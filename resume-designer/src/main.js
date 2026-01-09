@@ -1,9 +1,27 @@
-import { parseResume } from './parser.js';
+/**
+ * Resume Designer - Main Application
+ * Integrates all components: store, variant manager, inline editor, structure panel
+ */
+
+import { store } from './store.js';
 import { renderResume, renderResumeStacked } from './renderer.js';
 import { initPdfExport } from './pdf.js';
+import { initInlineEditor, refreshInlineEditor } from './inlineEditor.js';
+import { initStructurePanel } from './structurePanel.js';
+import { 
+  initVariantManager, 
+  getCurrentId,
+  loadVariant 
+} from './variantManager.js';
+import { 
+  migrateBuiltInVariants, 
+  loadFromStorage, 
+  saveSettings, 
+  getSettings 
+} from './persistence.js';
 
-// Resume file mappings
-const RESUME_VARIANTS = [
+// Built-in resume variants (for initial migration)
+const BUILT_IN_VARIANTS = [
   { id: 'book-illustrator', name: 'Book Illustrator', file: 'BookIllustrator.md' },
   { id: 'brand-campaign', name: 'Brand / Campaign', file: 'Brand-CampaignIllustrator-CharacterDesigner.md' },
   { id: 'concept-artist', name: 'Concept Artist', file: 'ConceptArtist-ArtDirection.md' },
@@ -57,55 +75,81 @@ const COLOR_PALETTES = {
   }
 };
 
-let currentVariant = RESUME_VARIANTS[0];
 let currentPalette = 'terracotta';
 let currentLayout = 'sidebar';
-let resumeCache = new Map();
 
 // Initialize the application
 async function init() {
-  renderVariantList();
-  await loadAndRenderResume(currentVariant);
+  // Load saved settings
+  const settings = getSettings();
+  currentPalette = settings.colorPalette || 'terracotta';
+  currentLayout = settings.layout || 'sidebar';
+  
+  // Migrate built-in variants to storage on first run
+  await migrateBuiltInVariants(BUILT_IN_VARIANTS);
+  
+  // Initialize variant manager
+  initVariantManager(handleVariantChange);
+  
+  // Initialize inline editor
+  initInlineEditor();
+  
+  // Initialize structure panel
+  initStructurePanel(handleStructureChange);
+  
+  // Initialize PDF export
   initPdfExport();
   
-  // Set up event listeners
-  document.getElementById('variant-list').addEventListener('click', handleVariantClick);
-  document.getElementById('color-palettes').addEventListener('click', handlePaletteClick);
-  document.getElementById('layout-options').addEventListener('click', handleLayoutClick);
+  // Subscribe to store changes for re-rendering
+  store.subscribe((event, payload) => {
+    if (event === 'change' || event === 'fieldUpdated') {
+      renderCurrentResume();
+    }
+  });
+  
+  // Set up UI event listeners
+  setupUIListeners();
+  
+  // Apply saved settings to UI
+  applySettingsToUI();
+  
+  // Render initial resume
+  renderCurrentResume();
 }
 
-// Render the variant selection list
-function renderVariantList() {
-  const list = document.getElementById('variant-list');
-  list.innerHTML = RESUME_VARIANTS.map(variant => `
-    <li>
-      <button 
-        class="variant-btn ${variant.id === currentVariant.id ? 'active' : ''}" 
-        data-variant-id="${variant.id}"
-      >
-        ${variant.name}
-      </button>
-    </li>
-  `).join('');
+// Set up UI event listeners
+function setupUIListeners() {
+  // Color palette selection
+  document.getElementById('color-palettes')?.addEventListener('click', handlePaletteClick);
+  
+  // Layout selection
+  document.getElementById('layout-options')?.addEventListener('click', handleLayoutClick);
 }
 
-// Handle variant selection
-async function handleVariantClick(e) {
-  const btn = e.target.closest('.variant-btn');
-  if (!btn) return;
+// Apply saved settings to UI elements
+function applySettingsToUI() {
+  // Set active palette button
+  document.querySelectorAll('.palette-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.palette === currentPalette);
+  });
   
-  const variantId = btn.dataset.variantId;
-  const variant = RESUME_VARIANTS.find(v => v.id === variantId);
+  // Set active layout button
+  document.querySelectorAll('.layout-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.layout === currentLayout);
+  });
   
-  if (variant && variant.id !== currentVariant.id) {
-    currentVariant = variant;
-    
-    // Update active state
-    document.querySelectorAll('.variant-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    
-    await loadAndRenderResume(variant);
-  }
+  // Apply palette to resume
+  applyColorPalette(currentPalette);
+}
+
+// Handle variant change from variant manager
+function handleVariantChange(variant) {
+  renderCurrentResume();
+}
+
+// Handle structure panel changes
+function handleStructureChange() {
+  renderCurrentResume();
 }
 
 // Handle color palette selection
@@ -123,11 +167,14 @@ function handlePaletteClick(e) {
     
     // Apply palette
     applyColorPalette(palette);
+    
+    // Save setting
+    saveSettings({ colorPalette: palette });
   }
 }
 
 // Handle layout selection
-async function handleLayoutClick(e) {
+function handleLayoutClick(e) {
   const btn = e.target.closest('.layout-btn');
   if (!btn) return;
   
@@ -139,13 +186,11 @@ async function handleLayoutClick(e) {
     document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     
-    // Update resume class
-    const resume = document.getElementById('resume');
-    resume.classList.remove('layout-sidebar', 'layout-stacked');
-    resume.classList.add(`layout-${layout}`);
+    // Save setting
+    saveSettings({ layout });
     
     // Re-render with new layout
-    await loadAndRenderResume(currentVariant);
+    renderCurrentResume();
   }
 }
 
@@ -155,6 +200,8 @@ function applyColorPalette(paletteName) {
   if (!palette) return;
   
   const resume = document.getElementById('resume');
+  if (!resume) return;
+  
   resume.style.setProperty('--resume-accent', palette.accent);
   resume.style.setProperty('--resume-accent-light', palette.accentLight);
   resume.style.setProperty('--header-bg', palette.headerBg);
@@ -162,50 +209,34 @@ function applyColorPalette(paletteName) {
   resume.style.setProperty('--sidebar-bg', palette.sidebarBg);
 }
 
-// Load and render a resume variant
-async function loadAndRenderResume(variant) {
+// Render the current resume
+function renderCurrentResume() {
   const container = document.getElementById('resume');
+  if (!container) return;
   
-  // Show loading state
-  container.classList.add('loading');
-  
-  try {
-    let resumeData;
-    
-    // Check cache first
-    if (resumeCache.has(variant.id)) {
-      resumeData = resumeCache.get(variant.id);
-    } else {
-      // Fetch and parse the markdown file
-      const response = await fetch(`/resumes/${variant.file}`);
-      if (!response.ok) throw new Error(`Failed to load ${variant.file}`);
-      
-      const markdown = await response.text();
-      resumeData = parseResume(markdown);
-      resumeCache.set(variant.id, resumeData);
-    }
-    
-    // Render the resume with current layout
-    if (currentLayout === 'stacked') {
-      container.innerHTML = renderResumeStacked(resumeData);
-    } else {
-      container.innerHTML = renderResume(resumeData);
-    }
-    
-    // Re-apply current palette
-    applyColorPalette(currentPalette);
-    
-  } catch (error) {
-    console.error('Error loading resume:', error);
+  const data = store.getData();
+  if (!data) {
     container.innerHTML = `
-      <div class="error-state">
-        <p>Failed to load resume variant.</p>
-        <p class="error-detail">${error.message}</p>
+      <div class="empty-state">
+        <p>No resume loaded</p>
+        <p>Select or create a variant to get started</p>
       </div>
     `;
-  } finally {
-    container.classList.remove('loading');
+    return;
   }
+  
+  // Render based on current layout
+  if (currentLayout === 'stacked') {
+    container.innerHTML = renderResumeStacked(data);
+  } else {
+    container.innerHTML = renderResume(data);
+  }
+  
+  // Apply current palette
+  applyColorPalette(currentPalette);
+  
+  // Refresh inline editor
+  refreshInlineEditor();
 }
 
 // Start the app
