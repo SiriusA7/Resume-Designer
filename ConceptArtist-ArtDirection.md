@@ -1,68 +1,56 @@
 # Colleen Sinclair
-**Concept Artist (Games/XR) • Art Direction • Character + Environment Design**  
+**Producer / Art Director (Games/XR) • Concept & Visual Development**
 Los Angeles, CA • Open to remote / hybrid / onsite • Open to relocate  
 ColleenMarySinclair@gmail.com • 203-258-0807  
 Portfolio: www.colleensinclair.com • Instagram: @colleensinclairart  
 
 ## Summary
-Concept artist and visual designer with XR game experience owning art direction, guiding a team, and creating marketing/presentation materials for a mixed reality project recognized at MIT Reality Hack. Background includes high-volume production-ready character and environment assets for animated content and strong visual storytelling instincts.
+Producer/art director and concept-focused designer with XR team leadership experience, owning art direction, coordinating cross-functional collaborators, and presenting a mixed reality project recognized at MIT Reality Hack. Background includes high-volume production-ready asset delivery for animation and strong visual storytelling.
 
 ## Core Skills
-Concept art • Visual development • Character design • Environment/BG design • Prop design  
-Art direction • Team coordination • Visual cohesion across a product  
-Marketing/pitch materials • Cross-functional collaboration and presentation
+Art direction • Concept art • Visual development • Character & environment design  
+Cross-functional coordination • Presentation/pitch materials • Style consistency  
+Production-minded execution and delivery under deadlines
 
 ## Tools
-Adobe Creative Cloud • Photoshop • Illustrator • After Effects • TVPaint Animation
+Photoshop • Illustrator • After Effects • TVPaint • Adobe Creative Cloud
 
 ## Experience
 
-### Game Concept Artist / Art Direction — Bounce Ball (Freelance)
+### Producer / Art Director — Bounce Ball (Mixed Reality) — MIT Reality Hack
 **Jan 2024 – Mar 2024**
-- Owned overall art direction and visual cohesion for **Bounce Ball**, a competitive mixed reality game
-- Created concept art and established the look/feel from early exploration through presentation-ready visuals
-- Managed and coordinated the art effort with a small team to maintain consistency across deliverables
-- Produced marketing materials and presented the project at **MIT Reality Hack**
-- **MIT Reality Hack (XR Hackathon): Bronze Prize**
+- Served as **Producer and Art Director** for a competitive mixed reality game project
+- Coordinated a **5-person cross-functional team** (2 engineers, audio engineer, 3D modeler, producer/art director) to align responsibilities, deliverables, and timelines
+- Owned overall visual direction, team management, and marketing/presentation materials
+- Presented the project at **MIT Reality Hack**; project received **Bronze Prize**
 
 ### Designer / Illustrator — Epipheo
 **Sep 2022 – Oct 2023**
-- Designed and illustrated production-ready assets (finished characters, backgrounds, and on-screen text) for **150+ animated videos**
-- Maintained consistency across multiple styles and fast timelines—skills transferable to asset pipelines and style systems in games
-- Typical cadence: completed all final assets for **one video per ~1–1.5 weeks** (scope-dependent)
-- Produced style frames on tight schedules (often **one completed style frame per day** when assigned)
-- Supported work for brands including **Procter & Gamble (P&G), U.S. Bank, Zelle, Okta** (plus other clients)
+- Designed and illustrated production-ready assets (characters, backgrounds, on-screen text) for **150+ animated videos**
+- Typical cadence: completed all final assets for a **~1–2 minute video** in **~1–1.5 weeks** (scope-dependent)
+- Produced style frames on compressed schedules (often **one completed style frame per day** when assigned)
 
-### Freelance Designer / Illustrator — Various Clients
+### Freelance Designer / Illustrator — Various Clients (via Shotopop + direct)
 **Apr 2024 – Present**
-- Designed characters for national ad campaigns including **McDonald’s x Genshin Impact** and **McDonald’s x Pokémon** (via Shotopop)
-- For **McDonald’s x Genshin Impact**, translated provided storyboards into refined character designs with enhanced posing and color treatment
-- Animated (frame-by-frame, 2D) for the pilot episode of **The Ekspats** (G2 Labs)
-- Illustrated a completed, commissioned children’s book (bespoke project), focused on character-driven storytelling
+- Character design for national campaigns including **McDonald’s x Genshin Impact** and **McDonald’s x Pokémon** (via Shotopop)
+- Commissioned children’s book: 8 spreads/16 pages + covers + spine; typography/layout; print-ready delivery
 
-### Style Artist Intern — Epipheo
-**Jun 2022 – Aug 2022**
-- Established styles for animated videos, ensuring brand consistency
-- Delivered high-quality assets under tight deadlines
+### 2D Animator — The Ekspats (Pilot) — G2 Labs (Freelance)
+**Oct 2023 – Dec 2023**
+- Frame-by-frame 2D animation; worked 3 days/week producing ~8 seconds/week over 10 weeks
 
-### Participant — Walt Disney Imagineering CalArts Educational Initiative
-**Mar 2020**
-- Selected as one of 16 students for a project-oriented collaboration under mentorship of Disney Imagineers
+## Additional Experience (Research / Archives)
+### Member — Hyperion Historical Alliance (HHA)
+**[Year] – Present**
+- Digitally archive and organize Disney-history materials (animation cels, drawings, and production documents)
 
-### Set Fabricator — Sister (Academy Award–Nominated Animated Short)
-**Jan 2017**
-- Fabricated, painted, and modeled stop-motion sets
-- Film nominated for **Best Animated Short Film** (92nd Academy Awards)
-- **Best Student Film Nomination** — 46th Annie Awards
-
-### Art Teacher — Assumption BVM School
-**Aug 2024 – Present**
-- Teach art to TK–8 students, focusing on foundational skills, creative expression, and technical growth
-- Develop and implement lesson plans tailored to different grade levels and learning styles
+### Research Intern — Mindy Johnson
+**Summer 2019**
+- Archival research trip (Yale Beinecke): photographed documents and named/cataloged **hundreds** of files for searchable reference
+**Summer 2020**
+- Wrote short artist bios for Mindy Johnson’s web series
 
 ## Education
-**California Institute of the Arts (CalArts)** — BFA, Character Animation  
-Sep 2017 – May 2021
-
-**Scenic Design Program (2 years)**  
-Sep 2015 – May 2017
+California Institute of the Arts (CalArts) — BFA, Character Animation  
+Sep 2017 – May 2021  
+Scenic Design Program (2 years) — Sep 2015 – May 2017
