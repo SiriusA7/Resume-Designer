@@ -1,0 +1,460 @@
+/* ==========================================================================
+   Resume Design Styles
+   Creative, artist-focused design
+   ========================================================================== */
+
+.resume {
+  /* Default color palette (terracotta) - can be overridden via JS */
+  --resume-accent: #c45c3e;
+  --resume-accent-light: #d97a5d;
+  --header-bg: #2d2a26;
+  --header-bg-end: #3d3832;
+  --sidebar-bg: #f4e8e4;
+  --resume-text: #2d2a26;
+  --resume-text-muted: #6b6560;
+  --resume-border: #e8e4df;
+  
+  font-family: var(--font-body);
+  font-size: 9pt;
+  line-height: 1.45;
+  color: var(--resume-text);
+  padding: 0;
+  
+  /* Fixed width (8.5 inches), adaptive height */
+  width: 8.5in;
+  min-height: 11in;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================================================
+   Header
+   ========================================================================== */
+
+.resume-header {
+  background: linear-gradient(135deg, var(--header-bg) 0%, var(--header-bg-end) 100%);
+  color: white;
+  padding: 0.5in 0.5in 0.4in;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.5rem;
+  position: relative;
+}
+
+.header-main {
+  flex: 1;
+}
+
+.resume-name {
+  font-family: var(--font-display);
+  font-size: 2.25rem;
+  font-weight: 700;
+  margin: 0 0 0.2rem;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.resume-tagline {
+  font-size: 0.95rem;
+  font-weight: 400;
+  margin: 0;
+  color: var(--resume-accent-light);
+  opacity: 0.9;
+}
+
+.header-contact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+}
+
+.contact-item {
+  color: rgba(255, 255, 255, 0.85);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+.contact-item:hover {
+  color: white;
+}
+
+.contact-item.location {
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* ==========================================================================
+   Body Layout
+   ========================================================================== */
+
+.resume-body {
+  display: grid;
+  grid-template-columns: 2.4in 1fr;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ==========================================================================
+   Sidebar
+   ========================================================================== */
+
+.resume-sidebar {
+  background: var(--sidebar-bg);
+  padding: 0.4in 0.35in;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  position: relative;
+}
+
+.sidebar-section {
+  margin: 0;
+}
+
+.sidebar-title {
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--resume-accent);
+  margin: 0 0 0.35rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 2px solid var(--resume-accent);
+}
+
+.sidebar-content {
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.sidebar-content p {
+  margin: 0;
+}
+
+/* Skill tags */
+.skill-tag {
+  display: inline;
+}
+
+.skill-tag:not(:last-child)::after {
+  content: ' • ';
+  color: var(--resume-text-muted);
+  opacity: 0.5;
+}
+
+.tools-list .skill-tag {
+  display: inline-block;
+  background: white;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  margin: 0.1rem 0.05rem;
+  font-size: 0.68rem;
+}
+
+.tools-list .skill-tag:not(:last-child)::after {
+  content: none;
+}
+
+/* Highlight bullets (from Highlights sections) */
+.highlight-bullet {
+  display: block;
+  position: relative;
+  padding-left: 0.7rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+
+.highlight-bullet::before {
+  content: '–';
+  position: absolute;
+  left: 0;
+  color: var(--resume-accent);
+  font-weight: 600;
+}
+
+.highlight-bullet:last-child {
+  margin-bottom: 0;
+}
+
+.highlight-bullet strong {
+  color: var(--resume-text);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Main Content
+   ========================================================================== */
+
+.resume-main {
+  padding: 0.4in 0.5in;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.section {
+  margin: 0;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--resume-text);
+  margin: 0 0 0.6rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--resume-border);
+  position: relative;
+}
+
+.section-title::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 60px;
+  height: 2px;
+  background: var(--resume-accent);
+}
+
+/* Summary */
+.summary-text {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  margin: 0;
+  color: var(--resume-text-muted);
+}
+
+/* ==========================================================================
+   Experience
+   ========================================================================== */
+
+.experience-section {
+  flex: 1;
+}
+
+.experience-item {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--resume-border);
+}
+
+.experience-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.experience-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.1rem;
+}
+
+.experience-title {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 700;
+  margin: 0;
+  color: var(--resume-text);
+}
+
+.experience-company {
+  font-size: 0.85rem;
+  color: var(--resume-accent);
+  font-weight: 500;
+}
+
+.experience-dates {
+  display: block;
+  font-size: 0.73rem;
+  color: var(--resume-text-muted);
+  margin-bottom: 0.35rem;
+  font-style: italic;
+}
+
+.experience-bullets {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.experience-bullets li {
+  margin-bottom: 0.15rem;
+  color: var(--resume-text-muted);
+}
+
+.experience-bullets li:last-child {
+  margin-bottom: 0;
+}
+
+.experience-bullets strong {
+  color: var(--resume-text);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Education
+   ========================================================================== */
+
+.education-content {
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.education-content p {
+  margin: 0 0 0.25rem;
+}
+
+.education-content p:last-child {
+  margin-bottom: 0;
+}
+
+/* ==========================================================================
+   Visual Flourishes
+   ========================================================================== */
+
+/* Decorative accent shapes */
+.resume-header::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 120px;
+  height: 120px;
+  background: linear-gradient(135deg, transparent 50%, color-mix(in srgb, var(--resume-accent) 15%, transparent) 50%);
+  pointer-events: none;
+}
+
+/* Subtle pattern overlay on sidebar */
+.resume-sidebar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    radial-gradient(circle at 20% 80%, color-mix(in srgb, var(--resume-accent) 8%, transparent) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, color-mix(in srgb, var(--resume-accent) 5%, transparent) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Stacked Layout
+   ========================================================================== */
+
+.stacked-header {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0.5in 0.6in 0.4in;
+}
+
+.stacked-header .header-main {
+  margin-bottom: 0.5rem;
+}
+
+.stacked-header .resume-tagline {
+  margin-bottom: 0.3rem;
+}
+
+.stacked-contact {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.stacked-contact .contact-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.2rem 0;
+  font-size: 0.8rem;
+}
+
+.stacked-contact .contact-sep {
+  margin: 0 0.4rem;
+  opacity: 0.5;
+}
+
+.stacked-contact .location {
+  width: 100%;
+  text-align: center;
+  margin-bottom: 0.2rem;
+}
+
+.stacked-body {
+  display: block;
+  padding: 0.5in 0.6in;
+}
+
+.stacked-body .section {
+  margin-bottom: 1rem;
+}
+
+/* Stacked skills grid */
+.stacked-skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.8rem;
+  background: var(--sidebar-bg);
+  border-radius: 8px;
+}
+
+.stacked-skill-section {
+  margin: 0;
+}
+
+.stacked-skill-section .section-title {
+  font-size: 0.85rem;
+  margin-bottom: 0.4rem;
+  padding-bottom: 0.2rem;
+}
+
+.stacked-skill-content {
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.stacked-skill-content p {
+  margin: 0;
+}
+
+.skill-tag-inline {
+  display: inline;
+}
+
+.skill-sep {
+  margin: 0 0.15rem;
+  opacity: 0.5;
+}
+
+/* Stacked layout specific adjustments */
+.stacked-body .summary-section {
+  background: var(--sidebar-bg);
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.stacked-body .summary-section .section-title {
+  margin-bottom: 0.4rem;
+}
+
+/* Hide decorative elements in stacked layout */
+.stacked-header::before {
+  display: none;
+}
