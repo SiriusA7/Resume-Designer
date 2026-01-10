@@ -14,7 +14,12 @@ const DEFAULT_STORAGE = {
   currentVariantId: null,
   settings: {
     colorPalette: 'terracotta',
-    layout: 'sidebar'
+    layout: 'sidebar',
+    customColor: '#c45c3e',
+    anthropicKey: '',
+    openaiKey: '',
+    geminiKey: '',
+    defaultModel: 'anthropic:claude-sonnet-4-20250514'
   }
 };
 

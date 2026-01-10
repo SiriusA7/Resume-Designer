@@ -180,6 +180,7 @@
   cursor: text;
   border-radius: 2px;
   transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
+  position: relative;
 }
 
 [data-editable]:hover {
@@ -199,7 +200,44 @@
   /* Visual feedback for modified content */
 }
 
-/* Edit mode hint */
+/* AI Chat Button on Hover */
+.editable-ai-btn {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-sidebar);
+  border: 2px solid white;
+  border-radius: 50%;
+  color: white;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all var(--transition-fast);
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+[data-editable]:hover .editable-ai-btn {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.editable-ai-btn:hover {
+  background: var(--color-accent);
+  transform: scale(1.1);
+}
+
+.editable-ai-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Edit mode hint - stays centered in viewport */
 .edit-mode-hint {
   position: fixed;
   bottom: var(--space-lg);
@@ -209,7 +247,8 @@
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(45, 42, 38, 0.9);
+  padding-right: var(--space-sm);
+  background: rgba(45, 42, 38, 0.95);
   color: rgba(248, 246, 243, 0.9);
   border-radius: 20px;
   font-size: 0.85rem;
@@ -218,9 +257,27 @@
   z-index: 100;
 }
 
-/* Move hint when panel is open */
-.app.panel-open .edit-mode-hint {
-  left: calc(50% - 180px); /* Shift left by half the panel width */
+/* Hint close button */
+.hint-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: var(--space-xs);
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+  border-radius: 50%;
+  color: rgba(248, 246, 243, 0.7);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.hint-close-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  color: rgba(248, 246, 243, 1);
 }
 
 .edit-mode-hint.hidden {
@@ -230,31 +287,22 @@
 }
 
 /* ==========================================================================
-   App Layout - Recenter when panel opens
+   App Layout - Panel open state (no layout shift, panels overlay)
    ========================================================================== */
 
-.app {
-  transition: padding-right 0.3s ease;
-}
-
-.app.panel-open {
-  padding-right: 360px; /* Width of structure panel */
-}
-
-.app.panel-open .preview-area {
-  /* Resume stays centered in the available space */
-}
+/* When panel is open, we don't shift the layout - panels overlay the content */
+/* This prevents header squeezing and maintains resume position */
 
 /* ==========================================================================
-   Structure Panel
+   Structure Panel - Fixed position, below header
    ========================================================================== */
 
 .structure-panel {
   position: fixed;
-  top: 0;
+  top: var(--header-height);
   right: 0;
-  width: 360px;
-  height: 100vh;
+  width: var(--structure-panel-width);
+  height: calc(100vh - var(--header-height));
   background: #faf9f7;
   border-left: 1px solid rgba(0, 0, 0, 0.1);
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.1);
@@ -262,7 +310,8 @@
   flex-direction: column;
   transform: translateX(100%);
   transition: transform 0.3s ease;
-  z-index: 200;
+  z-index: 200; /* Below header (300) but above content */
+  overflow: hidden; /* Children handle scrolling */
 }
 
 .structure-panel.open {
@@ -314,48 +363,131 @@
 }
 
 /* ==========================================================================
-   Panel Tabs
+   Panel Section Selector (Custom Dropdown)
    ========================================================================== */
 
-.panel-tabs {
-  display: flex;
-  gap: 2px;
-  padding: var(--space-sm);
+.panel-section-selector {
+  position: relative;
+  padding: var(--space-sm) var(--space-md);
   background: #f0efed;
   flex-shrink: 0;
 }
 
-.panel-tab {
-  flex: 1;
+.panel-section-dropdown {
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-xs);
+  gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--color-text-muted);
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text);
   font-family: var(--font-body);
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
-.panel-tab:hover {
-  background: rgba(255, 255, 255, 0.5);
-  color: var(--color-text);
+.panel-section-dropdown:hover {
+  border-color: var(--color-text-muted);
 }
 
-.panel-tab.active {
-  background: white;
+.panel-section-dropdown.open {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(196, 92, 62, 0.1);
+}
+
+.panel-section-dropdown .dropdown-icon {
+  display: flex;
+  align-items: center;
   color: var(--color-accent);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.panel-tab svg {
-  flex-shrink: 0;
+.panel-section-dropdown .dropdown-label {
+  flex: 1;
+  text-align: left;
+}
+
+.panel-section-dropdown .dropdown-chevron {
+  color: var(--color-text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.panel-section-dropdown.open .dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+.panel-section-menu {
+  position: absolute;
+  top: 100%;
+  left: var(--space-md);
+  right: var(--space-md);
+  margin-top: var(--space-xs);
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: all var(--transition-fast);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.panel-section-menu.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.panel-section-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: none;
+  border: none;
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.panel-section-option:hover {
+  background: var(--color-bg);
+}
+
+.panel-section-option.active {
+  background: rgba(196, 92, 62, 0.08);
+  color: var(--color-accent);
+}
+
+.panel-section-option .option-icon {
+  display: flex;
+  align-items: center;
+  color: var(--color-text-muted);
+}
+
+.panel-section-option.active .option-icon {
+  color: var(--color-accent);
+}
+
+.panel-section-option .option-label {
+  flex: 1;
+  text-align: left;
+}
+
+.panel-section-option .option-check {
+  color: var(--color-accent);
+}
+
+.panel-section-option + .panel-section-option {
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
 }
 
 .panel-tab-content {
@@ -381,12 +513,18 @@
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(196, 92, 62, 0.3);
   transition: all 0.3s ease;
-  z-index: 150;
+  z-index: 250; /* Above content but below header */
 }
 
-/* Move toggle button when panel is open */
+/* Move toggle button when panel is open so it's visible */
 .app.panel-open .structure-panel-toggle {
-  right: calc(360px + var(--space-lg));
+  right: calc(var(--structure-panel-width) + var(--space-lg));
+}
+
+/* Hide toggle when panel is open (close button is in panel header) */
+.structure-panel.open ~ .structure-panel-toggle {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .structure-panel-toggle:hover {
@@ -837,6 +975,161 @@
 }
 
 /* ==========================================================================
+   Design Tab Styles
+   ========================================================================== */
+
+/* Color Palette Grid */
+.design-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.design-palette-btn {
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 3px;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.design-palette-btn:hover {
+  border-color: var(--color-border);
+}
+
+.design-palette-btn.active {
+  border-color: var(--color-accent);
+}
+
+.design-palette-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(135deg, 
+    var(--p2) 0%, var(--p2) 40%, 
+    var(--p1) 40%, var(--p1) 60%, 
+    var(--p3) 60%, var(--p3) 100%
+  );
+}
+
+/* Custom Color Section */
+.design-custom-color {
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.design-custom-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1;
+}
+
+.design-custom-label {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.design-color-picker {
+  position: relative;
+  cursor: pointer;
+}
+
+.design-color-picker input[type="color"] {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.design-color-swatch {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  transition: all var(--transition-fast);
+}
+
+.design-color-picker:hover .design-color-swatch {
+  border-color: var(--color-text-muted);
+  transform: scale(1.1);
+}
+
+.design-palette-btn.custom {
+  flex-shrink: 0;
+  width: 48px;
+  aspect-ratio: 1;
+}
+
+/* Layout Options */
+.design-layout-options {
+  display: flex;
+  gap: var(--space-md);
+}
+
+.design-layout-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: var(--color-bg);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.design-layout-btn:hover {
+  background: #f0efed;
+  color: var(--color-text);
+}
+
+.design-layout-btn.active {
+  background: white;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  box-shadow: 0 2px 8px rgba(196, 92, 62, 0.15);
+}
+
+.design-layout-btn svg {
+  opacity: 0.7;
+}
+
+.design-layout-btn.active svg {
+  opacity: 1;
+  stroke: var(--color-accent);
+}
+
+/* Export Buttons */
+.design-export-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.design-export-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ==========================================================================
    Print Styles - Hide editor UI
    ========================================================================== */
 
@@ -846,12 +1139,22 @@
   .edit-mode-hint,
   #variant-manager,
   .variant-actions,
-  .variant-io {
+  .variant-io,
+  .chat-panel,
+  .header-bar {
     display: none !important;
   }
   
   .app.panel-open {
     padding-right: 0;
+  }
+  
+  .app-content {
+    height: auto !important;
+  }
+  
+  .preview-area {
+    padding: 0 !important;
   }
   
   [data-editable] {

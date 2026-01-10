@@ -1,24 +1,17 @@
 /**
  * Resume Designer - Main Application
- * Integrates all components: store, variant manager, inline editor, structure panel
+ * Integrates all components: store, header bar, chat panel, inline editor, structure panel
  */
 
 import { store } from './store.js';
 import { renderResume, renderResumeStacked } from './renderer.js';
 import { initPdfExport } from './pdf.js';
 import { initInlineEditor, refreshInlineEditor } from './inlineEditor.js';
-import { initStructurePanel } from './structurePanel.js';
-import { 
-  initVariantManager, 
-  getCurrentId,
-  loadVariant 
-} from './variantManager.js';
-import { 
-  migrateBuiltInVariants, 
-  loadFromStorage, 
-  saveSettings, 
-  getSettings 
-} from './persistence.js';
+import { initStructurePanel, setDesignSettings } from './structurePanel.js';
+import { initHeaderBar, getCurrentId, loadVariant } from './headerBar.js';
+import { initChatPanel } from './chatPanel.js';
+import { initZoomControls } from './zoomControls.js';
+import { migrateBuiltInVariants, saveSettings, getSettings } from './persistence.js';
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -132,17 +125,29 @@ async function init() {
   // Migrate built-in variants to storage on first run
   await migrateBuiltInVariants(BUILT_IN_VARIANTS);
   
-  // Initialize variant manager
-  initVariantManager(handleVariantChange);
+  // Initialize header bar (includes variant management)
+  initHeaderBar(handleVariantChange);
   
   // Initialize inline editor
   initInlineEditor();
   
-  // Initialize structure panel
-  initStructurePanel(handleStructureChange);
+  // Initialize structure panel with design change callback
+  initStructurePanel(handleStructureChange, handleDesignChange);
+  
+  // Sync design settings to structure panel
+  setDesignSettings(currentPalette, currentLayout, customColor);
   
   // Initialize PDF export
   initPdfExport();
+  
+  // Initialize chat panel
+  initChatPanel(handleChatApply);
+  
+  // Initialize zoom controls
+  initZoomControls();
+  
+  // Initialize settings modal
+  initSettingsModal();
   
   // Subscribe to store changes for re-rendering
   store.subscribe((event, payload) => {
@@ -151,60 +156,14 @@ async function init() {
     }
   });
   
-  // Set up UI event listeners
-  setupUIListeners();
-  
-  // Apply saved settings to UI
-  applySettingsToUI();
+  // Apply initial design settings
+  applyColorPalette(currentPalette);
   
   // Render initial resume
   renderCurrentResume();
 }
 
-// Set up UI event listeners
-function setupUIListeners() {
-  // Color palette selection
-  document.getElementById('color-palettes')?.addEventListener('click', handlePaletteClick);
-  
-  // Custom palette button
-  document.getElementById('custom-palette-btn')?.addEventListener('click', handleCustomPaletteClick);
-  
-  // Custom color picker
-  const customColorInput = document.getElementById('custom-color-input');
-  if (customColorInput) {
-    customColorInput.value = customColor;
-    customColorInput.addEventListener('input', handleCustomColorChange);
-    updateCustomPalettePreview(customColor);
-  }
-  
-  // Layout selection
-  document.getElementById('layout-options')?.addEventListener('click', handleLayoutClick);
-}
-
-// Apply saved settings to UI elements
-function applySettingsToUI() {
-  // Set active palette button
-  document.querySelectorAll('.palette-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.palette === currentPalette);
-  });
-  
-  // Set active layout button
-  document.querySelectorAll('.layout-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.layout === currentLayout);
-  });
-  
-  // Update custom color picker
-  const customColorInput = document.getElementById('custom-color-input');
-  if (customColorInput) {
-    customColorInput.value = customColor;
-    updateCustomPalettePreview(customColor);
-  }
-  
-  // Apply palette to resume
-  applyColorPalette(currentPalette);
-}
-
-// Handle variant change from variant manager
+// Handle variant change from header bar
 function handleVariantChange(variant) {
   renderCurrentResume();
 }
@@ -214,72 +173,64 @@ function handleStructureChange() {
   renderCurrentResume();
 }
 
-// Handle color palette selection
-function handlePaletteClick(e) {
-  const btn = e.target.closest('.palette-btn');
-  if (!btn || btn.dataset.palette === 'custom') return;
-  
-  const palette = btn.dataset.palette;
-  if (palette && palette !== currentPalette) {
-    currentPalette = palette;
-    
-    // Update active state
-    document.querySelectorAll('.palette-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    
-    // Apply palette
-    applyColorPalette(palette);
-    
-    // Save setting
-    saveSettings({ colorPalette: palette });
+// Handle chat panel apply actions
+function handleChatApply() {
+  renderCurrentResume();
+}
+
+// Handle design changes from structure panel
+function handleDesignChange(change) {
+  switch (change.type) {
+    case 'palette':
+      currentPalette = change.value;
+      customColor = change.customColor || customColor;
+      applyColorPalette(change.value);
+      saveSettings({ colorPalette: change.value, customColor });
+      break;
+      
+    case 'layout':
+      currentLayout = change.value;
+      saveSettings({ layout: change.value });
+      renderCurrentResume();
+      break;
+      
+    case 'customColor':
+      customColor = change.value;
+      applyCustomPalette(change.value);
+      saveSettings({ customColor: change.value });
+      break;
   }
 }
 
-// Handle custom palette button click
-function handleCustomPaletteClick(e) {
-  const btn = e.currentTarget;
-  if (currentPalette !== 'custom') {
-    currentPalette = 'custom';
-    
-    // Update active state
-    document.querySelectorAll('.palette-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    
-    // Apply custom palette
+// Apply color palette to resume
+function applyColorPalette(paletteName) {
+  if (paletteName === 'custom') {
     applyCustomPalette(customColor);
-    
-    // Save setting
-    saveSettings({ colorPalette: 'custom', customColor });
+    return;
   }
+  
+  const palette = COLOR_PALETTES[paletteName];
+  if (!palette) return;
+  
+  applyPaletteColors(palette);
 }
 
-// Handle custom color change
-function handleCustomColorChange(e) {
-  customColor = e.target.value;
-  updateCustomPalettePreview(customColor);
-  
-  // If custom palette is active, apply it immediately
-  if (currentPalette === 'custom') {
-    applyCustomPalette(customColor);
-    saveSettings({ customColor });
-  }
+// Apply custom palette
+function applyCustomPalette(color) {
+  const palette = generatePaletteFromColor(color);
+  applyPaletteColors(palette);
 }
 
-// Update custom palette preview
-function updateCustomPalettePreview(color) {
-  const preview = document.getElementById('custom-palette-preview');
-  const swatch = document.getElementById('custom-color-swatch');
+// Apply palette colors to resume element
+function applyPaletteColors(palette) {
+  const resume = document.getElementById('resume');
+  if (!resume) return;
   
-  if (preview) {
-    const palette = generatePaletteFromColor(color);
-    preview.style.setProperty('--p1', palette.accent);
-    preview.style.setProperty('--p2', palette.headerBg);
-    preview.style.setProperty('--p3', palette.sidebarBg);
-  }
-  
-  if (swatch) {
-    swatch.style.backgroundColor = color;
-  }
+  resume.style.setProperty('--resume-accent', palette.accent);
+  resume.style.setProperty('--resume-accent-light', palette.accentLight);
+  resume.style.setProperty('--header-bg', palette.headerBg);
+  resume.style.setProperty('--header-bg-end', palette.headerBgEnd);
+  resume.style.setProperty('--sidebar-bg', palette.sidebarBg);
 }
 
 // Generate a full palette from a single accent color
@@ -374,56 +325,92 @@ function hslToHex({ h, s, l }) {
   return `#${r}${g}${b}`;
 }
 
-// Handle layout selection
-function handleLayoutClick(e) {
-  const btn = e.target.closest('.layout-btn');
-  if (!btn) return;
+// Initialize settings modal
+function initSettingsModal() {
+  const settingsBtn = document.getElementById('chat-settings-btn');
+  const modal = document.getElementById('settings-modal');
+  const closeBtn = document.getElementById('close-settings-modal');
+  const saveBtn = document.getElementById('save-api-keys');
+  const clearBtn = document.getElementById('clear-api-keys');
   
-  const layout = btn.dataset.layout;
-  if (layout && layout !== currentLayout) {
-    currentLayout = layout;
-    
-    // Update active state
-    document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    
-    // Save setting
-    saveSettings({ layout });
-    
-    // Re-render with new layout
-    renderCurrentResume();
-  }
+  if (!settingsBtn || !modal) return;
+  
+  // Open modal
+  settingsBtn.addEventListener('click', () => {
+    loadApiKeysToModal();
+    modal.classList.add('show');
+  });
+  
+  // Close modal
+  closeBtn?.addEventListener('click', () => {
+    modal.classList.remove('show');
+  });
+  
+  // Close on overlay click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.classList.remove('show');
+    }
+  });
+  
+  // Save API keys
+  saveBtn?.addEventListener('click', () => {
+    saveApiKeysFromModal();
+    modal.classList.remove('show');
+  });
+  
+  // Clear all keys
+  clearBtn?.addEventListener('click', () => {
+    if (confirm('Are you sure you want to clear all API keys?')) {
+      clearAllApiKeys();
+      loadApiKeysToModal();
+    }
+  });
+  
+  // Toggle password visibility
+  document.querySelectorAll('.api-key-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.dataset.target;
+      const input = document.getElementById(targetId);
+      if (input) {
+        input.type = input.type === 'password' ? 'text' : 'password';
+      }
+    });
+  });
 }
 
-// Apply color palette to resume
-function applyColorPalette(paletteName) {
-  if (paletteName === 'custom') {
-    applyCustomPalette(customColor);
-    return;
-  }
+// Load API keys to modal inputs
+function loadApiKeysToModal() {
+  const settings = getSettings();
+  const anthropicInput = document.getElementById('anthropic-key');
+  const openaiInput = document.getElementById('openai-key');
+  const geminiInput = document.getElementById('gemini-key');
   
-  const palette = COLOR_PALETTES[paletteName];
-  if (!palette) return;
-  
-  applyPaletteColors(palette);
+  if (anthropicInput) anthropicInput.value = settings.anthropicKey || '';
+  if (openaiInput) openaiInput.value = settings.openaiKey || '';
+  if (geminiInput) geminiInput.value = settings.geminiKey || '';
 }
 
-// Apply custom palette
-function applyCustomPalette(color) {
-  const palette = generatePaletteFromColor(color);
-  applyPaletteColors(palette);
+// Save API keys from modal inputs
+function saveApiKeysFromModal() {
+  const anthropicInput = document.getElementById('anthropic-key');
+  const openaiInput = document.getElementById('openai-key');
+  const geminiInput = document.getElementById('gemini-key');
+  
+  saveSettings({
+    anthropicKey: anthropicInput?.value || '',
+    openaiKey: openaiInput?.value || '',
+    geminiKey: geminiInput?.value || ''
+  });
 }
 
-// Apply palette colors to resume element
-function applyPaletteColors(palette) {
-  const resume = document.getElementById('resume');
-  if (!resume) return;
-  
-  resume.style.setProperty('--resume-accent', palette.accent);
-  resume.style.setProperty('--resume-accent-light', palette.accentLight);
-  resume.style.setProperty('--header-bg', palette.headerBg);
-  resume.style.setProperty('--header-bg-end', palette.headerBgEnd);
-  resume.style.setProperty('--sidebar-bg', palette.sidebarBg);
+// Clear all API keys
+function clearAllApiKeys() {
+  saveSettings({
+    anthropicKey: '',
+    openaiKey: '',
+    geminiKey: ''
+  });
 }
 
 // Render the current resume

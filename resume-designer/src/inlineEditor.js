@@ -4,17 +4,31 @@
  */
 
 import { store } from './store.js';
+import { openChatWithContext } from './chatPanel.js';
 
 let isInitialized = false;
 let activeElement = null;
+let hintDismissed = false;
+let hasEditedOnce = false;
+let hoveredElement = null;
+let aiButton = null;
+
+// Check if hint was previously dismissed
+const HINT_DISMISSED_KEY = 'resume-edit-hint-dismissed';
 
 // Initialize inline editing
 export function initInlineEditor() {
   if (isInitialized) return;
   isInitialized = true;
   
+  // Check localStorage for hint dismissal
+  hintDismissed = localStorage.getItem(HINT_DISMISSED_KEY) === 'true';
+  
   const resumeContainer = document.getElementById('resume');
   if (!resumeContainer) return;
+  
+  // Create AI button element
+  createAIButton();
   
   // Click handler for editable elements
   resumeContainer.addEventListener('click', handleClick);
@@ -28,6 +42,13 @@ export function initInlineEditor() {
   // Handle input for real-time feedback
   resumeContainer.addEventListener('input', handleInput, true);
   
+  // Handle hover for AI button
+  resumeContainer.addEventListener('mouseenter', handleMouseEnter, true);
+  resumeContainer.addEventListener('mouseleave', handleMouseLeave, true);
+  
+  // Setup hint close button
+  setupHintDismissal();
+  
   // Subscribe to store changes to update edit hints
   store.subscribe((event) => {
     if (event === 'dataLoaded') {
@@ -35,6 +56,119 @@ export function initInlineEditor() {
       setTimeout(updateEditableHints, 100);
     }
   });
+  
+  // Show or hide hint based on previous dismissal
+  updateHintVisibility();
+}
+
+// Create the AI chat button element
+function createAIButton() {
+  aiButton = document.createElement('button');
+  aiButton.className = 'editable-ai-btn';
+  aiButton.title = 'Ask AI about this';
+  aiButton.innerHTML = `
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </svg>
+  `;
+  
+  // Handle AI button click
+  aiButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    if (hoveredElement) {
+      const text = hoveredElement.textContent?.trim() || '';
+      const path = hoveredElement.dataset.editable || '';
+      openChatWithContext(text, path);
+    }
+  });
+  
+  // Prevent button from triggering blur
+  aiButton.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+}
+
+// Handle mouse enter on editable elements
+function handleMouseEnter(e) {
+  const editable = e.target.closest('[data-editable]');
+  if (!editable || editable.isContentEditable) return;
+  
+  // Don't show button if already editing
+  if (activeElement) return;
+  
+  hoveredElement = editable;
+  showAIButton(editable);
+}
+
+// Handle mouse leave
+function handleMouseLeave(e) {
+  const editable = e.target.closest('[data-editable]');
+  if (!editable) return;
+  
+  // Check if we're leaving to the AI button
+  const relatedTarget = e.relatedTarget;
+  if (relatedTarget === aiButton || aiButton?.contains(relatedTarget)) {
+    return;
+  }
+  
+  hideAIButton();
+  hoveredElement = null;
+}
+
+// Show the AI button on an element
+function showAIButton(element) {
+  if (!aiButton || !element) return;
+  
+  // Append to the element
+  element.style.position = 'relative';
+  element.appendChild(aiButton);
+}
+
+// Hide the AI button
+function hideAIButton() {
+  if (!aiButton) return;
+  aiButton.remove();
+}
+
+// Setup hint dismissal functionality
+function setupHintDismissal() {
+  const hint = document.getElementById('edit-hint');
+  if (!hint) return;
+  
+  // Add close button if not already present
+  if (!hint.querySelector('.hint-close-btn')) {
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'hint-close-btn';
+    closeBtn.title = 'Dismiss';
+    closeBtn.innerHTML = '×';
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dismissHintPermanently();
+    });
+    hint.appendChild(closeBtn);
+  }
+}
+
+// Dismiss the hint permanently
+function dismissHintPermanently() {
+  hintDismissed = true;
+  localStorage.setItem(HINT_DISMISSED_KEY, 'true');
+  updateHintVisibility();
+}
+
+// Update hint visibility based on state
+function updateHintVisibility() {
+  const hint = document.getElementById('edit-hint');
+  if (!hint) return;
+  
+  if (hintDismissed) {
+    hint.classList.add('hidden');
+  } else {
+    hint.classList.remove('hidden');
+  }
 }
 
 // Handle click on editable elements
@@ -71,8 +205,13 @@ function startEditing(element) {
   selection.removeAllRanges();
   selection.addRange(range);
   
-  // Hide edit hint
+  // Hide edit hint while editing
   document.getElementById('edit-hint')?.classList.add('hidden');
+  
+  // Mark that user has edited
+  if (!hasEditedOnce) {
+    hasEditedOnce = true;
+  }
 }
 
 // Finish editing and save
@@ -102,8 +241,10 @@ function finishEditing(element) {
     activeElement = null;
   }
   
-  // Show edit hint again
-  document.getElementById('edit-hint')?.classList.remove('hidden');
+  // Auto-dismiss hint after first successful edit
+  if (hasEditedOnce && !hintDismissed) {
+    dismissHintPermanently();
+  }
 }
 
 // Handle blur event

@@ -26,6 +26,8 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  background: white; /* Ensure white background */
+  overflow: hidden; /* Contain children */
 }
 
 /* ==========================================================================
@@ -97,6 +99,7 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  width: 100%; /* Ensure full width */
 }
 
 /* ==========================================================================
