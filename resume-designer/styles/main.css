@@ -184,6 +184,62 @@ body {
   );
 }
 
+/* Custom Color Picker */
+.custom-color-section {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid rgba(248, 246, 243, 0.1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.custom-color-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1;
+}
+
+.custom-color-label {
+  font-size: 0.75rem;
+  color: rgba(248, 246, 243, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.custom-color-picker {
+  position: relative;
+  cursor: pointer;
+}
+
+.custom-color-picker input[type="color"] {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.custom-color-swatch {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(248, 246, 243, 0.3);
+  background: var(--color-accent);
+  transition: all var(--transition-fast);
+}
+
+.custom-color-picker:hover .custom-color-swatch {
+  border-color: rgba(248, 246, 243, 0.5);
+  transform: scale(1.1);
+}
+
+.custom-palette {
+  flex-shrink: 0;
+}
+
 /* Layout Options */
 .layout-options {
   display: flex;

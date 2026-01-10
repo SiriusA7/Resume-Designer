@@ -1,12 +1,14 @@
 /**
  * Structure Panel
- * Side panel for editing resume structure (sections, experience, etc.)
+ * Side panel for editing resume structure with tabbed interface
  */
 
 import { store, generateId } from './store.js';
 
 let isPanelOpen = false;
 let onChangeCallback = null;
+let currentTab = 'header'; // 'header', 'sidebar', 'main'
+let draggedItem = null;
 
 // Section type templates
 const SECTION_TEMPLATES = {
@@ -24,7 +26,6 @@ export function initStructurePanel(onChange) {
   // Set up toggle button
   const toggleBtn = document.getElementById('toggle-structure-panel');
   const closeBtn = document.getElementById('close-structure-panel');
-  const panel = document.getElementById('structure-panel');
   
   if (toggleBtn) {
     toggleBtn.addEventListener('click', () => togglePanel(true));
@@ -34,19 +35,12 @@ export function initStructurePanel(onChange) {
     closeBtn.addEventListener('click', () => togglePanel(false));
   }
   
-  // Close on click outside
-  document.addEventListener('click', (e) => {
-    if (isPanelOpen && 
-        !e.target.closest('#structure-panel') && 
-        !e.target.closest('#toggle-structure-panel')) {
-      togglePanel(false);
-    }
-  });
-  
   // Subscribe to store changes
   store.subscribe((event) => {
     if (event === 'dataLoaded' || event === 'change') {
-      renderPanel();
+      if (isPanelOpen) {
+        renderPanel();
+      }
     }
   });
   
@@ -58,6 +52,7 @@ export function initStructurePanel(onChange) {
 function togglePanel(open) {
   const panel = document.getElementById('structure-panel');
   const toggleBtn = document.getElementById('toggle-structure-panel');
+  const app = document.querySelector('.app');
   
   isPanelOpen = open !== undefined ? open : !isPanelOpen;
   
@@ -66,6 +61,9 @@ function togglePanel(open) {
   }
   if (toggleBtn) {
     toggleBtn.classList.toggle('active', isPanelOpen);
+  }
+  if (app) {
+    app.classList.toggle('panel-open', isPanelOpen);
   }
   
   if (isPanelOpen) {
@@ -85,6 +83,60 @@ function renderPanel() {
   }
   
   content.innerHTML = `
+    <!-- Tab Navigation -->
+    <div class="panel-tabs">
+      <button class="panel-tab ${currentTab === 'header' ? 'active' : ''}" data-tab="header">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="6" rx="1"/>
+          <rect x="3" y="12" width="18" height="9" rx="1" opacity="0.3"/>
+        </svg>
+        Header
+      </button>
+      <button class="panel-tab ${currentTab === 'sidebar' ? 'active' : ''}" data-tab="sidebar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="6" height="18" rx="1"/>
+          <rect x="12" y="3" width="9" height="18" rx="1" opacity="0.3"/>
+        </svg>
+        Sidebar
+      </button>
+      <button class="panel-tab ${currentTab === 'main' ? 'active' : ''}" data-tab="main">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="6" height="18" rx="1" opacity="0.3"/>
+          <rect x="12" y="3" width="9" height="18" rx="1"/>
+        </svg>
+        Main
+      </button>
+    </div>
+    
+    <!-- Tab Content -->
+    <div class="panel-tab-content">
+      ${currentTab === 'header' ? renderHeaderTab(data) : ''}
+      ${currentTab === 'sidebar' ? renderSidebarTab(data) : ''}
+      ${currentTab === 'main' ? renderMainTab(data) : ''}
+    </div>
+  `;
+}
+
+// Render Header tab content
+function renderHeaderTab(data) {
+  return `
+    <!-- Name & Tagline -->
+    <section class="panel-section">
+      <div class="panel-section-header">
+        <h3 class="panel-section-title">Name & Title</h3>
+      </div>
+      <div class="panel-section-content">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" class="form-input" data-field="name" value="${escapeAttr(data.name || '')}">
+        </div>
+        <div class="form-group">
+          <label>Professional Title</label>
+          <input type="text" class="form-input" data-field="tagline" value="${escapeAttr(data.tagline || '')}">
+        </div>
+      </div>
+    </section>
+    
     <!-- Contact Info -->
     <section class="panel-section">
       <div class="panel-section-header">
@@ -113,7 +165,12 @@ function renderPanel() {
         </div>
       </div>
     </section>
-    
+  `;
+}
+
+// Render Sidebar tab content
+function renderSidebarTab(data) {
+  return `
     <!-- Sections -->
     <section class="panel-section">
       <div class="panel-section-header">
@@ -126,7 +183,7 @@ function renderPanel() {
         </button>
       </div>
       <div class="panel-section-content">
-        <div class="sortable-list" id="sections-list">
+        <div class="sortable-list" id="sections-list" data-sortable="sections">
           ${(data.sections || []).map((section, i) => renderSectionItem(section, i)).join('')}
         </div>
         <div class="add-section-menu" id="add-section-menu">
@@ -134,48 +191,6 @@ function renderPanel() {
             <button class="add-section-option" data-template="${key}">${template.title}</button>
           `).join('')}
           <button class="add-section-option" data-template="custom">Custom Section...</button>
-        </div>
-      </div>
-    </section>
-    
-    <!-- Experience -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Experience</h3>
-        <button class="panel-add-btn" id="add-experience-btn" title="Add experience">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-      </div>
-      <div class="panel-section-content">
-        <div class="accordion-list" id="experience-list">
-          ${(data.experience || []).map((exp, i) => renderExperienceItem(exp, i)).join('')}
-        </div>
-      </div>
-    </section>
-    
-    <!-- Education -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Education</h3>
-        <button class="panel-add-btn" id="add-education-btn" title="Add education">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-      </div>
-      <div class="panel-section-content">
-        <div class="sortable-list" id="education-list">
-          ${(data.education || []).map((edu, i) => `
-            <div class="sortable-item" data-index="${i}">
-              <span class="drag-handle">⋮⋮</span>
-              <input type="text" class="form-input flex-grow" data-field="education[${i}]" value="${escapeAttr(edu)}">
-              <button class="item-delete-btn" data-action="delete-education" data-index="${i}" title="Delete">×</button>
-            </div>
-          `).join('')}
         </div>
       </div>
     </section>
@@ -195,18 +210,78 @@ function renderPanel() {
   `;
 }
 
+// Render Main tab content
+function renderMainTab(data) {
+  return `
+    <!-- Summary -->
+    <section class="panel-section">
+      <div class="panel-section-header">
+        <h3 class="panel-section-title">Summary</h3>
+      </div>
+      <div class="panel-section-content">
+        <div class="form-group">
+          <textarea class="form-textarea" data-field="summary" rows="4" placeholder="A brief professional summary...">${escapeAttr(data.summary || '')}</textarea>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Experience -->
+    <section class="panel-section">
+      <div class="panel-section-header">
+        <h3 class="panel-section-title">Experience</h3>
+        <button class="panel-add-btn" id="add-experience-btn" title="Add experience">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="panel-section-content">
+        <div class="accordion-list" id="experience-list" data-sortable="experience">
+          ${(data.experience || []).map((exp, i) => renderExperienceItem(exp, i)).join('')}
+        </div>
+      </div>
+    </section>
+    
+    <!-- Education -->
+    <section class="panel-section">
+      <div class="panel-section-header">
+        <h3 class="panel-section-title">Education</h3>
+        <button class="panel-add-btn" id="add-education-btn" title="Add education">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="panel-section-content">
+        <div class="sortable-list" id="education-list" data-sortable="education">
+          ${(data.education || []).map((edu, i) => `
+            <div class="sortable-item" data-index="${i}" draggable="true">
+              <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+              <input type="text" class="form-input flex-grow" data-field="education[${i}]" value="${escapeAttr(edu)}">
+              <button class="item-delete-btn" data-action="delete-education" data-index="${i}" title="Delete">×</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 // Render a sidebar section item
 function renderSectionItem(section, index) {
   return `
-    <div class="sortable-item section-item" data-index="${index}" data-section-id="${section.id || index}">
-      <span class="drag-handle">⋮⋮</span>
+    <div class="sortable-item section-item" data-index="${index}" data-section-id="${section.id || index}" draggable="true">
+      <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
       <div class="section-item-content">
         <input type="text" class="form-input section-title-input" 
                data-field="sections[${index}].title" 
                value="${escapeAttr(section.title)}">
-        <div class="section-content-list">
+        <div class="section-content-list" data-sortable="sections[${index}].content">
           ${(section.content || []).map((item, i) => `
-            <div class="section-content-item">
+            <div class="section-content-item" data-index="${i}" draggable="true">
+              <span class="drag-handle small" title="Drag to reorder">⋮</span>
               <input type="text" class="form-input" 
                      data-field="sections[${index}].content[${i}]" 
                      value="${escapeAttr(item)}">
@@ -228,12 +303,12 @@ function renderSectionItem(section, index) {
 
 // Render an experience item
 function renderExperienceItem(exp, index) {
-  const isExpanded = exp._expanded !== false; // Default to expanded for new items
+  const isExpanded = exp._expanded !== false;
   
   return `
-    <div class="accordion-item" data-index="${index}" data-experience-id="${exp.id || index}">
+    <div class="accordion-item" data-index="${index}" data-experience-id="${exp.id || index}" draggable="true">
       <div class="accordion-header" data-action="toggle-experience" data-index="${index}">
-        <span class="drag-handle">⋮⋮</span>
+        <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
         <span class="accordion-title">${escapeHtml(exp.title || 'Untitled Position')}</span>
         <span class="accordion-subtitle">${escapeHtml(exp.company || '')}</span>
         <svg class="accordion-chevron ${isExpanded ? 'expanded' : ''}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -255,10 +330,11 @@ function renderExperienceItem(exp, index) {
         </div>
         <div class="form-group">
           <label>Bullets</label>
-          <div class="bullet-list">
+          <div class="bullet-list" data-sortable="experience[${index}].bullets">
             ${(exp.bullets || []).map((bullet, i) => `
-              <div class="bullet-item">
-                <span class="bullet-handle">•</span>
+              <div class="bullet-item" data-index="${i}" draggable="true">
+                <span class="drag-handle small" title="Drag to reorder">⋮</span>
+                <span class="bullet-marker">•</span>
                 <input type="text" class="form-input" data-field="experience[${index}].bullets[${i}]" value="${escapeAttr(bullet)}">
                 <button class="item-delete-btn small" data-action="delete-bullet" data-exp="${index}" data-index="${i}">×</button>
               </div>
@@ -276,11 +352,21 @@ function renderExperienceItem(exp, index) {
 
 // Set up event handlers
 function setupEventHandlers() {
-  const content = document.getElementById('structure-panel-content');
-  if (!content) return;
+  const panel = document.getElementById('structure-panel');
+  if (!panel) return;
+  
+  // Tab switching
+  panel.addEventListener('click', (e) => {
+    const tab = e.target.closest('.panel-tab');
+    if (tab) {
+      currentTab = tab.dataset.tab;
+      renderPanel();
+      return;
+    }
+  });
   
   // Input changes
-  content.addEventListener('input', (e) => {
+  panel.addEventListener('input', (e) => {
     if (e.target.matches('.form-input, .form-textarea')) {
       const field = e.target.dataset.field;
       if (field) {
@@ -291,10 +377,10 @@ function setupEventHandlers() {
   });
   
   // Click actions
-  content.addEventListener('click', (e) => {
+  panel.addEventListener('click', (e) => {
     const target = e.target.closest('[data-action]');
     if (!target) {
-      // Check for add section button
+      // Check for add buttons
       if (e.target.closest('#add-section-btn')) {
         toggleAddSectionMenu();
         return;
@@ -358,6 +444,93 @@ function setupEventHandlers() {
       toggleAddSectionMenu(false);
     }
   });
+  
+  // Drag and drop for reordering
+  setupDragAndDrop(panel);
+}
+
+// Setup drag and drop
+function setupDragAndDrop(panel) {
+  panel.addEventListener('dragstart', (e) => {
+    const item = e.target.closest('[draggable="true"]');
+    if (!item) return;
+    
+    draggedItem = item;
+    item.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', '');
+  });
+  
+  panel.addEventListener('dragend', (e) => {
+    if (draggedItem) {
+      draggedItem.classList.remove('dragging');
+      draggedItem = null;
+    }
+    
+    // Remove all drag-over states
+    panel.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  });
+  
+  panel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    
+    const sortableList = e.target.closest('[data-sortable]');
+    if (!sortableList || !draggedItem) return;
+    
+    const afterElement = getDragAfterElement(sortableList, e.clientY);
+    const items = [...sortableList.querySelectorAll('[draggable="true"]:not(.dragging)')];
+    
+    // Remove previous drag-over states
+    items.forEach(item => item.classList.remove('drag-over'));
+    
+    if (afterElement) {
+      afterElement.classList.add('drag-over');
+    }
+  });
+  
+  panel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    
+    const sortableList = e.target.closest('[data-sortable]');
+    if (!sortableList || !draggedItem) return;
+    
+    const sortablePath = sortableList.dataset.sortable;
+    const items = [...sortableList.querySelectorAll('[draggable="true"]')];
+    const fromIndex = parseInt(draggedItem.dataset.index);
+    
+    const afterElement = getDragAfterElement(sortableList, e.clientY);
+    let toIndex;
+    
+    if (afterElement) {
+      toIndex = parseInt(afterElement.dataset.index);
+      if (fromIndex < toIndex) toIndex--;
+    } else {
+      toIndex = items.length - 1;
+    }
+    
+    if (fromIndex !== toIndex && !isNaN(fromIndex) && !isNaN(toIndex)) {
+      store.moveInArray(sortablePath, fromIndex, toIndex);
+      renderPanel();
+      if (onChangeCallback) onChangeCallback();
+    }
+  });
+}
+
+// Get the element to insert after during drag
+function getDragAfterElement(container, y) {
+  const draggableElements = [...container.querySelectorAll('[draggable="true"]:not(.dragging)')];
+  
+  return draggableElements.reduce((closest, child) => {
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    
+    if (offset < 0 && offset > closest.offset) {
+      return { offset, element: child };
+    } else {
+      return closest;
+    }
+  }, { offset: Number.NEGATIVE_INFINITY }).element;
 }
 
 // Toggle add section menu

@@ -31,23 +31,58 @@
       <div class="options-section">
         <h3 class="options-title">Color Theme</h3>
         <div class="color-palette-options" id="color-palettes">
+          <!-- Row 1: Warm tones -->
           <button class="palette-btn active" data-palette="terracotta" title="Terracotta">
             <span class="palette-preview" style="--p1: #c45c3e; --p2: #2d2a26; --p3: #f4e8e4;"></span>
           </button>
+          <button class="palette-btn" data-palette="rose" title="Rose">
+            <span class="palette-preview" style="--p1: #e11d48; --p2: #4a1025; --p3: #fce7f3;"></span>
+          </button>
+          <button class="palette-btn" data-palette="amber" title="Amber">
+            <span class="palette-preview" style="--p1: #d97706; --p2: #451a03; --p3: #fef3c7;"></span>
+          </button>
+          <button class="palette-btn" data-palette="coral" title="Coral">
+            <span class="palette-preview" style="--p1: #f97316; --p2: #431407; --p3: #ffedd5;"></span>
+          </button>
+          <!-- Row 2: Cool tones -->
           <button class="palette-btn" data-palette="ocean" title="Ocean">
             <span class="palette-preview" style="--p1: #2563eb; --p2: #1e3a5f; --p3: #e8f0fe;"></span>
+          </button>
+          <button class="palette-btn" data-palette="teal" title="Teal">
+            <span class="palette-preview" style="--p1: #0d9488; --p2: #134e4a; --p3: #ccfbf1;"></span>
           </button>
           <button class="palette-btn" data-palette="forest" title="Forest">
             <span class="palette-preview" style="--p1: #059669; --p2: #1a3c34; --p3: #e6f4f0;"></span>
           </button>
+          <button class="palette-btn" data-palette="cyan" title="Cyan">
+            <span class="palette-preview" style="--p1: #0891b2; --p2: #164e63; --p3: #cffafe;"></span>
+          </button>
+          <!-- Row 3: Purple/neutral -->
           <button class="palette-btn" data-palette="plum" title="Plum">
             <span class="palette-preview" style="--p1: #7c3aed; --p2: #2d1f47; --p3: #f3e8ff;"></span>
+          </button>
+          <button class="palette-btn" data-palette="indigo" title="Indigo">
+            <span class="palette-preview" style="--p1: #4f46e5; --p2: #1e1b4b; --p3: #e0e7ff;"></span>
           </button>
           <button class="palette-btn" data-palette="slate" title="Slate">
             <span class="palette-preview" style="--p1: #64748b; --p2: #1e293b; --p3: #f1f5f9;"></span>
           </button>
-          <button class="palette-btn" data-palette="rose" title="Rose">
-            <span class="palette-preview" style="--p1: #e11d48; --p2: #4a1025; --p3: #fce7f3;"></span>
+          <button class="palette-btn" data-palette="zinc" title="Zinc">
+            <span class="palette-preview" style="--p1: #52525b; --p2: #18181b; --p3: #f4f4f5;"></span>
+          </button>
+        </div>
+        
+        <!-- Custom Color Picker -->
+        <div class="custom-color-section">
+          <div class="custom-color-header">
+            <span class="custom-color-label">Custom</span>
+            <label class="custom-color-picker">
+              <input type="color" id="custom-color-input" value="#c45c3e">
+              <span class="custom-color-swatch" id="custom-color-swatch"></span>
+            </label>
+          </div>
+          <button class="palette-btn custom-palette" data-palette="custom" title="Custom color" id="custom-palette-btn">
+            <span class="palette-preview" id="custom-palette-preview" style="--p1: #c45c3e; --p2: #2d2a26; --p3: #f4e8e4;"></span>
           </button>
         </div>
       </div>
