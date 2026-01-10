@@ -103,13 +103,20 @@ function fitToView() {
   
   if (!scroller || !container) return;
   
+  // Temporarily reset zoom to get true dimensions
+  const previousZoom = currentZoom;
+  container.style.transform = 'scale(1)';
+  
+  // Force reflow to get accurate measurements
+  container.offsetHeight;
+  
   // Get available space (subtract padding)
   const availableWidth = scroller.clientWidth - 64; // 32px padding on each side
   const availableHeight = scroller.clientHeight - 96; // 64px top + 32px bottom
   
-  // Get resume size (at scale 1)
+  // Get resume size at scale 1
   const resumeWidth = 8.5 * 96; // 8.5 inches at 96 DPI
-  const resumeHeight = container.scrollHeight / currentZoom || 11 * 96; // Use actual height or estimate
+  const resumeHeight = container.scrollHeight || 11 * 96; // Now measured at scale 1
   
   // Calculate zoom to fit
   const widthZoom = availableWidth / resumeWidth;
@@ -118,6 +125,7 @@ function fitToView() {
   // Use the smaller zoom to ensure entire resume is visible
   const fitZoom = Math.min(widthZoom, heightZoom, MAX_ZOOM);
   
+  // Apply the calculated zoom
   setZoom(Math.max(fitZoom, MIN_ZOOM));
 }
 

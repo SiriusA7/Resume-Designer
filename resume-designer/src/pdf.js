@@ -18,34 +18,138 @@ export function initPdfExport() {
   const downloadBtn = document.getElementById('download-pdf');
   const printBtn = document.getElementById('print-resume');
   
-  downloadBtn.addEventListener('click', handleDownloadPdf);
+  downloadBtn.addEventListener('click', showPdfDialog);
   printBtn.addEventListener('click', handlePrint);
+  
+  // Initialize the PDF dialog
+  initPdfDialog();
 }
 
-async function handleDownloadPdf() {
-  const resumeEl = document.getElementById('resume');
-  const btn = document.getElementById('download-pdf');
+// Initialize PDF download dialog
+function initPdfDialog() {
+  // Create modal if it doesn't exist
+  if (!document.getElementById('pdf-dialog-overlay')) {
+    const dialogHTML = `
+      <div class="modal-overlay" id="pdf-dialog-overlay">
+        <div class="modal pdf-dialog">
+          <div class="modal-header">
+            <h3 class="modal-title">Download PDF</h3>
+            <button class="modal-close" id="pdf-dialog-close">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+          <div class="modal-content">
+            <div class="form-group">
+              <label class="form-label" for="pdf-filename">Filename</label>
+              <div class="pdf-filename-wrapper">
+                <input type="text" id="pdf-filename" class="form-input" placeholder="Resume">
+                <span class="pdf-extension">.pdf</span>
+              </div>
+            </div>
+            <div class="pdf-dialog-actions">
+              <button class="btn btn-secondary" id="pdf-dialog-cancel">Cancel</button>
+              <button class="btn btn-primary" id="pdf-dialog-download">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', dialogHTML);
+    
+    // Set up event listeners
+    const overlay = document.getElementById('pdf-dialog-overlay');
+    const closeBtn = document.getElementById('pdf-dialog-close');
+    const cancelBtn = document.getElementById('pdf-dialog-cancel');
+    const downloadBtn = document.getElementById('pdf-dialog-download');
+    const filenameInput = document.getElementById('pdf-filename');
+    
+    closeBtn?.addEventListener('click', closePdfDialog);
+    cancelBtn?.addEventListener('click', closePdfDialog);
+    overlay?.addEventListener('click', (e) => {
+      if (e.target === overlay) closePdfDialog();
+    });
+    
+    downloadBtn?.addEventListener('click', () => {
+      handleDownloadPdf(filenameInput?.value);
+    });
+    
+    filenameInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        handleDownloadPdf(filenameInput?.value);
+      } else if (e.key === 'Escape') {
+        closePdfDialog();
+      }
+    });
+  }
+}
+
+// Show the PDF dialog
+function showPdfDialog() {
+  const overlay = document.getElementById('pdf-dialog-overlay');
+  const filenameInput = document.getElementById('pdf-filename');
   
-  // Show loading state
-  btn.disabled = true;
-  btn.innerHTML = `
-    <svg class="spinner" width="18" height="18" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="60" stroke-dashoffset="20"/>
-    </svg>
-    Generating...
-  `;
+  // Get the active variant name for default filename
+  const variantDropdown = document.getElementById('variant-dropdown');
+  const selectedLabel = variantDropdown?.querySelector('.dropdown-label')?.textContent || 'Resume';
+  const defaultFilename = `Colleen-Sinclair-${selectedLabel.trim().replace(/\s+/g, '-')}`;
+  
+  if (filenameInput) {
+    filenameInput.value = defaultFilename;
+  }
+  
+  overlay?.classList.add('show');
+  
+  // Focus and select filename
+  setTimeout(() => {
+    filenameInput?.focus();
+    filenameInput?.select();
+  }, 100);
+}
+
+// Close the PDF dialog
+function closePdfDialog() {
+  const overlay = document.getElementById('pdf-dialog-overlay');
+  overlay?.classList.remove('show');
+}
+
+async function handleDownloadPdf(customFilename) {
+  const resumeEl = document.getElementById('resume');
+  const downloadBtn = document.getElementById('pdf-dialog-download');
+  
+  // Close dialog
+  closePdfDialog();
+  
+  // Show loading state on header button
+  const headerBtn = document.getElementById('download-pdf');
+  if (headerBtn) {
+    headerBtn.disabled = true;
+    headerBtn.innerHTML = `
+      <svg class="spinner" width="18" height="18" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="60" stroke-dashoffset="20"/>
+      </svg>
+      Generating...
+    `;
+  }
   
   try {
     const html2pdf = await loadHtml2Pdf();
     
-    // Get the active variant name for filename
-    const activeBtn = document.querySelector('.variant-btn.active');
-    const variantName = activeBtn ? activeBtn.textContent.trim().replace(/\s+/g, '-') : 'Resume';
-    const filename = `Colleen-Sinclair-${variantName}.pdf`;
+    // Use custom filename or default
+    const filename = customFilename ? 
+      (customFilename.endsWith('.pdf') ? customFilename : `${customFilename}.pdf`) : 
+      'Resume.pdf';
     
     // Fixed width (8.5 inches), adaptive height based on content
     const pageWidthInches = 8.5;
-    const pageWidthPx = pageWidthInches * 96;  // 816px
     
     // Get actual content height
     const contentHeight = resumeEl.scrollHeight;
@@ -77,15 +181,17 @@ async function handleDownloadPdf() {
     alert('Failed to generate PDF. Please try the Print option instead.');
   } finally {
     // Restore button state
-    btn.disabled = false;
-    btn.innerHTML = `
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="7 10 12 15 17 10"/>
-        <line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      Download PDF
-    `;
+    if (headerBtn) {
+      headerBtn.disabled = false;
+      headerBtn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download PDF
+      `;
+    }
   }
 }
 

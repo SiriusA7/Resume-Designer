@@ -425,7 +425,8 @@
   font-size: 0.9rem;
   color: var(--color-text);
   resize: none;
-  max-height: 120px;
+  min-height: 40px;
+  max-height: 200px;
   line-height: 1.4;
 }
 

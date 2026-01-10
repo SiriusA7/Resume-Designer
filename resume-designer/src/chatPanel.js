@@ -233,7 +233,7 @@ function setupEventListeners() {
   // Auto-resize textarea
   inputEl?.addEventListener('input', () => {
     inputEl.style.height = 'auto';
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
   });
   
   // Shortcut buttons

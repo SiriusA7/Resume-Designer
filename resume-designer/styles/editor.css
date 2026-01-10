@@ -298,24 +298,30 @@
    ========================================================================== */
 
 .structure-panel {
-  position: fixed;
-  top: var(--header-height);
-  right: 0;
   width: var(--structure-panel-width);
-  height: calc(100vh - var(--header-height));
+  height: 100%;
   background: #faf9f7;
   border-left: 1px solid rgba(0, 0, 0, 0.1);
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
-  transform: translateX(100%);
-  transition: transform 0.3s ease;
-  z-index: 200; /* Below header (300) but above content */
-  overflow: hidden; /* Children handle scrolling */
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width 0.3s ease;
 }
 
-.structure-panel.open {
-  transform: translateX(0);
+/* Closed state - collapse panel */
+.structure-panel:not(.open) {
+  width: 0;
+  min-width: 0;
+  border-left: none;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.structure-panel:not(.open) > * {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .structure-panel-header {
@@ -517,14 +523,11 @@
 }
 
 /* Move toggle button when panel is open so it's visible */
-.app.panel-open .structure-panel-toggle {
-  right: calc(var(--structure-panel-width) + var(--space-lg));
-}
-
 /* Hide toggle when panel is open (close button is in panel header) */
 .structure-panel.open ~ .structure-panel-toggle {
   opacity: 0;
   pointer-events: none;
+  transform: translateX(20px);
 }
 
 .structure-panel-toggle:hover {
