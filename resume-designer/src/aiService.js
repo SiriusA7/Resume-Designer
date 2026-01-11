@@ -13,8 +13,18 @@ const ENDPOINTS = {
   gemini: 'https://generativelanguage.googleapis.com/v1beta/models'
 };
 
-// Model configurations
+// Model configurations - Model IDs verified from provider documentation
 const MODELS = {
+  'anthropic:claude-opus-4-5-20251022': {
+    provider: 'anthropic',
+    model: 'claude-opus-4-5-20251022',
+    maxTokens: 8192
+  },
+  'anthropic:claude-sonnet-4-5-20251022': {
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-5-20251022',
+    maxTokens: 8192
+  },
   'anthropic:claude-sonnet-4-20250514': {
     provider: 'anthropic',
     model: 'claude-sonnet-4-20250514',
@@ -25,6 +35,16 @@ const MODELS = {
     model: 'claude-3-5-haiku-20241022',
     maxTokens: 4096
   },
+  'openai:gpt-5.2': {
+    provider: 'openai',
+    model: 'gpt-5.2',
+    maxTokens: 8192
+  },
+  'openai:gpt-5.2-pro': {
+    provider: 'openai',
+    model: 'gpt-5.2-pro',
+    maxTokens: 16384
+  },
   'openai:gpt-4o': {
     provider: 'openai',
     model: 'gpt-4o',
@@ -34,6 +54,16 @@ const MODELS = {
     provider: 'openai',
     model: 'gpt-4o-mini',
     maxTokens: 4096
+  },
+  'gemini:gemini-3-pro': {
+    provider: 'gemini',
+    model: 'gemini-3-pro',
+    maxTokens: 8192
+  },
+  'gemini:gemini-3-flash': {
+    provider: 'gemini',
+    model: 'gemini-3-flash',
+    maxTokens: 8192
   },
   'gemini:gemini-2.0-flash': {
     provider: 'gemini',
@@ -180,7 +210,7 @@ async function callOpenAI(modelConfig, messages, apiKey) {
     },
     body: JSON.stringify({
       model: modelConfig.model,
-      max_tokens: modelConfig.maxTokens,
+      max_completion_tokens: modelConfig.maxTokens, // Use max_completion_tokens instead of deprecated max_tokens
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         ...messages.map(m => ({

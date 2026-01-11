@@ -25,34 +25,43 @@
       <!-- Left Panel: AI Chat -->
       <aside class="chat-panel closed" id="chat-panel">
         <div class="chat-header">
-          <h2 class="chat-title">AI Assistant</h2>
-          <div class="chat-header-actions">
-            <button class="chat-settings-btn" id="chat-settings-btn" title="API Settings">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-              </svg>
-            </button>
-            <button class="chat-close-btn" id="chat-close-btn" title="Close panel">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"/>
-                <line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
+          <div class="chat-header-top">
+            <h2 class="chat-title">AI Assistant</h2>
+            <div class="chat-header-actions">
+              <button class="chat-settings-btn" id="chat-settings-btn" title="API Settings">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+              </button>
+              <button class="chat-close-btn" id="chat-close-btn" title="Close panel">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
           </div>
+          <div id="thread-selector" class="thread-selector"></div>
         </div>
         
         <div class="chat-model-selector">
           <select id="ai-model-select" class="model-select">
             <optgroup label="Anthropic">
+              <option value="anthropic:claude-opus-4-5-20251022">Claude Opus 4.5</option>
+              <option value="anthropic:claude-sonnet-4-5-20251022">Claude Sonnet 4.5</option>
               <option value="anthropic:claude-sonnet-4-20250514">Claude Sonnet 4</option>
               <option value="anthropic:claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
             </optgroup>
             <optgroup label="OpenAI">
+              <option value="openai:gpt-5.2">GPT-5.2</option>
+              <option value="openai:gpt-5.2-pro">GPT-5.2 Pro</option>
               <option value="openai:gpt-4o">GPT-4o</option>
               <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
             </optgroup>
             <optgroup label="Google">
+              <option value="gemini:gemini-3-pro">Gemini 3 Pro</option>
+              <option value="gemini:gemini-3-flash">Gemini 3 Flash</option>
               <option value="gemini:gemini-2.0-flash">Gemini 2.0 Flash</option>
               <option value="gemini:gemini-1.5-pro">Gemini 1.5 Pro</option>
             </optgroup>
@@ -84,7 +93,7 @@
             <textarea 
               id="chat-input" 
               class="chat-input" 
-              placeholder="Ask AI to help improve your resume..."
+              placeholder="Ask anything..."
               rows="1"
             ></textarea>
             <button class="chat-send-btn" id="chat-send-btn" title="Send message">
@@ -130,6 +139,19 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M1 4v6h6"/>
               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+            </svg>
+          </button>
+          <div class="zoom-divider"></div>
+          <button class="zoom-btn" id="undo-btn" title="Undo (Ctrl+Z)" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 7v6h6"/>
+              <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
+            </svg>
+          </button>
+          <button class="zoom-btn" id="redo-btn" title="Redo (Ctrl+Y)" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 7v6h-6"/>
+              <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/>
             </svg>
           </button>
         </div>

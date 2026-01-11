@@ -200,13 +200,18 @@
   /* Visual feedback for modified content */
 }
 
-/* AI Chat Button on Hover */
-.editable-ai-btn {
+/* AI Chat Button and Menu on Hover */
+.editable-ai-container {
   position: absolute;
-  top: -8px;
-  right: -8px;
-  width: 24px;
-  height: 24px;
+  top: -12px;
+  right: -12px;
+  z-index: 100;
+  padding: 4px; /* Extra padding for easier hover */
+}
+
+.editable-ai-btn {
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -215,16 +220,10 @@
   border-radius: 50%;
   color: white;
   cursor: pointer;
-  opacity: 0;
-  transform: scale(0.8);
-  transition: all var(--transition-fast);
-  z-index: 10;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
-[data-editable]:hover .editable-ai-btn {
   opacity: 1;
   transform: scale(1);
+  transition: background var(--transition-fast), transform var(--transition-fast);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .editable-ai-btn:hover {
@@ -233,8 +232,99 @@
 }
 
 .editable-ai-btn svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
+}
+
+/* AI Context Menu */
+.editable-ai-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 200px;
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: var(--space-xs);
+  display: none; /* Hide completely by default */
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: all 0.15s ease;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.editable-ai-menu.visible {
+  display: block; /* Show when visible */
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.editable-ai-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: left;
+}
+
+.editable-ai-menu-item:hover {
+  background: var(--color-bg);
+  color: var(--color-accent);
+}
+
+.editable-ai-menu-item svg {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.editable-ai-menu-item:hover svg {
+  color: var(--color-accent);
+}
+
+.editable-ai-menu-item span {
+  flex: 1;
+}
+
+/* First menu item (Ask AI) gets highlight styling */
+.editable-ai-menu-item:first-child {
+  background: rgba(196, 92, 62, 0.08);
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+.editable-ai-menu-item:first-child svg {
+  color: var(--color-accent);
+}
+
+.editable-ai-menu-item:first-child:hover {
+  background: rgba(196, 92, 62, 0.15);
+}
+
+/* Menu separator */
+.editable-ai-menu-separator {
+  padding: 8px 12px 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-muted);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  margin-top: 4px;
 }
 
 /* Edit mode hint - stays centered in viewport */

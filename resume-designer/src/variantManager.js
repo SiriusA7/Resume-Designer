@@ -56,7 +56,7 @@ export function loadVariant(id) {
   if (variant) {
     currentVariantId = id;
     setCurrentVariantId(id);
-    store.setData(variant.data, true); // Skip save since we're loading
+    store.setData(variant.data, true, id); // Skip save since we're loading, pass variantId for history
     initPersistence(id);
     
     if (onVariantChangeCallback) {

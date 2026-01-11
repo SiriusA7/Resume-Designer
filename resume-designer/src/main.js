@@ -146,6 +146,9 @@ async function init() {
   // Initialize zoom controls
   initZoomControls();
   
+  // Initialize undo/redo
+  initUndoRedo();
+  
   // Initialize settings modal
   initSettingsModal();
   
@@ -323,6 +326,67 @@ function hslToHex({ h, s, l }) {
   b = Math.round((b + m) * 255).toString(16).padStart(2, '0');
   
   return `#${r}${g}${b}`;
+}
+
+// Initialize undo/redo functionality
+function initUndoRedo() {
+  const undoBtn = document.getElementById('undo-btn');
+  const redoBtn = document.getElementById('redo-btn');
+  
+  // Update button states
+  function updateButtons() {
+    if (undoBtn) {
+      undoBtn.disabled = !store.canUndo();
+      undoBtn.classList.toggle('disabled', !store.canUndo());
+    }
+    if (redoBtn) {
+      redoBtn.disabled = !store.canRedo();
+      redoBtn.classList.toggle('disabled', !store.canRedo());
+    }
+  }
+  
+  // Subscribe to history changes
+  store.subscribe((event) => {
+    if (event === 'historyChanged' || event === 'dataLoaded') {
+      updateButtons();
+    }
+  });
+  
+  // Button click handlers
+  undoBtn?.addEventListener('click', () => {
+    store.undo();
+  });
+  
+  redoBtn?.addEventListener('click', () => {
+    store.redo();
+  });
+  
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    // Don't trigger if user is typing in an input
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
+      return;
+    }
+    
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modKey = isMac ? e.metaKey : e.ctrlKey;
+    
+    if (modKey && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      store.undo();
+    } else if (modKey && e.key === 'z' && e.shiftKey) {
+      // Mac style redo: Cmd+Shift+Z
+      e.preventDefault();
+      store.redo();
+    } else if (modKey && e.key === 'y') {
+      // Windows style redo: Ctrl+Y
+      e.preventDefault();
+      store.redo();
+    }
+  });
+  
+  // Initial state
+  updateButtons();
 }
 
 // Initialize settings modal

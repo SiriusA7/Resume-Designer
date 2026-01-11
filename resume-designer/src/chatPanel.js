@@ -3,38 +3,54 @@
  * AI chat interface with message history and actions
  */
 
-import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured } from './aiService.js';
+import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders } from './aiService.js';
 import { getSettings, saveSettings } from './persistence.js';
 import { store } from './store.js';
+import { marked } from 'marked';
 
 let messagesContainer;
 let inputEl;
 let sendBtn;
 let modelSelect;
+let contextChipsContainer;
 let messages = [];
 let isLoading = false;
 let onApplyCallback = null;
 let isPanelOpen = false;
 
-const STORAGE_KEY = 'resume-designer-chat-history';
+// Context chips storage
+let contextChips = [];
 
-// AI Model options
+// Thread management
+let threads = [];
+let currentThreadId = null;
+
+const STORAGE_KEY = 'resume-designer-chat-history';
+const THREADS_KEY = 'resume-designer-chat-threads';
+
+// AI Model options - Model IDs verified from provider documentation
 const AI_MODELS = [
   { group: 'Anthropic', options: [
+    { value: 'anthropic:claude-opus-4-5-20251022', label: 'Claude Opus 4.5' },
+    { value: 'anthropic:claude-sonnet-4-5-20251022', label: 'Claude Sonnet 4.5' },
     { value: 'anthropic:claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
     { value: 'anthropic:claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' }
   ]},
   { group: 'OpenAI', options: [
+    { value: 'openai:gpt-5.2', label: 'GPT-5.2' },
+    { value: 'openai:gpt-5.2-pro', label: 'GPT-5.2 Pro' },
     { value: 'openai:gpt-4o', label: 'GPT-4o' },
     { value: 'openai:gpt-4o-mini', label: 'GPT-4o Mini' }
   ]},
   { group: 'Google', options: [
+    { value: 'gemini:gemini-3-pro', label: 'Gemini 3 Pro' },
+    { value: 'gemini:gemini-3-flash', label: 'Gemini 3 Flash' },
     { value: 'gemini:gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
     { value: 'gemini:gemini-1.5-pro', label: 'Gemini 1.5 Pro' }
   ]}
 ];
 
-let currentModel = 'anthropic:claude-sonnet-4-20250514';
+let currentModel = 'anthropic:claude-sonnet-4-5-20251022';
 
 // Initialize chat panel
 export function initChatPanel(onApply) {
@@ -42,6 +58,7 @@ export function initChatPanel(onApply) {
   inputEl = document.getElementById('chat-input');
   sendBtn = document.getElementById('chat-send-btn');
   modelSelect = document.getElementById('ai-model-select');
+  contextChipsContainer = document.getElementById('context-chips');
   onApplyCallback = onApply;
   
   if (!messagesContainer || !inputEl || !sendBtn) return;
@@ -55,8 +72,11 @@ export function initChatPanel(onApply) {
   // Initialize custom model dropdown
   initModelDropdown();
   
-  // Load chat history
+  // Load chat history (includes thread loading)
   loadChatHistory();
+  
+  // Render thread selector
+  renderThreadSelector();
   
   // Set up event listeners
   setupEventListeners();
@@ -64,17 +84,64 @@ export function initChatPanel(onApply) {
   // Set up panel toggle
   setupPanelToggle();
   
-  // Render initial state
-  renderMessages();
+  // Check if API keys are configured and render appropriate view
+  renderChatView();
 }
+
+// Map provider keys to display names
+const PROVIDER_NAMES = {
+  'anthropic': 'Anthropic (Claude)',
+  'openai': 'OpenAI',
+  'gemini': 'Google (Gemini)'
+};
 
 // Initialize custom model dropdown
 function initModelDropdown() {
   const selectorContainer = document.querySelector('.chat-model-selector');
   if (!selectorContainer) return;
   
+  // Get configured providers
+  const configuredProviders = getConfiguredProviders();
+  
   // Get current model label
   const currentModelLabel = getModelLabel(currentModel);
+  
+  // Build dropdown content based on provider configuration
+  const dropdownContent = AI_MODELS.map(group => {
+    const providerKey = group.options[0]?.value.split(':')[0]; // Get provider from first option
+    const isConfigured = configuredProviders.includes(providerKey);
+    
+    if (isConfigured) {
+      // Show available models for configured providers
+      return `
+        <div class="custom-dropdown-group-label">${group.group}</div>
+        ${group.options.map(opt => `
+          <button class="custom-dropdown-option ${opt.value === currentModel ? 'selected' : ''}" 
+                  data-value="${opt.value}" type="button">
+            <svg class="check-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            ${opt.label}
+          </button>
+        `).join('')}
+      `;
+    } else {
+      // Show notice for unconfigured providers
+      return `
+        <div class="custom-dropdown-group-label">${group.group}</div>
+        <div class="custom-dropdown-notice">
+          <span class="notice-text">API key not configured</span>
+          <button class="notice-configure-btn" data-provider="${providerKey}" type="button">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+            </svg>
+            Configure
+          </button>
+        </div>
+      `;
+    }
+  }).join('');
   
   // Create custom dropdown HTML
   const dropdownHTML = `
@@ -86,18 +153,7 @@ function initModelDropdown() {
         </svg>
       </button>
       <div class="custom-dropdown-menu">
-        ${AI_MODELS.map(group => `
-          <div class="custom-dropdown-group-label">${group.group}</div>
-          ${group.options.map(opt => `
-            <button class="custom-dropdown-option ${opt.value === currentModel ? 'selected' : ''}" 
-                    data-value="${opt.value}" type="button">
-              <svg class="check-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              ${opt.label}
-            </button>
-          `).join('')}
-        `).join('')}
+        ${dropdownContent}
       </div>
     </div>
   `;
@@ -107,7 +163,6 @@ function initModelDropdown() {
   // Setup dropdown events
   const dropdown = document.getElementById('model-dropdown');
   const trigger = dropdown?.querySelector('.custom-dropdown-trigger');
-  const menu = dropdown?.querySelector('.custom-dropdown-menu');
   
   trigger?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -122,6 +177,14 @@ function initModelDropdown() {
       selectModel(value);
       dropdown.classList.remove('open');
     }
+    
+    // Handle configure button click
+    const configureBtn = e.target.closest('.notice-configure-btn');
+    if (configureBtn) {
+      e.stopPropagation();
+      openSettingsModal();
+      dropdown.classList.remove('open');
+    }
   });
   
   // Close dropdown when clicking outside
@@ -130,6 +193,14 @@ function initModelDropdown() {
       dropdown?.classList.remove('open');
     }
   });
+}
+
+// Open the settings modal
+function openSettingsModal() {
+  const modal = document.getElementById('settings-modal');
+  if (modal) {
+    modal.classList.add('show');
+  }
 }
 
 // Get model label from value
@@ -203,17 +274,171 @@ function updateToggleIndicator(loading) {
   }
 }
 
-// Open chat panel with a message pre-filled
-export function openChatWithContext(context, elementPath) {
+// Open chat panel with context added as a chip
+export function openChatWithContext(context, elementPath, contextType = 'text') {
   togglePanel(true);
   
-  if (inputEl && context) {
-    // Pre-fill input with context reference
-    const prefix = `Regarding the text "${context.substring(0, 50)}${context.length > 50 ? '...' : ''}": `;
-    inputEl.value = prefix;
-    inputEl.dataset.contextPath = elementPath || '';
-    inputEl.focus();
-    inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+  if (context) {
+    // Add context as a chip instead of pasting text
+    addContextChip({
+      type: contextType,
+      path: elementPath || '',
+      content: context,
+      label: getContextLabel(context, contextType, elementPath)
+    });
+    
+    // Focus input
+    if (inputEl) {
+      inputEl.focus();
+    }
+  }
+}
+
+// Get a label for the context chip
+function getContextLabel(content, type, path) {
+  switch (type) {
+    case 'section':
+      // Extract section name from path like "sections[0]" or section title
+      if (path) {
+        const match = path.match(/sections\[(\d+)\]/);
+        if (match) {
+          const data = store.getData();
+          const section = data?.sections?.[parseInt(match[1])];
+          return section?.title || 'Section';
+        }
+      }
+      return 'Section';
+      
+    case 'experience':
+      // Extract experience entry info
+      if (path) {
+        const match = path.match(/experience\[(\d+)\]/);
+        if (match) {
+          const data = store.getData();
+          const exp = data?.experience?.[parseInt(match[1])];
+          if (exp) {
+            return `${exp.title} @ ${exp.company}`;
+          }
+        }
+      }
+      return 'Experience Entry';
+      
+    case 'bullet':
+      return 'Bullet Point';
+      
+    case 'text':
+    default:
+      // Truncate long text for label
+      const text = content.trim();
+      if (text.length > 40) {
+        return text.substring(0, 40) + '...';
+      }
+      return text;
+  }
+}
+
+// Add a context chip (exported for use by other modules)
+export function addContextChip(chipData) {
+  // Check if this context is already added (by path or content)
+  const exists = contextChips.some(c => 
+    (c.path && c.path === chipData.path) || 
+    (c.content === chipData.content)
+  );
+  
+  if (!exists) {
+    contextChips.push(chipData);
+    renderContextChips();
+  }
+}
+
+// Remove a context chip
+function removeContextChip(index) {
+  contextChips.splice(index, 1);
+  renderContextChips();
+}
+
+// Clear all context chips
+function clearContextChips() {
+  contextChips = [];
+  renderContextChips();
+}
+
+// Render context chips
+function renderContextChips() {
+  if (!contextChipsContainer) {
+    // Create container if it doesn't exist
+    const inputArea = document.querySelector('.chat-input-area');
+    if (inputArea) {
+      contextChipsContainer = document.createElement('div');
+      contextChipsContainer.id = 'context-chips';
+      contextChipsContainer.className = 'context-chips';
+      inputArea.insertBefore(contextChipsContainer, inputArea.firstChild);
+    }
+  }
+  
+  if (!contextChipsContainer) return;
+  
+  if (contextChips.length === 0) {
+    contextChipsContainer.innerHTML = '';
+    contextChipsContainer.classList.remove('has-chips');
+    return;
+  }
+  
+  contextChipsContainer.classList.add('has-chips');
+  contextChipsContainer.innerHTML = `
+    <div class="context-chips-header">
+      <span class="context-chips-label">Context:</span>
+      <button class="context-chips-clear" title="Clear all">Clear all</button>
+    </div>
+    <div class="context-chips-list">
+      ${contextChips.map((chip, i) => `
+        <div class="context-chip" data-index="${i}">
+          <span class="context-chip-icon">${getChipIcon(chip.type)}</span>
+          <span class="context-chip-label">${escapeHtml(chip.label)}</span>
+          <button class="context-chip-remove" data-index="${i}" title="Remove">×</button>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  
+  // Add event listeners
+  contextChipsContainer.querySelector('.context-chips-clear')?.addEventListener('click', clearContextChips);
+  contextChipsContainer.querySelectorAll('.context-chip-remove').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const index = parseInt(btn.dataset.index);
+      removeContextChip(index);
+    });
+  });
+}
+
+// Get icon for chip type
+function getChipIcon(type) {
+  switch (type) {
+    case 'section':
+      return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <line x1="3" y1="9" x2="21" y2="9"/>
+      </svg>`;
+    case 'experience':
+      return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="7" width="20" height="14" rx="2"/>
+        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+      </svg>`;
+    case 'bullet':
+      return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="8" y1="6" x2="21" y2="6"/>
+        <line x1="8" y1="12" x2="21" y2="12"/>
+        <line x1="8" y1="18" x2="21" y2="18"/>
+        <circle cx="4" cy="6" r="1" fill="currentColor"/>
+        <circle cx="4" cy="12" r="1" fill="currentColor"/>
+        <circle cx="4" cy="18" r="1" fill="currentColor"/>
+      </svg>`;
+    default:
+      return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>`;
   }
 }
 
@@ -258,10 +483,89 @@ function setupEventListeners() {
   });
 }
 
+// Render the chat view based on API key configuration
+function renderChatView() {
+  const configuredProviders = getConfiguredProviders();
+  const modelSelector = document.querySelector('.chat-model-selector');
+  const inputArea = document.querySelector('.chat-input-area');
+  
+  if (configuredProviders.length === 0) {
+    // Hide model selector and input area when no API keys
+    if (modelSelector) modelSelector.style.display = 'none';
+    if (inputArea) inputArea.style.display = 'none';
+    
+    // Show API key setup prompt
+    renderApiKeyPrompt();
+  } else {
+    // Show model selector and input area
+    if (modelSelector) modelSelector.style.display = '';
+    if (inputArea) inputArea.style.display = '';
+    
+    // Show normal chat view
+    renderMessages();
+  }
+}
+
+// Render API key setup prompt
+function renderApiKeyPrompt() {
+  if (!messagesContainer) return;
+  
+  messagesContainer.innerHTML = `
+    <div class="chat-api-prompt">
+      <div class="chat-api-prompt-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </div>
+      <h3>Setup Required</h3>
+      <p>To use the AI Assistant, you need to configure at least one API key.</p>
+      <div class="chat-api-prompt-providers">
+        <div class="provider-option">
+          <strong>Anthropic (Claude)</strong>
+          <span>Best for nuanced writing</span>
+        </div>
+        <div class="provider-option">
+          <strong>OpenAI (GPT)</strong>
+          <span>Fast and versatile</span>
+        </div>
+        <div class="provider-option">
+          <strong>Google (Gemini)</strong>
+          <span>Great for analysis</span>
+        </div>
+      </div>
+      <button class="btn btn-primary chat-api-prompt-btn" id="open-settings-from-prompt">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        Configure API Keys
+      </button>
+    </div>
+  `;
+  
+  // Add click handler for settings button
+  const settingsBtn = document.getElementById('open-settings-from-prompt');
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openSettingsModal();
+    });
+  }
+}
+
 // Handle send message
 async function handleSend() {
   const text = inputEl?.value.trim();
   if (!text || isLoading) return;
+  
+  // Check if any API keys are configured
+  const configuredProviders = getConfiguredProviders();
+  if (configuredProviders.length === 0) {
+    addMessage('error', 'Please configure an API key in settings before using the AI assistant.');
+    return;
+  }
   
   // Check for commands
   if (text.startsWith('/')) {
@@ -269,13 +573,25 @@ async function handleSend() {
     return;
   }
   
-  // Add user message
+  // Build message with context chips
+  let messageWithContext = text;
+  if (contextChips.length > 0) {
+    const contextText = contextChips.map(chip => {
+      return `[${chip.label}]:\n${chip.content}`;
+    }).join('\n\n');
+    messageWithContext = `Context from resume:\n${contextText}\n\n---\n\nUser request: ${text}`;
+  }
+  
+  // Add user message (show only the user's text in UI)
   addMessage('user', text);
   inputEl.value = '';
   inputEl.style.height = 'auto';
   
-  // Get AI response
-  await getAIResponse(text);
+  // Clear context chips after sending
+  clearContextChips();
+  
+  // Get AI response with context included
+  await getAIResponse(messageWithContext, contextChips.length > 0);
 }
 
 // Handle slash commands
@@ -321,18 +637,28 @@ async function handleCommand(command) {
 }
 
 // Get AI response for general chat
-async function getAIResponse(userMessage) {
+async function getAIResponse(userMessage, hasExplicitContext = false) {
   const modelId = currentModel;
   
   setLoading(true);
   
   try {
     // Build conversation history (last 10 messages for context)
+    // Filter out error messages as they're not valid API roles
     const conversationHistory = messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
       .slice(-10)
       .map(m => ({ role: m.role, content: m.content }));
     
-    const response = await chat(modelId, conversationHistory, true);
+    // Replace last message with the one that includes context
+    if (conversationHistory.length > 0) {
+      conversationHistory[conversationHistory.length - 1].content = userMessage;
+    }
+    
+    // If explicit context was provided, don't add resume context again
+    const includeResumeContext = !hasExplicitContext;
+    
+    const response = await chat(modelId, conversationHistory, includeResumeContext);
     addMessage('assistant', response);
   } catch (error) {
     addMessage('error', error.message);
@@ -498,28 +824,27 @@ function renderMessages() {
   }).join('');
 }
 
-// Format message content (basic markdown support)
+// Configure marked for safe rendering
+marked.setOptions({
+  breaks: true,      // Convert line breaks to <br>
+  gfm: true,         // Enable GitHub Flavored Markdown
+  headerIds: false,  // Don't add IDs to headers
+  mangle: false      // Don't mangle email addresses
+});
+
+// Format message content using marked for markdown rendering
 function formatMessage(content) {
-  // Escape HTML first
-  let formatted = escapeHtml(content);
+  if (!content) return '';
   
-  // Convert markdown-style formatting
-  // Bold
-  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Italic
-  formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Code blocks
-  formatted = formatted.replace(/```(\w+)?\n([\s\S]+?)```/g, '<pre><code>$2</code></pre>');
-  // Inline code
-  formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Line breaks
-  formatted = formatted.replace(/\n/g, '<br>');
-  // Numbered lists
-  formatted = formatted.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
-  // Bullet lists
-  formatted = formatted.replace(/^[•\-]\s+(.+)$/gm, '<li>$1</li>');
-  
-  return formatted;
+  try {
+    // Use marked to parse markdown
+    const html = marked.parse(content);
+    return html;
+  } catch (e) {
+    console.error('Markdown parsing error:', e);
+    // Fallback to basic escaping
+    return escapeHtml(content).replace(/\n/g, '<br>');
+  }
 }
 
 // Handle apply action
@@ -570,9 +895,15 @@ function showHelp() {
 // Save chat history to localStorage
 function saveChatHistory() {
   try {
-    // Only save last 50 messages
-    const toSave = messages.slice(-50);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    // Save current thread
+    if (currentThreadId) {
+      const thread = threads.find(t => t.id === currentThreadId);
+      if (thread) {
+        thread.messages = messages.slice(-50);
+        thread.updatedAt = new Date().toISOString();
+      }
+    }
+    saveThreads();
   } catch (e) {
     console.error('Failed to save chat history:', e);
   }
@@ -581,14 +912,219 @@ function saveChatHistory() {
 // Load chat history from localStorage
 function loadChatHistory() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      messages = JSON.parse(saved);
+    // Load threads
+    const savedThreads = localStorage.getItem(THREADS_KEY);
+    if (savedThreads) {
+      threads = JSON.parse(savedThreads);
+    }
+    
+    // If no threads exist, create a default one
+    if (threads.length === 0) {
+      // Migrate old single-thread history if exists
+      const oldHistory = localStorage.getItem(STORAGE_KEY);
+      const oldMessages = oldHistory ? JSON.parse(oldHistory) : [];
+      
+      createNewThread('New Chat', oldMessages);
+    } else {
+      // Load the most recent thread
+      const mostRecent = threads.sort((a, b) => 
+        new Date(b.updatedAt) - new Date(a.updatedAt)
+      )[0];
+      switchToThread(mostRecent.id, false);
     }
   } catch (e) {
     console.error('Failed to load chat history:', e);
-    messages = [];
+    threads = [];
+    createNewThread('New Chat');
   }
+}
+
+// Save threads to localStorage
+function saveThreads() {
+  try {
+    localStorage.setItem(THREADS_KEY, JSON.stringify(threads));
+  } catch (e) {
+    console.error('Failed to save threads:', e);
+  }
+}
+
+// Create a new thread
+function createNewThread(name = 'New Chat', initialMessages = []) {
+  const newThread = {
+    id: `thread-${Date.now()}`,
+    name: name,
+    messages: initialMessages,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  
+  threads.unshift(newThread);
+  switchToThread(newThread.id, true);
+  saveThreads();
+  
+  return newThread;
+}
+
+// Switch to a different thread
+function switchToThread(threadId, save = true) {
+  // Save current thread first
+  if (save && currentThreadId) {
+    const current = threads.find(t => t.id === currentThreadId);
+    if (current) {
+      current.messages = messages.slice(-50);
+      current.updatedAt = new Date().toISOString();
+    }
+  }
+  
+  // Switch to new thread
+  const thread = threads.find(t => t.id === threadId);
+  if (thread) {
+    currentThreadId = threadId;
+    messages = thread.messages || [];
+    renderChatView();
+    renderThreadSelector();
+  }
+  
+  if (save) saveThreads();
+}
+
+// Delete a thread
+function deleteThread(threadId) {
+  const index = threads.findIndex(t => t.id === threadId);
+  if (index === -1) return;
+  
+  threads.splice(index, 1);
+  
+  // If we deleted the current thread, switch to another
+  if (threadId === currentThreadId) {
+    if (threads.length === 0) {
+      createNewThread('New Chat');
+    } else {
+      switchToThread(threads[0].id, false);
+    }
+  }
+  
+  saveThreads();
+  renderThreadSelector();
+}
+
+// Rename a thread
+function renameThread(threadId, newName) {
+  const thread = threads.find(t => t.id === threadId);
+  if (thread) {
+    thread.name = newName;
+    saveThreads();
+    renderThreadSelector();
+  }
+}
+
+// Get thread name from first message or default
+function getThreadDisplayName(thread) {
+  if (thread.name !== 'New Chat') return thread.name;
+  
+  // Try to get a name from the first user message
+  const firstUserMsg = thread.messages?.find(m => m.role === 'user');
+  if (firstUserMsg) {
+    const text = firstUserMsg.content;
+    return text.length > 30 ? text.substring(0, 30) + '...' : text;
+  }
+  
+  return thread.name;
+}
+
+// Render thread selector
+function renderThreadSelector() {
+  const container = document.getElementById('thread-selector');
+  if (!container) return;
+  
+  const currentThread = threads.find(t => t.id === currentThreadId);
+  const currentName = currentThread ? getThreadDisplayName(currentThread) : 'New Chat';
+  
+  container.innerHTML = `
+    <button class="thread-selector-trigger" id="thread-selector-trigger">
+      <span class="thread-name">${escapeHtml(currentName)}</span>
+      <svg class="thread-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="6 9 12 15 18 9"/>
+      </svg>
+    </button>
+    <div class="thread-selector-menu" id="thread-selector-menu">
+      <div class="thread-menu-header">
+        <span>Chat Threads</span>
+        <button class="thread-new-btn" id="new-thread-btn" title="Start new chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="thread-list">
+        ${threads.map(thread => `
+          <div class="thread-item ${thread.id === currentThreadId ? 'active' : ''}" data-thread-id="${thread.id}">
+            <span class="thread-item-name">${escapeHtml(getThreadDisplayName(thread))}</span>
+            <button class="thread-delete-btn" data-thread-id="${thread.id}" title="Delete thread">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  
+  // Event listeners
+  const trigger = document.getElementById('thread-selector-trigger');
+  const menu = document.getElementById('thread-selector-menu');
+  const newBtn = document.getElementById('new-thread-btn');
+  
+  trigger?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    
+    // Position the fixed menu relative to the trigger
+    if (menu && trigger) {
+      const rect = trigger.getBoundingClientRect();
+      menu.style.top = `${rect.bottom + 4}px`;
+      menu.style.left = `${rect.left}px`;
+    }
+    
+    menu?.classList.toggle('open');
+  });
+  
+  newBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    createNewThread('New Chat');
+    menu?.classList.remove('open');
+  });
+  
+  // Thread selection
+  container.querySelectorAll('.thread-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (!e.target.closest('.thread-delete-btn')) {
+        const threadId = item.dataset.threadId;
+        switchToThread(threadId);
+        menu?.classList.remove('open');
+      }
+    });
+  });
+  
+  // Thread deletion
+  container.querySelectorAll('.thread-delete-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const threadId = btn.dataset.threadId;
+      if (threads.length > 1 || confirm('Delete this chat thread?')) {
+        deleteThread(threadId);
+      }
+    });
+  });
+  
+  // Close menu when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!container.contains(e.target)) {
+      menu?.classList.remove('open');
+    }
+  });
 }
 
 // Escape HTML

@@ -382,6 +382,25 @@ body {
   text-align: center;
 }
 
+.zoom-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(248, 246, 243, 0.2);
+  margin: 0 var(--space-xs);
+}
+
+.zoom-btn:disabled,
+.zoom-btn.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.zoom-btn:disabled:hover,
+.zoom-btn.disabled:hover {
+  background: transparent;
+  color: rgba(248, 246, 243, 0.8);
+}
+
 /* Resume Scroller - handles all scrolling */
 .resume-scroller {
   flex: 1;

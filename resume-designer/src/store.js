@@ -54,6 +54,9 @@ function setByPath(obj, path, value) {
   }
 }
 
+// History persistence key prefix
+const HISTORY_KEY_PREFIX = 'resume-designer-history-';
+
 // Create the store
 function createStore() {
   let data = null;
@@ -62,6 +65,13 @@ function createStore() {
   let saveCallback = null;
   let saveTimeout = null;
   const SAVE_DEBOUNCE_MS = 500;
+  
+  // Undo/redo history
+  let history = [];
+  let historyIndex = -1;
+  const MAX_HISTORY = 50;
+  let isUndoRedoAction = false;
+  let currentVariantId = null;
 
   return {
     // Get current data (returns a clone to prevent direct mutation)
@@ -75,10 +85,25 @@ function createStore() {
     },
 
     // Set entire data object
-    setData(newData, skipSave = false) {
+    setData(newData, skipSave = false, variantId = null) {
       data = deepClone(newData);
       isDirty = false;
+      
+      // Track current variant for history persistence
+      if (variantId) {
+        currentVariantId = variantId;
+        // Try to load existing history for this variant
+        this.loadHistory(variantId);
+      }
+      
+      // If no history was loaded, initialize with current state
+      if (history.length === 0) {
+        history.push(deepClone(data));
+        historyIndex = 0;
+      }
+      
       this.emit('dataLoaded', data);
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
       if (!skipSave) {
         this.scheduleSave();
       }
@@ -88,11 +113,134 @@ function createStore() {
     update(path, value) {
       if (!data) return;
       
+      // Make the change
       setByPath(data, path, value);
       isDirty = true;
+      
+      // Save state to history AFTER making changes (unless this is an undo/redo action)
+      if (!isUndoRedoAction) {
+        this.pushHistory();
+      }
+      
       this.emit('fieldUpdated', { path, value });
       this.emit('change', data);
       this.scheduleSave();
+    },
+    
+    // Push current state to history (called AFTER changes are made)
+    pushHistory() {
+      if (!data) return;
+      
+      // Remove any future history if we're not at the end (branching)
+      if (historyIndex < history.length - 1) {
+        history.splice(historyIndex + 1);
+      }
+      
+      // Add the NEW current state
+      history.push(deepClone(data));
+      historyIndex = history.length - 1;
+      
+      // Limit history size
+      if (history.length > MAX_HISTORY) {
+        history.shift();
+        historyIndex--;
+      }
+      
+      // Persist history
+      this.saveHistory();
+      
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+    },
+    
+    // Save history to localStorage
+    saveHistory() {
+      if (!currentVariantId) return;
+      
+      try {
+        const historyData = {
+          history: history,
+          historyIndex: historyIndex
+        };
+        localStorage.setItem(
+          HISTORY_KEY_PREFIX + currentVariantId, 
+          JSON.stringify(historyData)
+        );
+      } catch (e) {
+        console.warn('Failed to save history:', e);
+      }
+    },
+    
+    // Load history from localStorage
+    loadHistory(variantId) {
+      try {
+        const saved = localStorage.getItem(HISTORY_KEY_PREFIX + variantId);
+        if (saved) {
+          const historyData = JSON.parse(saved);
+          if (historyData.history && Array.isArray(historyData.history)) {
+            history = historyData.history;
+            historyIndex = historyData.historyIndex ?? history.length - 1;
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load history:', e);
+      }
+      
+      // Reset to empty if load fails
+      history = [];
+      historyIndex = -1;
+      return false;
+    },
+    
+    // Check if undo is available
+    canUndo() {
+      return historyIndex > 0;
+    },
+    
+    // Check if redo is available
+    canRedo() {
+      return historyIndex < history.length - 1;
+    },
+    
+    // Undo last change
+    undo() {
+      if (!this.canUndo()) return false;
+      
+      isUndoRedoAction = true;
+      historyIndex--;
+      data = deepClone(history[historyIndex]);
+      isDirty = true;
+      this.saveHistory(); // Persist after undo
+      this.emit('change', data);
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+      this.scheduleSave();
+      isUndoRedoAction = false;
+      
+      return true;
+    },
+    
+    // Redo last undone change
+    redo() {
+      if (!this.canRedo()) return false;
+      
+      isUndoRedoAction = true;
+      historyIndex++;
+      data = deepClone(history[historyIndex]);
+      isDirty = true;
+      this.saveHistory(); // Persist after redo
+      this.emit('change', data);
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+      this.scheduleSave();
+      isUndoRedoAction = false;
+      
+      return true;
+    },
+    
+    // Clear history (e.g., when loading new data)
+    clearHistory() {
+      history.length = 0;
+      historyIndex = -1;
+      this.emit('historyChanged', { canUndo: false, canRedo: false });
     },
 
     // Get a specific field by path
@@ -109,6 +257,7 @@ function createStore() {
       if (Array.isArray(arr)) {
         arr.push(item);
         isDirty = true;
+        if (!isUndoRedoAction) this.pushHistory();
         this.emit('arrayItemAdded', { path, item });
         this.emit('change', data);
         this.scheduleSave();
@@ -123,6 +272,7 @@ function createStore() {
       if (Array.isArray(arr) && index >= 0 && index < arr.length) {
         const removed = arr.splice(index, 1)[0];
         isDirty = true;
+        if (!isUndoRedoAction) this.pushHistory();
         this.emit('arrayItemRemoved', { path, index, item: removed });
         this.emit('change', data);
         this.scheduleSave();
@@ -138,6 +288,7 @@ function createStore() {
         const [item] = arr.splice(fromIndex, 1);
         arr.splice(toIndex, 0, item);
         isDirty = true;
+        if (!isUndoRedoAction) this.pushHistory();
         this.emit('arrayItemMoved', { path, fromIndex, toIndex });
         this.emit('change', data);
         this.scheduleSave();

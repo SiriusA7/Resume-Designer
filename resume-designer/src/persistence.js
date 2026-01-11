@@ -19,7 +19,7 @@ const DEFAULT_STORAGE = {
     anthropicKey: '',
     openaiKey: '',
     geminiKey: '',
-    defaultModel: 'anthropic:claude-sonnet-4-20250514'
+    defaultModel: 'anthropic:claude-sonnet-4-5-20251022'
   }
 };
 

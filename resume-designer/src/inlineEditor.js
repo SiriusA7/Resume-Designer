@@ -4,7 +4,7 @@
  */
 
 import { store } from './store.js';
-import { openChatWithContext } from './chatPanel.js';
+import { openChatWithContext, addContextChip } from './chatPanel.js';
 
 let isInitialized = false;
 let activeElement = null;
@@ -12,6 +12,9 @@ let hintDismissed = false;
 let hasEditedOnce = false;
 let hoveredElement = null;
 let aiButton = null;
+let aiMenu = null;
+let hideButtonTimeout = null;
+let isMenuVisible = false;
 
 // Check if hint was previously dismissed
 const HINT_DISMISSED_KEY = 'resume-edit-hint-dismissed';
@@ -42,9 +45,9 @@ export function initInlineEditor() {
   // Handle input for real-time feedback
   resumeContainer.addEventListener('input', handleInput, true);
   
-  // Handle hover for AI button
-  resumeContainer.addEventListener('mouseenter', handleMouseEnter, true);
-  resumeContainer.addEventListener('mouseleave', handleMouseLeave, true);
+  // Handle hover for AI button using mouseover/mouseout for better stability
+  resumeContainer.addEventListener('mouseover', handleMouseOver, true);
+  resumeContainer.addEventListener('mouseout', handleMouseOut, true);
   
   // Setup hint close button
   setupHintDismissal();
@@ -61,26 +64,35 @@ export function initInlineEditor() {
   updateHintVisibility();
 }
 
-// Create the AI chat button element
+// Create the AI chat button element with dropdown menu
 function createAIButton() {
+  // Create container
+  const container = document.createElement('div');
+  container.className = 'editable-ai-container';
+  
   aiButton = document.createElement('button');
   aiButton.className = 'editable-ai-btn';
-  aiButton.title = 'Ask AI about this';
+  aiButton.title = 'Add to AI context';
   aiButton.innerHTML = `
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
     </svg>
   `;
   
-  // Handle AI button click
+  // Create dropdown menu
+  aiMenu = document.createElement('div');
+  aiMenu.className = 'editable-ai-menu';
+  
+  container.appendChild(aiButton);
+  container.appendChild(aiMenu);
+  
+  // Handle AI button click - show menu
   aiButton.addEventListener('click', (e) => {
     e.stopPropagation();
     e.preventDefault();
     
     if (hoveredElement) {
-      const text = hoveredElement.textContent?.trim() || '';
-      const path = hoveredElement.dataset.editable || '';
-      openChatWithContext(text, path);
+      showAIMenu(hoveredElement);
     }
   });
   
@@ -89,48 +101,378 @@ function createAIButton() {
     e.preventDefault();
     e.stopPropagation();
   });
+  
+  // Store container reference
+  aiButton.container = container;
 }
 
-// Handle mouse enter on editable elements
-function handleMouseEnter(e) {
+// Show AI context menu with relevant options
+function showAIMenu(element) {
+  if (!aiMenu) return;
+  
+  isMenuVisible = true;
+  
+  const path = element.dataset.editable || '';
+  const text = element.textContent?.trim() || '';
+  const contextOptions = getContextOptions(element, path, text);
+  
+  aiMenu.innerHTML = contextOptions.map(opt => {
+    if (opt.action === 'separator') {
+      return `<div class="editable-ai-menu-separator">${opt.label}</div>`;
+    }
+    return `
+      <button class="editable-ai-menu-item" data-action="${opt.action}" data-type="${opt.type}" data-path="${opt.path || ''}">
+        ${opt.icon}
+        <span>${opt.label}</span>
+      </button>
+    `;
+  }).join('');
+  
+  // Add click handlers
+  aiMenu.querySelectorAll('.editable-ai-menu-item').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      handleContextAction(btn.dataset.action, btn.dataset.type, btn.dataset.path, element);
+      hideAIMenu();
+      hideAIButton();
+      hoveredElement = null;
+    });
+    
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  });
+  
+  aiMenu.classList.add('visible');
+  
+  // Close menu when clicking outside
+  setTimeout(() => {
+    document.addEventListener('click', closeMenuOnClickOutside);
+  }, 10);
+}
+
+function closeMenuOnClickOutside(e) {
+  const container = aiButton?.container;
+  if (!aiMenu?.contains(e.target) && !container?.contains(e.target)) {
+    hideAIMenu();
+    document.removeEventListener('click', closeMenuOnClickOutside);
+    
+    // Also hide the button after menu closes if not hovering
+    setTimeout(() => {
+      if (!hoveredElement || !hoveredElement.matches(':hover')) {
+        hideAIButton();
+        hoveredElement = null;
+      }
+    }, 100);
+  }
+}
+
+// Hide AI menu
+function hideAIMenu() {
+  isMenuVisible = false;
+  aiMenu?.classList.remove('visible');
+}
+
+// Get context options based on the element
+function getContextOptions(element, path, text) {
+  const options = [];
+  const data = store.getData();
+  
+  // Add "Ask AI to improve" option first - most common action
+  options.push({
+    action: 'chat',
+    type: 'text',
+    path: path,
+    label: 'Ask AI to improve this',
+    icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 20h9"/>
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+    </svg>`
+  });
+  
+  // Add section header for context options
+  options.push({
+    action: 'separator',
+    label: 'Add context for AI:',
+    icon: ''
+  });
+  
+  // Always show "Add this text" option
+  options.push({
+    action: 'add',
+    type: 'text',
+    path: path,
+    label: 'Add this text',
+    icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="12" y1="5" x2="12" y2="19"/>
+      <line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>`
+  });
+  
+  // Check if this is a bullet point
+  const bulletMatch = path.match(/experience\[(\d+)\]\.bullets\[(\d+)\]/);
+  if (bulletMatch) {
+    const expIndex = parseInt(bulletMatch[1]);
+    const exp = data?.experience?.[expIndex];
+    
+    // Add "All bullets" option
+    if (exp?.bullets && exp.bullets.length > 1) {
+      options.push({
+        action: 'add',
+        type: 'bullets',
+        path: `experience[${expIndex}].bullets`,
+        label: 'Add all bullets',
+        icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="8" y1="6" x2="21" y2="6"/>
+          <line x1="8" y1="12" x2="21" y2="12"/>
+          <line x1="8" y1="18" x2="21" y2="18"/>
+          <circle cx="4" cy="6" r="1" fill="currentColor"/>
+          <circle cx="4" cy="12" r="1" fill="currentColor"/>
+          <circle cx="4" cy="18" r="1" fill="currentColor"/>
+        </svg>`
+      });
+    }
+    
+    // Add "Entire experience entry" option
+    options.push({
+      action: 'add',
+      type: 'experience',
+      path: `experience[${expIndex}]`,
+      label: 'Add entire job',
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="7" width="20" height="14" rx="2"/>
+        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+      </svg>`
+    });
+  }
+  
+  // Check if this is an experience field (title, company, dates)
+  const expFieldMatch = path.match(/experience\[(\d+)\]\.(title|company|dates)/);
+  if (expFieldMatch) {
+    const expIndex = parseInt(expFieldMatch[1]);
+    
+    options.push({
+      action: 'add',
+      type: 'experience',
+      path: `experience[${expIndex}]`,
+      label: 'Add entire job',
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="7" width="20" height="14" rx="2"/>
+        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+      </svg>`
+    });
+  }
+  
+  // Check if this is a section item
+  const sectionMatch = path.match(/sections\[(\d+)\]\.content\[(\d+)\]/);
+  if (sectionMatch) {
+    const sectionIndex = parseInt(sectionMatch[1]);
+    const section = data?.sections?.[sectionIndex];
+    
+    if (section?.content && section.content.length > 1) {
+      options.push({
+        action: 'add',
+        type: 'section',
+        path: `sections[${sectionIndex}]`,
+        label: `Add entire ${section.title || 'section'}`,
+        icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <line x1="3" y1="9" x2="21" y2="9"/>
+        </svg>`
+      });
+    }
+  }
+  
+  // Add "All Experience" option if in experience section
+  if (path.includes('experience[') && data?.experience?.length > 1) {
+    options.push({
+      action: 'add',
+      type: 'all-experience',
+      path: 'experience',
+      label: 'Add all experience',
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="3" width="20" height="14" rx="2"/>
+        <line x1="8" y1="21" x2="16" y2="21"/>
+        <line x1="12" y1="17" x2="12" y2="21"/>
+      </svg>`
+    });
+  }
+  
+  return options;
+}
+
+// Handle context action
+function handleContextAction(action, type, path, element) {
+  const data = store.getData();
+  let content = '';
+  let label = '';
+  
+  switch (type) {
+    case 'text':
+      content = element.textContent?.trim() || '';
+      label = content.length > 40 ? content.substring(0, 40) + '...' : content;
+      break;
+      
+    case 'bullets': {
+      const match = path.match(/experience\[(\d+)\]/);
+      if (match) {
+        const exp = data?.experience?.[parseInt(match[1])];
+        if (exp?.bullets) {
+          content = exp.bullets.map((b, i) => `• ${b}`).join('\n');
+          label = `Bullets: ${exp.title}`;
+        }
+      }
+      break;
+    }
+    
+    case 'experience': {
+      const match = path.match(/experience\[(\d+)\]/);
+      if (match) {
+        const exp = data?.experience?.[parseInt(match[1])];
+        if (exp) {
+          content = formatExperienceEntry(exp);
+          label = `${exp.title} @ ${exp.company}`;
+        }
+      }
+      break;
+    }
+    
+    case 'section': {
+      const match = path.match(/sections\[(\d+)\]/);
+      if (match) {
+        const section = data?.sections?.[parseInt(match[1])];
+        if (section) {
+          content = formatSection(section);
+          label = section.title;
+        }
+      }
+      break;
+    }
+    
+    case 'all-experience':
+      if (data?.experience) {
+        content = data.experience.map(exp => formatExperienceEntry(exp)).join('\n\n---\n\n');
+        label = 'All Experience';
+      }
+      break;
+  }
+  
+  if (action === 'chat') {
+    openChatWithContext(content, path, type);
+  } else if (action === 'add' && content) {
+    // Just add the context chip, don't open chat
+    addContextChip({
+      type: type,
+      path: path,
+      content: content,
+      label: label
+    });
+    
+    // Open the chat panel to show the chip was added
+    const panel = document.getElementById('chat-panel');
+    if (panel?.classList.contains('closed')) {
+      document.getElementById('toggle-chat-panel')?.click();
+    }
+  }
+}
+
+// Format an experience entry as text
+function formatExperienceEntry(exp) {
+  let text = `${exp.title} at ${exp.company}\n${exp.dates}\n`;
+  if (exp.bullets && exp.bullets.length > 0) {
+    text += '\n' + exp.bullets.map(b => `• ${b}`).join('\n');
+  }
+  return text;
+}
+
+// Format a section as text
+function formatSection(section) {
+  let text = `${section.title}:\n`;
+  if (Array.isArray(section.content)) {
+    if (section.type === 'list' || section.type === 'highlights') {
+      text += section.content.map(item => `• ${item}`).join('\n');
+    } else {
+      text += section.content.join(' • ');
+    }
+  }
+  return text;
+}
+
+// Handle mouse over on editable elements
+function handleMouseOver(e) {
+  // Clear any pending hide timeout
+  if (hideButtonTimeout) {
+    clearTimeout(hideButtonTimeout);
+    hideButtonTimeout = null;
+  }
+  
   const editable = e.target.closest('[data-editable]');
   if (!editable || editable.isContentEditable) return;
   
   // Don't show button if already editing
   if (activeElement) return;
   
+  // Don't re-show if we're already showing for this element
+  if (hoveredElement === editable) return;
+  
   hoveredElement = editable;
   showAIButton(editable);
 }
 
-// Handle mouse leave
-function handleMouseLeave(e) {
+// Handle mouse out
+function handleMouseOut(e) {
   const editable = e.target.closest('[data-editable]');
   if (!editable) return;
   
-  // Check if we're leaving to the AI button
+  // Check if we're moving to the AI button/menu container or staying within the same editable
   const relatedTarget = e.relatedTarget;
-  if (relatedTarget === aiButton || aiButton?.contains(relatedTarget)) {
+  const container = aiButton?.container;
+  
+  // If moving to the AI button container, menu, or staying within the editable, don't hide
+  if (relatedTarget && (
+    relatedTarget === container ||
+    container?.contains(relatedTarget) ||
+    relatedTarget === aiMenu ||
+    aiMenu?.contains(relatedTarget) ||
+    editable.contains(relatedTarget)
+  )) {
     return;
   }
   
-  hideAIButton();
-  hoveredElement = null;
+  // If menu is visible, don't hide
+  if (isMenuVisible) {
+    return;
+  }
+  
+  // Use a small delay to prevent flickering
+  hideButtonTimeout = setTimeout(() => {
+    if (!isMenuVisible) {
+      hideAIButton();
+      hoveredElement = null;
+    }
+  }, 100);
 }
 
 // Show the AI button on an element
 function showAIButton(element) {
   if (!aiButton || !element) return;
   
+  const container = aiButton.container || aiButton;
+  
   // Append to the element
   element.style.position = 'relative';
-  element.appendChild(aiButton);
+  element.appendChild(container);
 }
 
 // Hide the AI button
 function hideAIButton() {
   if (!aiButton) return;
-  aiButton.remove();
+  
+  const container = aiButton.container || aiButton;
+  container.remove();
+  hideAIMenu();
 }
 
 // Setup hint dismissal functionality
@@ -189,6 +531,11 @@ function startEditing(element) {
     finishEditing(activeElement);
   }
   
+  // Hide AI button when editing
+  hideAIButton();
+  hideAIMenu();
+  hoveredElement = null;
+  
   activeElement = element;
   
   // Make editable
@@ -219,6 +566,13 @@ function finishEditing(element) {
   if (!element || !element.isContentEditable) return;
   
   const path = element.dataset.editable;
+  
+  // Remove AI button container before reading text content (it would be included otherwise)
+  const aiContainer = element.querySelector('.editable-ai-container');
+  if (aiContainer) {
+    aiContainer.remove();
+  }
+  
   const newValue = element.textContent.trim();
   
   // Handle different types of editable content
