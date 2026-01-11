@@ -9,9 +9,10 @@ import { initPdfExport } from './pdf.js';
 import { initInlineEditor, refreshInlineEditor } from './inlineEditor.js';
 import { initStructurePanel, setDesignSettings } from './structurePanel.js';
 import { initHeaderBar, getCurrentId, loadVariant } from './headerBar.js';
-import { initChatPanel } from './chatPanel.js';
+import { initChatPanel, refreshChatPanel } from './chatPanel.js';
 import { initZoomControls } from './zoomControls.js';
 import { migrateBuiltInVariants, saveSettings, getSettings } from './persistence.js';
+import { initTheme, setupThemeToggleAfterRender } from './theme.js';
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -125,8 +126,14 @@ async function init() {
   // Migrate built-in variants to storage on first run
   await migrateBuiltInVariants(BUILT_IN_VARIANTS);
   
+  // Initialize theme manager (before header for proper icons)
+  initTheme();
+  
   // Initialize header bar (includes variant management)
   initHeaderBar(handleVariantChange);
+  
+  // Setup theme toggle after header render
+  setupThemeToggleAfterRender();
   
   // Initialize inline editor
   initInlineEditor();
@@ -466,6 +473,9 @@ function saveApiKeysFromModal() {
     openaiKey: openaiInput?.value || '',
     geminiKey: geminiInput?.value || ''
   });
+  
+  // Refresh chat panel UI to reflect new API key configuration
+  refreshChatPanel();
 }
 
 // Clear all API keys
@@ -475,6 +485,9 @@ function clearAllApiKeys() {
     openaiKey: '',
     geminiKey: ''
   });
+  
+  // Refresh chat panel UI to reflect cleared API keys
+  refreshChatPanel();
 }
 
 // Render the current resume

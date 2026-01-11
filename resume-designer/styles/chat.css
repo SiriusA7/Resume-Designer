@@ -6,7 +6,7 @@
 .chat-panel {
   width: var(--chat-panel-width);
   height: 100%;
-  background: white;
+  background: var(--color-panel-bg);
   border-right: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
@@ -71,8 +71,8 @@
   justify-content: space-between;
   gap: var(--space-xs);
   padding: 6px 10px;
-  background: rgba(0, 0, 0, 0.04);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--color-hover-bg);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   font-family: var(--font-body);
   font-size: 0.8rem;
@@ -83,8 +83,8 @@
 }
 
 .thread-selector-trigger:hover {
-  background: rgba(0, 0, 0, 0.08);
-  border-color: rgba(0, 0, 0, 0.15);
+  background: var(--color-bg-dark);
+  border-color: var(--color-border);
 }
 
 .thread-selector-trigger .thread-name {
@@ -103,10 +103,10 @@
   min-width: 220px;
   max-width: 280px;
   max-height: 300px;
-  background: white;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-md);
   z-index: 1000;
   opacity: 0;
   visibility: hidden;
@@ -128,7 +128,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--color-border-light);
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -172,7 +172,7 @@
 }
 
 .thread-item:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--color-hover-bg);
 }
 
 .thread-item.active {
@@ -229,7 +229,7 @@
 
 .chat-settings-btn:hover,
 .chat-close-btn:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--color-hover-bg);
   color: var(--color-text);
 }
 
@@ -318,7 +318,7 @@
 .chat-model-selector .custom-dropdown-trigger {
   width: 100%;
   justify-content: space-between;
-  background: white;
+  background: var(--color-input-bg);
   border-color: var(--color-border);
   color: var(--color-text);
 }
@@ -328,13 +328,13 @@
 }
 
 .chat-model-selector .custom-dropdown-menu {
-  background: white;
+  background: var(--color-panel-bg);
   border-color: var(--color-border);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-md);
 }
 
 .chat-model-selector .custom-dropdown-group-label {
-  background: #f5f4f2;
+  background: var(--color-bg);
   color: var(--color-accent);
 }
 
@@ -343,7 +343,7 @@
 }
 
 .chat-model-selector .custom-dropdown-option:hover {
-  background: #f5f4f2;
+  background: var(--color-hover-bg);
 }
 
 .chat-model-selector .custom-dropdown-option.selected {
@@ -358,9 +358,9 @@
   justify-content: space-between;
   padding: 8px 12px;
   margin: 2px 4px;
-  background: #f9f8f6;
+  background: var(--color-bg);
   border-radius: 6px;
-  border: 1px dashed rgba(0, 0, 0, 0.15);
+  border: 1px dashed var(--color-border);
 }
 
 .custom-dropdown-notice .notice-text {
@@ -487,7 +487,7 @@
 }
 
 .chat-message-assistant .chat-bubble {
-  background: var(--color-bg);
+  background: var(--color-bg-dark);
   color: var(--color-text);
   border-radius: 16px 16px 16px 4px;
   max-width: 90%;
@@ -508,14 +508,14 @@
 }
 
 .chat-bubble code {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--color-code-bg);
   padding: 2px 4px;
   border-radius: 3px;
   font-size: 0.85em;
 }
 
 .chat-bubble pre {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--color-code-bg);
   padding: var(--space-sm);
   border-radius: 6px;
   overflow-x: auto;
@@ -573,7 +573,7 @@
 
 .chat-bubble hr {
   border: none;
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  border-top: 1px solid var(--color-border-light);
   margin: var(--space-md) 0;
 }
 
@@ -680,12 +680,18 @@
 /* Error Message */
 .chat-error {
   padding: var(--space-sm) var(--space-md);
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.3);
   border-radius: 8px;
   color: #dc2626;
   font-size: 0.85rem;
   margin-bottom: var(--space-md);
+}
+
+[data-theme="dark"] .chat-error {
+  background: rgba(220, 38, 38, 0.15);
+  border-color: rgba(220, 38, 38, 0.4);
+  color: #f87171;
 }
 
 /* ==========================================================================
@@ -782,7 +788,7 @@
 }
 
 .context-chip-remove:hover {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--color-hover-bg);
   color: var(--color-text);
 }
 
@@ -873,7 +879,7 @@
 .chat-input-area {
   padding: var(--space-md);
   border-top: 1px solid var(--color-border);
-  background: white;
+  background: var(--color-panel-bg);
 }
 
 .chat-input-wrapper {

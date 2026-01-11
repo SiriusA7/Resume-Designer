@@ -3,6 +3,8 @@
  * Handles PDF generation via html2pdf.js and print functionality
  */
 
+import { isElectron, saveFile } from './native.js';
+
 let html2pdfModule = null;
 
 // Dynamically import html2pdf.js
@@ -174,7 +176,23 @@ async function handleDownloadPdf(customFilename) {
       }
     };
     
-    await html2pdf().set(options).from(resumeEl).save();
+    if (isElectron) {
+      // In Electron: Generate PDF as blob and use native save dialog
+      const pdfBlob = await html2pdf().set(options).from(resumeEl).outputPdf('blob');
+      
+      const result = await saveFile(pdfBlob, filename, [
+        { name: 'PDF Documents', extensions: ['pdf'] }
+      ]);
+      
+      if (result.success) {
+        console.log('PDF saved to:', result.filePath);
+      } else if (!result.canceled) {
+        throw new Error(result.error || 'Failed to save PDF');
+      }
+    } else {
+      // In browser: Use default download behavior
+      await html2pdf().set(options).from(resumeEl).save();
+    }
     
   } catch (error) {
     console.error('PDF generation failed:', error);

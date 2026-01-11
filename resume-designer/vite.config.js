@@ -3,6 +3,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   root: '.',
   publicDir: 'public',
+  // Use relative paths for Electron compatibility
+  base: './',
   build: {
     outDir: 'dist',
     emptyOutDir: true

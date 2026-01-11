@@ -351,6 +351,13 @@ export function addContextChip(chipData) {
   }
 }
 
+// Refresh the chat panel UI (called when API keys change)
+export function refreshChatPanel() {
+  renderModelSelector();
+  renderThreadSelector();
+  renderChatView();
+}
+
 // Remove a context chip
 function removeContextChip(index) {
   contextChips.splice(index, 1);
@@ -1036,6 +1043,17 @@ function getThreadDisplayName(thread) {
 function renderThreadSelector() {
   const container = document.getElementById('thread-selector');
   if (!container) return;
+  
+  // Hide thread selector if no API keys are configured
+  const configuredProviders = getConfiguredProviders();
+  if (configuredProviders.length === 0) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  
+  // Show thread selector
+  container.style.display = '';
   
   const currentThread = threads.find(t => t.id === currentThreadId);
   const currentName = currentThread ? getThreadDisplayName(currentThread) : 'New Chat';

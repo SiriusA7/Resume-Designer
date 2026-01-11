@@ -676,7 +676,12 @@ function setupDragAndDrop(panel) {
     }
     
     // Remove all drag-over states
-    panel.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    panel.querySelectorAll('.drag-over, .drag-over-bottom').forEach(el => {
+      el.classList.remove('drag-over', 'drag-over-bottom');
+    });
+    panel.querySelectorAll('.drag-over-end').forEach(el => {
+      el.classList.remove('drag-over-end');
+    });
   });
   
   panel.addEventListener('dragover', (e) => {
@@ -690,10 +695,16 @@ function setupDragAndDrop(panel) {
     const items = [...sortableList.querySelectorAll('[draggable="true"]:not(.dragging)')];
     
     // Remove previous drag-over states
-    items.forEach(item => item.classList.remove('drag-over'));
+    items.forEach(item => item.classList.remove('drag-over', 'drag-over-bottom'));
+    sortableList.classList.remove('drag-over-end');
     
     if (afterElement) {
+      // Dropping before this element - show indicator on top
       afterElement.classList.add('drag-over');
+    } else if (items.length > 0) {
+      // Dropping at the end - show indicator on the last item's bottom
+      items[items.length - 1].classList.add('drag-over-bottom');
+      sortableList.classList.add('drag-over-end');
     }
   });
   
@@ -702,6 +713,11 @@ function setupDragAndDrop(panel) {
     
     const sortableList = e.target.closest('[data-sortable]');
     if (!sortableList || !draggedItem) return;
+    
+    // Save scroll position before re-render
+    const panelContent = document.getElementById('structure-panel-content');
+    const tabContent = panelContent?.querySelector('.panel-tab-content');
+    const scrollTop = tabContent?.scrollTop || 0;
     
     const sortablePath = sortableList.dataset.sortable;
     const items = [...sortableList.querySelectorAll('[draggable="true"]')];
@@ -720,6 +736,15 @@ function setupDragAndDrop(panel) {
     if (fromIndex !== toIndex && !isNaN(fromIndex) && !isNaN(toIndex)) {
       store.moveInArray(sortablePath, fromIndex, toIndex);
       renderPanel();
+      
+      // Restore scroll position after re-render
+      requestAnimationFrame(() => {
+        const newTabContent = document.querySelector('#structure-panel-content .panel-tab-content');
+        if (newTabContent) {
+          newTabContent.scrollTop = scrollTop;
+        }
+      });
+      
       if (onChangeCallback) onChangeCallback();
     }
   });

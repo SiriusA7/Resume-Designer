@@ -3,17 +3,6 @@
    ========================================================================== */
 
 :root {
-  /* Color Palette - Warm, artistic tones */
-  --color-bg: #f8f6f3;
-  --color-bg-dark: #e8e4df;
-  --color-sidebar: #2d2a26;
-  --color-sidebar-text: #f8f6f3;
-  --color-accent: #c45c3e;
-  --color-accent-light: #d97a5d;
-  --color-text: #2d2a26;
-  --color-text-muted: #6b6560;
-  --color-border: #d4cfc8;
-  
   /* Typography */
   --font-display: 'Cormorant Garamond', Georgia, serif;
   --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -34,6 +23,138 @@
   --header-height: 56px;
   --chat-panel-width: 320px;
   --structure-panel-width: 380px;
+}
+
+/* ==========================================================================
+   Light Theme (Default)
+   ========================================================================== */
+
+:root,
+[data-theme="light"] {
+  /* Color Palette - Warm, artistic tones */
+  --color-bg: #f8f6f3;
+  --color-bg-dark: #e8e4df;
+  --color-bg-light: #ffffff;
+  --color-sidebar: #2d2a26;
+  --color-sidebar-text: #f8f6f3;
+  --color-accent: #c45c3e;
+  --color-accent-light: #d97a5d;
+  --color-accent-hover: #b5513a;
+  --color-text: #2d2a26;
+  --color-text-muted: #6b6560;
+  --color-text-light: #8a8580;
+  --color-border: #d4cfc8;
+  --color-border-light: #e8e4df;
+  
+  /* Panel backgrounds */
+  --color-panel-bg: #ffffff;
+  --color-panel-header: #f8f6f3;
+  --color-input-bg: #ffffff;
+  --color-hover-bg: rgba(0, 0, 0, 0.04);
+  
+  /* Code/pre blocks */
+  --color-code-bg: rgba(0, 0, 0, 0.05);
+  
+  /* Modal */
+  --color-modal-bg: #ffffff;
+  --color-modal-overlay: rgba(0, 0, 0, 0.5);
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.1);
+  
+  /* Scrollbar */
+  --scrollbar-bg: #e8e4df;
+  --scrollbar-thumb: #c4c0b8;
+  --scrollbar-thumb-hover: #a8a49c;
+}
+
+/* ==========================================================================
+   Dark Theme
+   ========================================================================== */
+
+[data-theme="dark"] {
+  /* Color Palette - Dark artistic tones */
+  --color-bg: #1a1918;
+  --color-bg-dark: #121111;
+  --color-bg-light: #2d2a26;
+  --color-sidebar: #0d0c0c;
+  --color-sidebar-text: #e8e4df;
+  --color-accent: #d97a5d;
+  --color-accent-light: #e8957a;
+  --color-accent-hover: #c45c3e;
+  --color-text: #e8e4df;
+  --color-text-muted: #9a9590;
+  --color-text-light: #7a7570;
+  --color-border: #3d3a36;
+  --color-border-light: #2d2a26;
+  
+  /* Panel backgrounds */
+  --color-panel-bg: #1a1918;
+  --color-panel-header: #0d0c0c;
+  --color-input-bg: #2d2a26;
+  --color-hover-bg: rgba(255, 255, 255, 0.05);
+  
+  /* Code/pre blocks */
+  --color-code-bg: rgba(255, 255, 255, 0.08);
+  
+  /* Modal */
+  --color-modal-bg: #1a1918;
+  --color-modal-overlay: rgba(0, 0, 0, 0.7);
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.4);
+  
+  /* Scrollbar */
+  --scrollbar-bg: #2d2a26;
+  --scrollbar-thumb: #4d4a46;
+  --scrollbar-thumb-hover: #5d5a56;
+}
+
+/* System preference detection */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    /* Color Palette - Dark artistic tones */
+    --color-bg: #1a1918;
+    --color-bg-dark: #121111;
+    --color-bg-light: #2d2a26;
+    --color-sidebar: #0d0c0c;
+    --color-sidebar-text: #e8e4df;
+    --color-accent: #d97a5d;
+    --color-accent-light: #e8957a;
+    --color-accent-hover: #c45c3e;
+    --color-text: #e8e4df;
+    --color-text-muted: #9a9590;
+    --color-text-light: #7a7570;
+    --color-border: #3d3a36;
+    --color-border-light: #2d2a26;
+    
+    /* Panel backgrounds */
+    --color-panel-bg: #1a1918;
+    --color-panel-header: #0d0c0c;
+    --color-input-bg: #2d2a26;
+    --color-hover-bg: rgba(255, 255, 255, 0.05);
+    
+    /* Code/pre blocks */
+    --color-code-bg: rgba(255, 255, 255, 0.08);
+    
+    /* Modal */
+    --color-modal-bg: #1a1918;
+    --color-modal-overlay: rgba(0, 0, 0, 0.7);
+    
+    /* Shadows */
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.4);
+    
+    /* Scrollbar */
+    --scrollbar-bg: #2d2a26;
+    --scrollbar-thumb: #4d4a46;
+    --scrollbar-thumb-hover: #5d5a56;
+  }
 }
 
 /* Reset & Base */
@@ -88,8 +209,8 @@ body {
   gap: var(--space-lg);
   height: var(--header-height);
   padding: 0 var(--space-lg);
-  background: var(--color-sidebar);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  background: var(--color-panel-bg);
+  border-bottom: 1px solid var(--color-border);
   z-index: 300; /* Above sidebars */
   flex-shrink: 0; /* Don't shrink */
   position: relative; /* Stay in document flow but above everything */
@@ -105,7 +226,7 @@ body {
   font-family: var(--font-display);
   font-size: 1.25rem;
   font-weight: 600;
-  color: var(--color-accent-light);
+  color: var(--color-accent);
   margin: 0;
   white-space: nowrap;
 }
@@ -124,10 +245,10 @@ body {
   min-width: 200px;
   padding: var(--space-xs) var(--space-md);
   padding-right: 2rem;
-  background: rgba(248, 246, 243, 0.1);
-  border: 1px solid rgba(248, 246, 243, 0.2);
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
-  color: var(--color-sidebar-text);
+  color: var(--color-text);
   font-family: var(--font-body);
   font-size: 0.9rem;
   cursor: pointer;
@@ -138,7 +259,7 @@ body {
 }
 
 .header-variant-select:hover {
-  border-color: rgba(248, 246, 243, 0.4);
+  border-color: var(--color-text-muted);
 }
 
 .header-variant-select:focus {
@@ -160,14 +281,14 @@ body {
   background: transparent;
   border: none;
   border-radius: 4px;
-  color: rgba(248, 246, 243, 0.7);
+  color: var(--color-text-muted);
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
 .header-action-btn:hover {
-  background: rgba(248, 246, 243, 0.1);
-  color: var(--color-sidebar-text);
+  background: var(--color-hover-bg);
+  color: var(--color-text);
 }
 
 .header-action-btn.danger:hover {
@@ -188,9 +309,9 @@ body {
   gap: var(--space-xs);
   padding: var(--space-xs) var(--space-sm);
   background: transparent;
-  border: 1px solid rgba(248, 246, 243, 0.2);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
-  color: rgba(248, 246, 243, 0.8);
+  color: var(--color-text-muted);
   font-family: var(--font-body);
   font-size: 0.8rem;
   cursor: pointer;
@@ -198,8 +319,9 @@ body {
 }
 
 .header-import-btn:hover {
-  background: rgba(248, 246, 243, 0.1);
-  border-color: rgba(248, 246, 243, 0.3);
+  background: var(--color-hover-bg);
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
 }
 
 .header-export-dropdown {
@@ -212,9 +334,9 @@ body {
   gap: var(--space-xs);
   padding: var(--space-xs) var(--space-sm);
   background: transparent;
-  border: 1px solid rgba(248, 246, 243, 0.2);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
-  color: rgba(248, 246, 243, 0.8);
+  color: var(--color-text-muted);
   font-family: var(--font-body);
   font-size: 0.8rem;
   cursor: pointer;
@@ -222,8 +344,9 @@ body {
 }
 
 .header-export-btn:hover {
-  background: rgba(248, 246, 243, 0.1);
-  border-color: rgba(248, 246, 243, 0.3);
+  background: var(--color-hover-bg);
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
 }
 
 .header-export-menu {
@@ -231,12 +354,13 @@ body {
   top: 100%;
   right: 0;
   margin-top: var(--space-xs);
-  background: var(--color-sidebar);
-  border: 1px solid rgba(248, 246, 243, 0.2);
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   overflow: hidden;
   opacity: 0;
   visibility: hidden;
+  box-shadow: var(--shadow-md);
   transform: translateY(-8px);
   transition: all var(--transition-fast);
   z-index: 200;
@@ -255,7 +379,7 @@ body {
   padding: var(--space-sm) var(--space-md);
   background: none;
   border: none;
-  color: rgba(248, 246, 243, 0.8);
+  color: var(--color-text);
   font-family: var(--font-body);
   font-size: 0.85rem;
   text-align: left;
@@ -264,12 +388,12 @@ body {
 }
 
 .header-export-option:hover {
-  background: rgba(248, 246, 243, 0.1);
-  color: var(--color-sidebar-text);
+  background: var(--color-hover-bg);
+  color: var(--color-accent);
 }
 
 .header-export-option + .header-export-option {
-  border-top: 1px solid rgba(248, 246, 243, 0.1);
+  border-top: 1px solid var(--color-border-light);
 }
 
 .header-pdf-btn {
@@ -475,7 +599,7 @@ body {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--color-modal-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -494,9 +618,9 @@ body {
   width: 90%;
   max-width: 480px;
   max-height: 90vh;
-  background: white;
+  background: var(--color-modal-bg);
   border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   transform: scale(0.95);
@@ -537,7 +661,7 @@ body {
 }
 
 .modal-close:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--color-hover-bg);
   color: var(--color-text);
 }
 
@@ -593,8 +717,8 @@ body {
   align-items: center;
   justify-content: center;
   width: 40px;
-  background: #f5f4f2;
-  border: 1px solid transparent;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
   border-radius: 4px;
   color: var(--color-text-muted);
   cursor: pointer;
@@ -602,7 +726,7 @@ body {
 }
 
 .api-key-toggle:hover {
-  background: #e8e4df;
+  background: var(--color-bg-dark);
   color: var(--color-text);
 }
 
@@ -794,7 +918,7 @@ body {
 
 /* Light theme variant (for sidebar panels) */
 .custom-dropdown.light .custom-dropdown-trigger {
-  background: white;
+  background: var(--color-input-bg);
   border-color: var(--color-border);
   color: var(--color-text);
 }
@@ -804,13 +928,13 @@ body {
 }
 
 .custom-dropdown.light .custom-dropdown-menu {
-  background: white;
+  background: var(--color-panel-bg);
   border-color: var(--color-border);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-md);
 }
 
 .custom-dropdown.light .custom-dropdown-group-label {
-  background: #f5f4f2;
+  background: var(--color-bg);
   color: var(--color-accent);
 }
 
@@ -819,12 +943,84 @@ body {
 }
 
 .custom-dropdown.light .custom-dropdown-option:hover {
-  background: #f5f4f2;
+  background: var(--color-hover-bg);
 }
 
 .custom-dropdown.light .custom-dropdown-option.selected {
   background: rgba(196, 92, 62, 0.1);
   color: var(--color-accent);
+}
+
+/* ==========================================================================
+   Theme Toggle Dropdown
+   ========================================================================== */
+
+.theme-toggle-dropdown {
+  position: relative;
+}
+
+.theme-toggle-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+
+.theme-icon {
+  display: none;
+}
+
+.theme-toggle-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--space-xs);
+  min-width: 140px;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px);
+  transition: all var(--transition-fast);
+  z-index: 200;
+  box-shadow: var(--shadow-md);
+}
+
+.theme-toggle-dropdown.open .theme-toggle-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: none;
+  border: none;
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.theme-option:hover {
+  background: var(--color-hover-bg);
+  color: var(--color-accent);
+}
+
+.theme-option.selected {
+  background: var(--color-accent-faded, rgba(196, 92, 62, 0.1));
+  color: var(--color-accent);
+}
+
+.theme-option + .theme-option {
+  border-top: 1px solid var(--color-border-light);
 }
 
 /* ==========================================================================
