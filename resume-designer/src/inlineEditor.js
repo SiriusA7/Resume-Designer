@@ -5,6 +5,9 @@
 
 import { store } from './store.js';
 import { openChatWithContext, addContextChip } from './chatPanel.js';
+import { getPendingChange, applyInlineChange, rejectInlineChange, isInlineChangesActive, getCurrentChangeSet, getOriginalContent } from './inlineChanges.js';
+import { getPathLabel, DIFF_TYPES } from './diffEngine.js';
+import { showDiffView } from './diffView.js';
 
 let isInitialized = false;
 let activeElement = null;
@@ -66,7 +69,7 @@ export function initInlineEditor() {
 
 // Create the AI chat button element with dropdown menu
 function createAIButton() {
-  // Create container
+  // Create container for the button
   const container = document.createElement('div');
   container.className = 'editable-ai-container';
   
@@ -79,12 +82,13 @@ function createAIButton() {
     </svg>
   `;
   
-  // Create dropdown menu
+  // Create dropdown menu - append to body to escape stacking context
   aiMenu = document.createElement('div');
   aiMenu.className = 'editable-ai-menu';
+  aiMenu.id = 'editable-ai-menu';
+  document.body.appendChild(aiMenu);
   
   container.appendChild(aiButton);
-  container.appendChild(aiMenu);
   
   // Handle AI button click - show menu
   aiButton.addEventListener('click', (e) => {
@@ -96,47 +100,135 @@ function createAIButton() {
     }
   });
   
-  // Prevent button from triggering blur
+  // Prevent button from triggering blur or text selection
   aiButton.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
+  });
+  
+  // Prevent container clicks from reaching elements behind
+  container.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+  
+  container.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+  });
+  
+  // Prevent menu clicks from reaching elements behind
+  aiMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+  
+  aiMenu.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    e.preventDefault(); // Prevent text selection
   });
   
   // Store container reference
   aiButton.container = container;
 }
 
+// Track the element the menu was opened for
+let menuTargetElement = null;
+
 // Show AI context menu with relevant options
 function showAIMenu(element) {
   if (!aiMenu) return;
   
   isMenuVisible = true;
+  menuTargetElement = element; // Track which element opened the menu
   
-  const path = element.dataset.editable || '';
+  const path = element.dataset.editable || element.dataset.changePath || '';
   const text = element.textContent?.trim() || '';
-  const contextOptions = getContextOptions(element, path, text);
   
-  aiMenu.innerHTML = contextOptions.map(opt => {
-    if (opt.action === 'separator') {
-      return `<div class="editable-ai-menu-separator">${opt.label}</div>`;
-    }
-    return `
-      <button class="editable-ai-menu-item" data-action="${opt.action}" data-type="${opt.type}" data-path="${opt.path || ''}">
-        ${opt.icon}
-        <span>${opt.label}</span>
-      </button>
+  // Check if this element has pending AI changes
+  const pendingChange = getPendingChange(path);
+  
+  let menuContent = '';
+  
+  if (pendingChange) {
+    // Show apply/reject/review options for pending changes
+    // Get original content to show what's being replaced
+    const originalContent = getOriginalContent(path);
+    
+    menuContent = `
+      ${originalContent ? `
+        <div class="editable-ai-menu-preview compact original">
+          <div class="preview-label">Was:</div>
+          <div class="preview-content">${escapeHtml(truncateText(originalContent, 100))}</div>
+        </div>
+      ` : ''}
+      <div class="editable-ai-menu-actions">
+        <button class="editable-ai-menu-item apply-btn" data-action="apply-change" data-path="${path}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>Apply</span>
+        </button>
+        <button class="editable-ai-menu-item reject-btn" data-action="reject-change" data-path="${path}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          <span>Reject</span>
+        </button>
+        <button class="editable-ai-menu-item review-btn" data-action="review-all">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/>
+            <rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          <span>Review All</span>
+        </button>
+      </div>
     `;
-  }).join('');
+  } else {
+    // Show normal AI context options
+    const contextOptions = getContextOptions(element, path, text);
+    menuContent = contextOptions.map(opt => {
+      if (opt.action === 'separator') {
+        return `<div class="editable-ai-menu-separator">${opt.label}</div>`;
+      }
+      return `
+        <button class="editable-ai-menu-item" data-action="${opt.action}" data-type="${opt.type}" data-path="${opt.path || ''}">
+          ${opt.icon}
+          <span>${opt.label}</span>
+        </button>
+      `;
+    }).join('');
+  }
+  
+  aiMenu.innerHTML = menuContent;
   
   // Add click handlers
   aiMenu.querySelectorAll('.editable-ai-menu-item').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      handleContextAction(btn.dataset.action, btn.dataset.type, btn.dataset.path, element);
+      
+      const action = btn.dataset.action;
+      const actionPath = btn.dataset.path;
+      
+      if (action === 'apply-change') {
+        applyInlineChange(actionPath);
+      } else if (action === 'reject-change') {
+        rejectInlineChange(actionPath);
+      } else if (action === 'review-all') {
+        // Open the full diff review view
+        const changeSet = getCurrentChangeSet();
+        if (changeSet) {
+          showDiffView(changeSet);
+        }
+      } else {
+        handleContextAction(action, btn.dataset.type, actionPath, element);
+      }
+      
       hideAIMenu();
       hideAIButton();
       hoveredElement = null;
+      menuTargetElement = null;
     });
     
     btn.addEventListener('mousedown', (e) => {
@@ -144,6 +236,11 @@ function showAIMenu(element) {
       e.stopPropagation();
     });
   });
+  
+  // Position the menu using fixed coordinates (escape stacking context)
+  const btnRect = aiButton.getBoundingClientRect();
+  aiMenu.style.top = `${btnRect.bottom + 4}px`;
+  aiMenu.style.left = `${Math.max(10, btnRect.right - 200)}px`; // Align right edge with button, min 10px from left
   
   aiMenu.classList.add('visible');
   
@@ -153,26 +250,53 @@ function showAIMenu(element) {
   }, 10);
 }
 
+// Helper to truncate text
+function truncateText(text, maxLength) {
+  if (!text) return '';
+  text = String(text);
+  return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
+}
+
+// Helper to escape HTML
+function escapeHtml(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function closeMenuOnClickOutside(e) {
   const container = aiButton?.container;
-  if (!aiMenu?.contains(e.target) && !container?.contains(e.target)) {
-    hideAIMenu();
-    document.removeEventListener('click', closeMenuOnClickOutside);
-    
-    // Also hide the button after menu closes if not hovering
-    setTimeout(() => {
-      if (!hoveredElement || !hoveredElement.matches(':hover')) {
-        hideAIButton();
-        hoveredElement = null;
-      }
-    }, 100);
+  const menuEl = document.getElementById('editable-ai-menu');
+  
+  // Don't close if clicking within the menu or container
+  if (menuEl?.contains(e.target) || container?.contains(e.target)) {
+    return;
   }
+  
+  hideAIMenu();
+  document.removeEventListener('click', closeMenuOnClickOutside);
+  menuTargetElement = null;
+  
+  // Also hide the button after menu closes if not hovering
+  setTimeout(() => {
+    if (!hoveredElement || !hoveredElement.matches(':hover')) {
+      hideAIButton();
+      hoveredElement = null;
+    }
+  }, 100);
 }
 
 // Hide AI menu
 function hideAIMenu() {
   isMenuVisible = false;
-  aiMenu?.classList.remove('visible');
+  if (aiMenu) {
+    aiMenu.classList.remove('visible');
+    aiMenu.style.top = '';
+    aiMenu.style.left = '';
+  }
 }
 
 // Get context options based on the element
@@ -414,6 +538,9 @@ function handleMouseOver(e) {
   // Don't show button if already editing
   if (activeElement) return;
   
+  // Don't change anything if menu is visible - keep showing for original element
+  if (isMenuVisible && menuTargetElement) return;
+  
   // Don't re-show if we're already showing for this element
   if (hoveredElement === editable) return;
   
@@ -460,6 +587,26 @@ function showAIButton(element) {
   if (!aiButton || !element) return;
   
   const container = aiButton.container || aiButton;
+  
+  // Check if element has pending change and update button appearance
+  const hasChange = element.dataset.hasChange;
+  if (hasChange) {
+    aiButton.classList.add('has-change', `change-${hasChange}`);
+    aiButton.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+    `;
+  } else {
+    aiButton.classList.remove('has-change', 'change-add', 'change-remove', 'change-modify');
+    aiButton.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+    `;
+  }
   
   // Append to the element
   element.style.position = 'relative';
@@ -515,11 +662,21 @@ function updateHintVisibility() {
 
 // Handle click on editable elements
 function handleClick(e) {
+  // Don't start editing if clicking on the AI container/menu
+  if (e.target.closest('.editable-ai-container') || e.target.closest('.editable-ai-menu')) {
+    return;
+  }
+  
   const editable = e.target.closest('[data-editable]');
   if (!editable) return;
   
   // Don't start editing if already editing
   if (editable.isContentEditable) return;
+  
+  // Don't start editing if element has pending AI changes - use the hover menu instead
+  if (editable.dataset.hasChange) {
+    return;
+  }
   
   startEditing(editable);
 }

@@ -301,9 +301,7 @@
 
 /* Model Selector - Custom Dropdown */
 .chat-model-selector {
-  padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg);
+  flex: 1;
 }
 
 /* Hide the native select, we'll use custom dropdown */
@@ -312,15 +310,17 @@
 }
 
 .chat-model-selector .custom-dropdown {
-  width: 100%;
+  width: auto;
 }
 
 .chat-model-selector .custom-dropdown-trigger {
-  width: 100%;
-  justify-content: space-between;
-  background: var(--color-input-bg);
-  border-color: var(--color-border);
-  color: var(--color-text);
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  gap: 4px;
 }
 
 .chat-model-selector .custom-dropdown-trigger:hover {
@@ -331,6 +331,13 @@
   background: var(--color-panel-bg);
   border-color: var(--color-border);
   box-shadow: var(--shadow-md);
+  /* Open upward since selector is at bottom of screen */
+  bottom: 100%;
+  top: auto;
+  margin-bottom: 4px;
+  margin-top: 0;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .chat-model-selector .custom-dropdown-group-label {
@@ -612,25 +619,72 @@
   border-top-color: rgba(255, 255, 255, 0.2);
 }
 
+/* Chat Action Buttons Container */
+.chat-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.chat-message-assistant .chat-action-buttons {
+  border-top-color: var(--color-border-light);
+}
+
 /* AI Apply Button */
 .chat-apply-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  margin-top: var(--space-sm);
   padding: var(--space-xs) var(--space-sm);
   background: var(--color-accent);
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: var(--font-body);
   font-size: 0.8rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: background var(--transition-fast);
+  transition: all var(--transition-fast);
 }
 
 .chat-apply-btn:hover {
   background: var(--color-accent-light);
+  transform: translateY(-1px);
+}
+
+/* Review Changes Button */
+.chat-review-changes-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 4px rgba(22, 163, 74, 0.2);
+}
+
+.chat-review-changes-btn:hover {
+  background: linear-gradient(135deg, #15803d 0%, #16a34a 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(22, 163, 74, 0.3);
+}
+
+.chat-review-changes-btn:active {
+  transform: translateY(0);
+}
+
+.chat-review-changes-btn svg {
+  flex-shrink: 0;
 }
 
 /* Loading Indicator */
@@ -880,6 +934,123 @@
   padding: var(--space-md);
   border-top: 1px solid var(--color-border);
   background: var(--color-panel-bg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.chat-input-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--color-border-light);
+}
+
+.chat-options-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--color-border);
+  margin: 0 var(--space-xs);
+}
+
+.chat-option-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.chat-option-btn:hover {
+  background: var(--color-hover-bg);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.chat-option-btn.active {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+}
+
+.chat-option-btn.active:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+/* Reasoning dropdown */
+.chat-reasoning-dropdown {
+  position: relative;
+}
+
+.chat-reasoning-menu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 8px;
+  min-width: 140px;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  padding: var(--space-xs);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(8px);
+  transition: all var(--transition-fast);
+  z-index: 100;
+}
+
+.chat-reasoning-dropdown.open .chat-reasoning-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.chat-reasoning-label {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chat-reasoning-option {
+  display: block;
+  width: 100%;
+  padding: var(--space-sm) var(--space-sm);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.chat-reasoning-option:hover {
+  background: var(--color-hover-bg);
+}
+
+.chat-reasoning-option.selected {
+  background: rgba(196, 92, 62, 0.1);
+  color: var(--color-accent);
+}
+
+/* File input (hidden) */
+#chat-file-input {
+  display: none;
 }
 
 .chat-input-wrapper {
@@ -941,7 +1112,6 @@
 .chat-shortcuts {
   display: flex;
   gap: var(--space-xs);
-  margin-top: var(--space-sm);
   flex-wrap: wrap;
 }
 

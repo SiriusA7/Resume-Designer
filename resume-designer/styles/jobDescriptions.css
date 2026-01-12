@@ -1,0 +1,649 @@
+/**
+ * Job Description Panel Styles
+ */
+
+/* ============================================
+   Panel Overlay
+   ============================================ */
+
+.jd-panel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+}
+
+.jd-panel-overlay.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.jd-panel {
+  background: var(--color-panel-bg);
+  border-radius: 12px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  width: 90%;
+  max-width: 800px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  transform: scale(0.95) translateY(10px);
+  transition: transform 0.2s;
+}
+
+.jd-panel-overlay.show .jd-panel {
+  transform: scale(1) translateY(0);
+}
+
+/* ============================================
+   Panel Header
+   ============================================ */
+
+.jd-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.jd-panel-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.jd-panel-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+}
+
+.jd-panel-close:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+/* ============================================
+   Panel Content
+   ============================================ */
+
+.jd-panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.jd-panel-section {
+  margin-bottom: 24px;
+}
+
+.jd-panel-section:last-child {
+  margin-bottom: 0;
+}
+
+.jd-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.jd-section-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.jd-section-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.jd-icon-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+}
+
+.jd-icon-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+/* ============================================
+   Add Form
+   ============================================ */
+
+.jd-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.jd-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  transition: border-color 0.15s;
+}
+
+.jd-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.jd-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.jd-textarea {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  resize: vertical;
+  min-height: 120px;
+  transition: border-color 0.15s;
+}
+
+.jd-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.jd-textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+.jd-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.jd-paste-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ============================================
+   Job Description List
+   ============================================ */
+
+.jd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.jd-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--color-text-muted);
+}
+
+.jd-empty svg {
+  opacity: 0.5;
+  margin-bottom: 16px;
+}
+
+.jd-empty p {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.jd-empty span {
+  font-size: 13px;
+}
+
+/* ============================================
+   Job Description Card
+   ============================================ */
+
+.jd-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 14px;
+  transition: all 0.15s;
+}
+
+.jd-card.active {
+  border-color: var(--color-accent);
+  background: rgba(196, 92, 62, 0.03);
+}
+
+.jd-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.jd-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.jd-card-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jd-card-company {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.jd-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 12px;
+}
+
+.jd-card-toggle,
+.jd-card-edit,
+.jd-card-delete {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+}
+
+.jd-card-toggle:hover,
+.jd-card-edit:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.jd-card-toggle.active {
+  color: var(--color-accent);
+}
+
+.jd-card-delete:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.jd-card-preview {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.jd-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.jd-card-date {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* ============================================
+   Analysis Section
+   ============================================ */
+
+.jd-analysis-section {
+  background: var(--color-bg);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.jd-analysis-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.jd-warning {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin: 0 0 16px;
+  font-style: italic;
+}
+
+/* ============================================
+   Analysis Results
+   ============================================ */
+
+.jd-results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.jd-score {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+}
+
+.jd-score-circle {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-accent), #e07a5f);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+
+.jd-score-value {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.jd-score-label {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+.jd-results-section {
+  background: var(--color-panel-bg);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.jd-results-section h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.jd-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.jd-keyword {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.jd-keyword.match {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.jd-keyword.missing {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+html[data-theme="dark"] .jd-keyword.match {
+  color: #4ade80;
+}
+
+html[data-theme="dark"] .jd-keyword.missing {
+  color: #f87171;
+}
+
+.jd-list-simple {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.jd-list-simple li {
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.jd-list-simple li:last-child {
+  margin-bottom: 0;
+}
+
+.jd-strength {
+  color: #16a34a !important;
+}
+
+.jd-gap {
+  color: var(--color-text);
+}
+
+.jd-suggestion {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* ============================================
+   Recommendations
+   ============================================ */
+
+.jd-recommendation {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.jd-recommendation:last-child {
+  margin-bottom: 0;
+}
+
+.jd-rec-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.jd-rec-section {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-accent);
+  text-transform: capitalize;
+}
+
+.jd-rec-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.jd-rec-current,
+.jd-rec-suggested {
+  flex: 1;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.jd-rec-current {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
+.jd-rec-suggested {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--color-text);
+}
+
+.jd-rec-arrow {
+  color: var(--color-text-muted);
+  padding-top: 10px;
+}
+
+.jd-rec-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* ============================================
+   Edit Modal
+   ============================================ */
+
+.jd-edit-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.jd-edit-modal {
+  background: var(--color-panel-bg);
+  border-radius: 12px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.jd-edit-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.jd-edit-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.jd-edit-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 20px;
+  color: var(--color-text-muted);
+}
+
+.jd-edit-close:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.jd-edit-form {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.jd-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* ============================================
+   Responsive
+   ============================================ */
+
+@media (max-width: 768px) {
+  .jd-panel {
+    width: 95%;
+    max-height: 90vh;
+  }
+  
+  .jd-rec-content {
+    flex-direction: column;
+  }
+  
+  .jd-rec-arrow {
+    transform: rotate(90deg);
+    padding: 0;
+    text-align: center;
+  }
+  
+  .jd-form-actions {
+    flex-direction: column;
+  }
+  
+  .jd-form-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}

@@ -17,9 +17,12 @@
     "electron:publish": "npm run build && electron-builder --publish always"
   },
   "dependencies": {
+    "diff": "^8.0.2",
     "electron-updater": "^6.7.3",
     "html2pdf.js": "^0.10.1",
-    "marked": "^17.0.1"
+    "mammoth": "^1.11.0",
+    "marked": "^17.0.1",
+    "pdfjs-dist": "^5.4.530"
   },
   "devDependencies": {
     "electron": "^33.0.0",

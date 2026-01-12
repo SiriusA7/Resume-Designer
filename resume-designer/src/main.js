@@ -13,6 +13,9 @@ import { initChatPanel, refreshChatPanel } from './chatPanel.js';
 import { initZoomControls } from './zoomControls.js';
 import { migrateBuiltInVariants, saveSettings, getSettings } from './persistence.js';
 import { initTheme, setupThemeToggleAfterRender } from './theme.js';
+import { initJobDescriptionPanel, openJobDescriptionPanel } from './jobDescriptionPanel.js';
+import { initHistoryPanel, openHistoryPanel } from './historyPanel.js';
+import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -153,8 +156,26 @@ async function init() {
   // Initialize zoom controls
   initZoomControls();
   
+  // Initialize job description panel
+  initJobDescriptionPanel();
+  
+  // Initialize history panel
+  initHistoryPanel();
+  
+  // Expose panel openers and wizards globally
+  window.openJobDescriptionPanel = openJobDescriptionPanel;
+  window.openHistoryPanel = openHistoryPanel;
+  window.showOnboardingWizard = showOnboardingWizard;
+  
   // Initialize undo/redo
   initUndoRedo();
+  
+  // Check for first-time user onboarding
+  setTimeout(() => {
+    if (shouldShowOnboarding()) {
+      showOnboardingWizard();
+    }
+  }, 500);
   
   // Initialize settings modal
   initSettingsModal();

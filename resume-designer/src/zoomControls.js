@@ -68,8 +68,69 @@ export function initZoomControls() {
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(() => {
       // Re-apply current zoom on resize to maintain position
+      repositionToolbar();
     }, 100);
   });
+  
+  // Watch for sidebar changes to reposition toolbar
+  setupSidebarObserver();
+  
+  // Initial positioning
+  repositionToolbar();
+}
+
+// Reposition toolbar to center of content area
+export function repositionToolbar() {
+  const toolbar = document.getElementById('zoom-controls');
+  const editHint = document.getElementById('edit-hint');
+  const chatPanel = document.getElementById('chat-panel');
+  const structurePanel = document.getElementById('structure-panel');
+  
+  if (!toolbar) return;
+  
+  // Calculate content area bounds
+  const chatOpen = chatPanel && !chatPanel.classList.contains('closed');
+  const structureOpen = structurePanel && !structurePanel.classList.contains('closed');
+  
+  const leftOffset = chatOpen ? 320 : 0; // Chat panel width
+  const rightOffset = structureOpen ? 360 : 0; // Structure panel width
+  
+  // Calculate center of available content area
+  const viewportWidth = window.innerWidth;
+  const contentWidth = viewportWidth - leftOffset - rightOffset;
+  const centerX = leftOffset + (contentWidth / 2);
+  
+  // Position toolbar
+  toolbar.style.left = `${centerX}px`;
+  toolbar.style.transform = 'translateX(-50%)';
+  
+  // Also position edit hint if it exists
+  if (editHint) {
+    editHint.style.left = `${centerX}px`;
+  }
+}
+
+// Set up observer to watch for sidebar class changes
+function setupSidebarObserver() {
+  const chatPanel = document.getElementById('chat-panel');
+  const structurePanel = document.getElementById('structure-panel');
+  
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (mutation.attributeName === 'class') {
+        repositionToolbar();
+      }
+    });
+  });
+  
+  const config = { attributes: true, attributeFilter: ['class'] };
+  
+  if (chatPanel) {
+    observer.observe(chatPanel, config);
+  }
+  if (structurePanel) {
+    observer.observe(structurePanel, config);
+  }
 }
 
 // Set zoom level

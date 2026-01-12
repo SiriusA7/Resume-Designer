@@ -57,6 +57,17 @@ function setByPath(obj, path, value) {
 // History persistence key prefix
 const HISTORY_KEY_PREFIX = 'resume-designer-history-';
 
+// Change type constants
+export const CHANGE_TYPES = {
+  INITIAL: 'initial',
+  EDIT: 'edit',
+  AI: 'ai',
+  IMPORT: 'import',
+  REORDER: 'reorder',
+  ADD: 'add',
+  REMOVE: 'remove'
+};
+
 // Create the store
 function createStore() {
   let data = null;
@@ -66,12 +77,15 @@ function createStore() {
   let saveTimeout = null;
   const SAVE_DEBOUNCE_MS = 500;
   
-  // Undo/redo history
+  // Undo/redo history with metadata
+  // Each entry: { data, timestamp, description, changeType, path? }
   let history = [];
   let historyIndex = -1;
-  const MAX_HISTORY = 50;
+  const MAX_HISTORY = 100; // Increased for version history
   let isUndoRedoAction = false;
   let currentVariantId = null;
+  let pendingChangeDescription = null;
+  let pendingChangeType = CHANGE_TYPES.EDIT;
 
   return {
     // Get current data (returns a clone to prevent direct mutation)
@@ -98,7 +112,12 @@ function createStore() {
       
       // If no history was loaded, initialize with current state
       if (history.length === 0) {
-        history.push(deepClone(data));
+        history.push({
+          data: deepClone(data),
+          timestamp: new Date().toISOString(),
+          description: 'Initial state',
+          changeType: CHANGE_TYPES.INITIAL
+        });
         historyIndex = 0;
       }
       
@@ -127,8 +146,14 @@ function createStore() {
       this.scheduleSave();
     },
     
+    // Set metadata for next history entry
+    setChangeMetadata(description, changeType = CHANGE_TYPES.EDIT) {
+      pendingChangeDescription = description;
+      pendingChangeType = changeType;
+    },
+    
     // Push current state to history (called AFTER changes are made)
-    pushHistory() {
+    pushHistory(description = null, changeType = null) {
       if (!data) return;
       
       // Remove any future history if we're not at the end (branching)
@@ -136,9 +161,21 @@ function createStore() {
         history.splice(historyIndex + 1);
       }
       
+      // Create history entry with metadata
+      const entry = {
+        data: deepClone(data),
+        timestamp: new Date().toISOString(),
+        description: description || pendingChangeDescription || 'Edit',
+        changeType: changeType || pendingChangeType || CHANGE_TYPES.EDIT
+      };
+      
       // Add the NEW current state
-      history.push(deepClone(data));
+      history.push(entry);
       historyIndex = history.length - 1;
+      
+      // Reset pending metadata
+      pendingChangeDescription = null;
+      pendingChangeType = CHANGE_TYPES.EDIT;
       
       // Limit history size
       if (history.length > MAX_HISTORY) {
@@ -208,7 +245,7 @@ function createStore() {
       
       isUndoRedoAction = true;
       historyIndex--;
-      data = deepClone(history[historyIndex]);
+      data = deepClone(history[historyIndex].data);
       isDirty = true;
       this.saveHistory(); // Persist after undo
       this.emit('change', data);
@@ -225,7 +262,7 @@ function createStore() {
       
       isUndoRedoAction = true;
       historyIndex++;
-      data = deepClone(history[historyIndex]);
+      data = deepClone(history[historyIndex].data);
       isDirty = true;
       this.saveHistory(); // Persist after redo
       this.emit('change', data);
@@ -234,6 +271,52 @@ function createStore() {
       isUndoRedoAction = false;
       
       return true;
+    },
+    
+    // Get all history entries (for history panel)
+    getHistoryEntries() {
+      return history.map((entry, index) => ({
+        index,
+        timestamp: entry.timestamp,
+        description: entry.description,
+        changeType: entry.changeType,
+        isCurrent: index === historyIndex
+      }));
+    },
+    
+    // Get specific history entry data
+    getHistoryEntryData(index) {
+      if (index >= 0 && index < history.length) {
+        return deepClone(history[index].data);
+      }
+      return null;
+    },
+    
+    // Restore to a specific history entry
+    restoreToEntry(index) {
+      if (index < 0 || index >= history.length) return false;
+      
+      isUndoRedoAction = true;
+      historyIndex = index;
+      data = deepClone(history[historyIndex].data);
+      isDirty = true;
+      this.saveHistory();
+      this.emit('change', data);
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+      this.scheduleSave();
+      isUndoRedoAction = false;
+      
+      return true;
+    },
+    
+    // Get current history index
+    getHistoryIndex() {
+      return historyIndex;
+    },
+    
+    // Get history length
+    getHistoryLength() {
+      return history.length;
     },
     
     // Clear history (e.g., when loading new data)

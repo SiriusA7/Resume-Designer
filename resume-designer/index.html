@@ -11,6 +11,10 @@
   <link rel="stylesheet" href="/styles/resume.css">
   <link rel="stylesheet" href="/styles/editor.css">
   <link rel="stylesheet" href="/styles/chat.css">
+  <link rel="stylesheet" href="/styles/diff.css">
+  <link rel="stylesheet" href="/styles/jobDescriptions.css">
+  <link rel="stylesheet" href="/styles/onboarding.css">
+  <link rel="stylesheet" href="/styles/history.css">
   <link rel="stylesheet" href="/styles/print.css" media="print">
 </head>
 <body>
@@ -45,29 +49,6 @@
           <div id="thread-selector" class="thread-selector"></div>
         </div>
         
-        <div class="chat-model-selector">
-          <select id="ai-model-select" class="model-select">
-            <optgroup label="Anthropic">
-              <option value="anthropic:claude-opus-4-5-20251022">Claude Opus 4.5</option>
-              <option value="anthropic:claude-sonnet-4-5-20251022">Claude Sonnet 4.5</option>
-              <option value="anthropic:claude-sonnet-4-20250514">Claude Sonnet 4</option>
-              <option value="anthropic:claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
-            </optgroup>
-            <optgroup label="OpenAI">
-              <option value="openai:gpt-5.2">GPT-5.2</option>
-              <option value="openai:gpt-5.2-pro">GPT-5.2 Pro</option>
-              <option value="openai:gpt-4o">GPT-4o</option>
-              <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
-            </optgroup>
-            <optgroup label="Google">
-              <option value="gemini:gemini-3-pro">Gemini 3 Pro</option>
-              <option value="gemini:gemini-3-flash">Gemini 3 Flash</option>
-              <option value="gemini:gemini-2.0-flash">Gemini 2.0 Flash</option>
-              <option value="gemini:gemini-1.5-pro">Gemini 1.5 Pro</option>
-            </optgroup>
-          </select>
-        </div>
-        
         <div class="chat-messages" id="chat-messages">
           <!-- Chat messages rendered here -->
           <div class="chat-welcome">
@@ -89,6 +70,13 @@
         </div>
         
         <div class="chat-input-area">
+          <!-- Quick action buttons above input -->
+          <div class="chat-shortcuts">
+            <button class="chat-shortcut" data-command="/feedback">Get Feedback</button>
+            <button class="chat-shortcut" data-command="/improve summary">Improve Summary</button>
+          </div>
+          
+          <!-- Main input -->
           <div class="chat-input-wrapper">
             <textarea 
               id="chat-input" 
@@ -103,9 +91,65 @@
               </svg>
             </button>
           </div>
-          <div class="chat-shortcuts">
-            <button class="chat-shortcut" data-command="/feedback">Get Feedback</button>
-            <button class="chat-shortcut" data-command="/improve summary">Improve Summary</button>
+          
+          <!-- Model selector and options bar at bottom -->
+          <div class="chat-input-controls">
+            <div class="chat-model-selector">
+              <select id="ai-model-select" class="model-select">
+                <optgroup label="Anthropic">
+                  <option value="anthropic:claude-opus-4-5-20251022">Claude Opus 4.5</option>
+                  <option value="anthropic:claude-sonnet-4-5-20251022">Claude Sonnet 4.5</option>
+                  <option value="anthropic:claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                  <option value="anthropic:claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+                </optgroup>
+                <optgroup label="OpenAI">
+                  <option value="openai:gpt-5.2">GPT-5.2</option>
+                  <option value="openai:gpt-5.2-pro">GPT-5.2 Pro</option>
+                  <option value="openai:gpt-4o">GPT-4o</option>
+                  <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
+                </optgroup>
+                <optgroup label="Google">
+                  <option value="gemini:gemini-3-pro">Gemini 3 Pro</option>
+                  <option value="gemini:gemini-3-flash">Gemini 3 Flash</option>
+                  <option value="gemini:gemini-2.0-flash">Gemini 2.0 Flash</option>
+                  <option value="gemini:gemini-1.5-pro">Gemini 1.5 Pro</option>
+                </optgroup>
+              </select>
+            </div>
+            
+            <div class="chat-options-divider"></div>
+            
+            <!-- Attach files button -->
+            <button class="chat-option-btn" id="chat-attach-btn" title="Attach file">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
+            
+            <!-- Web search toggle -->
+            <button class="chat-option-btn" id="chat-search-btn" title="Enable web search">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+              </svg>
+            </button>
+            
+            <!-- Reasoning effort dropdown -->
+            <div class="chat-reasoning-dropdown" id="chat-reasoning-dropdown">
+              <button class="chat-option-btn" id="chat-reasoning-btn" title="Reasoning effort">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
+                  <path d="M12 6v6l4 2"/>
+                </svg>
+              </button>
+              <div class="chat-reasoning-menu" id="chat-reasoning-menu">
+                <div class="chat-reasoning-label">Reasoning Effort</div>
+                <button class="chat-reasoning-option" data-level="low">Low</button>
+                <button class="chat-reasoning-option selected" data-level="medium">Medium</button>
+                <button class="chat-reasoning-option" data-level="high">High</button>
+              </div>
+            </div>
           </div>
         </div>
       </aside>

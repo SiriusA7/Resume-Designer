@@ -3,10 +3,13 @@
  * AI chat interface with message history and actions
  */
 
-import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders } from './aiService.js';
+import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders, generateResumeChanges } from './aiService.js';
 import { getSettings, saveSettings } from './persistence.js';
 import { store } from './store.js';
 import { marked } from 'marked';
+import { createChangeSet, diffResumeData } from './diffEngine.js';
+import { showDiffView, initDiffView } from './diffView.js';
+import { showInlineChanges, hideInlineChanges, initInlineChanges } from './inlineChanges.js';
 
 let messagesContainer;
 let inputEl;
@@ -31,10 +34,9 @@ const THREADS_KEY = 'resume-designer-chat-threads';
 // AI Model options - Model IDs verified from provider documentation
 const AI_MODELS = [
   { group: 'Anthropic', options: [
-    { value: 'anthropic:claude-opus-4-5-20251022', label: 'Claude Opus 4.5' },
-    { value: 'anthropic:claude-sonnet-4-5-20251022', label: 'Claude Sonnet 4.5' },
-    { value: 'anthropic:claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-    { value: 'anthropic:claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' }
+    { value: 'anthropic:claude-opus-4-5', label: 'Claude Opus 4.5' },
+    { value: 'anthropic:claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+    { value: 'anthropic:claude-haiku-4-5', label: 'Claude Haiku 4.5' }
   ]},
   { group: 'OpenAI', options: [
     { value: 'openai:gpt-5.2', label: 'GPT-5.2' },
@@ -68,6 +70,12 @@ export function initChatPanel(onApply) {
   if (settings.defaultModel) {
     currentModel = settings.defaultModel;
   }
+  
+  // Initialize diff view
+  initDiffView(onApply);
+  
+  // Initialize inline changes
+  initInlineChanges();
   
   // Initialize custom model dropdown
   initModelDropdown();
@@ -353,7 +361,7 @@ export function addContextChip(chipData) {
 
 // Refresh the chat panel UI (called when API keys change)
 export function refreshChatPanel() {
-  renderModelSelector();
+  initModelDropdown();
   renderThreadSelector();
   renderChatView();
 }
@@ -488,7 +496,79 @@ function setupEventListeners() {
       handleApply(action, value);
     }
   });
+  
+  // Chat option buttons
+  setupChatOptions();
 }
+
+// Set up chat option buttons (attach, search, reasoning)
+function setupChatOptions() {
+  const attachBtn = document.getElementById('chat-attach-btn');
+  const searchBtn = document.getElementById('chat-search-btn');
+  const reasoningDropdown = document.getElementById('chat-reasoning-dropdown');
+  const reasoningBtn = document.getElementById('chat-reasoning-btn');
+  const reasoningMenu = document.getElementById('chat-reasoning-menu');
+  
+  // File attachment (placeholder - shows alert for now)
+  attachBtn?.addEventListener('click', () => {
+    // Create file input if needed
+    let fileInput = document.getElementById('chat-file-input');
+    if (!fileInput) {
+      fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.id = 'chat-file-input';
+      fileInput.accept = '.txt,.md,.pdf,.doc,.docx,.json';
+      fileInput.style.display = 'none';
+      document.body.appendChild(fileInput);
+      
+      fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          // Add file as context chip
+          addContextChip({
+            type: 'file',
+            label: file.name,
+            content: `[File: ${file.name}]`,
+            file: file
+          });
+        }
+        fileInput.value = ''; // Reset
+      });
+    }
+    fileInput.click();
+  });
+  
+  // Web search toggle
+  searchBtn?.addEventListener('click', () => {
+    searchBtn.classList.toggle('active');
+    const isActive = searchBtn.classList.contains('active');
+    searchBtn.title = isActive ? 'Web search enabled' : 'Enable web search';
+  });
+  
+  // Reasoning effort dropdown
+  reasoningBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    reasoningDropdown?.classList.toggle('open');
+  });
+  
+  // Reasoning options
+  reasoningMenu?.querySelectorAll('.chat-reasoning-option').forEach(option => {
+    option.addEventListener('click', (e) => {
+      e.stopPropagation();
+      reasoningMenu.querySelectorAll('.chat-reasoning-option').forEach(o => o.classList.remove('selected'));
+      option.classList.add('selected');
+      reasoningDropdown?.classList.remove('open');
+    });
+  });
+  
+  // Close reasoning dropdown on click outside
+  document.addEventListener('click', (e) => {
+    if (!reasoningDropdown?.contains(e.target)) {
+      reasoningDropdown?.classList.remove('open');
+    }
+  });
+}
+
 
 // Render the chat view based on API key configuration
 function renderChatView() {
@@ -582,6 +662,8 @@ async function handleSend() {
   
   // Build message with context chips
   let messageWithContext = text;
+  const savedContextChips = [...contextChips];
+  
   if (contextChips.length > 0) {
     const contextText = contextChips.map(chip => {
       return `[${chip.label}]:\n${chip.content}`;
@@ -594,11 +676,20 @@ async function handleSend() {
   inputEl.value = '';
   inputEl.style.height = 'auto';
   
+  // Get target path from context if available
+  const targetPath = savedContextChips.length > 0 ? savedContextChips[0].path : null;
+  
   // Clear context chips after sending
   clearContextChips();
   
-  // Get AI response with context included
-  await getAIResponse(messageWithContext, contextChips.length > 0);
+  // Determine if this is a change request or a general question
+  if (isChangeRequest(text)) {
+    // User wants changes - use the change generation flow
+    await requestAIChanges(messageWithContext, targetPath);
+  } else {
+    // General question - use normal chat flow
+    await getAIResponse(messageWithContext, savedContextChips.length > 0);
+  }
 }
 
 // Handle slash commands
@@ -723,6 +814,79 @@ async function getAIGenerateBullets(context) {
   }
 }
 
+// Check if the user's message is requesting changes to the resume
+function isChangeRequest(message) {
+  const changeKeywords = [
+    'change', 'update', 'modify', 'edit', 'rewrite', 'improve', 'replace',
+    'make it', 'make my', 'fix', 'adjust', 'enhance', 'revise', 'rework',
+    'redo', 'transform', 'convert', 'add to', 'remove from', 'delete',
+    'can you change', 'can you update', 'can you modify', 'can you edit',
+    'please change', 'please update', 'please modify', 'please edit',
+    'tailor', 'customize', 'personalize', 'optimize'
+  ];
+  
+  const lowerMessage = message.toLowerCase();
+  return changeKeywords.some(keyword => lowerMessage.includes(keyword));
+}
+
+// Get the target path from context chips if available
+function getTargetPathFromContext() {
+  if (contextChips.length === 0) return null;
+  
+  // If there's a specific context selected, return its path
+  const firstChip = contextChips[0];
+  return firstChip.path || null;
+}
+
+// Request AI to generate changes and show diff view
+async function requestAIChanges(instruction, targetPath = null) {
+  const modelId = currentModel;
+  
+  setLoading(true);
+  
+  try {
+    addMessage('assistant', '🔄 Generating changes to your resume...');
+    
+    const result = await generateResumeChanges(modelId, instruction, targetPath);
+    
+    if (!result.changes || Object.keys(result.changes).length === 0) {
+      // No changes generated - provide explanation
+      addMessage('assistant', result.explanation || 'No changes were generated. The AI may need more specific instructions.');
+      return;
+    }
+    
+    // Create change set for diff view
+    const currentData = store.getData();
+    const changeSet = createChangeSet(currentData, result.changes);
+    
+    // Show inline changes on the resume
+    showInlineChanges(changeSet);
+    
+    // Update the last message with explanation and review button
+    const changeCount = Object.keys(result.changes).length;
+    const lastMsgIndex = messages.length - 1;
+    if (lastMsgIndex >= 0) {
+      messages[lastMsgIndex].content = `✨ Generated ${changeCount} change${changeCount > 1 ? 's' : ''} to your resume.\n\n${result.explanation || ''}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review Changes" below for a detailed diff view.`;
+      messages[lastMsgIndex].pendingChanges = changeSet;
+      saveChatHistory();
+      renderMessages();
+    }
+    
+  } catch (error) {
+    addMessage('error', error.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// Open diff view with pending changes from a message
+function openDiffViewForMessage(messageId) {
+  const message = messages.find(m => m.id === messageId);
+  if (message?.pendingChanges) {
+    showDiffView(message.pendingChanges);
+  }
+}
+
 // Add a message to the chat
 function addMessage(role, content, applyData = null) {
   const message = {
@@ -808,9 +972,11 @@ function renderMessages() {
     const isUser = msg.role === 'user';
     const bubbleClass = isUser ? 'chat-message-user' : 'chat-message-assistant';
     
-    let applyButton = '';
+    let actionButtons = '';
+    
+    // Apply button for direct apply actions
     if (msg.applyData) {
-      applyButton = `
+      actionButtons += `
         <button class="chat-apply-btn" data-action="${msg.applyData.action}" data-value="${escapeAttr(msg.applyData.value)}">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="20 6 9 17 4 12"/>
@@ -820,15 +986,36 @@ function renderMessages() {
       `;
     }
     
+    // Review Changes button for pending changes
+    if (msg.pendingChanges) {
+      actionButtons += `
+        <button class="chat-review-changes-btn" data-message-id="${msg.id}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+          Review Changes
+        </button>
+      `;
+    }
+    
     return `
       <div class="chat-message ${bubbleClass}">
         <div class="chat-bubble">
           ${formatMessage(msg.content)}
-          ${applyButton}
+          ${actionButtons ? `<div class="chat-action-buttons">${actionButtons}</div>` : ''}
         </div>
       </div>
     `;
   }).join('');
+  
+  // Add click handlers for review changes buttons
+  messagesContainer.querySelectorAll('.chat-review-changes-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const messageId = parseInt(btn.dataset.messageId);
+      openDiffViewForMessage(messageId);
+    });
+  });
 }
 
 // Configure marked for safe rendering
