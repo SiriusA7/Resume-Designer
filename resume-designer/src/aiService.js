@@ -172,6 +172,21 @@ export function getConfiguredProviders() {
   return ['anthropic', 'openai', 'gemini'].filter(p => isProviderConfigured(p));
 }
 
+// Get the default model ID based on configured providers
+export function getDefaultModelId() {
+  const providers = getConfiguredProviders();
+  if (providers.includes('anthropic')) {
+    return 'anthropic:claude-sonnet-4-5';
+  }
+  if (providers.includes('openai')) {
+    return 'openai:gpt-4o';
+  }
+  if (providers.includes('gemini')) {
+    return 'gemini:gemini-2.0-flash';
+  }
+  return null;
+}
+
 // Get resume context for AI
 function getResumeContext() {
   const data = store.getData();
@@ -218,8 +233,50 @@ function getResumeContext() {
   return context;
 }
 
+// Map reasoning effort levels to Anthropic thinking budget tokens
+const ANTHROPIC_THINKING_BUDGETS = {
+  'low': 1024,      // Minimum required
+  'medium': 4096,   // Moderate thinking
+  'high': 8192      // Extended thinking
+};
+
 // Call Anthropic API
-async function callAnthropic(modelConfig, messages, apiKey) {
+async function callAnthropic(modelConfig, messages, apiKey, options = {}) {
+  const { reasoningEffort, webSearch } = options;
+  
+  const requestBody = {
+    model: modelConfig.model,
+    max_tokens: modelConfig.maxTokens,
+    system: SYSTEM_PROMPT,
+    messages: messages.map(m => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.content
+    }))
+  };
+  
+  // Add extended thinking if reasoning effort is specified
+  // Note: Extended thinking requires max_tokens > budget_tokens
+  if (reasoningEffort && reasoningEffort !== 'none' && ANTHROPIC_THINKING_BUDGETS[reasoningEffort]) {
+    const budgetTokens = ANTHROPIC_THINKING_BUDGETS[reasoningEffort];
+    // Ensure max_tokens is greater than budget_tokens
+    requestBody.max_tokens = Math.max(modelConfig.maxTokens, budgetTokens + 2048);
+    requestBody.thinking = {
+      type: 'enabled',
+      budget_tokens: budgetTokens
+    };
+  }
+  
+  // Add web search tool if enabled
+  // Uses the web_search_20250305 tool type
+  if (webSearch) {
+    requestBody.tools = [
+      {
+        type: 'web_search_20250305',
+        name: 'web_search'
+      }
+    ];
+  }
+  
   const response = await fetch(ENDPOINTS.anthropic, {
     method: 'POST',
     headers: {
@@ -228,15 +285,7 @@ async function callAnthropic(modelConfig, messages, apiKey) {
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true'
     },
-    body: JSON.stringify({
-      model: modelConfig.model,
-      max_tokens: modelConfig.maxTokens,
-      system: SYSTEM_PROMPT,
-      messages: messages.map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content
-      }))
-    })
+    body: JSON.stringify(requestBody)
   });
   
   if (!response.ok) {
@@ -245,28 +294,94 @@ async function callAnthropic(modelConfig, messages, apiKey) {
   }
   
   const data = await response.json();
+  
+  // Handle response with extended thinking or tool use (may have multiple content blocks)
+  if (Array.isArray(data.content)) {
+    // Extract thinking/reasoning summary if present
+    const thinkingBlock = data.content.find(block => block.type === 'thinking');
+    const thinkingSummary = thinkingBlock?.thinking || null;
+    
+    // Find the text content block (not the thinking block or tool_use block)
+    const textBlock = data.content.find(block => block.type === 'text');
+    const text = textBlock?.text || '';
+    
+    // If there's a web search result, note it
+    const webSearchResult = data.content.find(block => block.type === 'web_search_tool_result');
+    const usedWebSearch = !!webSearchResult;
+    
+    // Return structured response if we have thinking or web search
+    if (thinkingSummary || usedWebSearch) {
+      return {
+        text: text || data.content.find(block => block.text)?.text || JSON.stringify(data.content),
+        thinking: thinkingSummary,
+        usedWebSearch
+      };
+    }
+    
+    // Fallback to simple text
+    return text || data.content[0]?.text || JSON.stringify(data.content);
+  }
+  
   return data.content[0].text;
 }
 
-// Call OpenAI API
-async function callOpenAI(modelConfig, messages, apiKey) {
+// Map our reasoning levels to OpenAI reasoning_effort values
+const OPENAI_REASONING_EFFORT = {
+  'none': 'none',
+  'low': 'low',
+  'medium': 'medium',
+  'high': 'high'
+};
+
+// OpenAI search-enabled model mappings
+// When web search is enabled, we can use search-preview models for gpt-4o variants
+const OPENAI_SEARCH_MODELS = {
+  'gpt-4o': 'gpt-4o-search-preview',
+  'gpt-4o-mini': 'gpt-4o-mini-search-preview'
+};
+
+// Call OpenAI API (Chat Completions for most models)
+async function callOpenAI(modelConfig, messages, apiKey, options = {}) {
+  const { reasoningEffort, webSearch } = options;
+  
+  // Determine which model to use
+  let modelToUse = modelConfig.model;
+  
+  // For web search with gpt-4o models, use search-preview variants
+  if (webSearch && OPENAI_SEARCH_MODELS[modelConfig.model]) {
+    modelToUse = OPENAI_SEARCH_MODELS[modelConfig.model];
+  }
+  
+  // Check if we should use the Responses API (for GPT-5 with web search)
+  const isGpt5 = modelConfig.model.startsWith('gpt-5');
+  if (isGpt5 && webSearch) {
+    return callOpenAIResponses(modelConfig, messages, apiKey, options);
+  }
+  
+  const requestBody = {
+    model: modelToUse,
+    max_completion_tokens: modelConfig.maxTokens,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...messages.map(m => ({
+        role: m.role,
+        content: m.content
+      }))
+    ]
+  };
+  
+  // Add reasoning_effort for reasoning-capable models (GPT-5.x)
+  if (reasoningEffort && OPENAI_REASONING_EFFORT[reasoningEffort] && isGpt5) {
+    requestBody.reasoning_effort = OPENAI_REASONING_EFFORT[reasoningEffort];
+  }
+  
   const response = await fetch(ENDPOINTS.openai, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
     },
-    body: JSON.stringify({
-      model: modelConfig.model,
-      max_completion_tokens: modelConfig.maxTokens, // Use max_completion_tokens instead of deprecated max_tokens
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...messages.map(m => ({
-          role: m.role,
-          content: m.content
-        }))
-      ]
-    })
+    body: JSON.stringify(requestBody)
   });
   
   if (!response.ok) {
@@ -278,8 +393,75 @@ async function callOpenAI(modelConfig, messages, apiKey) {
   return data.choices[0].message.content;
 }
 
+// Call OpenAI Responses API (for GPT-5 with web search and reasoning)
+async function callOpenAIResponses(modelConfig, messages, apiKey, options = {}) {
+  const { reasoningEffort, webSearch } = options;
+  
+  // Build input from messages
+  const input = messages.map(m => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: m.content
+  }));
+  
+  // Add system message context to first user message
+  if (input.length > 0 && input[0].role === 'user') {
+    input[0].content = `${SYSTEM_PROMPT}\n\n${input[0].content}`;
+  }
+  
+  const requestBody = {
+    model: modelConfig.model,
+    input: input
+  };
+  
+  // Add reasoning configuration
+  if (reasoningEffort && OPENAI_REASONING_EFFORT[reasoningEffort]) {
+    requestBody.reasoning = {
+      effort: OPENAI_REASONING_EFFORT[reasoningEffort]
+    };
+  }
+  
+  // Add web search tool
+  if (webSearch) {
+    requestBody.tools = [{ type: 'web_search' }];
+  }
+  
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `OpenAI API error: ${response.status}`);
+  }
+  
+  const data = await response.json();
+  
+  // Responses API returns output differently
+  // Look for the message output item
+  if (data.output_text) {
+    return data.output_text;
+  }
+  
+  // Or extract from output array
+  if (Array.isArray(data.output)) {
+    const messageItem = data.output.find(item => item.type === 'message');
+    if (messageItem?.content?.[0]?.text) {
+      return messageItem.content[0].text;
+    }
+  }
+  
+  throw new Error('Unexpected response format from OpenAI Responses API');
+}
+
 // Call Gemini API
-async function callGemini(modelConfig, messages, apiKey) {
+async function callGemini(modelConfig, messages, apiKey, options = {}) {
+  const { webSearch } = options;
+  
   const url = `${ENDPOINTS.gemini}/${modelConfig.model}:generateContent?key=${apiKey}`;
   
   // Convert messages to Gemini format
@@ -295,20 +477,29 @@ async function callGemini(modelConfig, messages, apiKey) {
     });
   }
   
+  const requestBody = {
+    contents,
+    systemInstruction: {
+      parts: [{ text: systemContext }]
+    },
+    generationConfig: {
+      maxOutputTokens: modelConfig.maxTokens
+    }
+  };
+  
+  // Add Google Search grounding if web search is enabled
+  if (webSearch) {
+    requestBody.tools = [
+      { google_search: {} }
+    ];
+  }
+  
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      contents,
-      systemInstruction: {
-        parts: [{ text: systemContext }]
-      },
-      generationConfig: {
-        maxOutputTokens: modelConfig.maxTokens
-      }
-    })
+    body: JSON.stringify(requestBody)
   });
   
   if (!response.ok) {
@@ -320,8 +511,17 @@ async function callGemini(modelConfig, messages, apiKey) {
   return data.candidates[0].content.parts[0].text;
 }
 
-// Main chat function
-export async function chat(modelId, messages, includeContext = true) {
+/**
+ * Main chat function
+ * @param {string} modelId - Model identifier (e.g., 'anthropic:claude-sonnet-4-5')
+ * @param {Array} messages - Array of message objects with role and content
+ * @param {boolean} includeContext - Whether to include resume context
+ * @param {Object} options - Additional options
+ * @param {string} options.reasoningEffort - Reasoning effort level: 'none', 'low', 'medium', 'high'
+ * @param {boolean} options.webSearch - Whether to enable web search (Gemini only)
+ * @returns {Promise<string>} AI response
+ */
+export async function chat(modelId, messages, includeContext = true, options = {}) {
   const modelConfig = MODELS[modelId];
   if (!modelConfig) {
     throw new Error(`Unknown model: ${modelId}`);
@@ -345,14 +545,14 @@ export async function chat(modelId, messages, includeContext = true) {
     }
   }
   
-  // Call the appropriate API
+  // Call the appropriate API with options
   switch (modelConfig.provider) {
     case 'anthropic':
-      return callAnthropic(modelConfig, processedMessages, apiKey);
+      return callAnthropic(modelConfig, processedMessages, apiKey, options);
     case 'openai':
-      return callOpenAI(modelConfig, processedMessages, apiKey);
+      return callOpenAI(modelConfig, processedMessages, apiKey, options);
     case 'gemini':
-      return callGemini(modelConfig, processedMessages, apiKey);
+      return callGemini(modelConfig, processedMessages, apiKey, options);
     default:
       throw new Error(`Unsupported provider: ${modelConfig.provider}`);
   }

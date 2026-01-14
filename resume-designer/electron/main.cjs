@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -8,6 +8,27 @@ let mainWindow = null;
 
 // Determine if we're in development or production
 const isDev = !app.isPackaged;
+
+// Set up Content Security Policy
+function setupCSP() {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self';" +
+          "script-src 'self' 'unsafe-inline';" +
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com data:;" +
+          "style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com data:;" +
+          "img-src 'self' data: blob:;" +
+          "font-src 'self' data: https://fonts.gstatic.com;" +
+          "connect-src 'self' https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com;" +
+          "worker-src 'self' blob:;"
+        ]
+      }
+    });
+  });
+}
 
 // ============================================
 // Auto-Updater Configuration
@@ -149,6 +170,9 @@ async function createWindow() {
 
 // Create window when app is ready
 app.whenReady().then(() => {
+  // Set up Content Security Policy
+  setupCSP();
+  
   createWindow();
 
   // Set up auto-updater (only in production)

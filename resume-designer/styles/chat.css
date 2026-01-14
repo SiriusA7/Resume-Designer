@@ -36,6 +36,7 @@
   padding: var(--space-md) var(--space-lg);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
+  flex-shrink: 0; /* Prevent header from being compressed */
 }
 
 .chat-header-top {
@@ -321,6 +322,14 @@
   border-radius: 4px;
   color: var(--color-text-muted);
   gap: 4px;
+  max-width: 160px;
+}
+
+.chat-model-selector .custom-dropdown-trigger .dropdown-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
 }
 
 .chat-model-selector .custom-dropdown-trigger:hover {
@@ -731,6 +740,135 @@
   }
 }
 
+/* Thinking Process Display */
+.chat-thinking-process {
+  background: var(--color-bg);
+  border-radius: 12px;
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+  border: 1px solid var(--color-border);
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+}
+
+.thinking-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.thinking-indicator.complete {
+  color: var(--color-success, #22c55e);
+}
+
+.thinking-indicator.complete svg {
+  stroke: var(--color-success, #22c55e);
+}
+
+.thinking-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: thinking-spin 0.8s linear infinite;
+}
+
+@keyframes thinking-spin {
+  to { transform: rotate(360deg); }
+}
+
+.thinking-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.thinking-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  padding-left: 4px;
+}
+
+.thinking-step.active {
+  color: var(--color-text);
+}
+
+.thinking-step.complete {
+  color: var(--color-text);
+}
+
+.thinking-step-bullet {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.thinking-step-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--color-text-muted);
+  border-radius: 50%;
+}
+
+.thinking-step.active .thinking-step-dot {
+  background: var(--color-accent);
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+
+.thinking-step.complete .thinking-step-bullet svg {
+  stroke: var(--color-success, #22c55e);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.8); }
+}
+
+/* Reasoning summary in assistant response */
+.chat-reasoning-summary {
+  background: var(--color-hover-bg);
+  border-radius: 8px;
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  border-left: 3px solid var(--color-accent);
+}
+
+.chat-reasoning-summary-header {
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.chat-reasoning-summary-header svg {
+  opacity: 0.7;
+}
+
+.chat-reasoning-summary-content {
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 /* Error Message */
 .chat-error {
   padding: var(--space-sm) var(--space-md);
@@ -756,6 +894,7 @@
   padding: 0 var(--space-md);
   padding-top: var(--space-md);
   display: none;
+  flex-shrink: 0; /* Prevent from being compressed */
 }
 
 .context-chips.has-chips {
@@ -937,6 +1076,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+  flex-shrink: 0; /* Prevent input area from being compressed */
 }
 
 .chat-input-controls {
@@ -944,6 +1084,7 @@
   align-items: center;
   gap: var(--space-xs);
   padding-top: var(--space-sm);
+  padding-bottom: 2px;
   border-top: 1px solid var(--color-border-light);
 }
 
@@ -991,12 +1132,36 @@
   position: relative;
 }
 
+.chat-reasoning-dropdown .reasoning-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  min-width: auto;
+  width: auto;
+}
+
+.chat-reasoning-dropdown .reasoning-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.chat-reasoning-dropdown .reasoning-chevron {
+  opacity: 0.6;
+  transition: transform var(--transition-fast);
+}
+
+.chat-reasoning-dropdown.open .reasoning-chevron {
+  transform: rotate(180deg);
+}
+
 .chat-reasoning-menu {
   position: absolute;
   bottom: 100%;
   right: 0;
   margin-bottom: 8px;
-  min-width: 140px;
+  min-width: 180px;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -1015,28 +1180,41 @@
   transform: translateY(0);
 }
 
-.chat-reasoning-label {
+.chat-reasoning-header {
   padding: var(--space-xs) var(--space-sm);
   font-size: 0.7rem;
   font-weight: 600;
   color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-xs);
 }
 
 .chat-reasoning-option {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   width: 100%;
-  padding: var(--space-sm) var(--space-sm);
+  padding: var(--space-sm);
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: var(--font-body);
-  font-size: 0.85rem;
-  color: var(--color-text);
   text-align: left;
   cursor: pointer;
   transition: background var(--transition-fast);
+}
+
+.chat-reasoning-option .option-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.chat-reasoning-option .option-desc {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
 }
 
 .chat-reasoning-option:hover {
@@ -1044,8 +1222,16 @@
 }
 
 .chat-reasoning-option.selected {
-  background: rgba(196, 92, 62, 0.1);
+  background: var(--color-accent-faded, rgba(196, 92, 62, 0.1));
+}
+
+.chat-reasoning-option.selected .option-label {
   color: var(--color-accent);
+}
+
+.chat-reasoning-option.selected .option-desc {
+  color: var(--color-accent);
+  opacity: 0.8;
 }
 
 /* File input (hidden) */

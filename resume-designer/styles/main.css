@@ -214,12 +214,33 @@ body {
   z-index: 300; /* Above sidebars */
   flex-shrink: 0; /* Don't shrink */
   position: relative; /* Stay in document flow but above everything */
+  /* Make header draggable on macOS Electron */
+  -webkit-app-region: drag;
+  /* Allow user to still select text if needed */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Electron: Add padding for macOS traffic lights */
+.electron-mac .header-bar {
+  padding-left: 85px;
 }
 
 .header-brand {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+}
+
+/* All interactive elements in header should not be draggable */
+.header-bar button,
+.header-bar select,
+.header-bar input,
+.header-bar a,
+.header-bar .custom-dropdown,
+.header-bar .header-variant,
+.header-bar .header-actions {
+  -webkit-app-region: no-drag;
 }
 
 .header-title {
@@ -555,7 +576,7 @@ html[data-theme="dark"] .header-variant-select {
   background: rgba(45, 42, 38, 0.95);
   border-radius: 8px;
   position: fixed;
-  bottom: 70px; /* Above the edit-hint */
+  bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 50;
@@ -617,7 +638,8 @@ html[data-theme="dark"] .header-variant-select {
 .resume-scroller {
   flex: 1;
   padding: var(--space-xl);
-  padding-top: 64px; /* Account for zoom controls */
+  padding-top: 32px;
+  padding-bottom: 100px; /* Space for bottom toolbar */
   overflow: auto; /* Scroll both directions */
   display: flex;
   justify-content: center;
@@ -656,28 +678,9 @@ html[data-theme="dark"] .header-variant-select {
   color: var(--color-accent);
 }
 
-/* Edit mode hint */
+/* Edit mode hint - Hidden by default */
 .edit-mode-hint {
-  position: fixed;
-  bottom: var(--space-lg);
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: rgba(45, 42, 38, 0.9);
-  color: rgba(248, 246, 243, 0.9);
-  border-radius: 20px;
-  font-size: 0.85rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-  z-index: 100;
-}
-
-.edit-mode-hint.hidden {
-  opacity: 0;
-  transform: translateX(-50%) translateY(10px);
-  pointer-events: none;
+  display: none !important;
 }
 
 /* ==========================================================================

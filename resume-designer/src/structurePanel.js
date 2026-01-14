@@ -4,6 +4,53 @@
  */
 
 import { store, generateId } from './store.js';
+import { 
+  FONT_PAIRINGS, 
+  POPULAR_GOOGLE_FONTS, 
+  SYSTEM_FONT_STACKS,
+  loadFontPairing,
+  loadGoogleFont,
+  applyFontSettings,
+  getCurrentFontSettings,
+  saveFontSettings,
+  searchGoogleFonts,
+  getSystemFonts
+} from './fontService.js';
+import {
+  GRADIENT_STYLES,
+  PATTERN_STYLES,
+  TEXTURE_STYLES,
+  getHeaderStyleSettings,
+  saveHeaderStyleSettings,
+  applyHeaderStyle,
+  getStylePreview
+} from './headerStyleService.js';
+import {
+  getSpacingSettings,
+  saveSpacingSettings,
+  applySpacingSettings,
+  resetSpacingSettings,
+  DEFAULT_SPACING
+} from './spacingService.js';
+import {
+  UNDERLINE_STYLES,
+  BULLET_STYLES,
+  BORDER_RADIUS_PRESETS,
+  getAccentSettings,
+  saveAccentSettings,
+  applyAccentSettings,
+  resetAccentSettings,
+  DEFAULT_ACCENT
+} from './accentService.js';
+import {
+  PHOTO_PLACEMENTS,
+  PHOTO_SHAPES,
+  PHOTO_SIZES,
+  getPhotoSettings,
+  savePhotoSettings,
+  applyPhotoSettings,
+  removePhoto
+} from './photoService.js';
 
 let isPanelOpen = false;
 let onChangeCallback = null;
@@ -15,6 +62,30 @@ let draggedItem = null;
 let currentPalette = 'terracotta';
 let currentLayout = 'sidebar';
 let customColor = '#c45c3e';
+
+// Font settings
+let currentFontSettings = getCurrentFontSettings();
+let fontSubTab = 'presets'; // 'presets', 'google', 'system'
+let googleFontSearch = '';
+let googleFontCategory = null;
+let systemFontsList = null;
+
+// Header style settings
+let currentHeaderStyle = getHeaderStyleSettings();
+let headerStyleTab = 'gradients'; // 'gradients', 'patterns', 'textures', 'image'
+
+// Spacing settings
+let currentSpacing = getSpacingSettings();
+
+// Accent settings
+let currentAccent = getAccentSettings();
+
+// Photo settings
+let currentPhoto = getPhotoSettings();
+
+// Section collapse state - tracks which sections are collapsed
+// Key format: "tabName-sectionId" e.g., "design-color-theme", "header-name-title"
+let collapsedSections = {};
 
 // Color palette definitions
 const COLOR_PALETTES = {
@@ -112,6 +183,36 @@ const TAB_OPTIONS = {
   design: { label: 'Design', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a4.5 4.5 0 0 0 0 9 4.5 4.5 0 0 1 0 9 10 10 0 0 0 0-18z"/></svg>' }
 };
 
+// Helper function to render a collapsible section
+function renderCollapsibleSection(sectionId, title, content, extraHeaderContent = '') {
+  const isCollapsed = collapsedSections[`${currentTab}-${sectionId}`] || false;
+  return `
+    <section class="panel-section ${isCollapsed ? 'collapsed' : ''}" data-section-id="${sectionId}">
+      <div class="panel-section-header" data-action="toggle-section" data-section="${sectionId}">
+        <h3 class="panel-section-title">${title}</h3>
+        <div class="panel-section-actions">
+          ${extraHeaderContent}
+          <button class="panel-collapse-btn" data-action="toggle-section" data-section="${sectionId}" title="${isCollapsed ? 'Expand' : 'Collapse'}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="${isCollapsed ? '6 9 12 15 18 9' : '18 15 12 9 6 15'}"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="panel-section-content">
+        ${content}
+      </div>
+    </section>
+  `;
+}
+
+// Toggle section collapse state
+function toggleSection(sectionId) {
+  const key = `${currentTab}-${sectionId}`;
+  collapsedSections[key] = !collapsedSections[key];
+  renderPanel();
+}
+
 // Render the panel content
 function renderPanel() {
   const content = document.getElementById('structure-panel-content');
@@ -181,252 +282,924 @@ function setupSectionDropdown() {
 
 // Render Header tab content
 function renderHeaderTab(data) {
+  const nameContent = `
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" class="form-input" data-field="name" value="${escapeAttr(data.name || '')}">
+    </div>
+    <div class="form-group">
+      <label>Professional Title</label>
+      <input type="text" class="form-input" data-field="tagline" value="${escapeAttr(data.tagline || '')}">
+    </div>
+  `;
+
+  const contactContent = `
+    <div class="form-group">
+      <label>Location</label>
+      <input type="text" class="form-input" data-field="contact.location" value="${escapeAttr(data.contact?.location || '')}">
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" class="form-input" data-field="contact.email" value="${escapeAttr(data.contact?.email || '')}">
+    </div>
+    <div class="form-group">
+      <label>Phone</label>
+      <input type="tel" class="form-input" data-field="contact.phone" value="${escapeAttr(data.contact?.phone || '')}">
+    </div>
+    <div class="form-group">
+      <label>Portfolio URL</label>
+      <input type="text" class="form-input" data-field="contact.portfolio" value="${escapeAttr(data.contact?.portfolio || '')}">
+    </div>
+    <div class="form-group">
+      <label>Instagram</label>
+      <input type="text" class="form-input" data-field="contact.instagram" value="${escapeAttr(data.contact?.instagram || '')}">
+    </div>
+  `;
+
   return `
-    <!-- Name & Tagline -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Name & Title</h3>
-      </div>
-      <div class="panel-section-content">
-        <div class="form-group">
-          <label>Name</label>
-          <input type="text" class="form-input" data-field="name" value="${escapeAttr(data.name || '')}">
-        </div>
-        <div class="form-group">
-          <label>Professional Title</label>
-          <input type="text" class="form-input" data-field="tagline" value="${escapeAttr(data.tagline || '')}">
-        </div>
-      </div>
-    </section>
-    
-    <!-- Contact Info -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Contact Information</h3>
-      </div>
-      <div class="panel-section-content">
-        <div class="form-group">
-          <label>Location</label>
-          <input type="text" class="form-input" data-field="contact.location" value="${escapeAttr(data.contact?.location || '')}">
-        </div>
-        <div class="form-group">
-          <label>Email</label>
-          <input type="email" class="form-input" data-field="contact.email" value="${escapeAttr(data.contact?.email || '')}">
-        </div>
-        <div class="form-group">
-          <label>Phone</label>
-          <input type="tel" class="form-input" data-field="contact.phone" value="${escapeAttr(data.contact?.phone || '')}">
-        </div>
-        <div class="form-group">
-          <label>Portfolio URL</label>
-          <input type="text" class="form-input" data-field="contact.portfolio" value="${escapeAttr(data.contact?.portfolio || '')}">
-        </div>
-        <div class="form-group">
-          <label>Instagram</label>
-          <input type="text" class="form-input" data-field="contact.instagram" value="${escapeAttr(data.contact?.instagram || '')}">
-        </div>
-      </div>
-    </section>
+    ${renderCollapsibleSection('name-title', 'Name & Title', nameContent)}
+    ${renderCollapsibleSection('contact-info', 'Contact Information', contactContent)}
   `;
 }
 
 // Render Sidebar tab content
 function renderSidebarTab(data) {
+  const addButton = `
+    <button class="panel-add-btn" id="add-section-btn" title="Add section">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  `;
+
+  const sectionsContent = `
+    <div class="sortable-list" id="sections-list" data-sortable="sections">
+      ${(data.sections || []).map((section, i) => renderSectionItem(section, i)).join('')}
+    </div>
+    <div class="add-section-menu" id="add-section-menu">
+      ${Object.entries(SECTION_TEMPLATES).map(([key, template]) => `
+        <button class="add-section-option" data-template="${key}">${template.title}</button>
+      `).join('')}
+      <button class="add-section-option" data-template="custom">Custom Section...</button>
+    </div>
+  `;
+
+  const toolsContent = `
+    <div class="form-group">
+      <textarea class="form-textarea" data-field="tools" rows="3" placeholder="Tool 1 • Tool 2 • Tool 3">${escapeAttr(data.tools || '')}</textarea>
+      <small class="form-hint">Separate tools with • (bullet)</small>
+    </div>
+  `;
+
   return `
-    <!-- Sections -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Sidebar Sections</h3>
-        <button class="panel-add-btn" id="add-section-btn" title="Add section">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-      </div>
-      <div class="panel-section-content">
-        <div class="sortable-list" id="sections-list" data-sortable="sections">
-          ${(data.sections || []).map((section, i) => renderSectionItem(section, i)).join('')}
-        </div>
-        <div class="add-section-menu" id="add-section-menu">
-          ${Object.entries(SECTION_TEMPLATES).map(([key, template]) => `
-            <button class="add-section-option" data-template="${key}">${template.title}</button>
-          `).join('')}
-          <button class="add-section-option" data-template="custom">Custom Section...</button>
-        </div>
-      </div>
-    </section>
-    
-    <!-- Tools -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Tools</h3>
-      </div>
-      <div class="panel-section-content">
-        <div class="form-group">
-          <textarea class="form-textarea" data-field="tools" rows="3" placeholder="Tool 1 • Tool 2 • Tool 3">${escapeAttr(data.tools || '')}</textarea>
-          <small class="form-hint">Separate tools with • (bullet)</small>
-        </div>
-      </div>
-    </section>
+    ${renderCollapsibleSection('sidebar-sections', 'Sidebar Sections', sectionsContent, addButton)}
+    ${renderCollapsibleSection('tools', 'Tools', toolsContent)}
   `;
 }
 
 // Render Main tab content
 function renderMainTab(data) {
+  const summaryContent = `
+    <div class="form-group">
+      <textarea class="form-textarea" data-field="summary" rows="4" placeholder="A brief professional summary...">${escapeAttr(data.summary || '')}</textarea>
+    </div>
+  `;
+
+  const experienceAddButton = `
+    <button class="panel-add-btn" id="add-experience-btn" title="Add experience">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  `;
+
+  const experienceContent = `
+    <div class="accordion-list" id="experience-list" data-sortable="experience">
+      ${(data.experience || []).map((exp, i) => renderExperienceItem(exp, i)).join('')}
+    </div>
+  `;
+
+  const educationAddButton = `
+    <button class="panel-add-btn" id="add-education-btn" title="Add education">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  `;
+
+  const educationContent = `
+    <div class="sortable-list" id="education-list" data-sortable="education">
+      ${(data.education || []).map((edu, i) => `
+        <div class="sortable-item" data-index="${i}" draggable="true">
+          <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+          <input type="text" class="form-input flex-grow" data-field="education[${i}]" value="${escapeAttr(edu)}">
+          <button class="item-delete-btn" data-action="delete-education" data-index="${i}" title="Delete">×</button>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
   return `
-    <!-- Summary -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Summary</h3>
-      </div>
-      <div class="panel-section-content">
-        <div class="form-group">
-          <textarea class="form-textarea" data-field="summary" rows="4" placeholder="A brief professional summary...">${escapeAttr(data.summary || '')}</textarea>
-        </div>
-      </div>
-    </section>
-    
-    <!-- Experience -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Experience</h3>
-        <button class="panel-add-btn" id="add-experience-btn" title="Add experience">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-      </div>
-      <div class="panel-section-content">
-        <div class="accordion-list" id="experience-list" data-sortable="experience">
-          ${(data.experience || []).map((exp, i) => renderExperienceItem(exp, i)).join('')}
-        </div>
-      </div>
-    </section>
-    
-    <!-- Education -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Education</h3>
-        <button class="panel-add-btn" id="add-education-btn" title="Add education">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-      </div>
-      <div class="panel-section-content">
-        <div class="sortable-list" id="education-list" data-sortable="education">
-          ${(data.education || []).map((edu, i) => `
-            <div class="sortable-item" data-index="${i}" draggable="true">
-              <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
-              <input type="text" class="form-input flex-grow" data-field="education[${i}]" value="${escapeAttr(edu)}">
-              <button class="item-delete-btn" data-action="delete-education" data-index="${i}" title="Delete">×</button>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    </section>
+    ${renderCollapsibleSection('summary', 'Summary', summaryContent)}
+    ${renderCollapsibleSection('experience', 'Experience', experienceContent, experienceAddButton)}
+    ${renderCollapsibleSection('education', 'Education', educationContent, educationAddButton)}
   `;
 }
 
 // Render Design tab content
 function renderDesignTab() {
-  return `
-    <!-- Color Theme -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Color Theme</h3>
+  // Color Theme content
+  const colorThemeContent = `
+    <div class="design-palette-grid">
+      ${Object.entries(COLOR_PALETTES).map(([key, colors]) => `
+        <button class="design-palette-btn ${currentPalette === key ? 'active' : ''}" 
+                data-action="set-palette" 
+                data-palette="${key}" 
+                title="${key.charAt(0).toUpperCase() + key.slice(1)}">
+          <span class="design-palette-preview" style="--p1: ${colors.p1}; --p2: ${colors.p2}; --p3: ${colors.p3};"></span>
+        </button>
+      `).join('')}
+    </div>
+    
+    <!-- Custom Color -->
+    <div class="design-custom-color">
+      <div class="design-custom-header">
+        <span class="design-custom-label">Custom Color</span>
+        <label class="design-color-picker">
+          <input type="color" id="design-custom-color" value="${customColor}" data-action="custom-color-input">
+          <span class="design-color-swatch" style="background-color: ${customColor};"></span>
+        </label>
       </div>
-      <div class="panel-section-content">
-        <div class="design-palette-grid">
-          ${Object.entries(COLOR_PALETTES).map(([key, colors]) => `
-            <button class="design-palette-btn ${currentPalette === key ? 'active' : ''}" 
-                    data-action="set-palette" 
-                    data-palette="${key}" 
-                    title="${key.charAt(0).toUpperCase() + key.slice(1)}">
-              <span class="design-palette-preview" style="--p1: ${colors.p1}; --p2: ${colors.p2}; --p3: ${colors.p3};"></span>
-            </button>
-          `).join('')}
+      <button class="design-palette-btn custom ${currentPalette === 'custom' ? 'active' : ''}" 
+              data-action="set-palette" 
+              data-palette="custom" 
+              title="Custom color">
+        <span class="design-palette-preview" id="design-custom-preview" style="--p1: ${customColor}; --p2: ${generateDarkColor(customColor)}; --p3: ${generateLightColor(customColor)};"></span>
+      </button>
+    </div>
+  `;
+
+  // Layout content
+  const layoutContent = `
+    <div class="design-layout-grid">
+      <button class="design-layout-btn ${currentLayout === 'sidebar' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="sidebar">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="7" height="18" rx="1"/>
+          <rect x="12" y="3" width="9" height="18" rx="1"/>
+        </svg>
+        <span>Sidebar</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'right-sidebar' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="right-sidebar">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="9" height="18" rx="1"/>
+          <rect x="14" y="3" width="7" height="18" rx="1"/>
+        </svg>
+        <span>Right Side</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'stacked' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="stacked">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="5" rx="1"/>
+          <rect x="3" y="10" width="18" height="5" rx="1"/>
+          <rect x="3" y="17" width="18" height="4" rx="1"/>
+        </svg>
+        <span>Stacked</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'compact' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="compact">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="4" rx="1"/>
+          <rect x="3" y="9" width="12" height="12" rx="1"/>
+          <rect x="17" y="9" width="4" height="12" rx="1"/>
+        </svg>
+        <span>Compact</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'executive' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="executive">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="6" rx="1"/>
+          <rect x="3" y="11" width="12" height="10" rx="1"/>
+          <rect x="17" y="11" width="4" height="10" rx="1"/>
+        </svg>
+        <span>Executive</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'classic' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="classic">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="4" rx="1"/>
+          <rect x="3" y="9" width="18" height="12" rx="1"/>
+        </svg>
+        <span>Classic</span>
+      </button>
+    </div>
+  `;
+
+  return `
+    ${renderCollapsibleSection('color-theme', 'Color Theme', colorThemeContent)}
+    ${renderHeaderStyleSection()}
+    ${renderTypographySection()}
+    ${renderCollapsibleSection('layout', 'Layout', layoutContent)}
+    ${renderSpacingSection()}
+    ${renderAccentSection()}
+    ${renderPhotoSection()}
+    ${renderExportSection()}
+  `;
+}
+
+// Render Export section
+function renderExportSection() {
+  const exportContent = `
+    <div class="design-export-buttons">
+      <button class="btn btn-primary design-export-btn" data-action="download-pdf">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download PDF
+      </button>
+      <button class="btn btn-secondary design-export-btn" data-action="print-resume">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 6 2 18 2 18 9"/>
+          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+          <rect x="6" y="14" width="12" height="8"/>
+        </svg>
+        Print
+      </button>
+    </div>
+  `;
+  return renderCollapsibleSection('export', 'Export', exportContent);
+}
+
+// Render Typography section
+function renderTypographySection() {
+  const typographyContent = `
+    <!-- Font Source Tabs -->
+    <div class="font-source-tabs">
+      <button class="font-source-tab ${fontSubTab === 'presets' ? 'active' : ''}" 
+              data-action="set-font-tab" data-tab="presets">
+        Presets
+      </button>
+      <button class="font-source-tab ${fontSubTab === 'google' ? 'active' : ''}" 
+              data-action="set-font-tab" data-tab="google">
+        Google Fonts
+      </button>
+      <button class="font-source-tab ${fontSubTab === 'system' ? 'active' : ''}" 
+              data-action="set-font-tab" data-tab="system">
+        System
+      </button>
+    </div>
+    
+    <!-- Font Content -->
+    <div class="font-content">
+      ${fontSubTab === 'presets' ? renderFontPresets() : ''}
+      ${fontSubTab === 'google' ? renderGoogleFonts() : ''}
+      ${fontSubTab === 'system' ? renderSystemFonts() : ''}
+    </div>
+  `;
+  return renderCollapsibleSection('typography', 'Typography', typographyContent);
+}
+
+// Render font preset pairings
+function renderFontPresets() {
+  const currentPairing = currentFontSettings.mode === 'preset' ? currentFontSettings.pairingId : null;
+  
+  return `
+    <div class="font-presets-grid">
+      ${Object.entries(FONT_PAIRINGS).map(([id, pairing]) => `
+        <button class="font-preset-btn ${currentPairing === id ? 'active' : ''}" 
+                data-action="select-font-preset" 
+                data-preset="${id}">
+          <span class="font-preset-name">${pairing.name}</span>
+          <span class="font-preset-sample" style="font-family: '${pairing.display.family}', serif;">Aa</span>
+          <span class="font-preset-families">${pairing.display.family} + ${pairing.body.family}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+// Render Google Fonts picker
+function renderGoogleFonts() {
+  const fonts = searchGoogleFonts(googleFontSearch, googleFontCategory);
+  const currentDisplay = currentFontSettings.mode === 'google' ? currentFontSettings.displayFont?.family : null;
+  const currentBody = currentFontSettings.mode === 'google' ? currentFontSettings.bodyFont?.family : null;
+  
+  return `
+    <div class="google-fonts-picker">
+      <!-- Search -->
+      <div class="font-search">
+        <input type="text" 
+               class="form-input" 
+               placeholder="Search fonts..." 
+               value="${googleFontSearch}"
+               data-action="font-search-input">
+      </div>
+      
+      <!-- Category Filter -->
+      <div class="font-category-filter">
+        <button class="font-category-btn ${!googleFontCategory ? 'active' : ''}" 
+                data-action="set-font-category" data-category="">All</button>
+        <button class="font-category-btn ${googleFontCategory === 'serif' ? 'active' : ''}" 
+                data-action="set-font-category" data-category="serif">Serif</button>
+        <button class="font-category-btn ${googleFontCategory === 'sans-serif' ? 'active' : ''}" 
+                data-action="set-font-category" data-category="sans-serif">Sans</button>
+        <button class="font-category-btn ${googleFontCategory === 'display' ? 'active' : ''}" 
+                data-action="set-font-category" data-category="display">Display</button>
+      </div>
+      
+      <!-- Current Selection -->
+      <div class="font-current-selection">
+        <div class="font-selection-row">
+          <label>Display Font:</label>
+          <span class="font-selection-value">${currentDisplay || 'Not set'}</span>
+        </div>
+        <div class="font-selection-row">
+          <label>Body Font:</label>
+          <span class="font-selection-value">${currentBody || 'Not set'}</span>
+        </div>
+      </div>
+      
+      <!-- Font List -->
+      <div class="font-list">
+        ${fonts.map(font => `
+          <div class="font-list-item">
+            <span class="font-list-name" style="font-family: '${font.family}', ${font.category};">${font.family}</span>
+            <span class="font-list-category">${font.category}</span>
+            <div class="font-list-actions">
+              <button class="font-select-btn ${currentDisplay === font.family ? 'active' : ''}" 
+                      data-action="select-google-font" 
+                      data-font-family="${font.family}"
+                      data-font-category="${font.category}"
+                      data-font-type="display"
+                      title="Use as display font">H</button>
+              <button class="font-select-btn ${currentBody === font.family ? 'active' : ''}" 
+                      data-action="select-google-font" 
+                      data-font-family="${font.family}"
+                      data-font-category="${font.category}"
+                      data-font-type="body"
+                      title="Use as body font">B</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// Render system fonts picker
+function renderSystemFonts() {
+  const systemFonts = Object.entries(SYSTEM_FONT_STACKS);
+  const currentDisplay = currentFontSettings.mode === 'system' ? currentFontSettings.displayFont : null;
+  const currentBody = currentFontSettings.mode === 'system' ? currentFontSettings.bodyFont : null;
+  
+  return `
+    <div class="system-fonts-picker">
+      <!-- Current Selection -->
+      <div class="font-current-selection">
+        <div class="font-selection-row">
+          <label>Display Font:</label>
+          <span class="font-selection-value">${currentDisplay ? SYSTEM_FONT_STACKS[currentDisplay]?.name || currentDisplay : 'Not set'}</span>
+        </div>
+        <div class="font-selection-row">
+          <label>Body Font:</label>
+          <span class="font-selection-value">${currentBody ? SYSTEM_FONT_STACKS[currentBody]?.name || currentBody : 'Not set'}</span>
+        </div>
+      </div>
+      
+      <!-- System Font List -->
+      <div class="font-list">
+        ${systemFonts.map(([id, font]) => `
+          <div class="font-list-item">
+            <span class="font-list-name" style="font-family: ${font.family};">${font.name}</span>
+            <span class="font-list-category">${font.category}</span>
+            <div class="font-list-actions">
+              <button class="font-select-btn ${currentDisplay === id ? 'active' : ''}" 
+                      data-action="select-system-font" 
+                      data-font-id="${id}"
+                      data-font-type="display"
+                      title="Use as display font">H</button>
+              <button class="font-select-btn ${currentBody === id ? 'active' : ''}" 
+                      data-action="select-system-font" 
+                      data-font-id="${id}"
+                      data-font-type="body"
+                      title="Use as body font">B</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      
+      <p class="font-hint">System fonts work offline and render consistently across devices.</p>
+    </div>
+  `;
+}
+
+// Render Header Style section
+function renderHeaderStyleSection() {
+  // Get current colors for previews
+  const colors = getCurrentColors();
+  
+  const headerStyleContent = `
+    <!-- Style Type Tabs -->
+    <div class="header-style-tabs">
+      <button class="header-style-tab ${headerStyleTab === 'gradients' ? 'active' : ''}" 
+              data-action="set-header-tab" data-tab="gradients">
+        Gradients
+      </button>
+      <button class="header-style-tab ${headerStyleTab === 'patterns' ? 'active' : ''}" 
+              data-action="set-header-tab" data-tab="patterns">
+        Patterns
+      </button>
+      <button class="header-style-tab ${headerStyleTab === 'textures' ? 'active' : ''}" 
+              data-action="set-header-tab" data-tab="textures">
+        Textures
+      </button>
+      <button class="header-style-tab ${headerStyleTab === 'image' ? 'active' : ''}" 
+              data-action="set-header-tab" data-tab="image">
+        Image
+      </button>
+    </div>
+    
+    <!-- Style Content -->
+    <div class="header-style-content">
+      ${headerStyleTab === 'gradients' ? renderGradientStyles(colors) : ''}
+      ${headerStyleTab === 'patterns' ? renderPatternStyles(colors) : ''}
+      ${headerStyleTab === 'textures' ? renderTextureStyles(colors) : ''}
+      ${headerStyleTab === 'image' ? renderImageUpload() : ''}
+    </div>
+  `;
+  return renderCollapsibleSection('header-style', 'Header Style', headerStyleContent);
+}
+
+// Get current color values
+function getCurrentColors() {
+  const palette = COLOR_PALETTES[currentPalette];
+  if (currentPalette === 'custom') {
+    return {
+      headerBg: generateDarkColor(customColor),
+      headerBgEnd: adjustColorBrightness(generateDarkColor(customColor), 0.1),
+      accent: customColor
+    };
+  }
+  return {
+    headerBg: palette.p2,
+    headerBgEnd: adjustColorBrightness(palette.p2, 0.15),
+    accent: palette.p1
+  };
+}
+
+// Helper to adjust color brightness
+function adjustColorBrightness(hex, factor) {
+  hex = hex.replace('#', '');
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  
+  const newR = Math.min(255, Math.max(0, Math.round(r + (255 - r) * factor)));
+  const newG = Math.min(255, Math.max(0, Math.round(g + (255 - g) * factor)));
+  const newB = Math.min(255, Math.max(0, Math.round(b + (255 - b) * factor)));
+  
+  return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+// Render gradient styles
+function renderGradientStyles(colors) {
+  const isGradientActive = currentHeaderStyle.type === 'gradient';
+  
+  return `
+    <div class="header-style-grid">
+      ${Object.entries(GRADIENT_STYLES).map(([id, style]) => `
+        <button class="header-style-btn ${isGradientActive && currentHeaderStyle.styleId === id ? 'active' : ''}" 
+                data-action="select-header-style" 
+                data-style-type="gradient"
+                data-style-id="${id}"
+                title="${style.name}">
+          <span class="header-style-preview" style="background: ${style.css(colors.headerBg, colors.headerBgEnd)};"></span>
+          <span class="header-style-label">${style.name}</span>
+        </button>
+      `).join('')}
+    </div>
+    
+    <!-- Solid Color Option -->
+    <div class="header-solid-option">
+      <button class="header-style-btn solid ${currentHeaderStyle.type === 'solid' ? 'active' : ''}" 
+              data-action="select-header-style" 
+              data-style-type="solid"
+              data-style-id="solid">
+        <span class="header-style-preview" style="background: ${colors.headerBg};"></span>
+        <span class="header-style-label">Solid Color</span>
+      </button>
+    </div>
+  `;
+}
+
+// Render pattern styles
+function renderPatternStyles(colors) {
+  const isPatternActive = currentHeaderStyle.type === 'pattern';
+  
+  return `
+    <div class="header-style-grid">
+      ${Object.entries(PATTERN_STYLES).map(([id, style]) => `
+        <button class="header-style-btn ${isPatternActive && currentHeaderStyle.styleId === id ? 'active' : ''}" 
+                data-action="select-header-style" 
+                data-style-type="pattern"
+                data-style-id="${id}"
+                title="${style.name}">
+          <span class="header-style-preview" style="background: ${style.css(colors.headerBg, colors.headerBgEnd, colors.accent)}; background-size: ${style.size || 'auto'};"></span>
+          <span class="header-style-label">${style.name}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+// Render texture styles
+function renderTextureStyles(colors) {
+  const isTextureActive = currentHeaderStyle.type === 'texture';
+  
+  return `
+    <div class="header-style-grid">
+      ${Object.entries(TEXTURE_STYLES).map(([id, style]) => `
+        <button class="header-style-btn ${isTextureActive && currentHeaderStyle.styleId === id ? 'active' : ''}" 
+                data-action="select-header-style" 
+                data-style-type="texture"
+                data-style-id="${id}"
+                title="${style.name}">
+          <span class="header-style-preview" style="background: ${style.css(colors.headerBg, colors.headerBgEnd, colors.accent)};"></span>
+          <span class="header-style-label">${style.name}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+// Render image upload section
+function renderImageUpload() {
+  const hasImage = currentHeaderStyle.customImage;
+  
+  return `
+    <div class="header-image-upload">
+      ${hasImage ? `
+        <div class="header-image-preview">
+          <img src="${currentHeaderStyle.customImage}" alt="Header background">
+          <button class="header-image-remove" data-action="remove-header-image" title="Remove image">×</button>
         </div>
         
-        <!-- Custom Color -->
-        <div class="design-custom-color">
-          <div class="design-custom-header">
-            <span class="design-custom-label">Custom Color</span>
-            <label class="design-color-picker">
-              <input type="color" id="design-custom-color" value="${customColor}" data-action="custom-color-input">
-              <span class="design-color-swatch" style="background-color: ${customColor};"></span>
-            </label>
+        <div class="header-image-controls">
+          <div class="control-row">
+            <label>Opacity:</label>
+            <input type="range" min="0" max="100" value="${Math.round((currentHeaderStyle.imageOpacity || 0.3) * 100)}" 
+                   data-action="header-image-opacity" class="slider-input">
+            <span class="slider-value">${Math.round((currentHeaderStyle.imageOpacity || 0.3) * 100)}%</span>
           </div>
-          <button class="design-palette-btn custom ${currentPalette === 'custom' ? 'active' : ''}" 
-                  data-action="set-palette" 
-                  data-palette="custom" 
-                  title="Custom color">
-            <span class="design-palette-preview" id="design-custom-preview" style="--p1: ${customColor}; --p2: ${generateDarkColor(customColor)}; --p3: ${generateLightColor(customColor)};"></span>
-          </button>
+          
+          <div class="control-row">
+            <label>Fit:</label>
+            <select data-action="header-image-fit" class="form-select-small">
+              <option value="cover" ${currentHeaderStyle.imageFit === 'cover' ? 'selected' : ''}>Cover</option>
+              <option value="contain" ${currentHeaderStyle.imageFit === 'contain' ? 'selected' : ''}>Contain</option>
+              <option value="tile" ${currentHeaderStyle.imageFit === 'tile' ? 'selected' : ''}>Tile</option>
+            </select>
+          </div>
         </div>
-      </div>
-    </section>
-    
-    <!-- Layout -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Layout</h3>
-      </div>
-      <div class="panel-section-content">
-        <div class="design-layout-options">
-          <button class="design-layout-btn ${currentLayout === 'sidebar' ? 'active' : ''}" 
-                  data-action="set-layout" 
-                  data-layout="sidebar">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <rect x="3" y="3" width="7" height="18" rx="1"/>
-              <rect x="12" y="3" width="9" height="18" rx="1"/>
-            </svg>
-            <span>Sidebar</span>
-          </button>
-          <button class="design-layout-btn ${currentLayout === 'stacked' ? 'active' : ''}" 
-                  data-action="set-layout" 
-                  data-layout="stacked">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <rect x="3" y="3" width="18" height="5" rx="1"/>
-              <rect x="3" y="10" width="18" height="5" rx="1"/>
-              <rect x="3" y="17" width="18" height="4" rx="1"/>
-            </svg>
-            <span>Stacked</span>
-          </button>
+      ` : `
+        <div class="header-image-dropzone" id="header-image-dropzone">
+          <input type="file" id="header-image-input" accept="image/*" style="display: none;">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <path d="M21 15l-5-5L5 21"/>
+          </svg>
+          <p>Drop image here or click to upload</p>
+          <span>Recommended: 800x200px or larger</span>
         </div>
-      </div>
-    </section>
-    
-    <!-- Export Options -->
-    <section class="panel-section">
-      <div class="panel-section-header">
-        <h3 class="panel-section-title">Export</h3>
-      </div>
-      <div class="panel-section-content">
-        <div class="design-export-buttons">
-          <button class="btn btn-primary design-export-btn" data-action="download-pdf">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-            Download PDF
-          </button>
-          <button class="btn btn-secondary design-export-btn" data-action="print-resume">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 6 2 18 2 18 9"/>
-              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-              <rect x="6" y="14" width="12" height="8"/>
-            </svg>
-            Print
-          </button>
-        </div>
-      </div>
-    </section>
+      `}
+      
+      <button class="btn btn-secondary btn-sm" 
+              data-action="select-header-style" 
+              data-style-type="gradient"
+              data-style-id="linear-135"
+              style="margin-top: var(--space-sm); width: 100%;">
+        Reset to Gradient
+      </button>
+    </div>
   `;
+}
+
+// Render spacing controls section
+function renderSpacingSection() {
+  const s = currentSpacing;
+  
+  const resetButton = `
+    <button class="panel-reset-btn" data-action="reset-spacing" title="Reset to defaults">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+        <path d="M3 3v5h5"/>
+      </svg>
+    </button>
+  `;
+  
+  const spacingContent = `
+    <!-- Font Scale -->
+    <div class="spacing-control">
+      <div class="spacing-control-header">
+        <label>Font Size</label>
+        <span class="spacing-value">${Math.round(s.fontScale * 100)}%</span>
+      </div>
+      <input type="range" 
+             min="70" max="130" 
+             value="${Math.round(s.fontScale * 100)}" 
+             data-action="spacing-font-scale"
+             class="spacing-slider">
+    </div>
+    
+    <!-- Line Height -->
+    <div class="spacing-control">
+      <div class="spacing-control-header">
+        <label>Line Height</label>
+        <span class="spacing-value">${s.lineHeight.toFixed(2)}</span>
+      </div>
+      <input type="range" 
+             min="120" max="180" 
+             value="${Math.round(s.lineHeight * 100)}" 
+             data-action="spacing-line-height"
+             class="spacing-slider">
+    </div>
+    
+    <!-- Section Spacing -->
+    <div class="spacing-control">
+      <div class="spacing-control-header">
+        <label>Section Gap</label>
+        <span class="spacing-value">${s.sectionSpacing.toFixed(1)} rem</span>
+      </div>
+      <input type="range" 
+             min="4" max="16" 
+             value="${Math.round(s.sectionSpacing * 10)}" 
+             data-action="spacing-section"
+             class="spacing-slider">
+    </div>
+    
+    <!-- Sidebar Width (for two-column layouts) -->
+    <div class="spacing-control">
+      <div class="spacing-control-header">
+        <label>Sidebar Width</label>
+        <span class="spacing-value">${s.sidebarWidth.toFixed(1)} in</span>
+      </div>
+      <input type="range" 
+             min="18" max="32" 
+             value="${Math.round(s.sidebarWidth * 10)}" 
+             data-action="spacing-sidebar"
+             class="spacing-slider">
+    </div>
+    
+    <!-- Page Margins -->
+    <div class="spacing-margins">
+      <label class="spacing-margins-label">Page Margins (inches)</label>
+      <div class="spacing-margins-grid">
+        <div class="margin-control">
+          <label>Top</label>
+          <input type="number" 
+                 step="0.1" min="0.2" max="1.0"
+                 value="${s.pageMargins.top}"
+                 data-action="spacing-margin"
+                 data-margin="top"
+                 class="margin-input">
+        </div>
+        <div class="margin-control">
+          <label>Right</label>
+          <input type="number" 
+                 step="0.1" min="0.2" max="1.0"
+                 value="${s.pageMargins.right}"
+                 data-action="spacing-margin"
+                 data-margin="right"
+                 class="margin-input">
+        </div>
+        <div class="margin-control">
+          <label>Bottom</label>
+          <input type="number" 
+                 step="0.1" min="0.2" max="1.0"
+                 value="${s.pageMargins.bottom}"
+                 data-action="spacing-margin"
+                 data-margin="bottom"
+                 class="margin-input">
+        </div>
+        <div class="margin-control">
+          <label>Left</label>
+          <input type="number" 
+                 step="0.1" min="0.2" max="1.0"
+                 value="${s.pageMargins.left}"
+                 data-action="spacing-margin"
+                 data-margin="left"
+                 class="margin-input">
+        </div>
+      </div>
+    </div>
+  `;
+  return renderCollapsibleSection('spacing', 'Spacing & Sizing', spacingContent, resetButton);
+}
+
+// Render accent styles section
+function renderAccentSection() {
+  const a = currentAccent;
+  
+  const resetButton = `
+    <button class="panel-reset-btn" data-action="reset-accent" title="Reset to defaults">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+        <path d="M3 3v5h5"/>
+      </svg>
+    </button>
+  `;
+  
+  const accentContent = `
+    <!-- Section Title Underline -->
+    <div class="accent-control">
+      <label>Title Underline</label>
+      <div class="accent-options-row">
+        ${Object.entries(UNDERLINE_STYLES).map(([id, style]) => `
+          <button class="accent-option-btn ${a.underlineStyle === id ? 'active' : ''}" 
+                  data-action="set-underline"
+                  data-value="${id}"
+                  title="${style.name}">
+            <span class="underline-preview ${id}"></span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- Underline Width -->
+    <div class="accent-control compact">
+      <div class="spacing-control-header">
+        <label>Underline Width</label>
+        <span class="spacing-value">${a.underlineWidth}px</span>
+      </div>
+      <input type="range" 
+             min="1" max="4" 
+             value="${a.underlineWidth}" 
+             data-action="accent-underline-width"
+             class="spacing-slider">
+    </div>
+    
+    <!-- Bullet Style -->
+    <div class="accent-control">
+      <label>Bullet Points</label>
+      <div class="accent-options-row bullets">
+        ${Object.entries(BULLET_STYLES).map(([id, style]) => `
+          <button class="accent-option-btn bullet ${a.bulletStyle === id ? 'active' : ''}" 
+                  data-action="set-bullet"
+                  data-value="${id}"
+                  title="${style.name}">
+            ${style.char || '—'}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- Border Radius -->
+    <div class="accent-control">
+      <label>Corner Rounding</label>
+      <div class="accent-options-row radius">
+        ${Object.entries(BORDER_RADIUS_PRESETS).map(([id, preset]) => `
+          <button class="accent-option-btn radius ${a.borderRadius === id ? 'active' : ''}" 
+                  data-action="set-radius"
+                  data-value="${id}"
+                  title="${preset.name}">
+            <span class="radius-preview" style="border-radius: ${preset.value};"></span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- Skill Tag Style -->
+    <div class="accent-control">
+      <label>Skill Tags</label>
+      <div class="accent-options-row tags">
+        <button class="accent-option-btn tag ${a.skillTagStyle === 'filled' ? 'active' : ''}" 
+                data-action="set-skill-tag"
+                data-value="filled"
+                title="Filled">
+          <span class="tag-preview filled">Skill</span>
+        </button>
+        <button class="accent-option-btn tag ${a.skillTagStyle === 'outlined' ? 'active' : ''}" 
+                data-action="set-skill-tag"
+                data-value="outlined"
+                title="Outlined">
+          <span class="tag-preview outlined">Skill</span>
+        </button>
+        <button class="accent-option-btn tag ${a.skillTagStyle === 'minimal' ? 'active' : ''}" 
+                data-action="set-skill-tag"
+                data-value="minimal"
+                title="Minimal">
+          <span class="tag-preview minimal">Skill</span>
+        </button>
+      </div>
+    </div>
+  `;
+  return renderCollapsibleSection('accents', 'Accents', accentContent, resetButton);
+}
+
+// Render photo section
+function renderPhotoSection() {
+  const p = currentPhoto;
+  
+  const photoContent = p.enabled && p.imageData ? `
+    <!-- Photo Preview & Controls -->
+    <div class="photo-preview-container">
+      <div class="photo-preview">
+        <img src="${p.imageData}" alt="Profile photo">
+        <button class="photo-remove-btn" data-action="remove-photo" title="Remove photo">×</button>
+      </div>
+    </div>
+    
+    <!-- Placement -->
+    <div class="photo-control">
+      <label>Placement</label>
+      <div class="photo-options-row">
+        ${Object.entries(PHOTO_PLACEMENTS).map(([id, opt]) => `
+          <button class="photo-option-btn ${p.placement === id ? 'active' : ''}" 
+                  data-action="set-photo-placement"
+                  data-value="${id}"
+                  title="${opt.description}">
+            ${opt.name}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- Shape -->
+    <div class="photo-control">
+      <label>Shape</label>
+      <div class="photo-options-row">
+        ${Object.entries(PHOTO_SHAPES).map(([id, shape]) => `
+          <button class="photo-option-btn shape ${p.shape === id ? 'active' : ''}" 
+                  data-action="set-photo-shape"
+                  data-value="${id}"
+                  title="${shape.name}">
+            <span class="shape-preview" style="border-radius: ${shape.css};"></span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- Size -->
+    <div class="photo-control">
+      <label>Size</label>
+      <div class="photo-options-row">
+        ${Object.entries(PHOTO_SIZES).map(([id, size]) => `
+          <button class="photo-option-btn ${p.size === id ? 'active' : ''}" 
+                  data-action="set-photo-size"
+                  data-value="${id}">
+            ${size.name}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+    
+    <!-- Border -->
+    <div class="photo-control">
+      <label>Border</label>
+      <div class="photo-options-row">
+        <button class="photo-option-btn ${p.borderColor === 'accent' ? 'active' : ''}" 
+                data-action="set-photo-border"
+                data-value="accent">
+          Accent
+        </button>
+        <button class="photo-option-btn ${p.borderColor === 'white' ? 'active' : ''}" 
+                data-action="set-photo-border"
+                data-value="white">
+          White
+        </button>
+        <button class="photo-option-btn ${p.borderColor === 'none' ? 'active' : ''}" 
+                data-action="set-photo-border"
+                data-value="none">
+          None
+        </button>
+      </div>
+    </div>
+  ` : `
+    <!-- Upload Dropzone -->
+    <div class="photo-upload-dropzone" id="photo-dropzone">
+      <input type="file" id="photo-input" accept="image/*" style="display: none;">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="8" r="4"/>
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+      </svg>
+      <p>Add Profile Photo</p>
+      <span>Click or drag image here</span>
+    </div>
+  `;
+  return renderCollapsibleSection('photo', 'Profile Photo', photoContent);
 }
 
 // Helper to generate dark color from hex
@@ -614,6 +1387,11 @@ function setupEventHandlers() {
       case 'delete-education':
         deleteEducation(parseInt(target.dataset.index));
         break;
+      
+      // Section collapse/expand
+      case 'toggle-section':
+        toggleSection(target.dataset.section);
+        break;
         
       // Design tab actions
       case 'set-palette':
@@ -631,6 +1409,91 @@ function setupEventHandlers() {
       case 'print-resume':
         window.print();
         break;
+        
+      // Font actions
+      case 'set-font-tab':
+        handleSetFontTab(target.dataset.tab);
+        break;
+        
+      case 'select-font-preset':
+        handleSelectFontPreset(target.dataset.preset);
+        break;
+        
+      case 'set-font-category':
+        handleSetFontCategory(target.dataset.category || null);
+        break;
+        
+      case 'select-google-font':
+        handleSelectGoogleFont(
+          target.dataset.fontFamily, 
+          target.dataset.fontCategory, 
+          target.dataset.fontType
+        );
+        break;
+        
+      case 'select-system-font':
+        handleSelectSystemFont(target.dataset.fontId, target.dataset.fontType);
+        break;
+        
+      // Header style actions
+      case 'set-header-tab':
+        handleSetHeaderTab(target.dataset.tab);
+        break;
+        
+      case 'select-header-style':
+        handleSelectHeaderStyle(target.dataset.styleType, target.dataset.styleId);
+        break;
+        
+      case 'remove-header-image':
+        handleRemoveHeaderImage();
+        break;
+        
+      // Spacing actions
+      case 'reset-spacing':
+        handleResetSpacing();
+        break;
+        
+      // Accent actions
+      case 'reset-accent':
+        handleResetAccent();
+        break;
+        
+      case 'set-underline':
+        handleAccentChange('underlineStyle', target.dataset.value);
+        break;
+        
+      case 'set-bullet':
+        handleAccentChange('bulletStyle', target.dataset.value);
+        break;
+        
+      case 'set-radius':
+        handleAccentChange('borderRadius', target.dataset.value);
+        break;
+        
+      case 'set-skill-tag':
+        handleAccentChange('skillTagStyle', target.dataset.value);
+        break;
+        
+      // Photo actions
+      case 'remove-photo':
+        handleRemovePhoto();
+        break;
+        
+      case 'set-photo-placement':
+        handlePhotoChange('placement', target.dataset.value);
+        break;
+        
+      case 'set-photo-shape':
+        handlePhotoChange('shape', target.dataset.value);
+        break;
+        
+      case 'set-photo-size':
+        handlePhotoChange('size', target.dataset.value);
+        break;
+        
+      case 'set-photo-border':
+        handlePhotoChange('borderColor', target.dataset.value);
+        break;
     }
   });
   
@@ -639,7 +1502,53 @@ function setupEventHandlers() {
     if (e.target.dataset.action === 'custom-color-input') {
       handleCustomColorChange(e.target.value);
     }
+    
+    // Font search input
+    if (e.target.dataset.action === 'font-search-input') {
+      googleFontSearch = e.target.value;
+      renderPanel();
+    }
+    
+    // Header image opacity
+    if (e.target.dataset.action === 'header-image-opacity') {
+      handleHeaderImageOpacity(e.target.value);
+    }
+    
+    // Spacing controls
+    if (e.target.dataset.action === 'spacing-font-scale') {
+      handleSpacingChange('fontScale', parseInt(e.target.value) / 100);
+    }
+    if (e.target.dataset.action === 'spacing-line-height') {
+      handleSpacingChange('lineHeight', parseInt(e.target.value) / 100);
+    }
+    if (e.target.dataset.action === 'spacing-section') {
+      handleSpacingChange('sectionSpacing', parseInt(e.target.value) / 10);
+    }
+    if (e.target.dataset.action === 'spacing-sidebar') {
+      handleSpacingChange('sidebarWidth', parseInt(e.target.value) / 10);
+    }
+    if (e.target.dataset.action === 'spacing-margin') {
+      handleMarginChange(e.target.dataset.margin, parseFloat(e.target.value));
+    }
+    
+    // Accent underline width
+    if (e.target.dataset.action === 'accent-underline-width') {
+      handleAccentChange('underlineWidth', parseInt(e.target.value));
+    }
   });
+  
+  // Change event for select elements
+  panel.addEventListener('change', (e) => {
+    if (e.target.dataset.action === 'header-image-fit') {
+      handleHeaderImageFit(e.target.value);
+    }
+  });
+  
+  // Setup header image dropzone
+  setupHeaderImageDropzone(panel);
+  
+  // Setup photo dropzone
+  setupPhotoDropzone(panel);
   
   // Add section menu
   document.addEventListener('click', (e) => {
@@ -943,6 +1852,409 @@ function handleCustomColorChange(color) {
   if (currentPalette === 'custom' && onDesignChangeCallback) {
     onDesignChangeCallback({ type: 'customColor', value: color });
   }
+}
+
+// Handle font tab change
+function handleSetFontTab(tab) {
+  fontSubTab = tab;
+  renderPanel();
+}
+
+// Handle font preset selection
+async function handleSelectFontPreset(presetId) {
+  currentFontSettings = {
+    mode: 'preset',
+    pairingId: presetId
+  };
+  
+  // Load and apply the fonts
+  await loadFontPairing(presetId);
+  applyFontSettings(currentFontSettings);
+  saveFontSettings(currentFontSettings);
+  
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'font', value: currentFontSettings });
+  }
+}
+
+// Handle font category filter change
+function handleSetFontCategory(category) {
+  googleFontCategory = category;
+  renderPanel();
+}
+
+// Handle Google font selection
+async function handleSelectGoogleFont(family, category, fontType) {
+  // Load the font
+  await loadGoogleFont(family, [400, 500, 600, 700]);
+  
+  // Update settings
+  if (currentFontSettings.mode !== 'google') {
+    currentFontSettings = {
+      mode: 'google',
+      displayFont: null,
+      bodyFont: null
+    };
+  }
+  
+  if (fontType === 'display') {
+    currentFontSettings.displayFont = { family, category };
+  } else if (fontType === 'body') {
+    currentFontSettings.bodyFont = { family, category };
+  }
+  
+  applyFontSettings(currentFontSettings);
+  saveFontSettings(currentFontSettings);
+  
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'font', value: currentFontSettings });
+  }
+}
+
+// Handle system font selection
+function handleSelectSystemFont(fontId, fontType) {
+  // Update settings
+  if (currentFontSettings.mode !== 'system') {
+    currentFontSettings = {
+      mode: 'system',
+      displayFont: null,
+      bodyFont: null
+    };
+  }
+  
+  if (fontType === 'display') {
+    currentFontSettings.displayFont = fontId;
+  } else if (fontType === 'body') {
+    currentFontSettings.bodyFont = fontId;
+  }
+  
+  applyFontSettings(currentFontSettings);
+  saveFontSettings(currentFontSettings);
+  
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'font', value: currentFontSettings });
+  }
+}
+
+// Handle header style tab change
+function handleSetHeaderTab(tab) {
+  headerStyleTab = tab;
+  renderPanel();
+}
+
+// Handle header style selection
+function handleSelectHeaderStyle(styleType, styleId) {
+  currentHeaderStyle = {
+    ...currentHeaderStyle,
+    type: styleType,
+    styleId: styleId
+  };
+  
+  const colors = getCurrentColors();
+  applyHeaderStyle(currentHeaderStyle, colors);
+  saveHeaderStyleSettings(currentHeaderStyle);
+  
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'headerStyle', value: currentHeaderStyle });
+  }
+}
+
+// Handle header image opacity change
+function handleHeaderImageOpacity(value) {
+  const opacity = parseInt(value) / 100;
+  currentHeaderStyle.imageOpacity = opacity;
+  
+  const colors = getCurrentColors();
+  applyHeaderStyle(currentHeaderStyle, colors);
+  saveHeaderStyleSettings(currentHeaderStyle);
+  
+  // Update slider value display
+  const sliderValue = document.querySelector('.header-image-controls .slider-value');
+  if (sliderValue) {
+    sliderValue.textContent = `${value}%`;
+  }
+}
+
+// Handle header image fit change
+function handleHeaderImageFit(value) {
+  currentHeaderStyle.imageFit = value;
+  
+  const colors = getCurrentColors();
+  applyHeaderStyle(currentHeaderStyle, colors);
+  saveHeaderStyleSettings(currentHeaderStyle);
+}
+
+// Handle remove header image
+function handleRemoveHeaderImage() {
+  currentHeaderStyle = {
+    type: 'gradient',
+    styleId: 'linear-135',
+    customImage: null,
+    imageOpacity: 0.3,
+    imageFit: 'cover'
+  };
+  
+  const colors = getCurrentColors();
+  applyHeaderStyle(currentHeaderStyle, colors);
+  saveHeaderStyleSettings(currentHeaderStyle);
+  
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'headerStyle', value: currentHeaderStyle });
+  }
+}
+
+// Setup header image dropzone
+function setupHeaderImageDropzone(panel) {
+  // Use event delegation for dynamically created elements
+  panel.addEventListener('click', (e) => {
+    const dropzone = e.target.closest('#header-image-dropzone');
+    if (dropzone) {
+      const input = document.getElementById('header-image-input');
+      if (input) input.click();
+    }
+  });
+  
+  // File input change
+  panel.addEventListener('change', (e) => {
+    if (e.target.id === 'header-image-input') {
+      handleHeaderImageFile(e.target.files[0]);
+    }
+  });
+  
+  // Drag and drop
+  panel.addEventListener('dragover', (e) => {
+    const dropzone = e.target.closest('#header-image-dropzone');
+    if (dropzone) {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    }
+  });
+  
+  panel.addEventListener('dragleave', (e) => {
+    const dropzone = e.target.closest('#header-image-dropzone');
+    if (dropzone) {
+      dropzone.classList.remove('dragover');
+    }
+  });
+  
+  panel.addEventListener('drop', (e) => {
+    const dropzone = e.target.closest('#header-image-dropzone');
+    if (dropzone) {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        handleHeaderImageFile(file);
+      }
+    }
+  });
+}
+
+// Handle header image file
+function handleHeaderImageFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    currentHeaderStyle = {
+      ...currentHeaderStyle,
+      type: 'image',
+      styleId: 'custom',
+      customImage: e.target.result,
+      imageOpacity: currentHeaderStyle.imageOpacity || 0.3,
+      imageFit: currentHeaderStyle.imageFit || 'cover'
+    };
+    
+    const colors = getCurrentColors();
+    applyHeaderStyle(currentHeaderStyle, colors);
+    saveHeaderStyleSettings(currentHeaderStyle);
+    
+    renderPanel();
+    
+    // Notify main.js
+    if (onDesignChangeCallback) {
+      onDesignChangeCallback({ type: 'headerStyle', value: currentHeaderStyle });
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+// Handle spacing change
+function handleSpacingChange(property, value) {
+  currentSpacing[property] = value;
+  applySpacingSettings(currentSpacing);
+  saveSpacingSettings(currentSpacing);
+  
+  // Update display values without full re-render
+  updateSpacingDisplayValues();
+}
+
+// Handle margin change
+function handleMarginChange(side, value) {
+  currentSpacing.pageMargins[side] = value;
+  applySpacingSettings(currentSpacing);
+  saveSpacingSettings(currentSpacing);
+}
+
+// Handle reset spacing
+function handleResetSpacing() {
+  currentSpacing = resetSpacingSettings();
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'spacing', value: currentSpacing });
+  }
+}
+
+// Handle accent change
+function handleAccentChange(property, value) {
+  currentAccent[property] = value;
+  applyAccentSettings(currentAccent);
+  saveAccentSettings(currentAccent);
+  
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'accent', value: currentAccent });
+  }
+}
+
+// Handle reset accent
+function handleResetAccent() {
+  currentAccent = resetAccentSettings();
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'accent', value: currentAccent });
+  }
+}
+
+// Handle photo change
+function handlePhotoChange(property, value) {
+  currentPhoto[property] = value;
+  applyPhotoSettings(currentPhoto);
+  savePhotoSettings(currentPhoto);
+  
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'photo', value: currentPhoto });
+  }
+}
+
+// Handle remove photo
+function handleRemovePhoto() {
+  currentPhoto = removePhoto();
+  renderPanel();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'photo', value: currentPhoto });
+  }
+}
+
+// Setup photo dropzone
+function setupPhotoDropzone(panel) {
+  // Click to upload
+  panel.addEventListener('click', (e) => {
+    const dropzone = e.target.closest('#photo-dropzone');
+    if (dropzone) {
+      const input = document.getElementById('photo-input');
+      if (input) input.click();
+    }
+  });
+  
+  // File input change
+  panel.addEventListener('change', (e) => {
+    if (e.target.id === 'photo-input') {
+      handlePhotoFile(e.target.files[0]);
+    }
+  });
+  
+  // Drag and drop
+  panel.addEventListener('dragover', (e) => {
+    const dropzone = e.target.closest('#photo-dropzone');
+    if (dropzone) {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    }
+  });
+  
+  panel.addEventListener('dragleave', (e) => {
+    const dropzone = e.target.closest('#photo-dropzone');
+    if (dropzone) {
+      dropzone.classList.remove('dragover');
+    }
+  });
+  
+  panel.addEventListener('drop', (e) => {
+    const dropzone = e.target.closest('#photo-dropzone');
+    if (dropzone) {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        handlePhotoFile(file);
+      }
+    }
+  });
+}
+
+// Handle photo file upload
+function handlePhotoFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    currentPhoto = {
+      ...currentPhoto,
+      enabled: true,
+      imageData: e.target.result
+    };
+    
+    applyPhotoSettings(currentPhoto);
+    savePhotoSettings(currentPhoto);
+    
+    renderPanel();
+    
+    // Notify main.js
+    if (onDesignChangeCallback) {
+      onDesignChangeCallback({ type: 'photo', value: currentPhoto });
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+// Update spacing display values without re-rendering
+function updateSpacingDisplayValues() {
+  const fontScaleValue = document.querySelector('[data-action="spacing-font-scale"]')?.parentElement.querySelector('.spacing-value');
+  const lineHeightValue = document.querySelector('[data-action="spacing-line-height"]')?.parentElement.querySelector('.spacing-value');
+  const sectionValue = document.querySelector('[data-action="spacing-section"]')?.parentElement.querySelector('.spacing-value');
+  const sidebarValue = document.querySelector('[data-action="spacing-sidebar"]')?.parentElement.querySelector('.spacing-value');
+  
+  if (fontScaleValue) fontScaleValue.textContent = `${Math.round(currentSpacing.fontScale * 100)}%`;
+  if (lineHeightValue) lineHeightValue.textContent = currentSpacing.lineHeight.toFixed(2);
+  if (sectionValue) sectionValue.textContent = `${currentSpacing.sectionSpacing.toFixed(1)} rem`;
+  if (sidebarValue) sidebarValue.textContent = `${currentSpacing.sidebarWidth.toFixed(1)} in`;
 }
 
 // Escape HTML for display

@@ -119,13 +119,6 @@
             
             <div class="chat-options-divider"></div>
             
-            <!-- Attach files button -->
-            <button class="chat-option-btn" id="chat-attach-btn" title="Attach file">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-              </svg>
-            </button>
-            
             <!-- Web search toggle -->
             <button class="chat-option-btn" id="chat-search-btn" title="Enable web search">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -137,17 +130,35 @@
             
             <!-- Reasoning effort dropdown -->
             <div class="chat-reasoning-dropdown" id="chat-reasoning-dropdown">
-              <button class="chat-option-btn" id="chat-reasoning-btn" title="Reasoning effort">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
-                  <path d="M12 6v6l4 2"/>
+              <button class="chat-option-btn reasoning-btn" id="chat-reasoning-btn" title="Reasoning effort">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                <span class="reasoning-label">Medium</span>
+                <svg class="reasoning-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9"/>
                 </svg>
               </button>
               <div class="chat-reasoning-menu" id="chat-reasoning-menu">
-                <div class="chat-reasoning-label">Reasoning Effort</div>
-                <button class="chat-reasoning-option" data-level="low">Low</button>
-                <button class="chat-reasoning-option selected" data-level="medium">Medium</button>
-                <button class="chat-reasoning-option" data-level="high">High</button>
+                <div class="chat-reasoning-header">Reasoning Effort</div>
+                <button class="chat-reasoning-option" data-level="none">
+                  <span class="option-label">Off</span>
+                  <span class="option-desc">Fastest responses</span>
+                </button>
+                <button class="chat-reasoning-option" data-level="low">
+                  <span class="option-label">Low</span>
+                  <span class="option-desc">Quick thinking</span>
+                </button>
+                <button class="chat-reasoning-option selected" data-level="medium">
+                  <span class="option-label">Medium</span>
+                  <span class="option-desc">Balanced</span>
+                </button>
+                <button class="chat-reasoning-option" data-level="high">
+                  <span class="option-label">High</span>
+                  <span class="option-desc">Deep analysis</span>
+                </button>
               </div>
             </div>
           </div>

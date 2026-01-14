@@ -151,12 +151,14 @@ function generateMarkdown(data) {
   
   // Contact
   const contactParts = [];
-  if (data.contact.location) contactParts.push(data.contact.location);
-  if (data.contact.email) contactParts.push(data.contact.email);
-  if (data.contact.phone) contactParts.push(data.contact.phone);
-  if (data.contact.portfolio) contactParts.push(`Portfolio: ${data.contact.portfolio}`);
-  if (data.contact.instagram) contactParts.push(`Instagram: ${data.contact.instagram}`);
-  md += contactParts.join(' • ') + '\n\n';
+  if (data.contact?.location) contactParts.push(data.contact.location);
+  if (data.contact?.email) contactParts.push(data.contact.email);
+  if (data.contact?.phone) contactParts.push(data.contact.phone);
+  if (data.contact?.portfolio) contactParts.push(`Portfolio: ${data.contact.portfolio}`);
+  if (data.contact?.instagram) contactParts.push(`Instagram: ${data.contact.instagram}`);
+  if (contactParts.length > 0) {
+    md += contactParts.join(' • ') + '\n\n';
+  }
   
   // Summary
   if (data.summary) {
@@ -282,6 +284,14 @@ export async function migrateBuiltInVariants(variants) {
   
   // Only migrate if no variants exist
   if (Object.keys(storage.variants).length > 0) {
+    return false;
+  }
+  
+  // In Electron, we don't pre-load built-in variants since they require file:// protocol handling
+  // Users will create or import their own resumes via the onboarding wizard
+  const isElectron = typeof window !== 'undefined' && window.electron?.isElectron === true;
+  if (isElectron) {
+    // Skip migration in Electron - let user start fresh with wizard
     return false;
   }
   

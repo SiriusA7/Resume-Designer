@@ -96,6 +96,8 @@ export function renderResumeStacked(data) {
 }
 
 function renderContact(contact) {
+  if (!contact) return '';
+  
   const items = [];
   
   if (contact.location) {
@@ -118,6 +120,8 @@ function renderContact(contact) {
 }
 
 function renderContactStacked(contact) {
+  if (!contact) return '';
+  
   const items = [];
   
   if (contact.email) {
@@ -301,4 +305,243 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+// Right Sidebar layout (sidebar on the right)
+export function renderResumeRightSidebar(data) {
+  return `
+    <header class="resume-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+      </div>
+      <div class="header-contact">
+        ${renderContact(data.contact)}
+      </div>
+    </header>
+    
+    <div class="resume-body right-sidebar-body">
+      <section class="resume-main">
+        ${data.summary ? `
+          <div class="section summary-section">
+            <h2 class="section-title">Summary</h2>
+            <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+          </div>
+        ` : ''}
+        
+        ${data.experience && data.experience.length > 0 ? `
+          <div class="section experience-section">
+            <h2 class="section-title">Experience</h2>
+            ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+          </div>
+        ` : ''}
+        
+        ${data.education && data.education.length > 0 ? `
+          <div class="section education-section">
+            <h2 class="section-title">Education</h2>
+            <div class="education-content">
+              ${data.education.map((line, i) => `
+                <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </section>
+      
+      <aside class="resume-sidebar">
+        ${renderSidebar(data)}
+      </aside>
+    </div>
+  `;
+}
+
+// Compact layout (condensed spacing, smaller fonts)
+export function renderResumeCompact(data) {
+  return `
+    <header class="resume-header compact-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+      </div>
+      <div class="header-contact compact-contact">
+        ${renderContactCompact(data.contact)}
+      </div>
+    </header>
+    
+    <div class="resume-body compact-body">
+      <div class="compact-columns">
+        <section class="compact-main">
+          ${data.summary ? `
+            <div class="section summary-section">
+              <h2 class="section-title">Summary</h2>
+              <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+            </div>
+          ` : ''}
+          
+          ${data.experience && data.experience.length > 0 ? `
+            <div class="section experience-section">
+              <h2 class="section-title">Experience</h2>
+              ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+            </div>
+          ` : ''}
+        </section>
+        
+        <aside class="compact-sidebar">
+          ${renderSidebar(data)}
+          
+          ${data.education && data.education.length > 0 ? `
+            <div class="sidebar-section">
+              <h3 class="sidebar-title">Education</h3>
+              <div class="sidebar-content">
+                ${data.education.map((line, i) => `
+                  <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </aside>
+      </div>
+    </div>
+  `;
+}
+
+// Compact contact renderer (inline)
+function renderContactCompact(contact) {
+  if (!contact) return '';
+  contact = contact || {};
+  const items = [];
+  
+  if (contact.location) items.push(contact.location);
+  if (contact.email) items.push(`<a href="mailto:${contact.email}" class="contact-item">${contact.email}</a>`);
+  if (contact.phone) items.push(`<a href="tel:${contact.phone}" class="contact-item">${contact.phone}</a>`);
+  if (contact.portfolio) items.push(`<a href="${contact.portfolio}" class="contact-item" target="_blank">${formatUrl(contact.portfolio)}</a>`);
+  
+  return `<div class="compact-contact-row">${items.join(' <span class="contact-sep">•</span> ')}</div>`;
+}
+
+// Executive layout (centered, spacious)
+export function renderResumeExecutive(data) {
+  return `
+    <header class="resume-header executive-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+      </div>
+      <div class="header-contact executive-contact">
+        ${renderContactStacked(data.contact)}
+      </div>
+    </header>
+    
+    <div class="resume-body executive-body">
+      ${data.summary ? `
+        <div class="section summary-section executive-summary">
+          <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+        </div>
+      ` : ''}
+      
+      <div class="executive-columns">
+        <div class="executive-main">
+          ${data.experience && data.experience.length > 0 ? `
+            <div class="section experience-section">
+              <h2 class="section-title">Professional Experience</h2>
+              ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+            </div>
+          ` : ''}
+        </div>
+        
+        <div class="executive-side">
+          ${renderSidebar(data)}
+          
+          ${data.education && data.education.length > 0 ? `
+            <div class="sidebar-section">
+              <h3 class="sidebar-title">Education</h3>
+              <div class="sidebar-content">
+                ${data.education.map((line, i) => `
+                  <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Classic layout (traditional single column)
+export function renderResumeClassic(data) {
+  return `
+    <header class="resume-header classic-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+        <div class="classic-contact">
+          ${renderContactClassic(data.contact)}
+        </div>
+      </div>
+    </header>
+    
+    <div class="resume-body classic-body">
+      ${data.summary ? `
+        <div class="section summary-section">
+          <h2 class="section-title">Professional Summary</h2>
+          <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+        </div>
+      ` : ''}
+      
+      ${data.experience && data.experience.length > 0 ? `
+        <div class="section experience-section">
+          <h2 class="section-title">Professional Experience</h2>
+          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+        </div>
+      ` : ''}
+      
+      ${data.education && data.education.length > 0 ? `
+        <div class="section education-section">
+          <h2 class="section-title">Education</h2>
+          <div class="education-content">
+            ${data.education.map((line, i) => `
+              <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+      
+      ${data.sections && data.sections.length > 0 ? `
+        <div class="classic-skills-section">
+          ${data.sections.map((section, sIdx) => `
+            <div class="section">
+              <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
+              <div class="classic-skill-content">
+                ${section.content.map((line, i) => `
+                  <span class="classic-skill-item" data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</span>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// Classic contact renderer
+function renderContactClassic(contact) {
+  if (!contact) return '';
+  contact = contact || {};
+  const items = [];
+  
+  if (contact.location) items.push(`<span class="contact-item">${contact.location}</span>`);
+  if (contact.email) items.push(`<a href="mailto:${contact.email}" class="contact-item">${contact.email}</a>`);
+  if (contact.phone) items.push(`<a href="tel:${contact.phone}" class="contact-item">${contact.phone}</a>`);
+  if (contact.portfolio) items.push(`<a href="${contact.portfolio}" class="contact-item" target="_blank">${formatUrl(contact.portfolio)}</a>`);
+  if (contact.linkedin) items.push(`<a href="${contact.linkedin}" class="contact-item" target="_blank">${formatUrl(contact.linkedin)}</a>`);
+  
+  return items.join(' <span class="contact-sep">|</span> ');
+}
+
+// Format URL helper
+function formatUrl(url) {
+  if (!url) return '';
+  return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }

@@ -14,9 +14,26 @@
   --resume-text-muted: #6b6560;
   --resume-border: #e8e4df;
   
+  /* Spacing variables (can be overridden via JS) */
+  --page-margin-top: 0.5in;
+  --page-margin-bottom: 0.5in;
+  --page-margin-left: 0.5in;
+  --page-margin-right: 0.5in;
+  --section-spacing: 0.8rem;
+  --sidebar-width: 2.4in;
+  --font-scale: 1;
+  --line-height: 1.45;
+  
+  /* Accent variables (can be overridden via JS) */
+  --title-underline-style: solid;
+  --title-underline-width: 2px;
+  --bullet-char: "•";
+  --bullet-style: disc;
+  --accent-radius: 4px;
+  
   font-family: var(--font-body);
-  font-size: 9pt;
-  line-height: 1.45;
+  font-size: calc(9pt * var(--font-scale, 1));
+  line-height: var(--line-height, 1.45);
   color: var(--resume-text);
   padding: 0;
   
@@ -164,6 +181,40 @@
   content: none;
 }
 
+/* Skill tag style variants */
+.resume[data-skill-tag-style="filled"] .skill-tag {
+  background: var(--resume-accent);
+  color: white;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--accent-radius, 4px);
+  margin: 0.1rem;
+}
+
+.resume[data-skill-tag-style="filled"] .skill-tag:not(:last-child)::after {
+  content: none;
+}
+
+.resume[data-skill-tag-style="outlined"] .skill-tag {
+  border: 1px solid var(--resume-accent);
+  color: var(--resume-accent);
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--accent-radius, 4px);
+  margin: 0.1rem;
+}
+
+.resume[data-skill-tag-style="outlined"] .skill-tag:not(:last-child)::after {
+  content: none;
+}
+
+.resume[data-skill-tag-style="minimal"] .skill-tag {
+  border-bottom: 1px dashed var(--resume-border);
+}
+
+.resume[data-skill-tag-style="minimal"] .skill-tag:not(:last-child)::after {
+  content: ' | ';
+  color: var(--resume-border);
+}
+
 /* Highlight bullets (from Highlights sections) */
 .highlight-bullet {
   display: block;
@@ -223,6 +274,19 @@
   bottom: -1px;
   left: 0;
   width: 60px;
+  height: var(--title-underline-width, 2px);
+  background: var(--resume-accent);
+  border-style: var(--title-underline-style, solid);
+}
+
+/* Gradient underline variant */
+.resume.gradient-underlines .section-title::after {
+  background: linear-gradient(90deg, var(--resume-accent), transparent);
+}
+
+/* Hide underline when style is none */
+.resume[style*="--title-underline-style: none"] .section-title::after {
+  display: none;
   height: 2px;
   background: var(--resume-accent);
 }
@@ -290,11 +354,32 @@
   padding-left: 1rem;
   font-size: 0.78rem;
   line-height: 1.5;
+  list-style-type: var(--bullet-style, disc);
 }
 
 .experience-bullets li {
   margin-bottom: 0.15rem;
   color: var(--resume-text-muted);
+}
+
+/* Custom bullet character support */
+.resume[data-bullet-style="dash"] .experience-bullets,
+.resume[data-bullet-style="arrow"] .experience-bullets,
+.resume[data-bullet-style="check"] .experience-bullets,
+.resume[data-bullet-style="star"] .experience-bullets,
+.resume[data-bullet-style="diamond"] .experience-bullets,
+.resume[data-bullet-style="none"] .experience-bullets {
+  list-style: none;
+}
+
+.resume[data-bullet-style="dash"] .experience-bullets li::before,
+.resume[data-bullet-style="arrow"] .experience-bullets li::before,
+.resume[data-bullet-style="check"] .experience-bullets li::before,
+.resume[data-bullet-style="star"] .experience-bullets li::before,
+.resume[data-bullet-style="diamond"] .experience-bullets li::before {
+  content: var(--bullet-char, "•");
+  margin-right: 0.5em;
+  color: var(--resume-accent);
 }
 
 .experience-bullets li:last-child {
@@ -460,4 +545,355 @@
 /* Hide decorative elements in stacked layout */
 .stacked-header::before {
   display: none;
+}
+
+/* ==========================================================================
+   Right Sidebar Layout
+   ========================================================================== */
+
+.right-sidebar-body {
+  display: grid;
+  grid-template-columns: 1fr 2.4in;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.right-sidebar-body .resume-main {
+  order: 1;
+}
+
+.right-sidebar-body .resume-sidebar {
+  order: 2;
+}
+
+/* ==========================================================================
+   Compact Layout
+   ========================================================================== */
+
+.compact-header {
+  padding: 0.35in 0.4in 0.3in;
+}
+
+.compact-header .resume-name {
+  font-size: 1.75rem;
+}
+
+.compact-header .resume-tagline {
+  font-size: 0.85rem;
+}
+
+.compact-contact-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  font-size: 0.7rem;
+}
+
+.compact-contact-row .contact-sep {
+  opacity: 0.5;
+}
+
+.compact-body {
+  padding: 0;
+}
+
+.compact-columns {
+  display: grid;
+  grid-template-columns: 1fr 2in;
+  flex: 1;
+}
+
+.compact-main {
+  padding: 0.3in 0.4in;
+}
+
+.compact-sidebar {
+  background: var(--sidebar-bg);
+  padding: 0.3in 0.3in;
+}
+
+.compact-main .section {
+  margin-bottom: 0.5rem;
+}
+
+.compact-main .section-title {
+  font-size: 0.9rem;
+  margin-bottom: 0.4rem;
+}
+
+.compact-main .summary-text {
+  font-size: 0.75rem;
+}
+
+.compact-main .experience-item {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.compact-main .experience-title {
+  font-size: 0.8rem;
+}
+
+.compact-main .experience-company {
+  font-size: 0.75rem;
+}
+
+.compact-main .experience-dates {
+  font-size: 0.65rem;
+}
+
+.compact-main .experience-bullets {
+  font-size: 0.7rem;
+}
+
+.compact-sidebar .sidebar-section {
+  margin-bottom: 0.6rem;
+}
+
+.compact-sidebar .sidebar-title {
+  font-size: 0.7rem;
+  margin-bottom: 0.25rem;
+}
+
+.compact-sidebar .sidebar-content {
+  font-size: 0.65rem;
+}
+
+/* ==========================================================================
+   Executive Layout
+   ========================================================================== */
+
+.executive-header {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0.6in 0.6in 0.5in;
+  background: linear-gradient(180deg, var(--header-bg) 0%, var(--header-bg-end) 100%);
+}
+
+.executive-header .header-main {
+  margin-bottom: 0.4rem;
+}
+
+.executive-header .resume-name {
+  font-size: 2.5rem;
+  letter-spacing: 0.02em;
+}
+
+.executive-header .resume-tagline {
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.executive-contact {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.executive-contact .contact-row {
+  gap: 0.5rem;
+}
+
+.executive-body {
+  padding: 0;
+}
+
+.executive-summary {
+  background: var(--sidebar-bg);
+  padding: 0.5in 0.6in;
+  text-align: center;
+  margin-bottom: 0;
+}
+
+.executive-summary .summary-text {
+  font-size: 0.9rem;
+  font-style: italic;
+  max-width: 7in;
+  margin: 0 auto;
+}
+
+.executive-columns {
+  display: grid;
+  grid-template-columns: 1fr 2.2in;
+  padding: 0;
+}
+
+.executive-main {
+  padding: 0.4in 0.5in;
+}
+
+.executive-main .section-title {
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+}
+
+.executive-main .section-title::after {
+  width: 80px;
+}
+
+.executive-side {
+  background: var(--sidebar-bg);
+  padding: 0.4in 0.35in;
+}
+
+.executive-side .sidebar-title {
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+}
+
+/* ==========================================================================
+   Classic Layout
+   ========================================================================== */
+
+.classic-header {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0.4in 0.5in 0.35in;
+  background: var(--header-bg);
+}
+
+.classic-header .header-main {
+  width: 100%;
+}
+
+.classic-header .resume-name {
+  font-size: 2rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 0.15rem;
+}
+
+.classic-header .resume-tagline {
+  font-size: 0.95rem;
+  margin-bottom: 0.4rem;
+}
+
+.classic-contact {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+}
+
+.classic-contact .contact-sep {
+  margin: 0 0.3rem;
+  opacity: 0.6;
+}
+
+.classic-body {
+  display: block;
+  padding: 0.5in 0.6in;
+}
+
+.classic-body .section {
+  margin-bottom: 0.8rem;
+}
+
+.classic-body .section-title {
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 2px solid var(--resume-accent);
+  margin-bottom: 0.5rem;
+}
+
+.classic-body .section-title::after {
+  display: none;
+}
+
+.classic-body .summary-text {
+  font-size: 0.85rem;
+}
+
+.classic-body .experience-header {
+  margin-bottom: 0.2rem;
+}
+
+.classic-body .experience-title {
+  font-size: 0.9rem;
+}
+
+.classic-skills-section .section {
+  margin-bottom: 0.6rem;
+}
+
+.classic-skill-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.classic-skill-item {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  background: var(--sidebar-bg);
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+/* Hide decorative elements in classic layout */
+.classic-header::before {
+  display: none;
+}
+
+/* ==========================================================================
+   Profile Photo Styles
+   ========================================================================== */
+
+.resume-photo-container {
+  margin-bottom: 0.5rem;
+}
+
+.resume-photo {
+  display: block;
+}
+
+/* Photo in header */
+.photo-placement-header {
+  text-align: center;
+  margin-bottom: 0.5rem;
+}
+
+.resume.photo-header .header-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Photo in sidebar */
+.photo-placement-sidebar-top {
+  text-align: center;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--resume-border);
+}
+
+/* Floating photo */
+.photo-placement-floating {
+  position: absolute;
+  top: 0.3in;
+  right: 0.3in;
+}
+
+.resume.photo-floating .resume-header {
+  position: relative;
+}
+
+/* Stacked layout photo adjustments */
+.stacked-header .photo-placement-header {
+  margin: 0 auto 0.3rem;
+}
+
+/* Executive layout photo adjustments */
+.executive-header .photo-placement-header {
+  margin: 0 auto 0.3rem;
 }

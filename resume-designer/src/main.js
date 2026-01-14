@@ -4,7 +4,14 @@
  */
 
 import { store } from './store.js';
-import { renderResume, renderResumeStacked } from './renderer.js';
+import { 
+  renderResume, 
+  renderResumeStacked, 
+  renderResumeRightSidebar,
+  renderResumeCompact,
+  renderResumeExecutive,
+  renderResumeClassic
+} from './renderer.js';
 import { initPdfExport } from './pdf.js';
 import { initInlineEditor, refreshInlineEditor } from './inlineEditor.js';
 import { initStructurePanel, setDesignSettings } from './structurePanel.js';
@@ -16,6 +23,11 @@ import { initTheme, setupThemeToggleAfterRender } from './theme.js';
 import { initJobDescriptionPanel, openJobDescriptionPanel } from './jobDescriptionPanel.js';
 import { initHistoryPanel, openHistoryPanel } from './historyPanel.js';
 import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
+import { initFontService } from './fontService.js';
+import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from './headerStyleService.js';
+import { initSpacingService, applySpacingSettings } from './spacingService.js';
+import { initAccentService, applyAccentSettings } from './accentService.js';
+import { initPhotoService, applyPhotoSettings } from './photoService.js';
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -120,6 +132,14 @@ let customColor = '#c45c3e';
 
 // Initialize the application
 async function init() {
+  // Detect Electron on macOS and add class for traffic light padding
+  if (typeof window !== 'undefined' && window.electron?.isElectron) {
+    if (window.electron.platform === 'darwin') {
+      document.documentElement.classList.add('electron-mac');
+    }
+    document.documentElement.classList.add('electron');
+  }
+  
   // Load saved settings
   const settings = getSettings();
   currentPalette = settings.colorPalette || 'terracotta';
@@ -131,6 +151,18 @@ async function init() {
   
   // Initialize theme manager (before header for proper icons)
   initTheme();
+  
+  // Initialize font service (load saved fonts)
+  await initFontService();
+  
+  // Initialize spacing service
+  initSpacingService();
+  
+  // Initialize accent service
+  initAccentService();
+  
+  // Initialize photo service
+  initPhotoService();
   
   // Initialize header bar (includes variant management)
   initHeaderBar(handleVariantChange);
@@ -171,11 +203,35 @@ async function init() {
   initUndoRedo();
   
   // Check for first-time user onboarding
+  console.log('[Main] Setting up onboarding check...');
+  
+  // In Electron, expose a function to reset onboarding for debugging
+  if (typeof window !== 'undefined' && window.electron?.isElectron) {
+    window.resetForTesting = () => {
+      localStorage.clear();
+      location.reload();
+    };
+    console.log('[Main] Electron detected, resetForTesting() available');
+  }
+  
+  // Check onboarding after a short delay to ensure UI is ready
+  console.log('[Main] Scheduling onboarding check in 300ms...');
   setTimeout(() => {
-    if (shouldShowOnboarding()) {
+    console.log('[Main] Running onboarding check NOW');
+    try {
+      const shouldShow = shouldShowOnboarding();
+      console.log('[Main] shouldShowOnboarding returned:', shouldShow);
+      if (shouldShow) {
+        console.log('[Main] Calling showOnboardingWizard()...');
+        showOnboardingWizard();
+      }
+    } catch (e) {
+      console.error('[Main] Error checking onboarding:', e);
+      // Force show wizard on error in fresh installs
+      console.log('[Main] Forcing wizard due to error');
       showOnboardingWizard();
     }
-  }, 500);
+  }, 300);
   
   // Initialize settings modal
   initSettingsModal();
@@ -185,6 +241,12 @@ async function init() {
     if (event === 'change' || event === 'fieldUpdated') {
       renderCurrentResume();
     }
+  });
+  
+  // Listen for resume-ready event from onboarding
+  window.addEventListener('resume-ready', () => {
+    console.log('[Main] Resume ready event received, rendering...');
+    renderCurrentResume();
   });
   
   // Apply initial design settings
@@ -217,6 +279,27 @@ function handleDesignChange(change) {
       customColor = change.customColor || customColor;
       applyColorPalette(change.value);
       saveSettings({ colorPalette: change.value, customColor });
+      break;
+    
+    case 'headerStyle':
+      // Header style is handled by structurePanel and saved automatically
+      // Just need to re-render if necessary
+      break;
+    
+    case 'font':
+      // Font settings are handled by structurePanel and saved automatically
+      break;
+    
+    case 'spacing':
+      // Spacing settings are handled by structurePanel and saved automatically
+      break;
+    
+    case 'accent':
+      // Accent settings are handled by structurePanel and saved automatically
+      break;
+    
+    case 'photo':
+      // Photo settings are handled by structurePanel and saved automatically
       break;
       
     case 'layout':
@@ -262,6 +345,14 @@ function applyPaletteColors(palette) {
   resume.style.setProperty('--header-bg', palette.headerBg);
   resume.style.setProperty('--header-bg-end', palette.headerBgEnd);
   resume.style.setProperty('--sidebar-bg', palette.sidebarBg);
+  
+  // Also apply header style with new colors
+  const headerStyle = getHeaderStyleSettings();
+  applyHeaderStyle(headerStyle, {
+    headerBg: palette.headerBg,
+    headerBgEnd: palette.headerBgEnd,
+    accent: palette.accent
+  });
 }
 
 // Generate a full palette from a single accent color
@@ -528,14 +619,37 @@ function renderCurrentResume() {
   }
   
   // Render based on current layout
-  if (currentLayout === 'stacked') {
-    container.innerHTML = renderResumeStacked(data);
-  } else {
-    container.innerHTML = renderResume(data);
+  switch (currentLayout) {
+    case 'stacked':
+      container.innerHTML = renderResumeStacked(data);
+      break;
+    case 'right-sidebar':
+      container.innerHTML = renderResumeRightSidebar(data);
+      break;
+    case 'compact':
+      container.innerHTML = renderResumeCompact(data);
+      break;
+    case 'executive':
+      container.innerHTML = renderResumeExecutive(data);
+      break;
+    case 'classic':
+      container.innerHTML = renderResumeClassic(data);
+      break;
+    default:
+      container.innerHTML = renderResume(data);
   }
   
   // Apply current palette
   applyColorPalette(currentPalette);
+  
+  // Re-apply spacing settings after render
+  initSpacingService();
+  
+  // Re-apply accent settings after render
+  initAccentService();
+  
+  // Re-apply photo settings after render
+  initPhotoService();
   
   // Refresh inline editor
   refreshInlineEditor();

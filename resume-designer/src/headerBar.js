@@ -199,7 +199,7 @@ function renderHeaderBar() {
       </div>
       
       <div class="header-variant-actions">
-        <button class="header-action-btn" id="btn-new-variant" title="New variant">
+        <button class="header-action-btn" id="btn-new-variant" title="Create new resume">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"/>
             <line x1="5" y1="12" x2="19" y2="12"/>
@@ -254,19 +254,6 @@ function renderHeaderBar() {
               <polyline points="12 6 12 12 16 14"/>
             </svg>
             Version History
-          </button>
-          <button class="header-tools-option" id="btn-onboarding">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2v4"/>
-              <path d="M12 18v4"/>
-              <path d="m4.93 4.93 2.83 2.83"/>
-              <path d="m16.24 16.24 2.83 2.83"/>
-              <path d="M2 12h4"/>
-              <path d="M18 12h4"/>
-              <path d="m4.93 19.07 2.83-2.83"/>
-              <path d="m16.24 7.76 2.83-2.83"/>
-            </svg>
-            New Resume Wizard
           </button>
         </div>
       </div>
@@ -424,11 +411,10 @@ function setupHeaderEventListeners() {
     const target = e.target.closest('button, select, .header-import-btn, .header-export-option');
     if (!target) return;
     
-    // New variant
+    // New variant - launch the new resume wizard (skip API key step since we're already in the app)
     if (target.id === 'btn-new-variant') {
-      const name = prompt('Enter variant name:', 'New Resume');
-      if (name && name.trim()) {
-        createVariant(name.trim());
+      if (window.showOnboardingWizard) {
+        window.showOnboardingWizard({ skipApiKeyStep: true });
       }
     }
     
@@ -468,14 +454,6 @@ function setupHeaderEventListeners() {
       document.getElementById('header-tools-menu')?.classList.remove('show');
       if (window.openHistoryPanel) {
         window.openHistoryPanel();
-      }
-    }
-    
-    // Onboarding wizard
-    if (target.id === 'btn-onboarding') {
-      document.getElementById('header-tools-menu')?.classList.remove('show');
-      if (window.showOnboardingWizard) {
-        window.showOnboardingWizard();
       }
     }
     

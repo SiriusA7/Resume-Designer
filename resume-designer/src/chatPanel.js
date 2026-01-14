@@ -3,7 +3,7 @@
  * AI chat interface with message history and actions
  */
 
-import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders, generateResumeChanges } from './aiService.js';
+import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders, generateResumeChanges, getDefaultModelId } from './aiService.js';
 import { getSettings, saveSettings } from './persistence.js';
 import { store } from './store.js';
 import { marked } from 'marked';
@@ -27,6 +27,10 @@ let contextChips = [];
 // Thread management
 let threads = [];
 let currentThreadId = null;
+
+// Chat options state
+let currentReasoningEffort = 'medium'; // 'none', 'low', 'medium', 'high'
+let webSearchEnabled = false;
 
 const STORAGE_KEY = 'resume-designer-chat-history';
 const THREADS_KEY = 'resume-designer-chat-threads';
@@ -52,7 +56,30 @@ const AI_MODELS = [
   ]}
 ];
 
-let currentModel = 'anthropic:claude-sonnet-4-5-20251022';
+let currentModel = null;
+
+// Get the initial default model based on configured providers
+function getInitialModel() {
+  // First check if there's a saved preference
+  const settings = getSettings();
+  if (settings.defaultModel) {
+    // Verify the saved model's provider is still configured
+    const provider = settings.defaultModel.split(':')[0];
+    const configuredProviders = getConfiguredProviders();
+    if (configuredProviders.includes(provider)) {
+      return settings.defaultModel;
+    }
+  }
+  
+  // Otherwise, get default based on configured providers
+  const defaultModel = getDefaultModelId();
+  if (defaultModel) {
+    return defaultModel;
+  }
+  
+  // Fallback to first available in list (won't work without API key anyway)
+  return 'openai:gpt-4o';
+}
 
 // Initialize chat panel
 export function initChatPanel(onApply) {
@@ -65,11 +92,8 @@ export function initChatPanel(onApply) {
   
   if (!messagesContainer || !inputEl || !sendBtn) return;
   
-  // Load saved model preference
-  const settings = getSettings();
-  if (settings.defaultModel) {
-    currentModel = settings.defaultModel;
-  }
+  // Set current model based on configured providers
+  currentModel = getInitialModel();
   
   // Initialize diff view
   initDiffView(onApply);
@@ -213,12 +237,29 @@ function openSettingsModal() {
 
 // Get model label from value
 function getModelLabel(value) {
+  if (!value) return 'Select Model';
+  
   for (const group of AI_MODELS) {
     for (const opt of group.options) {
       if (opt.value === value) return opt.label;
     }
   }
-  return value;
+  
+  // If not found, extract a friendly name from the model ID
+  // e.g., "anthropic:claude-sonnet-4-5-20251022" -> "Claude Sonnet 4.5"
+  const parts = value.split(':');
+  if (parts.length === 2) {
+    const modelName = parts[1]
+      .replace(/-/g, ' ')
+      .replace(/\d{8,}/, '') // Remove date suffixes
+      .trim()
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+    return modelName || 'Unknown Model';
+  }
+  
+  return 'Unknown Model';
 }
 
 // Select a model
@@ -361,6 +402,8 @@ export function addContextChip(chipData) {
 
 // Refresh the chat panel UI (called when API keys change)
 export function refreshChatPanel() {
+  // Re-evaluate the current model based on new API key configuration
+  currentModel = getInitialModel();
   initModelDropdown();
   renderThreadSelector();
   renderChatView();
@@ -501,48 +544,23 @@ function setupEventListeners() {
   setupChatOptions();
 }
 
-// Set up chat option buttons (attach, search, reasoning)
+// Set up chat option buttons (search, reasoning)
 function setupChatOptions() {
-  const attachBtn = document.getElementById('chat-attach-btn');
   const searchBtn = document.getElementById('chat-search-btn');
   const reasoningDropdown = document.getElementById('chat-reasoning-dropdown');
   const reasoningBtn = document.getElementById('chat-reasoning-btn');
   const reasoningMenu = document.getElementById('chat-reasoning-menu');
   
-  // File attachment (placeholder - shows alert for now)
-  attachBtn?.addEventListener('click', () => {
-    // Create file input if needed
-    let fileInput = document.getElementById('chat-file-input');
-    if (!fileInput) {
-      fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.id = 'chat-file-input';
-      fileInput.accept = '.txt,.md,.pdf,.doc,.docx,.json';
-      fileInput.style.display = 'none';
-      document.body.appendChild(fileInput);
-      
-      fileInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (file) {
-          // Add file as context chip
-          addContextChip({
-            type: 'file',
-            label: file.name,
-            content: `[File: ${file.name}]`,
-            file: file
-          });
-        }
-        fileInput.value = ''; // Reset
-      });
-    }
-    fileInput.click();
-  });
-  
   // Web search toggle
   searchBtn?.addEventListener('click', () => {
-    searchBtn.classList.toggle('active');
-    const isActive = searchBtn.classList.contains('active');
-    searchBtn.title = isActive ? 'Web search enabled' : 'Enable web search';
+    webSearchEnabled = !webSearchEnabled;
+    searchBtn.classList.toggle('active', webSearchEnabled);
+    searchBtn.title = webSearchEnabled ? 'Web search enabled' : 'Enable web search';
+    
+    // Show confirmation tooltip when enabled
+    if (webSearchEnabled) {
+      showTemporaryTooltip(searchBtn, 'Web search enabled - model will search the internet');
+    }
   });
   
   // Reasoning effort dropdown
@@ -555,8 +573,19 @@ function setupChatOptions() {
   reasoningMenu?.querySelectorAll('.chat-reasoning-option').forEach(option => {
     option.addEventListener('click', (e) => {
       e.stopPropagation();
+      const value = option.dataset.level; // Use data-level from HTML
+      currentReasoningEffort = value;
+      
+      // Update UI
       reasoningMenu.querySelectorAll('.chat-reasoning-option').forEach(o => o.classList.remove('selected'));
       option.classList.add('selected');
+      
+      // Update button label
+      const label = reasoningBtn?.querySelector('.reasoning-label');
+      if (label) {
+        label.textContent = getReasoningLabel(value);
+      }
+      
       reasoningDropdown?.classList.remove('open');
     });
   });
@@ -567,6 +596,46 @@ function setupChatOptions() {
       reasoningDropdown?.classList.remove('open');
     }
   });
+}
+
+// Get display label for reasoning effort
+function getReasoningLabel(value) {
+  const labels = {
+    'none': 'Off',
+    'low': 'Low',
+    'medium': 'Medium',
+    'high': 'High'
+  };
+  return labels[value] || 'Medium';
+}
+
+// Show temporary tooltip
+function showTemporaryTooltip(element, message) {
+  const tooltip = document.createElement('div');
+  tooltip.className = 'chat-temp-tooltip';
+  tooltip.textContent = message;
+  
+  const rect = element.getBoundingClientRect();
+  tooltip.style.cssText = `
+    position: fixed;
+    top: ${rect.top - 30}px;
+    left: ${rect.left + rect.width / 2}px;
+    transform: translateX(-50%);
+    background: var(--color-warning-bg, #fef3cd);
+    color: var(--color-warning-text, #856404);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    z-index: 10000;
+    pointer-events: none;
+  `;
+  
+  document.body.appendChild(tooltip);
+  
+  setTimeout(() => {
+    tooltip.remove();
+  }, 2000);
 }
 
 
@@ -741,6 +810,10 @@ async function getAIResponse(userMessage, hasExplicitContext = false) {
   setLoading(true);
   
   try {
+    // Show thinking step
+    const modelName = getModelDisplayName(modelId);
+    addThinkingStep(`Sending to ${modelName}...`);
+    
     // Build conversation history (last 10 messages for context)
     // Filter out error messages as they're not valid API roles
     const conversationHistory = messages
@@ -756,13 +829,71 @@ async function getAIResponse(userMessage, hasExplicitContext = false) {
     // If explicit context was provided, don't add resume context again
     const includeResumeContext = !hasExplicitContext;
     
-    const response = await chat(modelId, conversationHistory, includeResumeContext);
-    addMessage('assistant', response);
+    // Build options for the AI call
+    const options = {
+      reasoningEffort: currentReasoningEffort,
+      webSearch: webSearchEnabled
+    };
+    
+    // Show web search step if enabled
+    if (webSearchEnabled) {
+      completeThinkingStep('Searching the web...');
+    }
+    
+    const response = await chat(modelId, conversationHistory, includeResumeContext, options);
+    
+    // Handle structured response (with thinking/reasoning)
+    if (response && typeof response === 'object' && response.text) {
+      // Show additional thinking steps based on response
+      if (response.usedWebSearch) {
+        completeThinkingStep('Processed web search results');
+      }
+      if (response.thinking) {
+        completeThinkingStep('Applied reasoning');
+      }
+      completeThinkingStep('Response ready');
+      setLoading(false);
+      
+      // Add message with reasoning summary
+      addMessageWithReasoning('assistant', response.text, response.thinking);
+    } else {
+      // Simple text response
+      completeThinkingStep('Response received');
+      setLoading(false);
+      addMessage('assistant', response);
+    }
   } catch (error) {
-    addMessage('error', error.message);
-  } finally {
     setLoading(false);
+    addMessage('error', error.message);
   }
+}
+
+// Add message with optional reasoning summary
+function addMessageWithReasoning(role, content, reasoning = null) {
+  const message = {
+    id: Date.now(),
+    role,
+    content,
+    reasoning,
+    timestamp: new Date().toISOString()
+  };
+  
+  messages.push(message);
+  saveChatHistory();
+  renderMessages();
+  scrollToBottom();
+}
+
+// Get display name for a model ID
+function getModelDisplayName(modelId) {
+  for (const group of AI_MODELS) {
+    for (const opt of group.options) {
+      if (opt.value === modelId) {
+        return opt.label;
+      }
+    }
+  }
+  return modelId.split(':').pop();
 }
 
 // Get AI feedback
@@ -772,12 +903,14 @@ async function getAIFeedback() {
   setLoading(true);
   
   try {
+    addThinkingStep('Analyzing your resume...');
     const response = await getFeedback(modelId);
+    completeThinkingStep('Feedback ready');
+    setLoading(false);
     addMessage('assistant', response);
   } catch (error) {
-    addMessage('error', error.message);
-  } finally {
     setLoading(false);
+    addMessage('error', error.message);
   }
 }
 
@@ -788,13 +921,19 @@ async function getAIImproveSummary() {
   setLoading(true);
   
   try {
+    addThinkingStep('Reading current summary...');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    completeThinkingStep('Writing improved summary...');
+    
     const response = await improveSummary(modelId);
+    completeThinkingStep('Summary improved');
+    setLoading(false);
+    
     // Add with apply button for summary
     addMessage('assistant', response, { action: 'apply-summary', value: response });
   } catch (error) {
-    addMessage('error', error.message);
-  } finally {
     setLoading(false);
+    addMessage('error', error.message);
   }
 }
 
@@ -805,12 +944,14 @@ async function getAIGenerateBullets(context) {
   setLoading(true);
   
   try {
+    addThinkingStep('Generating bullet points...');
     const response = await generateBullets(modelId, context, 3);
+    completeThinkingStep('Bullets generated');
+    setLoading(false);
     addMessage('assistant', response);
   } catch (error) {
-    addMessage('error', error.message);
-  } finally {
     setLoading(false);
+    addMessage('error', error.message);
   }
 }
 
@@ -845,15 +986,24 @@ async function requestAIChanges(instruction, targetPath = null) {
   setLoading(true);
   
   try {
-    addMessage('assistant', '🔄 Generating changes to your resume...');
+    // Show thinking steps
+    addThinkingStep('Analyzing your request...');
+    
+    // Small delay to show the step
+    await new Promise(resolve => setTimeout(resolve, 300));
+    completeThinkingStep('Generating resume changes...');
     
     const result = await generateResumeChanges(modelId, instruction, targetPath);
     
     if (!result.changes || Object.keys(result.changes).length === 0) {
       // No changes generated - provide explanation
+      completeThinkingStep('No changes needed');
+      setLoading(false);
       addMessage('assistant', result.explanation || 'No changes were generated. The AI may need more specific instructions.');
       return;
     }
+    
+    completeThinkingStep('Preparing diff view...');
     
     // Create change set for diff view
     const currentData = store.getData();
@@ -862,20 +1012,28 @@ async function requestAIChanges(instruction, targetPath = null) {
     // Show inline changes on the resume
     showInlineChanges(changeSet);
     
-    // Update the last message with explanation and review button
     const changeCount = Object.keys(result.changes).length;
-    const lastMsgIndex = messages.length - 1;
-    if (lastMsgIndex >= 0) {
-      messages[lastMsgIndex].content = `✨ Generated ${changeCount} change${changeCount > 1 ? 's' : ''} to your resume.\n\n${result.explanation || ''}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review Changes" below for a detailed diff view.`;
-      messages[lastMsgIndex].pendingChanges = changeSet;
-      saveChatHistory();
-      renderMessages();
-    }
+    completeThinkingStep(`Generated ${changeCount} change${changeCount > 1 ? 's' : ''}`);
+    
+    // Finalize thinking and add response message
+    setLoading(false);
+    
+    // Add the actual response message with pending changes
+    const responseMsg = {
+      id: Date.now(),
+      role: 'assistant',
+      content: `${result.explanation || `Generated ${changeCount} change${changeCount > 1 ? 's' : ''} to your resume.`}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review Changes" below for a detailed diff view.`,
+      timestamp: new Date().toISOString(),
+      pendingChanges: changeSet
+    };
+    messages.push(responseMsg);
+    saveChatHistory();
+    renderMessages();
+    scrollToBottom();
     
   } catch (error) {
-    addMessage('error', error.message);
-  } finally {
     setLoading(false);
+    addMessage('error', error.message);
   }
 }
 
@@ -903,6 +1061,10 @@ function addMessage(role, content, applyData = null) {
   scrollToBottom();
 }
 
+// Thinking process state
+let thinkingSteps = [];
+let thinkingContainerId = null;
+
 // Set loading state
 function setLoading(loading) {
   isLoading = loading;
@@ -912,24 +1074,150 @@ function setLoading(loading) {
   updateToggleIndicator(loading);
   
   if (loading) {
-    // Add loading indicator
-    const loadingEl = document.createElement('div');
-    loadingEl.className = 'chat-loading';
-    loadingEl.id = 'chat-loading';
-    loadingEl.innerHTML = `
-      <div class="chat-loading-dots">
-        <span></span>
-        <span></span>
-        <span></span>
-      </div>
-      <span>Thinking...</span>
-    `;
-    messagesContainer.appendChild(loadingEl);
-    scrollToBottom();
+    // Create thinking process container
+    startThinkingProcess();
   } else {
-    // Remove loading indicator
-    document.getElementById('chat-loading')?.remove();
+    // Finalize thinking process
+    finalizeThinkingProcess();
   }
+}
+
+// Start a new thinking process display
+function startThinkingProcess() {
+  thinkingSteps = [];
+  thinkingContainerId = `thinking-${Date.now()}`;
+  
+  const thinkingEl = document.createElement('div');
+  thinkingEl.className = 'chat-thinking-process';
+  thinkingEl.id = thinkingContainerId;
+  thinkingEl.innerHTML = `
+    <div class="thinking-header">
+      <div class="thinking-indicator">
+        <div class="thinking-spinner"></div>
+        <span>Processing...</span>
+      </div>
+    </div>
+    <div class="thinking-steps"></div>
+  `;
+  messagesContainer.appendChild(thinkingEl);
+  scrollToBottom();
+}
+
+// Add a step to the thinking process
+function addThinkingStep(step, isComplete = false) {
+  thinkingSteps.push({ text: step, complete: isComplete });
+  
+  const container = document.getElementById(thinkingContainerId);
+  if (!container) return;
+  
+  const stepsEl = container.querySelector('.thinking-steps');
+  if (!stepsEl) return;
+  
+  // Re-render all steps
+  stepsEl.innerHTML = thinkingSteps.map((s, i) => `
+    <div class="thinking-step ${s.complete ? 'complete' : (i === thinkingSteps.length - 1 ? 'active' : '')}">
+      <div class="thinking-step-bullet">
+        ${s.complete 
+          ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+          : '<div class="thinking-step-dot"></div>'
+        }
+      </div>
+      <span>${escapeHtml(s.text)}</span>
+    </div>
+  `).join('');
+  
+  scrollToBottom();
+}
+
+// Update the last thinking step
+function updateThinkingStep(text, isComplete = false) {
+  if (thinkingSteps.length === 0) {
+    addThinkingStep(text, isComplete);
+    return;
+  }
+  
+  thinkingSteps[thinkingSteps.length - 1] = { text, complete: isComplete };
+  
+  const container = document.getElementById(thinkingContainerId);
+  if (!container) return;
+  
+  const stepsEl = container.querySelector('.thinking-steps');
+  if (!stepsEl) return;
+  
+  const lastStep = stepsEl.querySelector('.thinking-step:last-child');
+  if (lastStep) {
+    lastStep.querySelector('span').textContent = text;
+    if (isComplete) {
+      lastStep.classList.add('complete');
+      lastStep.classList.remove('active');
+      lastStep.querySelector('.thinking-step-bullet').innerHTML = 
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+    }
+  }
+  
+  scrollToBottom();
+}
+
+// Complete the current thinking step and start a new one
+function completeThinkingStep(newStep = null) {
+  if (thinkingSteps.length > 0) {
+    thinkingSteps[thinkingSteps.length - 1].complete = true;
+    
+    const container = document.getElementById(thinkingContainerId);
+    if (container) {
+      const stepsEl = container.querySelector('.thinking-steps');
+      const lastStep = stepsEl?.querySelector('.thinking-step:last-child');
+      if (lastStep) {
+        lastStep.classList.add('complete');
+        lastStep.classList.remove('active');
+        lastStep.querySelector('.thinking-step-bullet').innerHTML = 
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+      }
+    }
+  }
+  
+  if (newStep) {
+    addThinkingStep(newStep);
+  }
+}
+
+// Finalize the thinking process (mark as done)
+function finalizeThinkingProcess() {
+  const container = document.getElementById(thinkingContainerId);
+  if (!container) return;
+  
+  // Mark all steps as complete
+  thinkingSteps.forEach(s => s.complete = true);
+  
+  // Update header to show completion
+  const header = container.querySelector('.thinking-header');
+  if (header) {
+    header.innerHTML = `
+      <div class="thinking-indicator complete">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span>Complete</span>
+      </div>
+    `;
+  }
+  
+  // Update all steps to show complete
+  const stepsEl = container.querySelector('.thinking-steps');
+  if (stepsEl) {
+    stepsEl.querySelectorAll('.thinking-step').forEach(step => {
+      step.classList.add('complete');
+      step.classList.remove('active');
+      const bullet = step.querySelector('.thinking-step-bullet');
+      if (bullet && !bullet.querySelector('svg')) {
+        bullet.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+      }
+    });
+  }
+  
+  // Reset state
+  thinkingContainerId = null;
+  thinkingSteps = [];
 }
 
 // Render all messages
@@ -999,9 +1287,34 @@ function renderMessages() {
       `;
     }
     
+    // Render reasoning summary if present
+    let reasoningSummary = '';
+    if (msg.reasoning && !isUser) {
+      // Truncate long reasoning summaries
+      const maxLength = 300;
+      let reasoningText = msg.reasoning;
+      if (reasoningText.length > maxLength) {
+        reasoningText = reasoningText.substring(0, maxLength) + '...';
+      }
+      reasoningSummary = `
+        <div class="chat-reasoning-summary">
+          <div class="chat-reasoning-summary-header">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            Reasoning
+          </div>
+          <div class="chat-reasoning-summary-content">${escapeHtml(reasoningText)}</div>
+        </div>
+      `;
+    }
+    
     return `
       <div class="chat-message ${bubbleClass}">
         <div class="chat-bubble">
+          ${reasoningSummary}
           ${formatMessage(msg.content)}
           ${actionButtons ? `<div class="chat-action-buttons">${actionButtons}</div>` : ''}
         </div>
