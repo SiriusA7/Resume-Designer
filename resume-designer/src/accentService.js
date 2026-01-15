@@ -33,13 +33,21 @@ export const BORDER_RADIUS_PRESETS = {
   'pill': { name: 'Pill', value: '16px' }
 };
 
+// Decorative element options
+export const DECORATIVE_ELEMENTS = {
+  'corner-triangle': { name: 'Corner Triangle', description: 'Triangle in header corner' },
+  'sidebar-gradient': { name: 'Sidebar Gradient', description: 'Subtle gradient on sidebar' }
+};
+
 // Default accent settings
 const DEFAULT_ACCENT = {
   underlineStyle: 'solid',
   underlineWidth: 2,      // px
   bulletStyle: 'disc',
   borderRadius: 'subtle',
-  skillTagStyle: 'filled' // 'filled', 'outlined', 'minimal'
+  skillTagStyle: 'filled', // 'filled', 'outlined', 'minimal', 'plain'
+  showCornerTriangle: true,
+  showSidebarGradient: true
 };
 
 // Get current accent settings
@@ -96,6 +104,19 @@ export function applyAccentSettings(settings) {
   
   // Skill tag style
   resume.dataset.skillTagStyle = s.skillTagStyle;
+  
+  // Decorative elements
+  if (s.showCornerTriangle) {
+    resume.classList.remove('hide-corner-triangle');
+  } else {
+    resume.classList.add('hide-corner-triangle');
+  }
+  
+  if (s.showSidebarGradient) {
+    resume.classList.remove('hide-sidebar-gradient');
+  } else {
+    resume.classList.add('hide-sidebar-gradient');
+  }
 }
 
 /**

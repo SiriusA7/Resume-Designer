@@ -112,7 +112,7 @@
 
 .resume-body {
   display: grid;
-  grid-template-columns: 2.4in 1fr;
+  grid-template-columns: var(--sidebar-width, 2.4in) 1fr;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -125,10 +125,10 @@
 
 .resume-sidebar {
   background: var(--sidebar-bg);
-  padding: 0.4in 0.35in;
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.35in);
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: var(--section-spacing, 0.9rem);
   position: relative;
 }
 
@@ -215,6 +215,17 @@
   color: var(--resume-border);
 }
 
+/* Plain style - just text with bullet separators, no extra styling */
+.resume[data-skill-tag-style="plain"] .skill-tag {
+  /* No special background or styling */
+}
+
+.resume[data-skill-tag-style="plain"] .skill-tag:not(:last-child)::after {
+  content: ' • ';
+  color: var(--resume-text-muted);
+  opacity: 0.5;
+}
+
 /* Highlight bullets (from Highlights sections) */
 .highlight-bullet {
   display: block;
@@ -247,10 +258,10 @@
    ========================================================================== */
 
 .resume-main {
-  padding: 0.4in 0.5in;
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.5in) var(--page-margin-bottom, 0.4in) var(--page-margin-left, 0.5in);
   display: flex;
   flex-direction: column;
-  gap: 0.8rem;
+  gap: var(--section-spacing, 0.8rem);
 }
 
 .section {
@@ -424,6 +435,11 @@
   pointer-events: none;
 }
 
+/* Hide corner triangle when toggled off */
+.resume.hide-corner-triangle .resume-header::before {
+  display: none;
+}
+
 /* Subtle pattern overlay on sidebar */
 .resume-sidebar::before {
   content: '';
@@ -436,6 +452,11 @@
     radial-gradient(circle at 20% 80%, color-mix(in srgb, var(--resume-accent) 8%, transparent) 0%, transparent 50%),
     radial-gradient(circle at 80% 20%, color-mix(in srgb, var(--resume-accent) 5%, transparent) 0%, transparent 50%);
   pointer-events: none;
+}
+
+/* Hide sidebar gradient when toggled off */
+.resume.hide-sidebar-gradient .resume-sidebar::before {
+  display: none;
 }
 
 /* ==========================================================================
@@ -553,7 +574,7 @@
 
 .right-sidebar-body {
   display: grid;
-  grid-template-columns: 1fr 2.4in;
+  grid-template-columns: 1fr var(--sidebar-width, 2.4in);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -596,13 +617,15 @@
 }
 
 .compact-body {
+  display: block;
   padding: 0;
 }
 
 .compact-columns {
   display: grid;
-  grid-template-columns: 1fr 2in;
-  flex: 1;
+  grid-template-columns: 1fr var(--sidebar-width, 2in);
+  min-height: 100%;
+  width: 100%;
 }
 
 .compact-main {
@@ -842,6 +865,212 @@
 
 /* Hide decorative elements in classic layout */
 .classic-header::before {
+  display: none;
+}
+
+/* ==========================================================================
+   Modern Layout
+   ========================================================================== */
+
+.modern-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: var(--page-margin-top, 0.35in) var(--page-margin-right, 0.5in);
+  background: linear-gradient(135deg, var(--header-bg) 0%, var(--header-bg-end, var(--header-bg)) 100%);
+}
+
+.modern-contact {
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.modern-body {
+  display: grid;
+  grid-template-columns: 1.8in 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+.modern-sidebar {
+  background: var(--sidebar-bg);
+  padding: var(--page-margin-top, 0.4in) 0.3in;
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-spacing, 0.8rem);
+}
+
+.modern-sidebar .sidebar-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.modern-main {
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.5in);
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-spacing, 0.8rem);
+}
+
+/* ==========================================================================
+   Timeline Layout
+   ========================================================================== */
+
+.timeline-header {
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.5in);
+  background: linear-gradient(135deg, var(--header-bg) 0%, var(--header-bg-end, var(--header-bg)) 100%);
+}
+
+.timeline-body {
+  display: grid;
+  grid-template-columns: 1fr var(--sidebar-width, 2.2in);
+  flex: 1;
+  min-height: 0;
+}
+
+.timeline-main {
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.5in);
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-spacing, 0.8rem);
+}
+
+.timeline-sidebar {
+  background: var(--sidebar-bg);
+  padding: var(--page-margin-top, 0.4in) 0.35in;
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-spacing, 0.8rem);
+}
+
+/* Timeline experience */
+.timeline-container {
+  position: relative;
+  padding-left: 1.5rem;
+}
+
+.timeline-item {
+  position: relative;
+  padding-bottom: 1rem;
+}
+
+.timeline-item:last-child {
+  padding-bottom: 0;
+}
+
+.timeline-marker {
+  position: absolute;
+  left: -1.5rem;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.timeline-dot {
+  width: 10px;
+  height: 10px;
+  background: var(--resume-accent);
+  border-radius: 50%;
+  z-index: 1;
+}
+
+.timeline-line {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: calc(100% + 1rem);
+  background: linear-gradient(to bottom, var(--resume-accent) 0%, transparent 100%);
+}
+
+.timeline-item:last-child .timeline-line {
+  display: none;
+}
+
+.timeline-content {
+  padding-left: 0.5rem;
+}
+
+/* ==========================================================================
+   Creative Layout
+   ========================================================================== */
+
+.creative-header {
+  text-align: center;
+  padding: var(--page-margin-top, 0.5in) var(--page-margin-right, 0.5in);
+  background: linear-gradient(135deg, var(--header-bg) 0%, var(--header-bg-end, var(--header-bg)) 100%);
+}
+
+.creative-header .resume-name {
+  font-size: 2rem;
+  letter-spacing: 0.02em;
+}
+
+.creative-contact {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.creative-body {
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.5in);
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-spacing, 1rem);
+}
+
+.creative-summary {
+  text-align: center;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.creative-summary .summary-text {
+  font-style: italic;
+}
+
+.creative-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: var(--section-spacing, 1rem);
+}
+
+.creative-card {
+  background: var(--sidebar-bg);
+  padding: 0.6rem;
+  border-radius: 8px;
+  border-left: 3px solid var(--resume-accent);
+}
+
+.creative-card-title {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--resume-accent);
+  margin-bottom: 0.4rem;
+}
+
+.creative-card-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.creative-item {
+  font-size: 0.75rem;
+}
+
+.creative-experience .section-title {
+  text-align: center;
+}
+
+/* Hide decorative elements in modern layouts */
+.modern-header::before,
+.timeline-header::before,
+.creative-header::before {
   display: none;
 }
 

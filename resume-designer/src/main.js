@@ -10,7 +10,10 @@ import {
   renderResumeRightSidebar,
   renderResumeCompact,
   renderResumeExecutive,
-  renderResumeClassic
+  renderResumeClassic,
+  renderResumeModern,
+  renderResumeTimeline,
+  renderResumeCreative
 } from './renderer.js';
 import { initPdfExport } from './pdf.js';
 import { initInlineEditor, refreshInlineEditor } from './inlineEditor.js';
@@ -635,8 +638,26 @@ function renderCurrentResume() {
     case 'classic':
       container.innerHTML = renderResumeClassic(data);
       break;
+    case 'modern':
+      // Modern layout - small left sidebar with header on top
+      container.innerHTML = renderResumeModern(data);
+      break;
+    case 'timeline':
+      // Timeline layout - experience with visual timeline
+      container.innerHTML = renderResumeTimeline(data);
+      break;
+    case 'creative':
+      // Creative layout - multi-section grid
+      container.innerHTML = renderResumeCreative(data);
+      break;
     default:
       container.innerHTML = renderResume(data);
+  }
+  
+  // Add layout class to resume for CSS targeting
+  const resume = container.querySelector('.resume');
+  if (resume) {
+    resume.dataset.layout = currentLayout;
   }
   
   // Apply current palette

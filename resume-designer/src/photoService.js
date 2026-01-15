@@ -34,7 +34,9 @@ const DEFAULT_PHOTO = {
   shape: 'circle',
   size: 'medium',
   borderWidth: 2,
-  borderColor: 'accent' // 'accent', 'white', 'none'
+  borderColor: 'accent', // 'accent', 'white', 'none'
+  objectPosition: 'center center', // focus point for cropping
+  scale: 1 // zoom level (1 = 100%, 1.5 = 150%)
 };
 
 // Get current photo settings
@@ -92,17 +94,28 @@ export function applyPhotoSettings(settings) {
     borderStyle = `${s.borderWidth}px solid white`;
   }
   
+  const objectPosition = s.objectPosition || 'center center';
+  const scale = s.scale || 1;
+  
   photoContainer.innerHTML = `
-    <img src="${s.imageData}" 
-         alt="Profile photo" 
-         class="resume-photo"
-         style="
-           width: ${size}px;
-           height: ${size}px;
-           border-radius: ${borderRadius};
-           border: ${borderStyle};
-           object-fit: cover;
-         ">
+    <div class="resume-photo-wrapper" style="
+      width: ${size}px;
+      height: ${size}px;
+      border-radius: ${borderRadius};
+      border: ${borderStyle};
+      overflow: hidden;
+    ">
+      <img src="${s.imageData}" 
+           alt="Profile photo" 
+           class="resume-photo"
+           style="
+             width: ${100 * scale}%;
+             height: ${100 * scale}%;
+             object-fit: cover;
+             object-position: ${objectPosition};
+             transform: scale(1) translate(${scale > 1 ? '-' + ((scale - 1) * 50 / scale) + '%' : '0'}, ${scale > 1 ? '-' + ((scale - 1) * 50 / scale) + '%' : '0'});
+           ">
+    </div>
   `;
   
   // Insert based on placement

@@ -545,3 +545,212 @@ function formatUrl(url) {
   if (!url) return '';
   return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
+
+// Modern layout (slim sidebar, header on top)
+export function renderResumeModern(data) {
+  return `
+    <header class="resume-header modern-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+      </div>
+      <div class="header-contact modern-contact">
+        ${renderContactModern(data.contact)}
+      </div>
+    </header>
+    
+    <div class="resume-body modern-body">
+      <aside class="resume-sidebar modern-sidebar">
+        ${renderSidebar(data)}
+        
+        ${data.education && data.education.length > 0 ? `
+          <div class="sidebar-section">
+            <h3 class="sidebar-title">Education</h3>
+            <div class="education-content">
+              ${data.education.map((line, i) => `
+                <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </aside>
+      
+      <main class="resume-main modern-main">
+        ${data.summary ? `
+          <div class="section summary-section">
+            <h2 class="section-title">Summary</h2>
+            <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+          </div>
+        ` : ''}
+        
+        ${data.experience && data.experience.length > 0 ? `
+          <div class="section experience-section">
+            <h2 class="section-title">Experience</h2>
+            ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+          </div>
+        ` : ''}
+      </main>
+    </div>
+  `;
+}
+
+// Modern contact renderer
+function renderContactModern(contact) {
+  if (!contact) return '';
+  contact = contact || {};
+  const items = [];
+  
+  if (contact.email) items.push(`<a href="mailto:${contact.email}" class="contact-item">${contact.email}</a>`);
+  if (contact.phone) items.push(`<a href="tel:${contact.phone}" class="contact-item">${contact.phone}</a>`);
+  if (contact.portfolio) items.push(`<a href="${contact.portfolio}" class="contact-item" target="_blank">${formatUrl(contact.portfolio)}</a>`);
+  
+  return items.join(' <span class="contact-sep">•</span> ');
+}
+
+// Timeline layout (visual timeline for experience)
+export function renderResumeTimeline(data) {
+  return `
+    <header class="resume-header timeline-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+      </div>
+      <div class="header-contact">
+        ${renderContact(data.contact)}
+      </div>
+    </header>
+    
+    <div class="resume-body timeline-body">
+      <main class="resume-main timeline-main">
+        ${data.summary ? `
+          <div class="section summary-section">
+            <h2 class="section-title">Summary</h2>
+            <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+          </div>
+        ` : ''}
+        
+        ${data.experience && data.experience.length > 0 ? `
+          <div class="section experience-section timeline-experience">
+            <h2 class="section-title">Experience</h2>
+            <div class="timeline-container">
+              ${data.experience.map((exp, i) => renderTimelineExperience(exp, i)).join('')}
+            </div>
+          </div>
+        ` : ''}
+        
+        ${data.education && data.education.length > 0 ? `
+          <div class="section education-section">
+            <h2 class="section-title">Education</h2>
+            <div class="education-content">
+              ${data.education.map((line, i) => `
+                <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </main>
+      
+      <aside class="resume-sidebar timeline-sidebar">
+        ${renderSidebar(data)}
+      </aside>
+    </div>
+  `;
+}
+
+// Timeline experience renderer with visual timeline
+function renderTimelineExperience(exp, index) {
+  return `
+    <div class="timeline-item">
+      <div class="timeline-marker">
+        <span class="timeline-dot"></span>
+        <span class="timeline-line"></span>
+      </div>
+      <div class="timeline-content">
+        <div class="experience-header">
+          <div class="experience-title-row">
+            <span class="experience-role" data-editable="experience[${index}].role">${escapeHtml(exp.role)}</span>
+            ${exp.company ? `<span class="experience-company" data-editable="experience[${index}].company">${formatCompany(exp.company)}</span>` : ''}
+          </div>
+          <span class="experience-dates" data-editable="experience[${index}].dates">${escapeHtml(exp.dates)}</span>
+        </div>
+        ${exp.bullets && exp.bullets.length > 0 ? `
+          <ul class="experience-bullets">
+            ${exp.bullets.map((bullet, bIdx) => `
+              <li data-editable="experience[${index}].bullets[${bIdx}]">${formatBullet(bullet)}</li>
+            `).join('')}
+          </ul>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
+// Creative layout (multi-column grid for skills/highlights)
+export function renderResumeCreative(data) {
+  return `
+    <header class="resume-header creative-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+        <div class="creative-contact">
+          ${renderContactCreative(data.contact)}
+        </div>
+      </div>
+    </header>
+    
+    <div class="resume-body creative-body">
+      ${data.summary ? `
+        <div class="section summary-section creative-summary">
+          <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+        </div>
+      ` : ''}
+      
+      ${data.sections && data.sections.length > 0 ? `
+        <div class="creative-grid">
+          ${data.sections.map((section, sIdx) => `
+            <div class="creative-card">
+              <h3 class="creative-card-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
+              <div class="creative-card-content">
+                ${section.content.map((line, i) => `
+                  <span class="creative-item" data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</span>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+      
+      ${data.experience && data.experience.length > 0 ? `
+        <div class="section experience-section creative-experience">
+          <h2 class="section-title">Experience</h2>
+          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+        </div>
+      ` : ''}
+      
+      ${data.education && data.education.length > 0 ? `
+        <div class="section education-section">
+          <h2 class="section-title">Education</h2>
+          <div class="education-content">
+            ${data.education.map((line, i) => `
+              <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// Creative contact renderer
+function renderContactCreative(contact) {
+  if (!contact) return '';
+  contact = contact || {};
+  const items = [];
+  
+  if (contact.email) items.push(`<a href="mailto:${contact.email}" class="contact-item">${contact.email}</a>`);
+  if (contact.phone) items.push(`<a href="tel:${contact.phone}" class="contact-item">${contact.phone}</a>`);
+  if (contact.location) items.push(`<span class="contact-item">${contact.location}</span>`);
+  if (contact.portfolio) items.push(`<a href="${contact.portfolio}" class="contact-item" target="_blank">${formatUrl(contact.portfolio)}</a>`);
+  
+  return items.join(' <span class="contact-sep">•</span> ');
+}

@@ -730,7 +730,8 @@ function finishEditing(element) {
     aiContainer.remove();
   }
   
-  const newValue = element.textContent.trim();
+  // Extract value, handling special cases for skill tags and highlight bullets
+  let newValue = extractEditedValue(element, path);
   
   // Handle different types of editable content
   if (path.includes('[') && path.includes('].')) {
@@ -756,6 +757,42 @@ function finishEditing(element) {
   if (hasEditedOnce && !hintDismissed) {
     dismissHintPermanently();
   }
+}
+
+// Extract the edited value, preserving format for special content types
+function extractEditedValue(element, path) {
+  // Check for skill tags (rendered as separate spans that need to be joined with •)
+  const skillTags = element.querySelectorAll('.skill-tag, .skill-tag-inline');
+  if (skillTags.length > 0) {
+    // Multiple skill tags - join with bullet separator
+    return Array.from(skillTags).map(tag => tag.textContent.trim()).filter(t => t).join(' • ');
+  }
+  
+  // Check for highlight bullets (need to restore the "- " prefix)
+  const highlightBullet = element.querySelector('.highlight-bullet');
+  if (highlightBullet) {
+    // Restore the "- " prefix that was stripped during rendering
+    const content = highlightBullet.textContent.trim();
+    // Also preserve **bold** formatting if present
+    const strongTags = highlightBullet.querySelectorAll('strong');
+    let result = content;
+    strongTags.forEach(strong => {
+      const boldText = strong.textContent;
+      result = result.replace(boldText, `**${boldText}**`);
+    });
+    return '- ' + result;
+  }
+  
+  // For tools field, also check for skill tags
+  if (path === 'tools') {
+    const toolTags = element.querySelectorAll('.skill-tag');
+    if (toolTags.length > 0) {
+      return Array.from(toolTags).map(tag => tag.textContent.trim()).filter(t => t).join(' • ');
+    }
+  }
+  
+  // Default: just use textContent
+  return element.textContent.trim();
 }
 
 // Handle blur event

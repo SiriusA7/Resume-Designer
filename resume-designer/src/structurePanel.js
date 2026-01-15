@@ -214,9 +214,13 @@ function toggleSection(sectionId) {
 }
 
 // Render the panel content
-function renderPanel() {
+function renderPanel(preserveScroll = true) {
   const content = document.getElementById('structure-panel-content');
   if (!content) return;
+  
+  // Preserve scroll position
+  const tabContent = content.querySelector('.panel-tab-content');
+  const scrollTop = preserveScroll && tabContent ? tabContent.scrollTop : 0;
   
   const data = store.getData();
   if (!data && currentTab !== 'design') {
@@ -256,6 +260,16 @@ function renderPanel() {
   
   // Setup dropdown toggle
   setupSectionDropdown();
+  
+  // Restore scroll position after render
+  if (preserveScroll && scrollTop > 0) {
+    requestAnimationFrame(() => {
+      const newTabContent = content.querySelector('.panel-tab-content');
+      if (newTabContent) {
+        newTabContent.scrollTop = scrollTop;
+      }
+    });
+  }
 }
 
 // Setup section dropdown
@@ -502,6 +516,39 @@ function renderDesignTab() {
         </svg>
         <span>Classic</span>
       </button>
+      <button class="design-layout-btn ${currentLayout === 'modern' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="modern">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="3" rx="1"/>
+          <rect x="3" y="8" width="5" height="13" rx="1"/>
+          <rect x="10" y="8" width="11" height="13" rx="1"/>
+        </svg>
+        <span>Modern</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'timeline' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="timeline">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="4" rx="1"/>
+          <line x1="7" y1="10" x2="7" y2="21" stroke-dasharray="2 2"/>
+          <rect x="10" y="9" width="11" height="3" rx="0.5"/>
+          <rect x="10" y="14" width="11" height="3" rx="0.5"/>
+          <rect x="10" y="19" width="11" height="2" rx="0.5"/>
+        </svg>
+        <span>Timeline</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'creative' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="creative">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 3h18v6H3z" rx="1"/>
+          <rect x="3" y="11" width="8" height="4" rx="1"/>
+          <rect x="13" y="11" width="8" height="4" rx="1"/>
+          <rect x="3" y="17" width="18" height="4" rx="1"/>
+        </svg>
+        <span>Creative</span>
+      </button>
     </div>
   `;
 
@@ -544,7 +591,20 @@ function renderExportSection() {
 
 // Render Typography section
 function renderTypographySection() {
+  // Get current font family names for preview
+  const previewFonts = getCurrentPreviewFonts();
+  
   const typographyContent = `
+    <!-- Live Font Preview -->
+    <div class="font-preview-card">
+      <div class="font-preview-header" style="font-family: ${previewFonts.display};">
+        Jane Smith
+      </div>
+      <div class="font-preview-body" style="font-family: ${previewFonts.body};">
+        Senior Software Engineer with 8+ years of experience building scalable web applications.
+      </div>
+    </div>
+    
     <!-- Font Source Tabs -->
     <div class="font-source-tabs">
       <button class="font-source-tab ${fontSubTab === 'presets' ? 'active' : ''}" 
@@ -569,6 +629,32 @@ function renderTypographySection() {
     </div>
   `;
   return renderCollapsibleSection('typography', 'Typography', typographyContent);
+}
+
+// Get current font families for preview
+function getCurrentPreviewFonts() {
+  if (currentFontSettings.mode === 'preset' && currentFontSettings.pairingId) {
+    const pairing = FONT_PAIRINGS[currentFontSettings.pairingId];
+    if (pairing) {
+      return {
+        display: `'${pairing.display.family}', ${pairing.display.category}`,
+        body: `'${pairing.body.family}', ${pairing.body.category}`
+      };
+    }
+  } else if (currentFontSettings.mode === 'google') {
+    return {
+      display: currentFontSettings.displayFont ? `'${currentFontSettings.displayFont.family}', ${currentFontSettings.displayFont.category}` : 'serif',
+      body: currentFontSettings.bodyFont ? `'${currentFontSettings.bodyFont.family}', ${currentFontSettings.bodyFont.category}` : 'sans-serif'
+    };
+  } else if (currentFontSettings.mode === 'system') {
+    const displayFont = SYSTEM_FONT_STACKS[currentFontSettings.displayFont];
+    const bodyFont = SYSTEM_FONT_STACKS[currentFontSettings.bodyFont];
+    return {
+      display: displayFont ? displayFont.family : 'serif',
+      body: bodyFont ? bodyFont.family : 'sans-serif'
+    };
+  }
+  return { display: 'serif', body: 'sans-serif' };
 }
 
 // Render font preset pairings
@@ -709,8 +795,30 @@ function renderSystemFonts() {
 function renderHeaderStyleSection() {
   // Get current colors for previews
   const colors = getCurrentColors();
+  const isSolid = currentHeaderStyle.type === 'solid';
   
   const headerStyleContent = `
+    <!-- Enable/Disable Toggle -->
+    <div class="header-style-toggle">
+      <div class="header-style-toggle-row">
+        <button class="header-style-toggle-btn ${isSolid ? 'active' : ''}" 
+                data-action="select-header-style" 
+                data-style-type="solid"
+                data-style-id="solid">
+          <span class="toggle-preview" style="background: ${colors.headerBg};"></span>
+          <span class="toggle-label">Solid Color</span>
+          <span class="toggle-desc">Use color theme only</span>
+        </button>
+        <button class="header-style-toggle-btn ${!isSolid ? 'active' : ''}" 
+                data-action="enable-header-style">
+          <span class="toggle-preview styled" style="background: linear-gradient(135deg, ${colors.headerBg}, ${colors.headerBgEnd});"></span>
+          <span class="toggle-label">Styled</span>
+          <span class="toggle-desc">Add visual effects</span>
+        </button>
+      </div>
+    </div>
+    
+    ${!isSolid ? `
     <!-- Style Type Tabs -->
     <div class="header-style-tabs">
       <button class="header-style-tab ${headerStyleTab === 'gradients' ? 'active' : ''}" 
@@ -738,6 +846,7 @@ function renderHeaderStyleSection() {
       ${headerStyleTab === 'textures' ? renderTextureStyles(colors) : ''}
       ${headerStyleTab === 'image' ? renderImageUpload() : ''}
     </div>
+    ` : ''}
   `;
   return renderCollapsibleSection('header-style', 'Header Style', headerStyleContent);
 }
@@ -789,17 +898,6 @@ function renderGradientStyles(colors) {
           <span class="header-style-label">${style.name}</span>
         </button>
       `).join('')}
-    </div>
-    
-    <!-- Solid Color Option -->
-    <div class="header-solid-option">
-      <button class="header-style-btn solid ${currentHeaderStyle.type === 'solid' ? 'active' : ''}" 
-              data-action="select-header-style" 
-              data-style-type="solid"
-              data-style-id="solid">
-        <span class="header-style-preview" style="background: ${colors.headerBg};"></span>
-        <span class="header-style-label">Solid Color</span>
-      </button>
     </div>
   `;
 }
@@ -897,9 +995,52 @@ function renderImageUpload() {
   `;
 }
 
+// Spacing presets
+const SPACING_PRESETS = {
+  'compact': {
+    name: 'Compact',
+    description: 'Tighter spacing for more content',
+    fontScale: 0.9,
+    lineHeight: 1.3,
+    sectionSpacing: 0.6,
+    sidebarWidth: 2.0,
+    pageMargins: { top: 0.35, right: 0.35, bottom: 0.35, left: 0.35 }
+  },
+  'normal': {
+    name: 'Normal',
+    description: 'Balanced and readable',
+    fontScale: 1.0,
+    lineHeight: 1.45,
+    sectionSpacing: 0.8,
+    sidebarWidth: 2.2,
+    pageMargins: { top: 0.4, right: 0.4, bottom: 0.4, left: 0.4 }
+  },
+  'relaxed': {
+    name: 'Relaxed',
+    description: 'More breathing room',
+    fontScale: 1.05,
+    lineHeight: 1.6,
+    sectionSpacing: 1.0,
+    sidebarWidth: 2.4,
+    pageMargins: { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 }
+  },
+  'airy': {
+    name: 'Airy',
+    description: 'Maximum whitespace',
+    fontScale: 1.1,
+    lineHeight: 1.75,
+    sectionSpacing: 1.2,
+    sidebarWidth: 2.5,
+    pageMargins: { top: 0.6, right: 0.6, bottom: 0.6, left: 0.6 }
+  }
+};
+
 // Render spacing controls section
 function renderSpacingSection() {
   const s = currentSpacing;
+  
+  // Detect current preset
+  const currentPreset = detectSpacingPreset(s);
   
   const resetButton = `
     <button class="panel-reset-btn" data-action="reset-spacing" title="Reset to defaults">
@@ -911,6 +1052,22 @@ function renderSpacingSection() {
   `;
   
   const spacingContent = `
+    <!-- Spacing Presets -->
+    <div class="spacing-presets">
+      ${Object.entries(SPACING_PRESETS).map(([id, preset]) => `
+        <button class="spacing-preset-btn ${currentPreset === id ? 'active' : ''}" 
+                data-action="apply-spacing-preset" 
+                data-preset="${id}"
+                title="${preset.description}">
+          <span class="preset-name">${preset.name}</span>
+        </button>
+      `).join('')}
+    </div>
+    
+    <div class="spacing-divider">
+      <span>Fine Tune</span>
+    </div>
+    
     <!-- Font Scale -->
     <div class="spacing-control">
       <div class="spacing-control-header">
@@ -1013,6 +1170,9 @@ function renderSpacingSection() {
 function renderAccentSection() {
   const a = currentAccent;
   
+  // Get current bullet character
+  const bulletChar = BULLET_STYLES[a.bulletStyle]?.char || '•';
+  
   const resetButton = `
     <button class="panel-reset-btn" data-action="reset-accent" title="Reset to defaults">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1023,6 +1183,22 @@ function renderAccentSection() {
   `;
   
   const accentContent = `
+    <!-- Live Accent Preview -->
+    <div class="accent-preview-card">
+      <div class="accent-preview-title" data-underline="${a.underlineStyle}" style="--underline-width: ${a.underlineWidth}px;">
+        Experience
+      </div>
+      <div class="accent-preview-bullets">
+        <div class="accent-preview-bullet">${bulletChar || ''} Led team of 5 engineers</div>
+        <div class="accent-preview-bullet">${bulletChar || ''} Increased efficiency by 40%</div>
+      </div>
+      <div class="accent-preview-skills" data-tag-style="${a.skillTagStyle}">
+        <span class="accent-skill-tag">JavaScript</span>
+        <span class="accent-skill-tag">React</span>
+        <span class="accent-skill-tag">Node.js</span>
+      </div>
+    </div>
+    
     <!-- Section Title Underline -->
     <div class="accent-control">
       <label>Title Underline</label>
@@ -1060,7 +1236,7 @@ function renderAccentSection() {
                   data-action="set-bullet"
                   data-value="${id}"
                   title="${style.name}">
-            ${style.char || '—'}
+            ${id === 'none' ? '<span class="bullet-none">∅</span>' : (style.char || '—')}
           </button>
         `).join('')}
       </div>
@@ -1085,6 +1261,12 @@ function renderAccentSection() {
     <div class="accent-control">
       <label>Skill Tags</label>
       <div class="accent-options-row tags">
+        <button class="accent-option-btn tag ${a.skillTagStyle === 'plain' ? 'active' : ''}" 
+                data-action="set-skill-tag"
+                data-value="plain"
+                title="Plain (bullet-separated)">
+          <span class="tag-preview plain">A • B</span>
+        </button>
         <button class="accent-option-btn tag ${a.skillTagStyle === 'filled' ? 'active' : ''}" 
                 data-action="set-skill-tag"
                 data-value="filled"
@@ -1103,6 +1285,25 @@ function renderAccentSection() {
                 title="Minimal">
           <span class="tag-preview minimal">Skill</span>
         </button>
+      </div>
+    </div>
+    
+    <!-- Decorative Elements -->
+    <div class="accent-control">
+      <label>Decorative Elements</label>
+      <div class="decorative-toggles">
+        <label class="toggle-row">
+          <input type="checkbox" 
+                 data-action="toggle-corner-triangle" 
+                 ${a.showCornerTriangle !== false ? 'checked' : ''}>
+          <span class="toggle-label">Header corner accent</span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" 
+                 data-action="toggle-sidebar-gradient" 
+                 ${a.showSidebarGradient !== false ? 'checked' : ''}>
+          <span class="toggle-label">Sidebar gradient overlay</span>
+        </label>
       </div>
     </div>
   `;
@@ -1186,6 +1387,63 @@ function renderPhotoSection() {
           None
         </button>
       </div>
+    </div>
+    
+    <!-- Image Position (Crop Focus) -->
+    <div class="photo-control">
+      <label>Image Focus</label>
+      <div class="photo-position-grid">
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'left top' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="left top" title="Top Left">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'center top' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="center top" title="Top Center">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'right top' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="right top" title="Top Right">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'left center' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="left center" title="Middle Left">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'center center' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="center center" title="Center">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'right center' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="right center" title="Middle Right">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'left bottom' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="left bottom" title="Bottom Left">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'center bottom' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="center bottom" title="Bottom Center">
+          <span class="pos-dot"></span>
+        </button>
+        <button class="photo-position-btn ${(p.objectPosition || 'center center') === 'right bottom' ? 'active' : ''}" 
+                data-action="set-photo-position" data-value="right bottom" title="Bottom Right">
+          <span class="pos-dot"></span>
+        </button>
+      </div>
+      <p class="photo-hint">Choose which part of the image to focus on</p>
+    </div>
+    
+    <!-- Zoom -->
+    <div class="photo-control">
+      <div class="spacing-control-header">
+        <label>Zoom</label>
+        <span class="spacing-value">${Math.round((p.scale || 1) * 100)}%</span>
+      </div>
+      <input type="range" 
+             min="100" max="200" 
+             value="${Math.round((p.scale || 1) * 100)}" 
+             data-action="set-photo-scale"
+             class="spacing-slider">
     </div>
   ` : `
     <!-- Upload Dropzone -->
@@ -1444,6 +1702,11 @@ function setupEventHandlers() {
         handleSelectHeaderStyle(target.dataset.styleType, target.dataset.styleId);
         break;
         
+      case 'enable-header-style':
+        // Enable styled header - default to gradient
+        handleSelectHeaderStyle('gradient', 'linear-135');
+        break;
+        
       case 'remove-header-image':
         handleRemoveHeaderImage();
         break;
@@ -1451,6 +1714,10 @@ function setupEventHandlers() {
       // Spacing actions
       case 'reset-spacing':
         handleResetSpacing();
+        break;
+        
+      case 'apply-spacing-preset':
+        handleApplySpacingPreset(target.dataset.preset);
         break;
         
       // Accent actions
@@ -1474,6 +1741,14 @@ function setupEventHandlers() {
         handleAccentChange('skillTagStyle', target.dataset.value);
         break;
         
+      case 'toggle-corner-triangle':
+        handleAccentChange('showCornerTriangle', target.checked);
+        break;
+        
+      case 'toggle-sidebar-gradient':
+        handleAccentChange('showSidebarGradient', target.checked);
+        break;
+        
       // Photo actions
       case 'remove-photo':
         handleRemovePhoto();
@@ -1493,6 +1768,14 @@ function setupEventHandlers() {
         
       case 'set-photo-border':
         handlePhotoChange('borderColor', target.dataset.value);
+        break;
+        
+      case 'set-photo-position':
+        handlePhotoChange('objectPosition', target.dataset.value);
+        break;
+        
+      case 'set-photo-scale':
+        handlePhotoChange('scale', parseFloat(target.value) / 100);
         break;
     }
   });
@@ -1529,6 +1812,11 @@ function setupEventHandlers() {
     }
     if (e.target.dataset.action === 'spacing-margin') {
       handleMarginChange(e.target.dataset.margin, parseFloat(e.target.value));
+    }
+    
+    // Photo scale
+    if (e.target.dataset.action === 'set-photo-scale') {
+      handlePhotoChange('scale', parseFloat(e.target.value) / 100);
     }
     
     // Accent underline width
@@ -2100,8 +2388,13 @@ function handleSpacingChange(property, value) {
   applySpacingSettings(currentSpacing);
   saveSpacingSettings(currentSpacing);
   
-  // Update display values without full re-render
+  // Update display values without full re-render to preserve scroll
   updateSpacingDisplayValues();
+  
+  // Notify main.js
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'spacing', value: currentSpacing });
+  }
 }
 
 // Handle margin change
@@ -2122,13 +2415,53 @@ function handleResetSpacing() {
   }
 }
 
+// Handle apply spacing preset
+function handleApplySpacingPreset(presetId) {
+  const preset = SPACING_PRESETS[presetId];
+  if (!preset) return;
+  
+  currentSpacing = {
+    fontScale: preset.fontScale,
+    lineHeight: preset.lineHeight,
+    sectionSpacing: preset.sectionSpacing,
+    sidebarWidth: preset.sidebarWidth,
+    pageMargins: { ...preset.pageMargins }
+  };
+  
+  applySpacingSettings(currentSpacing);
+  saveSpacingSettings(currentSpacing);
+  renderPanel();
+  
+  if (onDesignChangeCallback) {
+    onDesignChangeCallback({ type: 'spacing', value: currentSpacing });
+  }
+}
+
+// Detect if current spacing matches a preset
+function detectSpacingPreset(spacing) {
+  for (const [id, preset] of Object.entries(SPACING_PRESETS)) {
+    if (
+      Math.abs(spacing.fontScale - preset.fontScale) < 0.05 &&
+      Math.abs(spacing.lineHeight - preset.lineHeight) < 0.1 &&
+      Math.abs(spacing.sectionSpacing - preset.sectionSpacing) < 0.1
+    ) {
+      return id;
+    }
+  }
+  return null;
+}
+
 // Handle accent change
 function handleAccentChange(property, value) {
   currentAccent[property] = value;
   applyAccentSettings(currentAccent);
   saveAccentSettings(currentAccent);
   
-  renderPanel();
+  // Only re-render for property changes that require UI update (like button selection)
+  // Don't re-render for checkbox toggles
+  if (property !== 'showCornerTriangle' && property !== 'showSidebarGradient') {
+    renderPanel();
+  }
   
   // Notify main.js
   if (onDesignChangeCallback) {
