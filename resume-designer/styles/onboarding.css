@@ -1553,11 +1553,6 @@ body:has(.onboarding-overlay.show) #editable-ai-menu {
   background: linear-gradient(135deg, rgba(196, 92, 62, 0.05), rgba(196, 92, 62, 0.12));
 }
 
-.welcome-option-featured .option-icon {
-  background: linear-gradient(135deg, var(--color-accent), #e07a5f);
-  color: white;
-}
-
 /* ============================================
    Job Input Step (Create for Job flow)
    ============================================ */

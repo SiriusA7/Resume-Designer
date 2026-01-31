@@ -95,6 +95,124 @@ export function renderResumeStacked(data) {
   `;
 }
 
+// Stacked Vertical layout - highlights above skills (not side-by-side)
+export function renderResumeStackedVertical(data) {
+  return `
+    <header class="resume-header stacked-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+      </div>
+      <div class="header-contact stacked-contact">
+        ${renderContactStacked(data.contact)}
+      </div>
+    </header>
+    
+    <div class="resume-body stacked-vertical-body">
+      ${data.summary ? `
+        <div class="section summary-section">
+          <h2 class="section-title">Summary</h2>
+          <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+        </div>
+      ` : ''}
+      
+      ${renderStackedVerticalSections(data)}
+      
+      ${data.experience && data.experience.length > 0 ? `
+        <div class="section experience-section">
+          <h2 class="section-title">Experience</h2>
+          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+        </div>
+      ` : ''}
+      
+      ${data.education && data.education.length > 0 ? `
+        <div class="section education-section">
+          <h2 class="section-title">Education</h2>
+          <div class="education-content">
+            ${data.education.map((line, i) => `
+              <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// Helper to render sections vertically (highlights first, then skills)
+function renderStackedVerticalSections(data) {
+  let html = '';
+  
+  if (!data.sections || data.sections.length === 0) {
+    if (data.tools) {
+      html += `
+        <div class="section stacked-vertical-section">
+          <h3 class="section-title">Tools</h3>
+          <div class="stacked-vertical-content">
+            <p data-editable="tools">${formatSkillLineStacked(data.tools)}</p>
+          </div>
+        </div>
+      `;
+    }
+    return html;
+  }
+  
+  // Separate highlights (bullet sections) from skills
+  const highlights = [];
+  const skills = [];
+  
+  data.sections.forEach((section, sIdx) => {
+    const isHighlight = section.content.some(line => line && line.startsWith('- '));
+    if (isHighlight) {
+      highlights.push({ section, sIdx });
+    } else {
+      skills.push({ section, sIdx });
+    }
+  });
+  
+  // Render highlights first (full width)
+  highlights.forEach(({ section, sIdx }) => {
+    html += `
+      <div class="section stacked-vertical-section highlight-section" data-section-id="${section.id || sIdx}">
+        <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
+        <div class="stacked-vertical-content">
+          ${section.content.map((line, i) => `
+            <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLineStacked(line)}</p>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  });
+  
+  // Render skills below (full width)
+  skills.forEach(({ section, sIdx }) => {
+    html += `
+      <div class="section stacked-vertical-section skill-section" data-section-id="${section.id || sIdx}">
+        <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
+        <div class="stacked-vertical-content">
+          ${section.content.map((line, i) => `
+            <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLineStacked(line)}</p>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  });
+  
+  // Add tools if present
+  if (data.tools) {
+    html += `
+      <div class="section stacked-vertical-section">
+        <h3 class="section-title">Tools</h3>
+        <div class="stacked-vertical-content">
+          <p data-editable="tools">${formatSkillLineStacked(data.tools)}</p>
+        </div>
+      </div>
+    `;
+  }
+  
+  return html;
+}
+
 function renderContact(contact) {
   if (!contact) return '';
   
@@ -557,6 +675,106 @@ export function renderResumeClassic(data) {
       ` : ''}
     </div>
   `;
+}
+
+// Classic Featured layout - highlights after summary, skills at bottom
+export function renderResumeClassicFeatured(data) {
+  // Separate highlights (bullet sections) from skills
+  const highlights = [];
+  const skills = [];
+  
+  if (data.sections) {
+    data.sections.forEach((section, sIdx) => {
+      const isHighlight = section.content.some(line => line && line.startsWith('- '));
+      if (isHighlight) {
+        highlights.push({ section, sIdx });
+      } else {
+        skills.push({ section, sIdx });
+      }
+    });
+  }
+  
+  return `
+    <header class="resume-header classic-header">
+      <div class="header-main">
+        <h1 class="resume-name" data-editable="name">${escapeHtml(data.name)}</h1>
+        <p class="resume-tagline" data-editable="tagline">${escapeHtml(data.tagline)}</p>
+        <div class="classic-contact">
+          ${renderContactClassic(data.contact)}
+        </div>
+      </div>
+    </header>
+    
+    <div class="resume-body classic-featured-body">
+      ${data.summary ? `
+        <div class="section summary-section">
+          <h2 class="section-title">Professional Summary</h2>
+          <p class="summary-text" data-editable="summary" data-multiline="true">${escapeHtml(data.summary)}</p>
+        </div>
+      ` : ''}
+      
+      ${highlights.length > 0 ? `
+        <div class="classic-featured-highlights">
+          ${highlights.map(({ section, sIdx }) => `
+            <div class="section highlight-section">
+              <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
+              <div class="classic-featured-highlight-content">
+                ${section.content.map((line, i) => `
+                  <p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${formatHighlightLine(line)}</p>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+      
+      ${data.experience && data.experience.length > 0 ? `
+        <div class="section experience-section">
+          <h2 class="section-title">Professional Experience</h2>
+          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+        </div>
+      ` : ''}
+      
+      ${data.education && data.education.length > 0 ? `
+        <div class="section education-section">
+          <h2 class="section-title">Education</h2>
+          <div class="education-content">
+            ${data.education.map((line, i) => `
+              <p data-editable="education[${i}]">${escapeHtml(line)}</p>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+      
+      ${skills.length > 0 ? `
+        <div class="classic-skills-section">
+          ${skills.map(({ section, sIdx }) => `
+            <div class="section">
+              <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
+              <div class="classic-skill-content">
+                ${section.content.map((line, i) => `
+                  <span class="classic-skill-item" data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</span>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// Helper to format highlight lines (with bullets)
+function formatHighlightLine(line) {
+  if (!line) return '';
+  
+  // Handle bullet point lines
+  if (line.startsWith('- ')) {
+    const content = line.substring(2).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return `<span class="highlight-bullet">${escapeHtml(content).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</span>`;
+  }
+  
+  return escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
 
 // Classic contact renderer

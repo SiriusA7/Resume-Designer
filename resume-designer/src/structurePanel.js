@@ -487,6 +487,17 @@ function renderDesignTab() {
         </svg>
         <span>Stacked</span>
       </button>
+      <button class="design-layout-btn ${currentLayout === 'stacked-vertical' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="stacked-vertical">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="4" rx="1"/>
+          <rect x="3" y="9" width="18" height="3" rx="1"/>
+          <rect x="3" y="14" width="18" height="3" rx="1"/>
+          <rect x="3" y="19" width="18" height="2" rx="1"/>
+        </svg>
+        <span>Flow</span>
+      </button>
       <button class="design-layout-btn ${currentLayout === 'compact' ? 'active' : ''}" 
               data-action="set-layout" 
               data-layout="compact">
@@ -515,6 +526,16 @@ function renderDesignTab() {
           <rect x="3" y="9" width="18" height="12" rx="1"/>
         </svg>
         <span>Classic</span>
+      </button>
+      <button class="design-layout-btn ${currentLayout === 'classic-featured' ? 'active' : ''}" 
+              data-action="set-layout" 
+              data-layout="classic-featured">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="3" rx="1"/>
+          <rect x="3" y="8" width="18" height="4" rx="1"/>
+          <rect x="3" y="14" width="18" height="7" rx="1"/>
+        </svg>
+        <span>Featured</span>
       </button>
       <button class="design-layout-btn ${currentLayout === 'modern' ? 'active' : ''}" 
               data-action="set-layout" 

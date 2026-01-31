@@ -54,7 +54,7 @@
 .resume-header {
   background: linear-gradient(135deg, var(--header-bg) 0%, var(--header-bg-end) 100%);
   color: white;
-  padding: 0.5in 0.5in 0.4in;
+  padding: var(--page-margin-top, 0.5in) var(--page-margin-right, 0.5in) 0.4in var(--page-margin-left, 0.5in);
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -125,7 +125,7 @@
 
 .resume-sidebar {
   background: var(--sidebar-bg);
-  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.35in);
+  padding: var(--page-margin-top, 0.4in) 0.35in var(--page-margin-bottom, 0.4in) var(--page-margin-left, 0.35in);
   display: flex;
   flex-direction: column;
   gap: var(--section-spacing, 0.9rem);
@@ -489,7 +489,7 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 0.5in 0.6in 0.4in;
+  padding: var(--page-margin-top, 0.5in) var(--page-margin-right, 0.6in) 0.4in var(--page-margin-left, 0.6in);
 }
 
 .stacked-header .header-main {
@@ -527,7 +527,7 @@
 
 .stacked-body {
   display: block;
-  padding: 0.5in 0.6in;
+  padding: var(--page-margin-top, 0.5in) var(--page-margin-right, 0.6in) var(--page-margin-bottom, 0.5in) var(--page-margin-left, 0.6in);
 }
 
 .stacked-body .section {
@@ -591,6 +591,85 @@
 }
 
 /* ==========================================================================
+   Stacked Vertical Layout (skills below highlights, not side-by-side)
+   ========================================================================== */
+
+.stacked-vertical-body {
+  display: block;
+  padding: var(--page-margin-top, 0.5in) var(--page-margin-right, 0.6in) var(--page-margin-bottom, 0.5in) var(--page-margin-left, 0.6in);
+}
+
+.stacked-vertical-body .section {
+  margin-bottom: var(--section-spacing, 1rem);
+}
+
+.stacked-vertical-section {
+  background: var(--sidebar-bg);
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  margin-bottom: var(--section-spacing, 0.8rem);
+}
+
+.stacked-vertical-section .section-title {
+  font-size: calc(0.9rem * var(--font-scale, 1));
+  margin-bottom: 0.4rem;
+  padding-bottom: 0.2rem;
+}
+
+.stacked-vertical-content {
+  font-size: calc(0.8rem * var(--font-scale, 1));
+  line-height: 1.5;
+}
+
+.stacked-vertical-content p {
+  margin: 0;
+}
+
+/* Highlights get slightly different treatment */
+.stacked-vertical-section.highlight-section .stacked-vertical-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stacked-vertical-section.highlight-section .highlight-bullet {
+  display: block;
+  padding-left: 0.5rem;
+  position: relative;
+}
+
+.stacked-vertical-section.highlight-section .highlight-bullet::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--resume-accent);
+}
+
+/* Skills stay inline */
+.stacked-vertical-section.skill-section .stacked-vertical-content p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+}
+
+/* Hide decorative elements in stacked vertical layout */
+.stacked-vertical-body .section-title::after {
+  display: none;
+}
+
+/* Summary section in stacked vertical */
+.stacked-vertical-body .summary-section {
+  background: var(--sidebar-bg);
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  margin-bottom: var(--section-spacing, 1rem);
+}
+
+.stacked-vertical-body .summary-section .section-title {
+  margin-bottom: 0.4rem;
+}
+
+/* ==========================================================================
    Right Sidebar Layout
    ========================================================================== */
 
@@ -615,7 +694,7 @@
    ========================================================================== */
 
 .compact-header {
-  padding: 0.35in 0.4in 0.3in;
+  padding: var(--page-margin-top, 0.35in) var(--page-margin-right, 0.4in) 0.3in var(--page-margin-left, 0.4in);
 }
 
 .compact-header .resume-name {
@@ -651,12 +730,12 @@
 }
 
 .compact-main {
-  padding: 0.3in 0.4in;
+  padding: var(--page-margin-top, 0.3in) var(--page-margin-right, 0.4in) var(--page-margin-bottom, 0.3in) var(--page-margin-left, 0.4in);
 }
 
 .compact-sidebar {
   background: var(--sidebar-bg);
-  padding: 0.3in 0.3in;
+  padding: var(--page-margin-top, 0.3in) 0.3in var(--page-margin-bottom, 0.3in) 0.3in;
 }
 
 .compact-main .section {
@@ -714,7 +793,7 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 0.6in 0.6in 0.5in;
+  padding: var(--page-margin-top, 0.6in) var(--page-margin-right, 0.6in) 0.5in var(--page-margin-left, 0.6in);
   background: linear-gradient(180deg, var(--header-bg) 0%, var(--header-bg-end) 100%);
 }
 
@@ -752,7 +831,7 @@
 
 .executive-summary {
   background: var(--sidebar-bg);
-  padding: 0.5in 0.6in;
+  padding: 0.4in var(--page-margin-right, 0.6in) 0.4in var(--page-margin-left, 0.6in);
   text-align: center;
   margin-bottom: 0;
 }
@@ -771,7 +850,7 @@
 }
 
 .executive-main {
-  padding: 0.4in 0.5in;
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.5in) var(--page-margin-bottom, 0.4in) 0.4in;
 }
 
 .executive-main .section-title {
@@ -785,7 +864,7 @@
 
 .executive-side {
   background: var(--sidebar-bg);
-  padding: 0.4in 0.35in;
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.35in) var(--page-margin-bottom, 0.4in) 0.35in;
 }
 
 .executive-side .sidebar-title {
@@ -801,7 +880,7 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 0.4in 0.5in 0.35in;
+  padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.5in) 0.35in var(--page-margin-left, 0.5in);
   background: var(--header-bg);
 }
 
@@ -836,7 +915,7 @@
 
 .classic-body {
   display: block;
-  padding: 0.5in 0.6in;
+  padding: var(--page-margin-top, 0.5in) var(--page-margin-right, 0.6in) var(--page-margin-bottom, 0.5in) var(--page-margin-left, 0.6in);
 }
 
 .classic-body .section {
@@ -887,6 +966,94 @@
 
 /* Hide decorative elements in classic layout */
 .classic-header::before {
+  display: none;
+}
+
+/* ==========================================================================
+   Classic Featured Layout (highlights after summary, skills at bottom)
+   ========================================================================== */
+
+.classic-featured-body {
+  display: block;
+  padding: var(--page-margin-top, 0.5in) var(--page-margin-right, 0.6in) var(--page-margin-bottom, 0.5in) var(--page-margin-left, 0.6in);
+}
+
+.classic-featured-body .section {
+  margin-bottom: var(--section-spacing, 0.8rem);
+}
+
+.classic-featured-body .section-title {
+  font-size: calc(1rem * var(--font-scale, 1));
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 2px solid var(--resume-accent);
+  margin-bottom: 0.5rem;
+}
+
+.classic-featured-body .section-title::after {
+  display: none;
+}
+
+.classic-featured-body .summary-text {
+  font-size: calc(0.85rem * var(--font-scale, 1));
+}
+
+.classic-featured-body .experience-header {
+  margin-bottom: 0.2rem;
+}
+
+.classic-featured-body .experience-title {
+  font-size: calc(0.9rem * var(--font-scale, 1));
+}
+
+/* Highlights section styling */
+.classic-featured-highlights {
+  margin-bottom: var(--section-spacing, 1rem);
+  padding: 0.6rem 0.8rem;
+  background: var(--sidebar-bg);
+  border-radius: 8px;
+}
+
+.classic-featured-highlights .section {
+  margin-bottom: 0.4rem;
+}
+
+.classic-featured-highlights .section:last-child {
+  margin-bottom: 0;
+}
+
+.classic-featured-highlight-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.classic-featured-highlight-content .highlight-item {
+  margin: 0;
+  font-size: calc(0.8rem * var(--font-scale, 1));
+  line-height: 1.4;
+}
+
+.classic-featured-highlight-content .highlight-bullet {
+  display: block;
+  padding-left: 0.5rem;
+  position: relative;
+}
+
+.classic-featured-highlight-content .highlight-bullet::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--resume-accent);
+}
+
+/* Skills at bottom - same as classic */
+.classic-featured-body .classic-skills-section .section {
+  margin-bottom: 0.6rem;
+}
+
+/* Hide decorative elements */
+.classic-featured-body .resume-header::before {
   display: none;
 }
 

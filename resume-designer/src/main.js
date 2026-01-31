@@ -6,11 +6,13 @@
 import { store } from './store.js';
 import { 
   renderResume, 
-  renderResumeStacked, 
+  renderResumeStacked,
+  renderResumeStackedVertical,
   renderResumeRightSidebar,
   renderResumeCompact,
   renderResumeExecutive,
   renderResumeClassic,
+  renderResumeClassicFeatured,
   renderResumeModern,
   renderResumeTimeline,
   renderResumeCreative
@@ -255,7 +257,7 @@ async function init() {
   
   // Subscribe to store changes for re-rendering
   store.subscribe((event, payload) => {
-    if (event === 'change' || event === 'fieldUpdated') {
+    if (event === 'change' || event === 'fieldUpdated' || event === 'dataLoaded') {
       renderCurrentResume();
     }
   });
@@ -787,6 +789,10 @@ function renderCurrentResume() {
     case 'stacked':
       container.innerHTML = renderResumeStacked(data);
       break;
+    case 'stacked-vertical':
+      // Stacked Vertical - skills below highlights (not side-by-side)
+      container.innerHTML = renderResumeStackedVertical(data);
+      break;
     case 'right-sidebar':
       container.innerHTML = renderResumeRightSidebar(data);
       break;
@@ -798,6 +804,10 @@ function renderCurrentResume() {
       break;
     case 'classic':
       container.innerHTML = renderResumeClassic(data);
+      break;
+    case 'classic-featured':
+      // Classic Featured - highlights after summary, skills at bottom
+      container.innerHTML = renderResumeClassicFeatured(data);
       break;
     case 'modern':
       // Modern layout - small left sidebar with header on top
