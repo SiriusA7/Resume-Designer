@@ -1538,3 +1538,316 @@ body:has(.onboarding-overlay.show) #editable-ai-menu {
   color: var(--color-text-muted);
   padding: 3px 8px;
 }
+
+/* ============================================
+   Create for Job - Featured Option
+   ============================================ */
+
+.welcome-option-featured {
+  background: linear-gradient(135deg, rgba(196, 92, 62, 0.03), rgba(196, 92, 62, 0.08));
+  border-color: rgba(196, 92, 62, 0.3);
+}
+
+.welcome-option-featured:hover:not(.disabled) {
+  border-color: var(--color-accent);
+  background: linear-gradient(135deg, rgba(196, 92, 62, 0.05), rgba(196, 92, 62, 0.12));
+}
+
+.welcome-option-featured .option-icon {
+  background: linear-gradient(135deg, var(--color-accent), #e07a5f);
+  color: white;
+}
+
+/* ============================================
+   Job Input Step (Create for Job flow)
+   ============================================ */
+
+.job-input-step {
+  text-align: center;
+}
+
+.job-input-step .step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  background: linear-gradient(135deg, rgba(196, 92, 62, 0.1), rgba(196, 92, 62, 0.05));
+  border-radius: 50%;
+  margin-bottom: 20px;
+  color: var(--color-accent);
+}
+
+.job-input-step h2 {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--color-text);
+}
+
+.job-input-step .step-description {
+  font-size: 15px;
+  color: var(--color-text-muted);
+  margin: 0 0 24px;
+  max-width: 420px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.5;
+}
+
+.job-input-form {
+  max-width: 480px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.job-input-form .input-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.job-input-form .input-group {
+  flex: 1;
+  margin-bottom: 12px;
+}
+
+.job-input-form .input-row .input-group {
+  margin-bottom: 0;
+}
+
+.job-input-form label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.job-input-form .job-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  transition: border-color 0.15s;
+}
+
+.job-input-form .job-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.job-input-form .job-textarea {
+  width: 100%;
+  padding: 14px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  resize: vertical;
+  min-height: 180px;
+  transition: border-color 0.15s;
+  line-height: 1.5;
+}
+
+.job-input-form .job-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.paste-clipboard-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: 20px;
+}
+
+.paste-clipboard-btn:hover {
+  background: var(--color-hover);
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
+}
+
+.paste-clipboard-btn svg {
+  opacity: 0.7;
+}
+
+/* Model selector in job input step */
+.job-model-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  margin-top: 4px;
+}
+
+.job-model-selector label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  margin: 0;
+}
+
+.job-model-selector label svg {
+  color: var(--color-accent);
+  opacity: 0.8;
+}
+
+.job-model-select {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.job-model-select:hover {
+  border-color: var(--color-text-muted);
+}
+
+.job-model-select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.job-input-benefits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 18px;
+  background: rgba(196, 92, 62, 0.06);
+  border-radius: 10px;
+  max-width: 480px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.job-input-benefits .benefit-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.job-input-benefits .benefit-item svg {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+
+/* ============================================
+   Profile Warning (Empty Profile State)
+   ============================================ */
+
+.profile-warning {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 24px;
+  text-align: center;
+}
+
+.profile-warning .warning-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.05));
+  border-radius: 50%;
+  margin-bottom: 20px;
+  color: #f59e0b;
+}
+
+.profile-warning h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: var(--color-text);
+}
+
+.profile-warning .warning-description {
+  font-size: 15px;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+  margin: 0 0 24px;
+}
+
+.profile-warning .warning-actions {
+  margin-bottom: 16px;
+}
+
+.profile-warning .warning-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 24px;
+  background: var(--color-accent);
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.profile-warning .warning-actions .btn:hover {
+  background: #b54d39;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(196, 92, 62, 0.25);
+}
+
+.profile-warning .warning-hint {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* Generate button with spinner */
+.onboarding-footer .btn-primary .btn-spinner {
+  margin-right: 8px;
+}
+
+/* Responsive adjustments for job input step */
+@media (max-width: 640px) {
+  .job-input-form {
+    max-width: 100%;
+  }
+  
+  .job-input-form .input-row {
+    flex-direction: column;
+    gap: 0;
+  }
+  
+  .job-input-benefits {
+    max-width: 100%;
+  }
+}

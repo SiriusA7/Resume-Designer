@@ -23,6 +23,18 @@ const DEFAULT_STORAGE = {
     chatPanelWidth: 320
   },
   userProfile: {
+    // Contact information
+    contactInfo: {
+      fullName: '',
+      email: '',
+      phone: '',
+      location: '',
+      linkedin: '',
+      portfolio: '',
+      github: '',
+      twitter: '',
+      instagram: ''
+    },
     personalSummary: '',
     careerGoals: '',
     workExperience: [],

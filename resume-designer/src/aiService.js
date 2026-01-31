@@ -302,6 +302,14 @@ export function getAvailableModelIds() {
 function isProfileEmpty(profile) {
   if (!profile) return true;
   
+  // Check contact info fields
+  if (profile.contactInfo) {
+    const contactFields = ['fullName', 'email', 'phone', 'location', 'linkedin', 'portfolio', 'github', 'twitter', 'instagram'];
+    for (const field of contactFields) {
+      if (profile.contactInfo[field] && profile.contactInfo[field].trim().length > 0) return false;
+    }
+  }
+  
   // Check text fields
   const textFields = ['personalSummary', 'careerGoals', 'preferences', 'industryKnowledge'];
   for (const field of textFields) {
@@ -315,6 +323,243 @@ function isProfileEmpty(profile) {
   }
   
   return true;
+}
+
+/**
+ * Check if user profile has enough data to generate a resume
+ * @returns {boolean} True if profile has meaningful data
+ */
+export function checkProfileHasData() {
+  const profile = getUserProfile();
+  return !isProfileEmpty(profile);
+}
+
+/**
+ * Generate a complete resume from user profile, tailored for a specific job
+ * @param {string} modelId - The AI model to use
+ * @param {Object} jobDescription - The job description object { title, company, description }
+ * @returns {Object} Generated resume data
+ */
+export async function generateResumeFromProfileForJob(modelId, jobDescription) {
+  const profile = getUserProfile();
+  
+  if (!profile || isProfileEmpty(profile)) {
+    throw new Error('User profile is empty. Please fill out your profile first.');
+  }
+  
+  const modelConfig = MODELS[modelId];
+  if (!modelConfig) {
+    throw new Error(`Unknown model: ${modelId}`);
+  }
+  
+  const apiKey = getApiKey(modelConfig.provider);
+  
+  if (!apiKey) {
+    throw new Error(`No API key configured for ${modelConfig.provider}`);
+  }
+  
+  // Build comprehensive profile context
+  let profileContext = `## User Profile Information\n\n`;
+  
+  // Add contact information if present
+  if (profile.contactInfo) {
+    const contact = profile.contactInfo;
+    profileContext += `### Contact Information\n`;
+    if (contact.fullName) profileContext += `- **Full Name:** ${contact.fullName}\n`;
+    if (contact.email) profileContext += `- **Email:** ${contact.email}\n`;
+    if (contact.phone) profileContext += `- **Phone:** ${contact.phone}\n`;
+    if (contact.location) profileContext += `- **Location:** ${contact.location}\n`;
+    if (contact.linkedin) profileContext += `- **LinkedIn:** ${contact.linkedin}\n`;
+    if (contact.portfolio) profileContext += `- **Portfolio/Website:** ${contact.portfolio}\n`;
+    if (contact.github) profileContext += `- **GitHub:** ${contact.github}\n`;
+    if (contact.twitter) profileContext += `- **Twitter:** ${contact.twitter}\n`;
+    if (contact.instagram) profileContext += `- **Instagram:** ${contact.instagram}\n`;
+    profileContext += '\n';
+  }
+  
+  if (profile.personalSummary) {
+    profileContext += `### Personal Summary\n${profile.personalSummary}\n\n`;
+  }
+  
+  if (profile.careerGoals) {
+    profileContext += `### Career Goals\n${profile.careerGoals}\n\n`;
+  }
+  
+  if (profile.workExperience && profile.workExperience.length > 0) {
+    profileContext += `### Work Experience\n`;
+    for (const exp of profile.workExperience) {
+      profileContext += `\n**${exp.title || 'Position'}** at **${exp.company || 'Company'}**`;
+      if (exp.dates) profileContext += ` (${exp.dates})`;
+      profileContext += `\n`;
+      if (exp.details) profileContext += `${exp.details}\n`;
+    }
+    profileContext += '\n';
+  }
+  
+  if (profile.skills && profile.skills.length > 0) {
+    profileContext += `### Skills\n`;
+    for (const skill of profile.skills) {
+      let skillLine = `- ${skill.name || skill}`;
+      if (skill.proficiency) skillLine += ` (${skill.proficiency})`;
+      if (skill.years) skillLine += ` - ${skill.years} years`;
+      profileContext += skillLine + '\n';
+    }
+    profileContext += '\n';
+  }
+  
+  if (profile.education && profile.education.length > 0) {
+    profileContext += `### Education\n`;
+    for (const edu of profile.education) {
+      profileContext += `- **${edu.degree || 'Degree'}** from ${edu.institution || 'Institution'}`;
+      if (edu.dates) profileContext += ` (${edu.dates})`;
+      if (edu.details) profileContext += `\n  ${edu.details}`;
+      profileContext += '\n';
+    }
+    profileContext += '\n';
+  }
+  
+  if (profile.projects && profile.projects.length > 0) {
+    profileContext += `### Projects\n`;
+    for (const proj of profile.projects) {
+      profileContext += `- **${proj.name || 'Project'}**`;
+      if (proj.url) profileContext += ` (${proj.url})`;
+      if (proj.description) profileContext += `: ${proj.description}`;
+      profileContext += '\n';
+    }
+    profileContext += '\n';
+  }
+  
+  if (profile.certifications && profile.certifications.length > 0) {
+    profileContext += `### Certifications\n`;
+    for (const cert of profile.certifications) {
+      profileContext += `- ${cert.name || cert}`;
+      if (cert.year) profileContext += ` (${cert.year})`;
+      profileContext += '\n';
+    }
+    profileContext += '\n';
+  }
+  
+  if (profile.achievements && profile.achievements.length > 0) {
+    profileContext += `### Achievements\n`;
+    for (const ach of profile.achievements) {
+      profileContext += `- ${ach.description || ach}\n`;
+    }
+    profileContext += '\n';
+  }
+  
+  if (profile.industryKnowledge) {
+    profileContext += `### Industry Knowledge\n${profile.industryKnowledge}\n\n`;
+  }
+  
+  if (profile.preferences) {
+    profileContext += `### Preferences\n${profile.preferences}\n\n`;
+  }
+  
+  // Build the prompt
+  const prompt = `You are an expert resume consultant and ATS optimization specialist. Your task is to create the BEST possible resume from the user's profile data, specifically tailored for a target job.
+
+${profileContext}
+
+## Target Job
+
+**Position:** ${jobDescription.title || 'Not specified'}
+**Company:** ${jobDescription.company || 'Not specified'}
+
+**Job Description:**
+${jobDescription.description}
+
+## Your Task
+
+Create a complete, ATS-optimized resume that:
+1. Highlights the most relevant experience and skills for this specific job
+2. Uses keywords and phrases from the job description naturally
+3. Prioritizes and reorders experience based on relevance to the target role
+4. Writes a compelling professional summary tailored to this position
+5. Creates impactful bullet points with quantifiable achievements where possible
+6. Includes a highlights section with the top 4-6 most relevant achievements/skills
+
+Return ONLY a valid JSON object (no markdown, no explanation) in this exact format:
+{
+  "name": "Full Name from profile",
+  "tagline": "Professional title tailored to target job",
+  "email": "email from profile if available",
+  "phone": "phone from profile if available",
+  "location": "location from profile if available",
+  "linkedin": "linkedin url if available",
+  "portfolio": "portfolio url if available",
+  "summary": "2-3 sentence compelling summary tailored for this specific job",
+  "highlights": [
+    "Most relevant achievement or skill for this job",
+    "Another key qualification that matches the job requirements",
+    "Quantifiable achievement relevant to the role",
+    "Important skill or expertise mentioned in the job description"
+  ],
+  "skills": ["skill1", "skill2", "skill3", "..."],
+  "experience": [
+    {
+      "title": "Job Title",
+      "company": "Company Name",
+      "location": "City, State",
+      "dates": "Start Date - End Date",
+      "bullets": [
+        "Achievement bullet with quantifiable results relevant to target job",
+        "Another impactful bullet highlighting relevant skills",
+        "More achievements tailored to the job requirements"
+      ]
+    }
+  ],
+  "education": [
+    {
+      "degree": "Degree Name",
+      "school": "School Name",
+      "year": "Year"
+    }
+  ],
+  "certifications": ["Relevant certification 1", "Relevant certification 2"]
+}
+
+IMPORTANT:
+- Only include sections that have relevant content from the profile
+- Prioritize and reorder experience based on relevance to the target job
+- Use action verbs and quantify achievements where possible
+- Include keywords from the job description naturally
+- Make the summary compelling and specific to this role`;
+
+  const messages = [{ role: 'user', content: prompt }];
+  
+  let response;
+  const featureOptions = { feature: 'generate-from-profile' };
+  
+  switch (modelConfig.provider) {
+    case 'anthropic':
+      response = await callAnthropic(modelConfig, messages, apiKey, featureOptions);
+      break;
+    case 'openai':
+      response = await callOpenAI(modelConfig, messages, apiKey, featureOptions);
+      break;
+    case 'gemini':
+      response = await callGemini(modelConfig, messages, apiKey, featureOptions);
+      break;
+    default:
+      throw new Error(`Unsupported provider: ${modelConfig.provider}`);
+  }
+  
+  // Parse the JSON response
+  try {
+    let jsonStr = response.trim();
+    // Remove markdown code blocks if present
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    }
+    
+    const resume = JSON.parse(jsonStr);
+    console.log('[AI Service] Generated resume from profile:', resume);
+    return resume;
+  } catch (e) {
+    console.error('Failed to parse AI response as JSON:', response);
+    throw new Error('AI response was not valid JSON. Please try again.');
+  }
 }
 
 // Get user profile context for AI
@@ -331,6 +576,24 @@ function getUserProfileContext() {
   
   let context = `## User Background Information\n\n`;
   context += `The following is detailed background information about the user that should inform your resume suggestions:\n\n`;
+  
+  // Add contact information if present
+  if (profile.contactInfo) {
+    const contact = profile.contactInfo;
+    if (contact.fullName || contact.email || contact.phone || contact.location) {
+      context += `### Contact Information\n`;
+      if (contact.fullName) context += `- **Name:** ${contact.fullName}\n`;
+      if (contact.email) context += `- **Email:** ${contact.email}\n`;
+      if (contact.phone) context += `- **Phone:** ${contact.phone}\n`;
+      if (contact.location) context += `- **Location:** ${contact.location}\n`;
+      if (contact.linkedin) context += `- **LinkedIn:** ${contact.linkedin}\n`;
+      if (contact.portfolio) context += `- **Portfolio:** ${contact.portfolio}\n`;
+      if (contact.github) context += `- **GitHub:** ${contact.github}\n`;
+      if (contact.twitter) context += `- **Twitter:** ${contact.twitter}\n`;
+      if (contact.instagram) context += `- **Instagram:** ${contact.instagram}\n`;
+      context += '\n';
+    }
+  }
   
   if (profile.personalSummary && profile.personalSummary.trim()) {
     context += `### Personal Summary\n${profile.personalSummary.trim()}\n\n`;

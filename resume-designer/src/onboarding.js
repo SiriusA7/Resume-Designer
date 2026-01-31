@@ -4,8 +4,8 @@
  */
 
 import { store } from './store.js';
-import { getSettings, saveSettings, getVariants, saveVariant, setCurrentVariantId, initPersistence, generateUniqueVariantName } from './persistence.js';
-import { getConfiguredProviders, getDefaultModelId, generateResumeChanges, chat } from './aiService.js';
+import { getSettings, saveSettings, getVariants, saveVariant, setCurrentVariantId, initPersistence, generateUniqueVariantName, getUserProfile } from './persistence.js';
+import { getConfiguredProviders, getDefaultModelId, generateResumeChanges, chat, generateResumeFromProfileForJob, checkProfileHasData, getAllModels, isProviderConfigured } from './aiService.js';
 import { loadVariant } from './variantManager.js';
 import { refreshChatPanel } from './chatPanel.js';
 import { parseResumeText } from './resumeParser.js';
@@ -94,15 +94,68 @@ let wizardContainer = null;
 let currentStep = 0;
 let isNewResumeMode = false; // true when launched from plus button (skips API step)
 let wizardData = {
-  mode: null, // 'new' | 'import'
+  mode: null, // 'new' | 'import' | 'job'
   importText: '',
   parsedResume: null,
   jobDescriptions: [],
   aiResponses: [],
   filePreviewText: '', // Raw text extracted from file
   filePreviewParsed: null, // Parsed data from file
-  filePreviewMode: false // Whether we're showing file preview
+  filePreviewMode: false, // Whether we're showing file preview
+  targetJob: null // Job description for 'job' mode
 };
+
+// Track selected model for job-based resume generation
+let selectedModelForJobGeneration = null;
+
+/**
+ * Get available models for the model selector dropdown
+ */
+function getAvailableModelsForSelector() {
+  const allModels = getAllModels();
+  const available = [];
+  
+  // Add models from each configured provider
+  for (const [provider, models] of Object.entries(allModels)) {
+    if (isProviderConfigured(provider)) {
+      for (const model of models) {
+        available.push({
+          id: model.id,
+          label: formatModelName(model.id),
+          provider: provider
+        });
+      }
+    }
+  }
+  
+  return available;
+}
+
+/**
+ * Format model name for display in dropdown
+ */
+function formatModelName(modelId) {
+  const parts = modelId.split(':');
+  if (parts.length !== 2) return modelId;
+  
+  const provider = parts[0];
+  const model = parts[1];
+  
+  // Format provider name
+  const providerNames = {
+    'anthropic': 'Anthropic',
+    'openai': 'OpenAI',
+    'gemini': 'Google'
+  };
+  
+  // Format model name (capitalize, clean up)
+  const modelName = model
+    .split('-')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+  
+  return `${providerNames[provider] || provider} ${modelName}`;
+}
 
 // Interview questions for AI-guided resume creation
 const INTERVIEW_QUESTIONS = [
@@ -224,7 +277,8 @@ export function showOnboardingWizard(options = {}) {
     aiResponses: [],
     filePreviewText: '',
     filePreviewParsed: null,
-    filePreviewMode: false
+    filePreviewMode: false,
+    targetJob: null
   };
   currentQuestion = 0;
   interviewAnswers = {};
@@ -336,6 +390,8 @@ function renderStep() {
     case 2:
       if (wizardData.mode === 'import') {
         renderImportStep(content, footer);
+      } else if (wizardData.mode === 'job') {
+        renderJobInputStep(content, footer);
       } else {
         renderInterviewStep(content, footer);
       }
@@ -639,6 +695,29 @@ function renderChoosePathStep(content, footer) {
             AI-Powered
           </div>
         </button>
+        
+        <button class="welcome-option welcome-option-featured" id="option-job">
+          <div class="option-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <circle cx="12" cy="12" r="3"/>
+              <line x1="12" y1="2" x2="12" y2="5"/>
+              <line x1="12" y1="19" x2="12" y2="22"/>
+              <line x1="2" y1="12" x2="5" y2="12"/>
+              <line x1="19" y1="12" x2="22" y2="12"/>
+            </svg>
+          </div>
+          <div class="option-text">
+            <h3>Create for Job</h3>
+            <p>Generate a tailored resume from your profile, optimized for a specific job posting</p>
+          </div>
+          <div class="option-badge ai-badge">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+            AI-Powered
+          </div>
+        </button>
       </div>
     </div>
   `;
@@ -667,6 +746,12 @@ function renderChoosePathStep(content, footer) {
   
   document.getElementById('option-import')?.addEventListener('click', () => {
     wizardData.mode = 'import';
+    currentStep = 2;
+    renderStep();
+  });
+  
+  document.getElementById('option-job')?.addEventListener('click', () => {
+    wizardData.mode = 'job';
     currentStep = 2;
     renderStep();
   });
@@ -1127,6 +1212,272 @@ function buildResumeFromInterview() {
 }
 
 /**
+ * Render job input step for 'job' mode (Create for Job flow)
+ * This is a dedicated step where user enters the target job description
+ */
+function renderJobInputStep(content, footer) {
+  // Check if user has profile data
+  const hasProfileData = checkProfileHasData();
+  
+  if (!hasProfileData) {
+    // Show warning that profile is needed
+    content.innerHTML = `
+      <div class="onboarding-step job-input-step">
+        <div class="profile-warning">
+          <div class="warning-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <h2>Profile Needed</h2>
+          <p class="warning-description">
+            To create a tailored resume from a job description, we need your background information. 
+            Please fill out your profile first with your work experience, skills, and education.
+          </p>
+          <div class="warning-actions">
+            <button class="btn btn-primary" id="open-profile-btn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              Open My Profile
+            </button>
+          </div>
+          <p class="warning-hint">
+            After filling out your profile, come back here to create a tailored resume.
+          </p>
+        </div>
+      </div>
+    `;
+    
+    footer.innerHTML = `
+      <button class="btn btn-secondary" id="back-btn">Back</button>
+    `;
+    
+    document.getElementById('back-btn')?.addEventListener('click', () => {
+      currentStep = 1;
+      renderStep();
+    });
+    
+    document.getElementById('open-profile-btn')?.addEventListener('click', () => {
+      closeOnboardingWizard();
+      // Open profile panel
+      if (window.openUserProfilePanel) {
+        window.openUserProfilePanel();
+      }
+    });
+    
+    return;
+  }
+  
+  // User has profile data - show job input form
+  const existingJob = wizardData.targetJob || {};
+  const availableModels = getAvailableModelsForSelector();
+  const settings = getSettings();
+  const defaultModel = selectedModelForJobGeneration || settings.defaultModel || getDefaultModelId();
+  
+  content.innerHTML = `
+    <div class="onboarding-step job-input-step">
+      <div class="step-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="3"/>
+          <line x1="12" y1="2" x2="12" y2="5"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+          <line x1="2" y1="12" x2="5" y2="12"/>
+          <line x1="19" y1="12" x2="22" y2="12"/>
+        </svg>
+      </div>
+      <h2>Target Job Details</h2>
+      <p class="step-description">
+        Paste the job description below. AI will analyze it and create a resume from your profile 
+        that's perfectly tailored for this role.
+      </p>
+      
+      <div class="job-input-form">
+        <div class="input-row">
+          <div class="input-group">
+            <label for="job-title-input">Job Title</label>
+            <input 
+              type="text" 
+              id="job-title-input" 
+              class="job-input" 
+              placeholder="e.g. Senior Software Engineer"
+              value="${escapeHtml(existingJob.title || '')}"
+            >
+          </div>
+          <div class="input-group">
+            <label for="job-company-input">Company</label>
+            <input 
+              type="text" 
+              id="job-company-input" 
+              class="job-input" 
+              placeholder="e.g. Google"
+              value="${escapeHtml(existingJob.company || '')}"
+            >
+          </div>
+        </div>
+        
+        <div class="input-group">
+          <label for="job-desc-input">Job Description</label>
+          <textarea 
+            id="job-desc-input" 
+            class="job-textarea" 
+            placeholder="Paste the full job description here..."
+            rows="10"
+          >${escapeHtml(existingJob.description || '')}</textarea>
+        </div>
+        
+        <button class="paste-clipboard-btn" id="paste-clipboard-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          Paste from Clipboard
+        </button>
+        
+        <div class="job-model-selector">
+          <label for="job-model-select">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2a4 4 0 0 1 4 4c0 1.1-.9 2-2 2h-4a2 2 0 0 1-2-2 4 4 0 0 1 4-4z"/>
+              <path d="M12 8v8"/>
+              <path d="M8 12h8"/>
+              <circle cx="12" cy="20" r="2"/>
+            </svg>
+            AI Model
+          </label>
+          <select id="job-model-select" class="job-model-select">
+            ${availableModels.map(m => `
+              <option value="${m.id}" ${m.id === defaultModel ? 'selected' : ''}>
+                ${escapeHtml(m.label)}
+              </option>
+            `).join('')}
+          </select>
+        </div>
+      </div>
+      
+      <div class="job-input-benefits">
+        <div class="benefit-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>AI extracts key requirements and skills</span>
+        </div>
+        <div class="benefit-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>Resume tailored with matching keywords</span>
+        </div>
+        <div class="benefit-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>Experience prioritized for this role</span>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  footer.innerHTML = `
+    <button class="btn btn-secondary" id="back-btn">Back</button>
+    <button class="btn btn-primary" id="generate-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+      </svg>
+      Generate Resume
+    </button>
+  `;
+  
+  // Paste from clipboard
+  document.getElementById('paste-clipboard-btn')?.addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const textarea = document.getElementById('job-desc-input');
+      if (textarea && text) {
+        textarea.value = text;
+      }
+    } catch (err) {
+      console.error('Failed to read clipboard:', err);
+      alert('Unable to access clipboard. Please paste manually using Ctrl+V / Cmd+V.');
+    }
+  });
+  
+  // Navigation
+  document.getElementById('back-btn')?.addEventListener('click', () => {
+    // Save current input state
+    wizardData.targetJob = {
+      title: document.getElementById('job-title-input')?.value.trim() || '',
+      company: document.getElementById('job-company-input')?.value.trim() || '',
+      description: document.getElementById('job-desc-input')?.value.trim() || ''
+    };
+    currentStep = 1;
+    renderStep();
+  });
+  
+  // Generate resume
+  document.getElementById('generate-btn')?.addEventListener('click', async () => {
+    const title = document.getElementById('job-title-input')?.value.trim();
+    const company = document.getElementById('job-company-input')?.value.trim();
+    const description = document.getElementById('job-desc-input')?.value.trim();
+    
+    if (!description) {
+      alert('Please paste a job description');
+      return;
+    }
+    
+    // Save the job description
+    wizardData.targetJob = {
+      title: title || 'Target Role',
+      company: company || 'Company',
+      description
+    };
+    
+    // Also add to job descriptions list for future reference
+    wizardData.jobDescriptions = [wizardData.targetJob];
+    
+    // Get the selected model from dropdown
+    const modelSelect = document.getElementById('job-model-select');
+    const selectedModel = modelSelect?.value || getDefaultModelId();
+    selectedModelForJobGeneration = selectedModel; // Save for future use
+    
+    const btn = document.getElementById('generate-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="btn-spinner"></span> AI is creating your resume...';
+    }
+    
+    try {
+      // Generate resume from profile using selected model
+      if (!selectedModel) {
+        throw new Error('No AI model configured');
+      }
+      
+      console.log('[Onboarding] Using model:', selectedModel);
+      wizardData.parsedResume = await generateResumeFromProfileForJob(selectedModel, wizardData.targetJob);
+      console.log('[Onboarding] Generated resume from profile:', wizardData.parsedResume);
+      
+      // Skip the optional JD step (step 3) since we already have the JD
+      currentStep = 4; // Go directly to review step
+      renderStep();
+    } catch (error) {
+      console.error('[Onboarding] Failed to generate resume:', error);
+      alert('Failed to generate resume: ' + error.message);
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+          </svg>
+          Generate Resume
+        `;
+      }
+    }
+  });
+}
+
+/**
  * Render job description step
  */
 function renderJobDescriptionStep(content, footer) {
@@ -1474,15 +1825,38 @@ function renderReviewStep(content, footer) {
   
   // Navigation
   document.getElementById('back-btn')?.addEventListener('click', () => {
-    currentStep = 3; // Go back to job descriptions step
+    // For 'job' mode, go back to job input step; for others, go to job descriptions step
+    if (wizardData.mode === 'job') {
+      currentStep = 2; // Go back to job input step
+    } else {
+      currentStep = 3; // Go back to job descriptions step
+    }
     renderStep();
   });
   
   document.getElementById('next-btn')?.addEventListener('click', async () => {
+    // Save job descriptions for 'job' mode (since we skip step 3)
+    if (wizardData.mode === 'job' && wizardData.jobDescriptions.length > 0) {
+      for (const jd of wizardData.jobDescriptions) {
+        addJobDescription(jd);
+      }
+    }
+    
     // Save the resume as a new variant
     const resume = wizardData.parsedResume || {};
     const variantId = `custom-${Date.now()}`;
-    const baseName = resume.name || 'My Resume';
+    
+    // Generate variant name based on mode
+    let baseName;
+    if (wizardData.mode === 'job' && wizardData.targetJob) {
+      // For job-based resumes, use job title and company name
+      const jobTitle = wizardData.targetJob.title || 'Role';
+      const company = wizardData.targetJob.company || '';
+      baseName = company ? `${jobTitle} - ${company}` : jobTitle;
+    } else {
+      // For other modes, use the person's name
+      baseName = resume.name || 'My Resume';
+    }
     const variantName = generateUniqueVariantName(baseName);
     
     // Transform education from objects to strings if needed
@@ -1517,6 +1891,15 @@ function renderReviewStep(content, footer) {
         id: 'skills',
         title: 'Skills',
         content: [resume.skills.join(' • ')]
+      });
+    }
+    
+    // Add certifications as a section if present
+    if (resume.certifications && resume.certifications.length > 0) {
+      sections.push({
+        id: 'certifications',
+        title: 'Certifications',
+        content: resume.certifications.map(c => typeof c === 'string' ? c : c.name || c)
       });
     }
     
