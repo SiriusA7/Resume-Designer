@@ -289,14 +289,21 @@ ipcMain.handle('print-to-pdf', async (event, { defaultName, pageSize }) => {
     }
 
     // Generate PDF using Chromium's native PDF generation
+    // NOTE: pageSize dimensions are in INCHES for printToPDF (not microns!)
     const pdfOptions = {
-      marginsType: 0, // No margins (we handle margins in CSS)
-      printBackground: true,
-      printSelectionOnly: false,
+      printBackground: true,  // Required to print backgrounds/colors
       landscape: false,
-      // Use custom page size if provided, otherwise use Letter
-      pageSize: pageSize || { width: 8.5 * 25400, height: 11 * 25400 } // microns
+      margins: {
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0
+      },
+      // Custom page size in INCHES - defaults to Letter (8.5 x 11)
+      pageSize: pageSize || { width: 8.5, height: 11 }
     };
+
+    console.log('PDF Options:', JSON.stringify(pdfOptions, null, 2));
 
     const pdfData = await mainWindow.webContents.printToPDF(pdfOptions);
     

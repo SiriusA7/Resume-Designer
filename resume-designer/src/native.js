@@ -165,7 +165,7 @@ export async function getAppInfo() {
 /**
  * Generate PDF using native Electron printToPDF (Electron only)
  * @param {string} defaultName - Default filename for the PDF
- * @param {Object} pageSize - Optional page size {width, height} in microns
+ * @param {Object} pageSize - Optional page size {width, height} in INCHES
  * @returns {Promise<{success: boolean, filePath?: string, canceled?: boolean, error?: string}>}
  */
 export async function printToPdf(defaultName, pageSize = null) {

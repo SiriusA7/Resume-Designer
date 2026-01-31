@@ -1,12 +1,14 @@
 /* ==========================================================================
    Print Styles
    Optimized for PDF export and browser printing
+   
+   Note: Page size is controlled dynamically by Electron's printToPDF
+   to support variable-height resumes. Do not hardcode a fixed size here.
    ========================================================================== */
 
 @media print {
-  /* Reset page */
+  /* Reset page - no fixed size, let printToPDF control dimensions */
   @page {
-    size: letter;
     margin: 0;
   }
   
@@ -19,39 +21,79 @@
   .undo-redo-controls,
   .modal-overlay,
   .onboarding-overlay,
+  .chat-panel-toggle,
+  .structure-panel-toggle,
   #download-pdf {
     display: none !important;
   }
   
-  /* Reset layout */
+  /* Reset layout - CRITICAL: Remove all flex, overflow, and positioning that can hide content */
   html, body {
-    height: auto;
-    background: white;
-    margin: 0;
-    padding: 0;
+    height: auto !important;
+    width: auto !important;
+    overflow: visible !important;
+    background: white !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
   
   .app {
-    display: block;
+    display: block !important;
+    height: auto !important;
+    width: auto !important;
+    overflow: visible !important;
+  }
+  
+  .app-content {
+    display: block !important;
+    height: auto !important;
+    width: auto !important;
+    overflow: visible !important;
   }
   
   .preview-area {
-    padding: 0;
-    display: block;
+    display: block !important;
+    padding: 0 !important;
+    height: auto !important;
+    width: auto !important;
+    overflow: visible !important;
+    position: static !important;
+  }
+  
+  /* CRITICAL: Reset the scroll container - this is what was hiding content */
+  .resume-scroller {
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    height: auto !important;
+    width: auto !important;
+    overflow: visible !important;
+    position: static !important;
   }
   
   .resume-container {
-    max-width: none;
-    box-shadow: none;
-    border-radius: 0;
+    display: block !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
     transform: none !important;
+    position: static !important;
   }
   
   .resume {
-    margin: 0 auto;
-    padding: 0;
-    background: white;
-    box-shadow: none;
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 8.5in !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+    box-shadow: none !important;
+    position: static !important;
   }
   
   /* Ensure colors print */
