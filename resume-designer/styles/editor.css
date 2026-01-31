@@ -179,12 +179,22 @@
 [data-editable] {
   cursor: text;
   border-radius: 2px;
-  transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
-  position: relative;
+  transition: background-color var(--transition-fast);
+  position: relative !important; /* Ensure this is always applied to prevent layout shift */
+  box-sizing: border-box;
+  /* Isolate layout to prevent hover from affecting siblings */
+  isolation: isolate;
 }
 
 [data-editable]:hover {
   background-color: rgba(196, 92, 62, 0.08);
+}
+
+/* Ensure highlight bullets inside editable elements don't shift */
+[data-editable] .highlight-bullet {
+  display: block;
+  position: relative;
+  box-sizing: border-box;
 }
 
 [data-editable].editing {
@@ -202,11 +212,17 @@
 
 /* AI Chat Button and Menu on Hover */
 .editable-ai-container {
-  position: absolute;
-  top: -12px;
-  right: -12px;
+  position: fixed; /* Fixed positioning to avoid modifying editable element DOM */
   z-index: 9999; /* High z-index to stay above highlighted elements */
   padding: 4px; /* Extra padding for easier hover */
+  pointer-events: none; /* Hidden by default */
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.editable-ai-container.visible {
+  pointer-events: auto;
+  opacity: 1;
 }
 
 .editable-ai-btn {

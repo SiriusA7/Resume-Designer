@@ -69,9 +69,11 @@ export function initInlineEditor() {
 
 // Create the AI chat button element with dropdown menu
 function createAIButton() {
-  // Create container for the button
+  // Create container for the button - append to body with fixed positioning
+  // This prevents DOM changes to editable elements which cause layout shifts
   const container = document.createElement('div');
   container.className = 'editable-ai-container';
+  container.id = 'editable-ai-container';
   
   aiButton = document.createElement('button');
   aiButton.className = 'editable-ai-btn';
@@ -89,6 +91,8 @@ function createAIButton() {
   document.body.appendChild(aiMenu);
   
   container.appendChild(aiButton);
+  // Append container to body (not to editable elements) to prevent layout shifts
+  document.body.appendChild(container);
   
   // Handle AI button click - show menu
   aiButton.addEventListener('click', (e) => {
@@ -608,9 +612,11 @@ function showAIButton(element) {
     `;
   }
   
-  // Append to the element
-  element.style.position = 'relative';
-  element.appendChild(container);
+  // Position the container using fixed positioning (no DOM changes to element)
+  const rect = element.getBoundingClientRect();
+  container.style.top = `${rect.top - 8}px`;
+  container.style.left = `${rect.right - 8}px`;
+  container.classList.add('visible');
 }
 
 // Hide the AI button
@@ -618,7 +624,7 @@ function hideAIButton() {
   if (!aiButton) return;
   
   const container = aiButton.container || aiButton;
-  container.remove();
+  container.classList.remove('visible');
   hideAIMenu();
 }
 
@@ -723,12 +729,6 @@ function finishEditing(element) {
   if (!element || !element.isContentEditable) return;
   
   const path = element.dataset.editable;
-  
-  // Remove AI button container before reading text content (it would be included otherwise)
-  const aiContainer = element.querySelector('.editable-ai-container');
-  if (aiContainer) {
-    aiContainer.remove();
-  }
   
   // Extract value, handling special cases for skill tags and highlight bullets
   let newValue = extractEditedValue(element, path);
