@@ -58,13 +58,28 @@ export function applySpacingSettings(settings) {
   // Sidebar width
   resume.style.setProperty('--sidebar-width', `${s.sidebarWidth}in`);
   
-  // Font scale
-  resume.style.setProperty('--font-scale', s.fontScale);
-  resume.style.fontSize = `calc(9pt * ${s.fontScale})`;
+  // Font scale - set CSS variable for elements using it
+  resume.style.setProperty('--font-scale', s.fontScale.toString());
   
   // Line height
-  resume.style.setProperty('--line-height', s.lineHeight);
-  resume.style.lineHeight = s.lineHeight;
+  resume.style.setProperty('--line-height', s.lineHeight.toString());
+  
+  // Apply font scale directly to sidebar content elements
+  const sidebarElements = resume.querySelectorAll('.sidebar-content, .sidebar-skills, .stacked-skill-content');
+  sidebarElements.forEach(el => {
+    const isCompact = el.closest('.compact-sidebar');
+    const isStacked = el.classList.contains('stacked-skill-content');
+    const baseSize = isCompact ? 0.68 : (isStacked ? 0.8 : 0.78);
+    el.style.fontSize = `${(baseSize * s.fontScale).toFixed(3)}rem`;
+  });
+  
+  // Also apply to skill tags directly for maximum reliability
+  const skillTags = resume.querySelectorAll('.skill-tag, .highlight-bullet');
+  skillTags.forEach(el => {
+    const isCompact = el.closest('.compact-sidebar');
+    const baseSize = isCompact ? 0.68 : 0.78;
+    el.style.fontSize = `${(baseSize * s.fontScale).toFixed(3)}rem`;
+  });
 }
 
 /**

@@ -14,7 +14,8 @@ import {
   initPersistence,
   importFile,
   exportAsJSON,
-  exportAsMarkdown
+  exportAsMarkdown,
+  generateUniqueVariantName
 } from './persistence.js';
 import { store, generateId, EMPTY_RESUME } from './store.js';
 
@@ -86,7 +87,8 @@ export function duplicateVariant() {
   const current = variants[currentVariantId];
   
   if (current) {
-    const newName = `${current.name} (Copy)`;
+    const baseName = `${current.name} (Copy)`;
+    const newName = generateUniqueVariantName(baseName, variants);
     const newData = JSON.parse(JSON.stringify(current.data));
     return createVariant(newName, newData);
   }
@@ -160,14 +162,17 @@ export function exportCurrentVariant(format = 'json') {
 }
 
 // Render the header bar
-function renderHeaderBar() {
+export function renderHeaderBar() {
   const container = document.getElementById('header-bar');
   if (!container) return;
   
   const variants = getVariants();
-  const variantList = Object.values(variants).sort((a, b) => 
-    a.name.localeCompare(b.name)
-  );
+  const variantList = Object.values(variants).sort((a, b) => {
+    // Sort by most recently modified first
+    const dateA = a.updatedAt || a.createdAt || '';
+    const dateB = b.updatedAt || b.createdAt || '';
+    return dateB.localeCompare(dateA);
+  });
   
   const currentVariant = variants[currentVariantId];
   const currentName = currentVariant?.name || 'Select Resume';
@@ -192,7 +197,10 @@ function renderHeaderBar() {
               <svg class="check-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-              ${escapeHtml(v.name)}
+              <span class="variant-info">
+                <span class="variant-name">${escapeHtml(v.name)}</span>
+                ${v.updatedAt ? `<span class="variant-date">${formatDate(v.updatedAt)}</span>` : ''}
+              </span>
             </button>
           `).join('')}
         </div>
@@ -239,6 +247,13 @@ function renderHeaderBar() {
           </svg>
         </button>
         <div class="header-tools-menu" id="header-tools-menu">
+          <button class="header-tools-option" id="btn-user-profile">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            User Profile
+          </button>
           <button class="header-tools-option" id="btn-job-descriptions">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -441,6 +456,14 @@ function setupHeaderEventListeners() {
       }
     }
     
+    // User Profile
+    if (target.id === 'btn-user-profile') {
+      document.getElementById('header-tools-menu')?.classList.remove('show');
+      if (window.openUserProfilePanel) {
+        window.openUserProfilePanel();
+      }
+    }
+    
     // Job Descriptions
     if (target.id === 'btn-job-descriptions') {
       document.getElementById('header-tools-menu')?.classList.remove('show');
@@ -498,6 +521,28 @@ function setupHeaderEventListeners() {
       document.getElementById('header-tools-menu')?.classList.remove('show');
     }
   });
+}
+
+// Format a date for display (relative or absolute)
+function formatDate(isoString) {
+  if (!isoString) return '';
+  
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) {
+    // Today - show time
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  } else if (diffDays === 1) {
+    return 'Yesterday';
+  } else if (diffDays < 7) {
+    return `${diffDays} days ago`;
+  } else {
+    // Show date
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
 }
 
 // HTML escape utility

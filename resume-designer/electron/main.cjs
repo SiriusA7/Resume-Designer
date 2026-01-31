@@ -274,3 +274,38 @@ ipcMain.handle('check-for-updates', async () => {
     return { checking: false, error: error.message };
   }
 });
+
+// Generate PDF using native Electron printToPDF
+ipcMain.handle('print-to-pdf', async (event, { defaultName, pageSize }) => {
+  try {
+    // Show save dialog first
+    const saveResult = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: defaultName || 'Resume.pdf',
+      filters: [{ name: 'PDF Documents', extensions: ['pdf'] }]
+    });
+
+    if (saveResult.canceled || !saveResult.filePath) {
+      return { success: false, canceled: true };
+    }
+
+    // Generate PDF using Chromium's native PDF generation
+    const pdfOptions = {
+      marginsType: 0, // No margins (we handle margins in CSS)
+      printBackground: true,
+      printSelectionOnly: false,
+      landscape: false,
+      // Use custom page size if provided, otherwise use Letter
+      pageSize: pageSize || { width: 8.5 * 25400, height: 11 * 25400 } // microns
+    };
+
+    const pdfData = await mainWindow.webContents.printToPDF(pdfOptions);
+    
+    // Write to file
+    fs.writeFileSync(saveResult.filePath, pdfData);
+    
+    return { success: true, filePath: saveResult.filePath };
+  } catch (error) {
+    console.error('PDF generation error:', error);
+    return { success: false, error: error.message };
+  }
+});

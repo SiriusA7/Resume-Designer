@@ -19,7 +19,21 @@ const DEFAULT_STORAGE = {
     anthropicKey: '',
     openaiKey: '',
     geminiKey: '',
-    defaultModel: 'anthropic:claude-sonnet-4-5-20251022'
+    defaultModel: 'anthropic:claude-sonnet-4-5',
+    chatPanelWidth: 320
+  },
+  userProfile: {
+    personalSummary: '',
+    careerGoals: '',
+    workExperience: [],
+    skills: [],
+    education: [],
+    projects: [],
+    certifications: [],
+    achievements: [],
+    industryKnowledge: '',
+    preferences: '',
+    customSections: []
   }
 };
 
@@ -69,13 +83,54 @@ export function setCurrentVariantId(id) {
 // Save a variant
 export function saveVariant(id, name, data) {
   const storage = loadFromStorage();
+  const existingVariant = storage.variants[id];
+  const now = new Date().toISOString();
+  
   storage.variants[id] = {
     id,
     name,
     data,
-    updatedAt: new Date().toISOString()
+    createdAt: existingVariant?.createdAt || now, // Preserve original creation time
+    updatedAt: now
   };
   saveToStorage(storage);
+}
+
+// Generate a unique variant name based on the person's name
+export function generateUniqueVariantName(baseName, variants = null) {
+  if (!variants) {
+    variants = getVariants();
+  }
+  
+  const variantList = Object.values(variants);
+  const baseNameLower = baseName.toLowerCase().trim();
+  
+  // Find all variants with names starting with the base name
+  const matchingNames = variantList
+    .map(v => v.name.toLowerCase())
+    .filter(name => name === baseNameLower || name.startsWith(baseNameLower + ' ('));
+  
+  if (matchingNames.length === 0) {
+    return baseName;
+  }
+  
+  // Find the next available number
+  let maxNum = 1;
+  const numPattern = /\((\d+)\)$/;
+  
+  for (const name of matchingNames) {
+    const match = name.match(numPattern);
+    if (match) {
+      maxNum = Math.max(maxNum, parseInt(match[1], 10));
+    }
+  }
+  
+  // If base name exists without a number, start at 2
+  if (matchingNames.includes(baseNameLower)) {
+    return `${baseName} (${maxNum + 1})`;
+  }
+  
+  return `${baseName} (${maxNum + 1})`;
 }
 
 // Delete a variant
@@ -114,6 +169,24 @@ export function saveSettings(settings) {
 export function getSettings() {
   const storage = loadFromStorage();
   return storage.settings || DEFAULT_STORAGE.settings;
+}
+
+// Get user profile
+export function getUserProfile() {
+  const storage = loadFromStorage();
+  const profile = storage.userProfile || DEFAULT_STORAGE.userProfile;
+  console.log('[Persistence] getUserProfile returning:', profile);
+  return profile;
+}
+
+// Save user profile
+export function saveUserProfile(profile) {
+  console.log('[Persistence] saveUserProfile called with:', profile);
+  const storage = loadFromStorage();
+  storage.userProfile = { ...DEFAULT_STORAGE.userProfile, ...profile };
+  console.log('[Persistence] Saving userProfile:', storage.userProfile);
+  const success = saveToStorage(storage);
+  console.log('[Persistence] Save success:', success);
 }
 
 // Initialize persistence - connect store to auto-save
@@ -302,12 +375,14 @@ export async function migrateBuiltInVariants(variants) {
         const markdown = await response.text();
         const data = parseResume(markdown);
         const id = generateId('variant');
+        const now = new Date().toISOString();
         storage.variants[id] = {
           id,
           name: variant.name,
           data,
           builtIn: true,
-          updatedAt: new Date().toISOString()
+          createdAt: now,
+          updatedAt: now
         };
         
         // Set first as current

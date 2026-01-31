@@ -1,0 +1,600 @@
+/**
+ * User Profile Panel Styles
+ */
+
+/* ============================================
+   Panel Overlay
+   ============================================ */
+
+.profile-panel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+}
+
+.profile-panel-overlay.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.profile-panel {
+  background: var(--color-panel-bg);
+  border-radius: 12px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  width: 90%;
+  max-width: 700px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  transform: scale(0.95) translateY(10px);
+  transition: transform 0.2s;
+}
+
+.profile-panel-overlay.show .profile-panel {
+  transform: scale(1) translateY(0);
+}
+
+/* ============================================
+   Panel Header
+   ============================================ */
+
+.profile-panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.profile-panel-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.profile-panel-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.profile-panel-subtitle {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.profile-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.profile-import-btn,
+.profile-export-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.profile-import-btn:hover,
+.profile-export-btn:hover {
+  background: var(--color-hover);
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
+}
+
+.profile-import-btn svg,
+.profile-export-btn svg {
+  flex-shrink: 0;
+}
+
+.profile-ai-interview-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--color-accent);
+  border: none;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: white;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.profile-ai-interview-btn:hover {
+  filter: brightness(1.1);
+}
+
+.profile-ai-interview-btn svg {
+  flex-shrink: 0;
+}
+
+.profile-panel-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+}
+
+.profile-panel-close:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+/* Save indicator */
+.save-indicator {
+  position: absolute;
+  top: 18px;
+  right: 56px;
+  font-size: 12px;
+  color: var(--color-accent);
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: all 0.2s;
+}
+
+.save-indicator.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Import success indicator */
+.import-indicator {
+  position: absolute;
+  bottom: -28px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+  padding: 6px 12px;
+  border-radius: 0 0 8px 8px;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: all 0.3s;
+}
+
+.import-indicator.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ============================================
+   Tabs
+   ============================================ */
+
+.profile-panel-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.profile-panel-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.profile-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.profile-tab:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.profile-tab.active {
+  background: var(--color-accent);
+  color: white;
+}
+
+.profile-tab svg {
+  flex-shrink: 0;
+}
+
+/* ============================================
+   Panel Content
+   ============================================ */
+
+.profile-panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.profile-section {
+  margin-bottom: 24px;
+}
+
+.profile-section:last-child {
+  margin-bottom: 0;
+}
+
+.profile-section-header {
+  margin-bottom: 12px;
+}
+
+.profile-section-header h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.profile-section-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+/* ============================================
+   Form Elements
+   ============================================ */
+
+.profile-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  transition: border-color 0.15s;
+}
+
+.profile-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.profile-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.profile-input.small {
+  width: 80px;
+  flex-shrink: 0;
+}
+
+.profile-textarea {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
+  transition: border-color 0.15s;
+}
+
+.profile-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.profile-textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+.profile-select {
+  padding: 10px 14px;
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  cursor: pointer;
+  min-width: 120px;
+  transition: border-color 0.15s;
+}
+
+.profile-select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+/* ============================================
+   Items List
+   ============================================ */
+
+.profile-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.profile-empty {
+  text-align: center;
+  padding: 32px 20px;
+  background: var(--color-bg);
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-muted);
+}
+
+.profile-empty.small {
+  padding: 16px;
+}
+
+.profile-empty p {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.profile-empty span {
+  font-size: 13px;
+}
+
+/* ============================================
+   Profile Item
+   ============================================ */
+
+.profile-item {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profile-item.compact {
+  padding: 10px 14px;
+  gap: 0;
+}
+
+.profile-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-item-title {
+  font-weight: 500;
+}
+
+.profile-item-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-item-row .profile-input {
+  flex: 1;
+}
+
+.profile-item-delete,
+.profile-item-delete-small {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.profile-item-delete-small {
+  width: 28px;
+  height: 28px;
+}
+
+.profile-item-delete:hover,
+.profile-item-delete-small:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+/* ============================================
+   Skills Grid
+   ============================================ */
+
+.profile-skills-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.profile-skill-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.profile-skill-item .skill-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-skill-item .skill-level {
+  width: 130px;
+  flex-shrink: 0;
+}
+
+.profile-skill-item .skill-years {
+  width: 70px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.profile-skill-delete {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.profile-skill-delete:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+/* ============================================
+   Add Button
+   ============================================ */
+
+.profile-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.profile-add-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: rgba(196, 92, 62, 0.03);
+}
+
+.profile-add-btn.small {
+  padding: 10px;
+  font-size: 13px;
+}
+
+/* ============================================
+   Responsive
+   ============================================ */
+
+@media (max-width: 768px) {
+  .profile-panel {
+    width: 95%;
+    max-height: 90vh;
+  }
+  
+  .profile-panel-tabs {
+    padding: 10px 16px;
+  }
+  
+  .profile-tab {
+    padding: 8px 12px;
+  }
+  
+  .profile-tab span {
+    display: none;
+  }
+  
+  .profile-panel-content {
+    padding: 16px;
+  }
+  
+  .profile-skill-item {
+    flex-wrap: wrap;
+  }
+  
+  .profile-skill-item .skill-name {
+    flex: 1 0 100%;
+    order: 1;
+  }
+  
+  .profile-skill-item .skill-level {
+    flex: 1;
+    order: 2;
+  }
+  
+  .profile-skill-item .skill-years {
+    width: 60px;
+    order: 3;
+  }
+  
+  .profile-skill-delete {
+    order: 4;
+  }
+  
+  .profile-item-row {
+    flex-wrap: wrap;
+  }
+  
+  .profile-item-row .profile-input {
+    flex: 1 0 calc(100% - 40px);
+  }
+  
+  .profile-item-row .profile-input.small {
+    flex: 0 0 70px;
+  }
+}

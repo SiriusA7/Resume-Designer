@@ -3,8 +3,10 @@
  * Unified interface for Anthropic, OpenAI, and Gemini APIs
  */
 
-import { getSettings } from './persistence.js';
+import { getSettings, getUserProfile, saveUserProfile } from './persistence.js';
 import { store } from './store.js';
+import { getActiveJobDescriptions } from './jobDescriptions.js';
+import { trackUsage } from './tokenTrackingService.js';
 
 // API Endpoints
 const ENDPOINTS = {
@@ -130,7 +132,22 @@ When analyzing:
 2. Compare against the resume content
 3. Calculate a match score (0-100)
 4. Identify gaps and missing keywords
-5. Provide specific, actionable recommendations
+5. Provide specific, actionable recommendations with impact ratings
+
+For each recommendation, assess its potential IMPACT on improving resume fit:
+- "high": Critical changes that address major keyword gaps, missing required skills, or significantly improve ATS match rate
+- "medium": Important improvements that enhance relevance but aren't critical requirements
+- "low": Nice-to-have optimizations that provide marginal improvements
+
+Order recommendations by impact (high first, then medium, then low).
+
+If user background information is provided, use it to suggest more personalized and accurate improvements based on their actual experience and skills.
+
+IMPORTANT for recommendations:
+- For MODIFYING existing content: set "current" to the exact text being replaced
+- For ADDING new content (new bullet points, skills, etc.): set "current" to "N/A" or "Add new"
+- For adding bullets to experience: use section name like "Experience - [Company Name]" or "Experience bullet"
+- For adding skills: use section name "Skills"
 
 Respond in the following JSON format:
 {
@@ -142,9 +159,74 @@ Respond in the following JSON format:
   ],
   "strengths": ["Strong experience in Y", "Good quantified achievements"],
   "recommendations": [
-    {"section": "summary", "current": "current text", "suggested": "improved text", "reason": "why this change helps"}
+    {
+      "section": "summary",
+      "current": "current text to replace (or 'N/A' if adding new)",
+      "suggested": "improved or new text",
+      "reason": "why this change helps",
+      "impact": "high",
+      "impactReason": "Addresses critical keyword gap for required skill"
+    }
   ]
 }`;
+
+// System prompt for profile interview
+const PROFILE_INTERVIEW_PROMPT = `You are a friendly career coach conducting an interview to learn about someone's professional background. Your goal is to gather detailed information that will help create better resumes.
+
+Interview Guidelines:
+1. Be conversational and encouraging
+2. Ask follow-up questions to get specific details (numbers, technologies, impact)
+3. Cover these areas naturally: career goals, work experience details, skills, education, projects, achievements
+4. Don't ask all questions at once - have a natural back-and-forth conversation
+5. When you have enough information, offer to summarize what you've learned
+
+Start by introducing yourself briefly and asking about their current role or what kind of work they're looking for.`;
+
+// System prompt for extracting profile data from conversation
+const PROFILE_EXTRACTION_PROMPT = `Extract structured profile information from the following conversation. Return ONLY valid JSON with no markdown formatting.
+
+The JSON structure should be:
+{
+  "personalSummary": "A 2-3 sentence professional summary based on what was discussed",
+  "careerGoals": "Their stated career goals and what they're looking for",
+  "workExperience": [
+    {
+      "title": "Job Title",
+      "company": "Company Name",
+      "dates": "Date range if mentioned",
+      "details": "Detailed description of responsibilities, achievements, technologies used, team size, impact"
+    }
+  ],
+  "skills": [
+    {"name": "Skill Name", "proficiency": "beginner|intermediate|advanced|expert", "years": "X"}
+  ],
+  "education": [
+    {
+      "degree": "Degree/Program",
+      "institution": "School Name",
+      "dates": "Year or date range",
+      "details": "Notable courses, projects, honors"
+    }
+  ],
+  "projects": [
+    {"name": "Project Name", "url": "", "description": "Description of the project"}
+  ],
+  "certifications": [
+    {"name": "Certification Name", "year": "Year"}
+  ],
+  "achievements": [
+    {"description": "Achievement description"}
+  ],
+  "industryKnowledge": "Domains, methodologies, tools they're familiar with",
+  "preferences": "Work preferences, industries of interest, location preferences"
+}
+
+Rules:
+1. Only include fields where information was actually discussed
+2. Use empty arrays [] for sections with no information
+3. Be specific and detailed based on what was shared
+4. Infer proficiency levels from context clues
+5. Output ONLY the JSON, no explanation`;
 
 // Get the API key for a provider
 function getApiKey(provider) {
@@ -179,20 +261,216 @@ export function getDefaultModelId() {
     return 'anthropic:claude-sonnet-4-5';
   }
   if (providers.includes('openai')) {
-    return 'openai:gpt-4o';
+    return 'openai:gpt-5.2';
   }
   if (providers.includes('gemini')) {
-    return 'gemini:gemini-2.0-flash';
+    return 'gemini:gemini-3-flash';
   }
   return null;
+}
+
+// Validate and migrate a model ID - returns valid model ID or fallback
+export function validateModelId(modelId) {
+  // If model exists in config, use it
+  if (MODELS[modelId]) {
+    return modelId;
+  }
+  
+  // Try to find a fallback based on the provider
+  const provider = modelId?.split(':')[0];
+  if (provider && isProviderConfigured(provider)) {
+    // Return default model for this provider
+    const fallbacks = {
+      'anthropic': 'anthropic:claude-sonnet-4-5',
+      'openai': 'openai:gpt-5.2',
+      'gemini': 'gemini:gemini-3-flash'
+    };
+    console.warn(`Model "${modelId}" not found, falling back to ${fallbacks[provider]}`);
+    return fallbacks[provider];
+  }
+  
+  // Return any available default
+  return getDefaultModelId();
+}
+
+// Get list of available model IDs
+export function getAvailableModelIds() {
+  return Object.keys(MODELS);
+}
+
+// Check if user profile has meaningful content
+function isProfileEmpty(profile) {
+  if (!profile) return true;
+  
+  // Check text fields
+  const textFields = ['personalSummary', 'careerGoals', 'preferences', 'industryKnowledge'];
+  for (const field of textFields) {
+    if (profile[field] && profile[field].trim().length > 0) return false;
+  }
+  
+  // Check array fields
+  const arrayFields = ['workExperience', 'skills', 'education', 'projects', 'certifications', 'achievements', 'customSections'];
+  for (const field of arrayFields) {
+    if (profile[field] && profile[field].length > 0) return false;
+  }
+  
+  return true;
+}
+
+// Get user profile context for AI
+function getUserProfileContext() {
+  const profile = getUserProfile();
+  console.log('[AI Context] User profile loaded:', profile);
+  
+  if (!profile || isProfileEmpty(profile)) {
+    console.log('[AI Context] User profile is empty or null');
+    return '';
+  }
+  
+  console.log('[AI Context] User profile has content, building context...');
+  
+  let context = `## User Background Information\n\n`;
+  context += `The following is detailed background information about the user that should inform your resume suggestions:\n\n`;
+  
+  if (profile.personalSummary && profile.personalSummary.trim()) {
+    context += `### Personal Summary\n${profile.personalSummary.trim()}\n\n`;
+  }
+  
+  if (profile.careerGoals && profile.careerGoals.trim()) {
+    context += `### Career Goals\n${profile.careerGoals.trim()}\n\n`;
+  }
+  
+  if (profile.preferences && profile.preferences.trim()) {
+    context += `### Preferences\n${profile.preferences.trim()}\n\n`;
+  }
+  
+  if (profile.workExperience && profile.workExperience.length > 0) {
+    context += `### Detailed Work Experience\n`;
+    for (const exp of profile.workExperience) {
+      if (exp.title || exp.company) {
+        context += `\n**${exp.title || 'Untitled'}** at ${exp.company || 'Unknown Company'}`;
+        if (exp.dates) context += ` (${exp.dates})`;
+        context += `\n`;
+        if (exp.details) context += `${exp.details}\n`;
+      }
+    }
+    context += '\n';
+  }
+  
+  if (profile.skills && profile.skills.length > 0) {
+    context += `### Skills Inventory\n`;
+    for (const skill of profile.skills) {
+      if (skill.name) {
+        let skillLine = `- ${skill.name}`;
+        if (skill.proficiency) skillLine += ` (${skill.proficiency})`;
+        if (skill.years) skillLine += ` - ${skill.years} years`;
+        context += skillLine + '\n';
+      }
+    }
+    context += '\n';
+  }
+  
+  if (profile.industryKnowledge && profile.industryKnowledge.trim()) {
+    context += `### Industry Knowledge\n${profile.industryKnowledge.trim()}\n\n`;
+  }
+  
+  if (profile.education && profile.education.length > 0) {
+    context += `### Education Details\n`;
+    for (const edu of profile.education) {
+      if (edu.degree || edu.institution) {
+        context += `\n**${edu.degree || 'Unknown Degree'}** - ${edu.institution || 'Unknown Institution'}`;
+        if (edu.dates) context += ` (${edu.dates})`;
+        context += `\n`;
+        if (edu.details) context += `${edu.details}\n`;
+      }
+    }
+    context += '\n';
+  }
+  
+  if (profile.projects && profile.projects.length > 0) {
+    context += `### Projects & Portfolio\n`;
+    for (const proj of profile.projects) {
+      if (proj.name) {
+        context += `\n**${proj.name}**`;
+        if (proj.url) context += ` (${proj.url})`;
+        context += `\n`;
+        if (proj.description) context += `${proj.description}\n`;
+      }
+    }
+    context += '\n';
+  }
+  
+  if (profile.certifications && profile.certifications.length > 0) {
+    context += `### Certifications\n`;
+    for (const cert of profile.certifications) {
+      if (cert.name) {
+        context += `- ${cert.name}`;
+        if (cert.year) context += ` (${cert.year})`;
+        context += '\n';
+      }
+    }
+    context += '\n';
+  }
+  
+  if (profile.achievements && profile.achievements.length > 0) {
+    context += `### Achievements\n`;
+    for (const ach of profile.achievements) {
+      if (ach.description) {
+        context += `- ${ach.description}\n`;
+      }
+    }
+    context += '\n';
+  }
+  
+  if (profile.customSections && profile.customSections.length > 0) {
+    for (const section of profile.customSections) {
+      if (section.title && section.content) {
+        context += `### ${section.title}\n${section.content}\n\n`;
+      }
+    }
+  }
+  
+  return context;
+}
+
+// Get active job descriptions context for AI
+function getJobDescriptionsContext() {
+  try {
+    const activeJDs = getActiveJobDescriptions();
+    if (!activeJDs || activeJDs.length === 0) return '';
+    
+    let context = `## Target Job Descriptions\n\n`;
+    context += `The user is targeting the following job(s). Use this information to make suggestions more relevant:\n\n`;
+    
+    for (const jd of activeJDs) {
+      context += `### ${jd.title} at ${jd.company}\n`;
+      context += `${jd.description}\n\n`;
+    }
+    
+    console.log('[AI Context] Job descriptions included:', activeJDs.length);
+    return context;
+  } catch (e) {
+    // jobDescriptions module may not be initialized yet
+    console.log('[AI Context] Job descriptions not available:', e.message);
+    return '';
+  }
 }
 
 // Get resume context for AI
 function getResumeContext() {
   const data = store.getData();
-  if (!data) return 'No resume is currently loaded.';
   
-  let context = `Current Resume:\n\n`;
+  // Start with user profile context (if available)
+  let context = getUserProfileContext();
+  
+  // Add active job descriptions context (if any)
+  context += getJobDescriptionsContext();
+  
+  if (!data) {
+    return context + '\nNo resume is currently loaded.';
+  }
+  
+  context += `## Current Resume\n\n`;
   context += `Name: ${data.name}\n`;
   context += `Title: ${data.tagline}\n\n`;
   
@@ -295,6 +573,19 @@ async function callAnthropic(modelConfig, messages, apiKey, options = {}) {
   
   const data = await response.json();
   
+  // Track token usage
+  if (data.usage) {
+    trackUsage({
+      provider: 'anthropic',
+      model: modelConfig.model,
+      feature: options.feature || 'chat',
+      inputTokens: data.usage.input_tokens || 0,
+      outputTokens: data.usage.output_tokens || 0,
+      cacheRead: data.usage.cache_read_input_tokens || 0,
+      cacheCreation: data.usage.cache_creation_input_tokens || 0
+    });
+  }
+  
   // Handle response with extended thinking or tool use (may have multiple content blocks)
   if (Array.isArray(data.content)) {
     // Extract thinking/reasoning summary if present
@@ -340,9 +631,15 @@ const OPENAI_SEARCH_MODELS = {
   'gpt-4o-mini': 'gpt-4o-mini-search-preview'
 };
 
-// Call OpenAI API (Chat Completions for most models)
+// Call OpenAI API (routes to appropriate endpoint based on model)
 async function callOpenAI(modelConfig, messages, apiKey, options = {}) {
   const { reasoningEffort, webSearch } = options;
+  
+  // GPT-5.x models require the Responses API (not Chat Completions)
+  const isGpt5 = modelConfig.model.startsWith('gpt-5');
+  if (isGpt5) {
+    return callOpenAIResponses(modelConfig, messages, apiKey, options);
+  }
   
   // Determine which model to use
   let modelToUse = modelConfig.model;
@@ -352,26 +649,34 @@ async function callOpenAI(modelConfig, messages, apiKey, options = {}) {
     modelToUse = OPENAI_SEARCH_MODELS[modelConfig.model];
   }
   
-  // Check if we should use the Responses API (for GPT-5 with web search)
-  const isGpt5 = modelConfig.model.startsWith('gpt-5');
-  if (isGpt5 && webSearch) {
-    return callOpenAIResponses(modelConfig, messages, apiKey, options);
-  }
+  // Check if this is an o1 reasoning model (uses 'developer' role instead of 'system')
+  const isO1Model = modelConfig.model.startsWith('o1');
+  
+  // Build messages array - o1 models use 'developer' role instead of 'system'
+  const apiMessages = isO1Model 
+    ? [
+        { role: 'developer', content: SYSTEM_PROMPT },
+        ...messages.map(m => ({
+          role: m.role,
+          content: m.content
+        }))
+      ]
+    : [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...messages.map(m => ({
+          role: m.role,
+          content: m.content
+        }))
+      ];
   
   const requestBody = {
     model: modelToUse,
     max_completion_tokens: modelConfig.maxTokens,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...messages.map(m => ({
-        role: m.role,
-        content: m.content
-      }))
-    ]
+    messages: apiMessages
   };
   
-  // Add reasoning_effort for reasoning-capable models (GPT-5.x)
-  if (reasoningEffort && OPENAI_REASONING_EFFORT[reasoningEffort] && isGpt5) {
+  // Add reasoning_effort for o1 models
+  if (reasoningEffort && OPENAI_REASONING_EFFORT[reasoningEffort] && isO1Model) {
     requestBody.reasoning_effort = OPENAI_REASONING_EFFORT[reasoningEffort];
   }
   
@@ -390,6 +695,18 @@ async function callOpenAI(modelConfig, messages, apiKey, options = {}) {
   }
   
   const data = await response.json();
+  
+  // Track token usage
+  if (data.usage) {
+    trackUsage({
+      provider: 'openai',
+      model: modelToUse,
+      feature: options.feature || 'chat',
+      inputTokens: data.usage.prompt_tokens || 0,
+      outputTokens: data.usage.completion_tokens || 0
+    });
+  }
+  
   return data.choices[0].message.content;
 }
 
@@ -440,6 +757,17 @@ async function callOpenAIResponses(modelConfig, messages, apiKey, options = {}) 
   }
   
   const data = await response.json();
+  
+  // Track token usage
+  if (data.usage) {
+    trackUsage({
+      provider: 'openai',
+      model: modelConfig.model,
+      feature: options.feature || 'chat',
+      inputTokens: data.usage.input_tokens || data.usage.prompt_tokens || 0,
+      outputTokens: data.usage.output_tokens || data.usage.completion_tokens || 0
+    });
+  }
   
   // Responses API returns output differently
   // Look for the message output item
@@ -508,6 +836,18 @@ async function callGemini(modelConfig, messages, apiKey, options = {}) {
   }
   
   const data = await response.json();
+  
+  // Track token usage (Gemini returns usage in usageMetadata)
+  if (data.usageMetadata) {
+    trackUsage({
+      provider: 'gemini',
+      model: modelConfig.model,
+      feature: options.feature || 'chat',
+      inputTokens: data.usageMetadata.promptTokenCount || 0,
+      outputTokens: data.usageMetadata.candidatesTokenCount || 0
+    });
+  }
+  
   return data.candidates[0].content.parts[0].text;
 }
 
@@ -522,9 +862,11 @@ async function callGemini(modelConfig, messages, apiKey, options = {}) {
  * @returns {Promise<string>} AI response
  */
 export async function chat(modelId, messages, includeContext = true, options = {}) {
-  const modelConfig = MODELS[modelId];
+  // Validate and potentially migrate the model ID
+  const validModelId = validateModelId(modelId);
+  const modelConfig = MODELS[validModelId];
   if (!modelConfig) {
-    throw new Error(`Unknown model: ${modelId}`);
+    throw new Error(`No valid model available. Please configure an API key in settings.`);
   }
   
   const apiKey = getApiKey(modelConfig.provider);
@@ -565,7 +907,7 @@ export async function rewriteText(modelId, text, instruction = 'Improve this tex
     content: `${instruction}:\n\n"${text}"\n\nProvide only the improved text without any explanation.`
   }];
   
-  return chat(modelId, messages, true);
+  return chat(modelId, messages, true, { feature: 'generate' });
 }
 
 export async function generateBullets(modelId, context, count = 3) {
@@ -574,7 +916,7 @@ export async function generateBullets(modelId, context, count = 3) {
     content: `Based on the resume and this context: "${context}", generate ${count} impactful bullet points. Format as a numbered list.`
   }];
   
-  return chat(modelId, messages, true);
+  return chat(modelId, messages, true, { feature: 'generate' });
 }
 
 export async function getFeedback(modelId) {
@@ -587,7 +929,7 @@ export async function getFeedback(modelId) {
 4. Any missing elements that would strengthen the resume`
   }];
   
-  return chat(modelId, messages, true);
+  return chat(modelId, messages, true, { feature: 'feedback' });
 }
 
 export async function improveSummary(modelId) {
@@ -596,7 +938,7 @@ export async function improveSummary(modelId) {
     content: `Please rewrite my resume summary to be more compelling and impactful. Make it concise but powerful, highlighting key strengths and value proposition. Provide only the improved summary text.`
   }];
   
-  return chat(modelId, messages, true);
+  return chat(modelId, messages, true, { feature: 'generate' });
 }
 
 /**
@@ -605,12 +947,15 @@ export async function improveSummary(modelId) {
  * @param {string} instruction - User's instruction for what to change
  * @param {string} targetPath - Optional specific path to target (e.g., "summary", "experience[0]")
  * @param {Object} additionalContext - Optional additional context like job descriptions
+ * @param {string} featureName - Optional feature name for tracking (defaults to 'generate')
  * @returns {Object} Object with changes and explanation
  */
-export async function generateResumeChanges(modelId, instruction, targetPath = null, additionalContext = null) {
-  const modelConfig = MODELS[modelId];
+export async function generateResumeChanges(modelId, instruction, targetPath = null, additionalContext = null, featureName = 'generate') {
+  // Validate and potentially migrate the model ID
+  const validModelId = validateModelId(modelId);
+  const modelConfig = MODELS[validModelId];
   if (!modelConfig) {
-    throw new Error(`Unknown model: ${modelId}`);
+    throw new Error(`No valid model available. Please configure an API key in settings.`);
   }
   
   const apiKey = getApiKey(modelConfig.provider);
@@ -623,8 +968,18 @@ export async function generateResumeChanges(modelId, instruction, targetPath = n
     throw new Error('No resume data available');
   }
   
+  // Include user profile context for better suggestions
+  const userProfileContext = getUserProfileContext();
+  
   // Build the prompt
-  let prompt = `Here is the current resume data as JSON:\n\n${JSON.stringify(resumeData, null, 2)}\n\n`;
+  let prompt = '';
+  
+  // Add user profile context if available
+  if (userProfileContext) {
+    prompt += `${userProfileContext}\n`;
+  }
+  
+  prompt += `Here is the current resume data as JSON:\n\n${JSON.stringify(resumeData, null, 2)}\n\n`;
   
   if (additionalContext?.jobDescriptions) {
     prompt += `Target job descriptions:\n`;
@@ -645,16 +1000,17 @@ export async function generateResumeChanges(modelId, instruction, targetPath = n
   // Call AI with the change generation system prompt
   let response;
   const messages = [{ role: 'user', content: prompt }];
+  const featureOptions = { feature: featureName };
   
   switch (modelConfig.provider) {
     case 'anthropic':
-      response = await callAnthropicWithSystem(modelConfig, messages, apiKey, CHANGE_GENERATION_PROMPT);
+      response = await callAnthropicWithSystem(modelConfig, messages, apiKey, CHANGE_GENERATION_PROMPT, featureOptions);
       break;
     case 'openai':
-      response = await callOpenAIWithSystem(modelConfig, messages, apiKey, CHANGE_GENERATION_PROMPT);
+      response = await callOpenAIWithSystem(modelConfig, messages, apiKey, CHANGE_GENERATION_PROMPT, featureOptions);
       break;
     case 'gemini':
-      response = await callGeminiWithSystem(modelConfig, messages, apiKey, CHANGE_GENERATION_PROMPT);
+      response = await callGeminiWithSystem(modelConfig, messages, apiKey, CHANGE_GENERATION_PROMPT, featureOptions);
       break;
     default:
       throw new Error(`Unsupported provider: ${modelConfig.provider}`);
@@ -681,7 +1037,7 @@ export async function generateResumeChanges(modelId, instruction, targetPath = n
 }
 
 // API calls with custom system prompts
-async function callAnthropicWithSystem(modelConfig, messages, apiKey, systemPrompt) {
+async function callAnthropicWithSystem(modelConfig, messages, apiKey, systemPrompt, options = {}) {
   const response = await fetch(ENDPOINTS.anthropic, {
     method: 'POST',
     headers: {
@@ -707,10 +1063,50 @@ async function callAnthropicWithSystem(modelConfig, messages, apiKey, systemProm
   }
   
   const data = await response.json();
+  
+  // Track token usage
+  if (data.usage) {
+    trackUsage({
+      provider: 'anthropic',
+      model: modelConfig.model,
+      feature: options.feature || 'chat',
+      inputTokens: data.usage.input_tokens || 0,
+      outputTokens: data.usage.output_tokens || 0,
+      cacheRead: data.usage.cache_read_input_tokens || 0,
+      cacheCreation: data.usage.cache_creation_input_tokens || 0
+    });
+  }
+  
   return data.content[0].text;
 }
 
-async function callOpenAIWithSystem(modelConfig, messages, apiKey, systemPrompt) {
+async function callOpenAIWithSystem(modelConfig, messages, apiKey, systemPrompt, options = {}) {
+  // GPT-5.x models require the Responses API (not Chat Completions)
+  const isGpt5 = modelConfig.model.startsWith('gpt-5');
+  if (isGpt5) {
+    return callOpenAIResponsesWithSystem(modelConfig, messages, apiKey, systemPrompt, options);
+  }
+  
+  // Check if this is an o1 reasoning model (uses 'developer' role instead of 'system')
+  const isO1Model = modelConfig.model.startsWith('o1');
+  
+  // Build messages array with appropriate role for system instructions
+  const apiMessages = isO1Model
+    ? [
+        { role: 'developer', content: systemPrompt },
+        ...messages.map(m => ({
+          role: m.role,
+          content: m.content
+        }))
+      ]
+    : [
+        { role: 'system', content: systemPrompt },
+        ...messages.map(m => ({
+          role: m.role,
+          content: m.content
+        }))
+      ];
+  
   const response = await fetch(ENDPOINTS.openai, {
     method: 'POST',
     headers: {
@@ -720,13 +1116,7 @@ async function callOpenAIWithSystem(modelConfig, messages, apiKey, systemPrompt)
     body: JSON.stringify({
       model: modelConfig.model,
       max_completion_tokens: modelConfig.maxTokens,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...messages.map(m => ({
-          role: m.role,
-          content: m.content
-        }))
-      ]
+      messages: apiMessages
     })
   });
   
@@ -736,10 +1126,83 @@ async function callOpenAIWithSystem(modelConfig, messages, apiKey, systemPrompt)
   }
   
   const data = await response.json();
+  
+  // Track token usage
+  if (data.usage) {
+    trackUsage({
+      provider: 'openai',
+      model: modelConfig.model,
+      feature: options.feature || 'chat',
+      inputTokens: data.usage.prompt_tokens || 0,
+      outputTokens: data.usage.completion_tokens || 0
+    });
+  }
+  
   return data.choices[0].message.content;
 }
 
-async function callGeminiWithSystem(modelConfig, messages, apiKey, systemPrompt) {
+// Call OpenAI Responses API with custom system prompt (for GPT-5.x)
+async function callOpenAIResponsesWithSystem(modelConfig, messages, apiKey, systemPrompt, options = {}) {
+  // Build input from messages
+  const input = messages.map(m => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: m.content
+  }));
+  
+  // Add system prompt context to first user message
+  if (input.length > 0 && input[0].role === 'user') {
+    input[0].content = `${systemPrompt}\n\n${input[0].content}`;
+  }
+  
+  const requestBody = {
+    model: modelConfig.model,
+    input: input
+  };
+  
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `OpenAI API error: ${response.status}`);
+  }
+  
+  const data = await response.json();
+  
+  // Track token usage
+  if (data.usage) {
+    trackUsage({
+      provider: 'openai',
+      model: modelConfig.model,
+      feature: options.feature || 'chat',
+      inputTokens: data.usage.input_tokens || data.usage.prompt_tokens || 0,
+      outputTokens: data.usage.output_tokens || data.usage.completion_tokens || 0
+    });
+  }
+  
+  // Responses API returns output differently
+  if (data.output_text) {
+    return data.output_text;
+  }
+  
+  // Or extract from output array
+  if (Array.isArray(data.output)) {
+    const messageItem = data.output.find(item => item.type === 'message');
+    if (messageItem?.content?.[0]?.text) {
+      return messageItem.content[0].text;
+    }
+  }
+  
+  throw new Error('Unexpected response format from OpenAI Responses API');
+}
+
+async function callGeminiWithSystem(modelConfig, messages, apiKey, systemPrompt, options = {}) {
   const url = `${ENDPOINTS.gemini}/${modelConfig.model}:generateContent?key=${apiKey}`;
   
   const contents = messages.map(msg => ({
@@ -769,6 +1232,18 @@ async function callGeminiWithSystem(modelConfig, messages, apiKey, systemPrompt)
   }
   
   const data = await response.json();
+  
+  // Track token usage (Gemini returns usage in usageMetadata)
+  if (data.usageMetadata) {
+    trackUsage({
+      provider: 'gemini',
+      model: modelConfig.model,
+      feature: options.feature || 'chat',
+      inputTokens: data.usageMetadata.promptTokenCount || 0,
+      outputTokens: data.usageMetadata.candidatesTokenCount || 0
+    });
+  }
+  
   return data.candidates[0].content.parts[0].text;
 }
 
@@ -779,9 +1254,11 @@ async function callGeminiWithSystem(modelConfig, messages, apiKey, systemPrompt)
  * @returns {Object} Analysis results
  */
 export async function analyzeAgainstJobs(modelId, jobDescriptions) {
-  const modelConfig = MODELS[modelId];
+  // Validate and potentially migrate the model ID
+  const validModelId = validateModelId(modelId);
+  const modelConfig = MODELS[validModelId];
   if (!modelConfig) {
-    throw new Error(`Unknown model: ${modelId}`);
+    throw new Error(`No valid model available. Please configure an API key in settings.`);
   }
   
   const apiKey = getApiKey(modelConfig.provider);
@@ -794,7 +1271,16 @@ export async function analyzeAgainstJobs(modelId, jobDescriptions) {
     throw new Error('No resume data available');
   }
   
+  // Include user profile context for better analysis
+  const userProfileContext = getUserProfileContext();
+  
   let prompt = `Analyze this resume against the target job description(s).\n\n`;
+  
+  // Add user profile context if available
+  if (userProfileContext) {
+    prompt += `${userProfileContext}\n`;
+  }
+  
   prompt += `Resume:\n${JSON.stringify(resumeData, null, 2)}\n\n`;
   prompt += `Job Descriptions:\n`;
   
@@ -805,17 +1291,18 @@ export async function analyzeAgainstJobs(modelId, jobDescriptions) {
   prompt += `\nProvide your analysis as a JSON object. No markdown, just raw JSON.`;
   
   const messages = [{ role: 'user', content: prompt }];
+  const featureOptions = { feature: 'analyze' };
   
   let response;
   switch (modelConfig.provider) {
     case 'anthropic':
-      response = await callAnthropicWithSystem(modelConfig, messages, apiKey, JOB_ANALYSIS_PROMPT);
+      response = await callAnthropicWithSystem(modelConfig, messages, apiKey, JOB_ANALYSIS_PROMPT, featureOptions);
       break;
     case 'openai':
-      response = await callOpenAIWithSystem(modelConfig, messages, apiKey, JOB_ANALYSIS_PROMPT);
+      response = await callOpenAIWithSystem(modelConfig, messages, apiKey, JOB_ANALYSIS_PROMPT, featureOptions);
       break;
     case 'gemini':
-      response = await callGeminiWithSystem(modelConfig, messages, apiKey, JOB_ANALYSIS_PROMPT);
+      response = await callGeminiWithSystem(modelConfig, messages, apiKey, JOB_ANALYSIS_PROMPT, featureOptions);
       break;
     default:
       throw new Error(`Unsupported provider: ${modelConfig.provider}`);
@@ -848,7 +1335,7 @@ export async function tailorForJob(modelId, jobDescription, section = null) {
   
   return generateResumeChanges(modelId, instruction, section, {
     jobDescriptions: [jobDescription]
-  });
+  }, 'tailor');
 }
 
 /**
@@ -882,4 +1369,166 @@ export function getAllModels() {
   }
   
   return grouped;
+}
+
+/**
+ * Conduct a profile interview chat
+ * @param {string} modelId - Model to use
+ * @param {Array} conversationHistory - Previous messages in the interview
+ * @returns {Promise<string>} AI response
+ */
+export async function profileInterviewChat(modelId, conversationHistory) {
+  const validModelId = validateModelId(modelId);
+  const modelConfig = MODELS[validModelId];
+  if (!modelConfig) {
+    throw new Error(`No valid model available. Please configure an API key in settings.`);
+  }
+  
+  const apiKey = getApiKey(modelConfig.provider);
+  if (!apiKey) {
+    throw new Error(`No API key configured for ${modelConfig.provider}. Please add your API key in settings.`);
+  }
+  
+  const messages = conversationHistory.map(m => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: m.content
+  }));
+  const featureOptions = { feature: 'profile' };
+  
+  switch (modelConfig.provider) {
+    case 'anthropic':
+      return callAnthropicWithSystem(modelConfig, messages, apiKey, PROFILE_INTERVIEW_PROMPT, featureOptions);
+    case 'openai':
+      return callOpenAIWithSystem(modelConfig, messages, apiKey, PROFILE_INTERVIEW_PROMPT, featureOptions);
+    case 'gemini':
+      return callGeminiWithSystem(modelConfig, messages, apiKey, PROFILE_INTERVIEW_PROMPT, featureOptions);
+    default:
+      throw new Error(`Unsupported provider: ${modelConfig.provider}`);
+  }
+}
+
+/**
+ * Extract profile data from interview conversation
+ * @param {string} modelId - Model to use
+ * @param {Array} conversationHistory - The interview conversation
+ * @returns {Promise<Object>} Extracted profile data
+ */
+export async function extractProfileFromInterview(modelId, conversationHistory) {
+  const validModelId = validateModelId(modelId);
+  const modelConfig = MODELS[validModelId];
+  if (!modelConfig) {
+    throw new Error(`No valid model available. Please configure an API key in settings.`);
+  }
+  
+  const apiKey = getApiKey(modelConfig.provider);
+  if (!apiKey) {
+    throw new Error(`No API key configured for ${modelConfig.provider}. Please add your API key in settings.`);
+  }
+  
+  // Format conversation for extraction
+  let conversationText = 'Interview Conversation:\n\n';
+  for (const msg of conversationHistory) {
+    const role = msg.role === 'user' ? 'User' : 'Interviewer';
+    conversationText += `${role}: ${msg.content}\n\n`;
+  }
+  
+  const messages = [{ role: 'user', content: conversationText }];
+  const featureOptions = { feature: 'profile' };
+  
+  let response;
+  switch (modelConfig.provider) {
+    case 'anthropic':
+      response = await callAnthropicWithSystem(modelConfig, messages, apiKey, PROFILE_EXTRACTION_PROMPT, featureOptions);
+      break;
+    case 'openai':
+      response = await callOpenAIWithSystem(modelConfig, messages, apiKey, PROFILE_EXTRACTION_PROMPT, featureOptions);
+      break;
+    case 'gemini':
+      response = await callGeminiWithSystem(modelConfig, messages, apiKey, PROFILE_EXTRACTION_PROMPT, featureOptions);
+      break;
+    default:
+      throw new Error(`Unsupported provider: ${modelConfig.provider}`);
+  }
+  
+  try {
+    let jsonStr = response.trim();
+    // Try to extract JSON from markdown code blocks
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    }
+    
+    // Also try to find JSON object if it's mixed with text
+    const jsonObjectMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (jsonObjectMatch) {
+      jsonStr = jsonObjectMatch[0];
+    }
+    
+    const parsed = JSON.parse(jsonStr);
+    console.log('[ProfileExtraction] Successfully parsed profile:', parsed);
+    
+    // Normalize the parsed data to ensure correct field names
+    const normalized = {
+      personalSummary: parsed.personalSummary || parsed.personal_summary || parsed.summary || '',
+      careerGoals: parsed.careerGoals || parsed.career_goals || parsed.goals || '',
+      workExperience: parsed.workExperience || parsed.work_experience || parsed.experience || [],
+      skills: parsed.skills || [],
+      education: parsed.education || [],
+      projects: parsed.projects || [],
+      certifications: parsed.certifications || [],
+      achievements: parsed.achievements || [],
+      industryKnowledge: parsed.industryKnowledge || parsed.industry_knowledge || parsed.industry || '',
+      preferences: parsed.preferences || ''
+    };
+    
+    console.log('[ProfileExtraction] Normalized profile:', normalized);
+    return normalized;
+  } catch (e) {
+    console.error('Failed to parse profile extraction response:', response);
+    console.error('Parse error:', e);
+    throw new Error('Failed to extract profile data. Please try again.');
+  }
+}
+
+/**
+ * Save extracted profile data (merges with existing)
+ * @param {Object} extractedProfile - Profile data extracted from interview
+ */
+export function saveExtractedProfile(extractedProfile) {
+  console.log('[Profile] Extracted profile to save:', extractedProfile);
+  
+  const existingProfile = getUserProfile() || {};
+  console.log('[Profile] Existing profile:', existingProfile);
+  
+  // Merge extracted data with existing profile
+  const mergedProfile = { ...existingProfile };
+  
+  // For text fields, prefer new content if it exists
+  const textFields = ['personalSummary', 'careerGoals', 'preferences', 'industryKnowledge'];
+  for (const field of textFields) {
+    if (extractedProfile[field] && extractedProfile[field].trim()) {
+      mergedProfile[field] = extractedProfile[field];
+    }
+  }
+  
+  // For array fields, merge (add new items)
+  const arrayFields = ['workExperience', 'skills', 'education', 'projects', 'certifications', 'achievements', 'customSections'];
+  for (const field of arrayFields) {
+    if (extractedProfile[field] && extractedProfile[field].length > 0) {
+      // Simple merge: add new items to existing
+      mergedProfile[field] = [
+        ...(existingProfile[field] || []),
+        ...extractedProfile[field]
+      ];
+    }
+  }
+  
+  console.log('[Profile] Merged profile to save:', mergedProfile);
+  saveUserProfile(mergedProfile);
+  
+  // Verify the save worked
+  const savedProfile = getUserProfile();
+  console.log('[Profile] Verified saved profile:', savedProfile);
+  
+  return mergedProfile;
 }

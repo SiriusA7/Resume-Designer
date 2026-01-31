@@ -4,12 +4,13 @@
  */
 
 import { store } from './store.js';
-import { getSettings, saveSettings, getVariants, saveVariant, setCurrentVariantId, initPersistence } from './persistence.js';
+import { getSettings, saveSettings, getVariants, saveVariant, setCurrentVariantId, initPersistence, generateUniqueVariantName } from './persistence.js';
 import { getConfiguredProviders, getDefaultModelId, generateResumeChanges, chat } from './aiService.js';
 import { loadVariant } from './variantManager.js';
 import { refreshChatPanel } from './chatPanel.js';
 import { parseResumeText } from './resumeParser.js';
 import { addJobDescription } from './jobDescriptions.js';
+import { renderHeaderBar } from './headerBar.js';
 
 const ONBOARDING_KEY = 'resume-designer-onboarding-complete';
 
@@ -1042,7 +1043,7 @@ function renderInterviewStep(content, footer) {
     }
     
     const settings = getSettings();
-    const modelId = settings.defaultModel || 'anthropic:claude-sonnet-4-5-20251022';
+    const modelId = settings.defaultModel || 'anthropic:claude-sonnet-4-5';
     
     try {
       const response = await chat(modelId, [{
@@ -1481,7 +1482,8 @@ function renderReviewStep(content, footer) {
     // Save the resume as a new variant
     const resume = wizardData.parsedResume || {};
     const variantId = `custom-${Date.now()}`;
-    const variantName = resume.name || 'My Resume';
+    const baseName = resume.name || 'My Resume';
+    const variantName = generateUniqueVariantName(baseName);
     
     // Transform education from objects to strings if needed
     let educationLines = [];
@@ -1555,6 +1557,9 @@ function renderReviewStep(content, footer) {
     
     // Store the data in the store directly
     store.setData(resumeData);
+    
+    // Refresh the header bar dropdown to show the new variant
+    renderHeaderBar();
     
     currentStep = 5; // Go to final step
     renderStep();

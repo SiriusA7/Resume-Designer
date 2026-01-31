@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/styles/jobDescriptions.css">
   <link rel="stylesheet" href="/styles/onboarding.css">
   <link rel="stylesheet" href="/styles/history.css">
+  <link rel="stylesheet" href="/styles/userProfile.css">
   <link rel="stylesheet" href="/styles/print.css" media="print">
 </head>
 <body>
@@ -28,6 +29,8 @@
     <div class="app-content">
       <!-- Left Panel: AI Chat -->
       <aside class="chat-panel closed" id="chat-panel">
+        <!-- Resize handle for dragging -->
+        <div class="chat-resize-handle" id="chat-resize-handle"></div>
         <div class="chat-header">
           <div class="chat-header-top">
             <h2 class="chat-title">AI Assistant</h2>
@@ -263,16 +266,15 @@
       </button>
     </div>
     
-    <!-- Hidden PDF export buttons (for programmatic triggering) -->
+    <!-- Hidden PDF export button (for programmatic triggering) -->
     <button id="download-pdf" hidden></button>
-    <button id="print-resume" hidden></button>
   </div>
   
   <!-- Settings Modal -->
   <div class="modal-overlay" id="settings-modal">
-    <div class="modal">
+    <div class="modal modal-wide">
       <div class="modal-header">
-        <h2 class="modal-title">AI Settings</h2>
+        <h2 class="modal-title">Settings</h2>
         <button class="modal-close" id="close-settings-modal">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/>
@@ -280,67 +282,210 @@
           </svg>
         </button>
       </div>
-      <div class="modal-content">
-        <p class="settings-warning">
+      
+      <!-- Settings Tabs -->
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="api-keys">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-            <line x1="12" y1="9" x2="12" y2="13"/>
-            <line x1="12" y1="17" x2="12.01" y2="17"/>
+            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
           </svg>
-          API keys are stored locally in your browser. Never share them.
-        </p>
-        
-        <div class="settings-section">
-          <h3 class="settings-section-title">Anthropic (Claude)</h3>
-          <div class="form-group">
-            <label for="anthropic-key">API Key</label>
-            <div class="api-key-input-wrapper">
-              <input type="password" id="anthropic-key" class="form-input api-key-input" placeholder="sk-ant-...">
-              <button class="api-key-toggle" data-target="anthropic-key" title="Show/hide">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
-              </button>
+          API Keys
+        </button>
+        <button class="settings-tab" data-tab="developer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="16 18 22 12 16 6"/>
+            <polyline points="8 6 2 12 8 18"/>
+          </svg>
+          Developer
+        </button>
+      </div>
+      
+      <div class="modal-content">
+        <!-- API Keys Tab -->
+        <div class="settings-tab-content active" id="tab-api-keys">
+          <p class="settings-warning">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            API keys are stored locally in your browser. Never share them.
+          </p>
+          
+          <div class="settings-section">
+            <h3 class="settings-section-title">Anthropic (Claude)</h3>
+            <div class="form-group">
+              <label for="anthropic-key">API Key</label>
+              <div class="api-key-input-wrapper">
+                <input type="password" id="anthropic-key" class="form-input api-key-input" placeholder="sk-ant-...">
+                <button class="api-key-toggle" data-target="anthropic-key" title="Show/hide">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                    <circle cx="12" cy="12" r="3"/>
+                  </svg>
+                </button>
+              </div>
             </div>
+          </div>
+          
+          <div class="settings-section">
+            <h3 class="settings-section-title">OpenAI</h3>
+            <div class="form-group">
+              <label for="openai-key">API Key</label>
+              <div class="api-key-input-wrapper">
+                <input type="password" id="openai-key" class="form-input api-key-input" placeholder="sk-...">
+                <button class="api-key-toggle" data-target="openai-key" title="Show/hide">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                    <circle cx="12" cy="12" r="3"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="settings-section">
+            <h3 class="settings-section-title">Google (Gemini)</h3>
+            <div class="form-group">
+              <label for="gemini-key">API Key</label>
+              <div class="api-key-input-wrapper">
+                <input type="password" id="gemini-key" class="form-input api-key-input" placeholder="AIza...">
+                <button class="api-key-toggle" data-target="gemini-key" title="Show/hide">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                    <circle cx="12" cy="12" r="3"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="settings-actions">
+            <button class="btn btn-secondary" id="clear-api-keys">Clear All Keys</button>
+            <button class="btn btn-primary" id="save-api-keys">Save Settings</button>
           </div>
         </div>
         
-        <div class="settings-section">
-          <h3 class="settings-section-title">OpenAI</h3>
-          <div class="form-group">
-            <label for="openai-key">API Key</label>
-            <div class="api-key-input-wrapper">
-              <input type="password" id="openai-key" class="form-input api-key-input" placeholder="sk-...">
-              <button class="api-key-toggle" data-target="openai-key" title="Show/hide">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
+        <!-- Developer Tab -->
+        <div class="settings-tab-content" id="tab-developer">
+          <div class="developer-section">
+            <h3 class="settings-section-title">Token Usage Statistics</h3>
+            
+            <!-- Summary Stats -->
+            <div class="usage-summary">
+              <div class="usage-stat-card">
+                <div class="usage-stat-label">Total Input Tokens</div>
+                <div class="usage-stat-value" id="total-input-tokens">0</div>
+              </div>
+              <div class="usage-stat-card">
+                <div class="usage-stat-label">Total Output Tokens</div>
+                <div class="usage-stat-value" id="total-output-tokens">0</div>
+              </div>
+              <div class="usage-stat-card">
+                <div class="usage-stat-label">Estimated Cost</div>
+                <div class="usage-stat-value usage-cost" id="total-cost">$0.00</div>
+              </div>
+              <div class="usage-stat-card">
+                <div class="usage-stat-label">Total API Calls</div>
+                <div class="usage-stat-value" id="total-calls">0</div>
+              </div>
+            </div>
+            
+            <!-- Usage by Model -->
+            <div class="usage-breakdown">
+              <h4 class="usage-breakdown-title">Usage by Model</h4>
+              <div class="usage-table-container">
+                <table class="usage-table" id="usage-by-model-table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Calls</th>
+                      <th>Input</th>
+                      <th>Output</th>
+                      <th>Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody id="usage-by-model">
+                    <tr class="usage-empty-row">
+                      <td colspan="5">No usage data yet</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            <!-- Usage by Feature -->
+            <div class="usage-breakdown">
+              <h4 class="usage-breakdown-title">Usage by Feature</h4>
+              <div class="usage-table-container">
+                <table class="usage-table" id="usage-by-feature-table">
+                  <thead>
+                    <tr>
+                      <th>Feature</th>
+                      <th>Calls</th>
+                      <th>Input</th>
+                      <th>Output</th>
+                      <th>Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody id="usage-by-feature">
+                    <tr class="usage-empty-row">
+                      <td colspan="5">No usage data yet</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            <!-- Usage by Date -->
+            <div class="usage-breakdown">
+              <h4 class="usage-breakdown-title">Recent Activity</h4>
+              <div class="usage-table-container usage-table-scrollable">
+                <table class="usage-table" id="usage-by-date-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Calls</th>
+                      <th>Input</th>
+                      <th>Output</th>
+                      <th>Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody id="usage-by-date">
+                    <tr class="usage-empty-row">
+                      <td colspan="5">No usage data yet</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            <div class="settings-actions">
+              <button class="btn btn-secondary" id="export-usage-data">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
+                Export Data
+              </button>
+              <button class="btn btn-secondary btn-danger" id="clear-usage-data">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                </svg>
+                Clear Data
+              </button>
+              <button class="btn btn-primary" id="refresh-usage-data">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="23 4 23 10 17 10"/>
+                  <polyline points="1 20 1 14 7 14"/>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                Refresh
               </button>
             </div>
           </div>
-        </div>
-        
-        <div class="settings-section">
-          <h3 class="settings-section-title">Google (Gemini)</h3>
-          <div class="form-group">
-            <label for="gemini-key">API Key</label>
-            <div class="api-key-input-wrapper">
-              <input type="password" id="gemini-key" class="form-input api-key-input" placeholder="AIza...">
-              <button class="api-key-toggle" data-target="gemini-key" title="Show/hide">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-        </div>
-        
-        <div class="settings-actions">
-          <button class="btn btn-secondary" id="clear-api-keys">Clear All Keys</button>
-          <button class="btn btn-primary" id="save-api-keys">Save Settings</button>
         </div>
       </div>
     </div>

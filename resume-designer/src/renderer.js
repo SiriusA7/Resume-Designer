@@ -212,26 +212,60 @@ function renderSidebar(data) {
   if (data.sections) {
     for (let sIdx = 0; sIdx < data.sections.length; sIdx++) {
       const section = data.sections[sIdx];
-      html += `
-        <div class="sidebar-section" data-section-id="${section.id || sIdx}">
-          <h3 class="sidebar-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
-          <div class="sidebar-content">
-            ${section.content.map((line, i) => `
-              <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</p>
-            `).join('')}
+      
+      // Check if this is a highlights/bullet section (lines start with "- ")
+      const isHighlightSection = section.content.some(line => line && line.startsWith('- '));
+      
+      if (isHighlightSection) {
+        // Render as block-level bullets
+        html += `
+          <div class="sidebar-section" data-section-id="${section.id || sIdx}">
+            <h3 class="sidebar-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
+            <div class="sidebar-content">
+              ${section.content.map((line, i) => `
+                <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</p>
+              `).join('')}
+            </div>
           </div>
-        </div>
-      `;
+        `;
+      } else {
+        // Render as inline skill tags - combine all lines into one flow
+        const allSkills = section.content
+          .filter(line => line && line.trim())
+          .map((line, i) => `<span class="skill-tag" data-editable="sections[${sIdx}].content[${i}]">${escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</span>`)
+          .join('');
+        
+        html += `
+          <div class="sidebar-section" data-section-id="${section.id || sIdx}">
+            <h3 class="sidebar-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
+            <div class="sidebar-content sidebar-skills">
+              ${allSkills}
+            </div>
+          </div>
+        `;
+      }
     }
   }
   
-  // Render tools
+  // Render tools - always render as inline skill tags
   if (data.tools) {
+    // Tools can be a string with bullets or an array
+    const toolsContent = Array.isArray(data.tools) 
+      ? data.tools.join(' • ')
+      : data.tools;
+    
+    // Split by bullet and render as inline tags
+    const toolTags = toolsContent.split('•')
+      .map(tool => tool.trim())
+      .filter(tool => tool)
+      .map(tool => `<span class="skill-tag">${escapeHtml(tool)}</span>`)
+      .join('');
+    
     html += `
       <div class="sidebar-section">
         <h3 class="sidebar-title">Tools</h3>
-        <div class="sidebar-content tools-list">
-          <p data-editable="tools">${formatSkillLine(data.tools)}</p>
+        <div class="sidebar-content sidebar-skills tools-list" data-editable="tools">
+          ${toolTags}
         </div>
       </div>
     `;
@@ -668,8 +702,8 @@ function renderTimelineExperience(exp, index) {
       <div class="timeline-content">
         <div class="experience-header">
           <div class="experience-title-row">
-            <span class="experience-role" data-editable="experience[${index}].role">${escapeHtml(exp.role)}</span>
-            ${exp.company ? `<span class="experience-company" data-editable="experience[${index}].company">${formatCompany(exp.company)}</span>` : ''}
+            <span class="experience-title" data-editable="experience[${index}].title">${escapeHtml(exp.title)}</span>
+            ${exp.company ? `<span class="experience-company" data-editable="experience[${index}].company">${escapeHtml(exp.company)}</span>` : ''}
           </div>
           <span class="experience-dates" data-editable="experience[${index}].dates">${escapeHtml(exp.dates)}</span>
         </div>

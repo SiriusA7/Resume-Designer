@@ -546,6 +546,228 @@ html[data-theme="dark"] .jd-keyword.missing {
   font-size: 12px;
 }
 
+/* Applied recommendation state */
+.jd-recommendation.applied {
+  opacity: 0.7;
+  background: rgba(34, 197, 94, 0.05);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.jd-applied-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.15);
+  border-radius: 4px;
+}
+
+.jd-applied-badge svg {
+  stroke: #22c55e;
+}
+
+/* ============================================
+   Impact Ratings
+   ============================================ */
+
+/* Recommendations section header */
+.jd-rec-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.jd-rec-section-header h4 {
+  margin: 0;
+}
+
+/* Impact summary counts */
+.jd-impact-summary {
+  display: flex;
+  gap: 8px;
+}
+
+.jd-impact-count {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.jd-impact-count.high {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.jd-impact-count.medium {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
+.jd-impact-count.low {
+  background: rgba(156, 163, 175, 0.2);
+  color: #6b7280;
+}
+
+html[data-theme="dark"] .jd-impact-count.high {
+  color: #4ade80;
+}
+
+html[data-theme="dark"] .jd-impact-count.medium {
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .jd-impact-count.low {
+  color: #9ca3af;
+}
+
+/* Impact groups */
+.jd-impact-group {
+  margin-bottom: 20px;
+}
+
+.jd-impact-group:last-child {
+  margin-bottom: 0;
+}
+
+.jd-impact-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.jd-impact-group-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+.jd-impact-group.high .jd-impact-group-icon {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.jd-impact-group.medium .jd-impact-group-icon {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
+.jd-impact-group.low .jd-impact-group-icon {
+  background: rgba(156, 163, 175, 0.2);
+  color: #6b7280;
+}
+
+html[data-theme="dark"] .jd-impact-group.high .jd-impact-group-icon {
+  color: #4ade80;
+}
+
+html[data-theme="dark"] .jd-impact-group.medium .jd-impact-group-icon {
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .jd-impact-group.low .jd-impact-group-icon {
+  color: #9ca3af;
+}
+
+.jd-impact-group-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.jd-impact-group-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+/* Impact badge on recommendations */
+.jd-rec-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.jd-impact-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  cursor: help;
+}
+
+.jd-impact-badge.high {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.jd-impact-badge.medium {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+
+.jd-impact-badge.low {
+  background: rgba(156, 163, 175, 0.2);
+  color: #6b7280;
+}
+
+html[data-theme="dark"] .jd-impact-badge.high {
+  color: #4ade80;
+}
+
+html[data-theme="dark"] .jd-impact-badge.medium {
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .jd-impact-badge.low {
+  color: #9ca3af;
+}
+
+.jd-impact-badge svg {
+  flex-shrink: 0;
+}
+
+/* Impact reason text */
+.jd-rec-impact-reason {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  background: var(--color-panel-bg);
+  border-radius: 4px;
+  border-left: 3px solid var(--color-accent);
+}
+
+/* Recommendation with impact styling */
+.jd-recommendation[data-impact="high"] {
+  border-left: 3px solid #22c55e;
+}
+
+.jd-recommendation[data-impact="medium"] {
+  border-left: 3px solid #f59e0b;
+}
+
+.jd-recommendation[data-impact="low"] {
+  border-left: 3px solid #9ca3af;
+}
+
 /* ============================================
    Edit Modal
    ============================================ */
@@ -616,6 +838,391 @@ html[data-theme="dark"] .jd-keyword.missing {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 8px;
+}
+
+/* ============================================
+   Job Selection Modal
+   ============================================ */
+
+.jd-select-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+}
+
+.jd-select-modal-overlay.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.jd-select-modal {
+  background: var(--color-panel-bg);
+  border-radius: 12px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  transform: scale(0.95) translateY(10px);
+  transition: transform 0.2s;
+}
+
+.jd-select-modal-overlay.show .jd-select-modal {
+  transform: scale(1) translateY(0);
+}
+
+.jd-select-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.jd-select-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.jd-select-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 20px;
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+}
+
+.jd-select-close:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.jd-select-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.jd-select-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.jd-select-count {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.jd-select-actions-header {
+  display: flex;
+  gap: 8px;
+}
+
+.jd-select-all-btn,
+.jd-select-none-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+}
+
+.jd-select-all-btn:hover,
+.jd-select-none-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+.jd-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jd-select-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.jd-select-item:hover {
+  border-color: var(--color-text-muted);
+}
+
+.jd-select-item.selected {
+  border-color: var(--color-accent);
+  background: rgba(196, 92, 62, 0.05);
+}
+
+.jd-select-checkbox {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.jd-select-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.jd-select-item-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.jd-select-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jd-select-item-company {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.jd-select-item-preview {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.jd-select-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--color-border);
+}
+
+.jd-select-footer .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.jd-select-footer .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================
+   Model Selector
+   ============================================ */
+
+.jd-model-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.jd-model-selector label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.jd-model-selector label svg {
+  color: var(--color-accent);
+}
+
+.jd-model-select {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.jd-model-select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.jd-model-select:hover {
+  border-color: var(--color-text-muted);
+}
+
+.jd-select-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-muted);
+  margin-bottom: 8px;
+}
+
+/* ============================================
+   Analysis Loading Overlay
+   ============================================ */
+
+.jd-analysis-loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  z-index: 2200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s, visibility 0.3s;
+}
+
+.jd-analysis-loading-overlay.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.jd-analysis-loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 40px;
+  max-width: 400px;
+}
+
+.jd-analysis-spinner {
+  margin-bottom: 24px;
+  color: var(--color-accent);
+}
+
+.jd-analysis-spinner svg {
+  width: 64px;
+  height: 64px;
+}
+
+.jd-analysis-loading-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 32px;
+}
+
+.jd-loading-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: white;
+}
+
+.jd-loading-subtitle {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.jd-loading-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.jd-loading-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+  transition: all 0.3s;
+}
+
+.jd-loading-step.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.jd-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+
+.jd-loading-step.active .jd-step-dot {
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-accent);
+}
+
+/* Pulse animation for active step */
+.jd-loading-step.active .jd-step-dot {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.8;
+  }
 }
 
 /* ============================================

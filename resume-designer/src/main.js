@@ -19,18 +19,27 @@ import { initPdfExport } from './pdf.js';
 import { initInlineEditor, refreshInlineEditor } from './inlineEditor.js';
 import { initStructurePanel, setDesignSettings } from './structurePanel.js';
 import { initHeaderBar, getCurrentId, loadVariant } from './headerBar.js';
-import { initChatPanel, refreshChatPanel } from './chatPanel.js';
+import { initChatPanel, refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initZoomControls } from './zoomControls.js';
 import { migrateBuiltInVariants, saveSettings, getSettings } from './persistence.js';
 import { initTheme, setupThemeToggleAfterRender } from './theme.js';
 import { initJobDescriptionPanel, openJobDescriptionPanel } from './jobDescriptionPanel.js';
 import { initHistoryPanel, openHistoryPanel } from './historyPanel.js';
+import { initUserProfilePanel, openUserProfilePanel } from './userProfilePanel.js';
 import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
 import { initFontService } from './fontService.js';
 import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from './headerStyleService.js';
 import { initSpacingService, applySpacingSettings } from './spacingService.js';
 import { initAccentService, applyAccentSettings } from './accentService.js';
 import { initPhotoService, applyPhotoSettings } from './photoService.js';
+import { 
+  getUsageSummary, 
+  getUsageByDate, 
+  exportUsageData, 
+  clearUsageData, 
+  formatTokenCount, 
+  formatCost 
+} from './tokenTrackingService.js';
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -197,10 +206,15 @@ async function init() {
   // Initialize history panel
   initHistoryPanel();
   
+  // Initialize user profile panel
+  initUserProfilePanel();
+  
   // Expose panel openers and wizards globally
   window.openJobDescriptionPanel = openJobDescriptionPanel;
   window.openHistoryPanel = openHistoryPanel;
+  window.openUserProfilePanel = openUserProfilePanel;
   window.showOnboardingWizard = showOnboardingWizard;
+  window.startProfileInterviewFromChat = startProfileInterviewFromPanel;
   
   // Initialize undo/redo
   initUndoRedo();
@@ -563,6 +577,153 @@ function initSettingsModal() {
       }
     });
   });
+  
+  // Initialize settings tabs
+  initSettingsTabs();
+  
+  // Initialize developer panel
+  initDeveloperPanel();
+}
+
+// Initialize settings tabs
+function initSettingsTabs() {
+  const tabs = document.querySelectorAll('.settings-tab');
+  const tabContents = document.querySelectorAll('.settings-tab-content');
+  
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const targetTab = tab.dataset.tab;
+      
+      // Update active tab
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      
+      // Update active content
+      tabContents.forEach(content => {
+        content.classList.remove('active');
+        if (content.id === `tab-${targetTab}`) {
+          content.classList.add('active');
+          
+          // Refresh developer panel data when switching to it
+          if (targetTab === 'developer') {
+            renderUsageData();
+          }
+        }
+      });
+    });
+  });
+}
+
+// Initialize developer panel
+function initDeveloperPanel() {
+  const refreshBtn = document.getElementById('refresh-usage-data');
+  const exportBtn = document.getElementById('export-usage-data');
+  const clearBtn = document.getElementById('clear-usage-data');
+  
+  // Refresh usage data
+  refreshBtn?.addEventListener('click', () => {
+    renderUsageData();
+  });
+  
+  // Export usage data
+  exportBtn?.addEventListener('click', () => {
+    const data = exportUsageData();
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `token-usage-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  });
+  
+  // Clear usage data
+  clearBtn?.addEventListener('click', () => {
+    if (confirm('Are you sure you want to clear all usage data? This cannot be undone.')) {
+      clearUsageData();
+      renderUsageData();
+    }
+  });
+}
+
+// Render usage data to the developer panel
+function renderUsageData() {
+  const summary = getUsageSummary();
+  const byDate = getUsageByDate();
+  
+  // Update summary stats
+  document.getElementById('total-input-tokens').textContent = formatTokenCount(summary.totalInputTokens);
+  document.getElementById('total-output-tokens').textContent = formatTokenCount(summary.totalOutputTokens);
+  document.getElementById('total-cost').textContent = formatCost(summary.totalCost);
+  
+  // Calculate total calls
+  let totalCalls = 0;
+  Object.values(summary.byModel).forEach(m => totalCalls += m.calls);
+  document.getElementById('total-calls').textContent = totalCalls.toString();
+  
+  // Render usage by model
+  const modelTbody = document.getElementById('usage-by-model');
+  if (modelTbody) {
+    const modelEntries = Object.entries(summary.byModel);
+    if (modelEntries.length === 0) {
+      modelTbody.innerHTML = '<tr class="usage-empty-row"><td colspan="5">No usage data yet</td></tr>';
+    } else {
+      modelTbody.innerHTML = modelEntries
+        .sort((a, b) => b[1].cost - a[1].cost)
+        .map(([key, data]) => `
+          <tr>
+            <td class="usage-model-name">${data.model}</td>
+            <td>${data.calls}</td>
+            <td>${formatTokenCount(data.inputTokens)}</td>
+            <td>${formatTokenCount(data.outputTokens)}</td>
+            <td>${formatCost(data.cost)}</td>
+          </tr>
+        `).join('');
+    }
+  }
+  
+  // Render usage by feature
+  const featureTbody = document.getElementById('usage-by-feature');
+  if (featureTbody) {
+    const featureEntries = Object.entries(summary.byFeature);
+    if (featureEntries.length === 0) {
+      featureTbody.innerHTML = '<tr class="usage-empty-row"><td colspan="5">No usage data yet</td></tr>';
+    } else {
+      featureTbody.innerHTML = featureEntries
+        .sort((a, b) => b[1].cost - a[1].cost)
+        .map(([feature, data]) => `
+          <tr>
+            <td class="usage-feature-name">${feature}</td>
+            <td>${data.calls}</td>
+            <td>${formatTokenCount(data.inputTokens)}</td>
+            <td>${formatTokenCount(data.outputTokens)}</td>
+            <td>${formatCost(data.cost)}</td>
+          </tr>
+        `).join('');
+    }
+  }
+  
+  // Render usage by date
+  const dateTbody = document.getElementById('usage-by-date');
+  if (dateTbody) {
+    if (byDate.length === 0) {
+      dateTbody.innerHTML = '<tr class="usage-empty-row"><td colspan="5">No usage data yet</td></tr>';
+    } else {
+      dateTbody.innerHTML = byDate
+        .slice(0, 30) // Show last 30 days
+        .map(data => `
+          <tr>
+            <td>${data.date}</td>
+            <td>${data.calls}</td>
+            <td>${formatTokenCount(data.inputTokens)}</td>
+            <td>${formatTokenCount(data.outputTokens)}</td>
+            <td>${formatCost(data.cost)}</td>
+          </tr>
+        `).join('');
+    }
+  }
 }
 
 // Load API keys to modal inputs

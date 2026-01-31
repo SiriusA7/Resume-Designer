@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('electron', {
   // Check for updates
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   
+  // Generate PDF using native Electron printToPDF
+  printToPdf: (options) => ipcRenderer.invoke('print-to-pdf', options),
+  
   // Listen for update events
   onUpdateDownloading: (callback) => ipcRenderer.on('update-downloading', callback),
   onUpdateProgress: (callback) => ipcRenderer.on('update-progress', (_, percent) => callback(percent)),

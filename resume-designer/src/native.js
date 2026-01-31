@@ -15,6 +15,24 @@ export function getPlatform() {
 }
 
 /**
+ * Convert a Uint8Array to base64 string (handles large files without stack overflow)
+ * @param {Uint8Array} uint8Array 
+ * @returns {string}
+ */
+function uint8ArrayToBase64(uint8Array) {
+  // Process in chunks to avoid stack overflow
+  const CHUNK_SIZE = 8192;
+  let binaryString = '';
+  
+  for (let i = 0; i < uint8Array.length; i += CHUNK_SIZE) {
+    const chunk = uint8Array.subarray(i, i + CHUNK_SIZE);
+    binaryString += String.fromCharCode.apply(null, chunk);
+  }
+  
+  return btoa(binaryString);
+}
+
+/**
  * Save a file using native dialog (Electron) or browser download (web)
  * @param {Uint8Array|Blob|string} data - File data
  * @param {string} defaultName - Default filename
@@ -23,13 +41,13 @@ export function getPlatform() {
  */
 export async function saveFile(data, defaultName, filters = []) {
   if (isElectron) {
-    // Convert data to base64 for IPC
+    // Convert data to base64 for IPC (using chunked approach to avoid stack overflow)
     let base64Data;
     if (data instanceof Blob) {
       const buffer = await data.arrayBuffer();
-      base64Data = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      base64Data = uint8ArrayToBase64(new Uint8Array(buffer));
     } else if (data instanceof Uint8Array) {
-      base64Data = btoa(String.fromCharCode(...data));
+      base64Data = uint8ArrayToBase64(data);
     } else if (typeof data === 'string') {
       base64Data = btoa(data);
     } else {
@@ -142,4 +160,19 @@ export async function getAppInfo() {
     platform: 'web',
     isPackaged: false
   };
+}
+
+/**
+ * Generate PDF using native Electron printToPDF (Electron only)
+ * @param {string} defaultName - Default filename for the PDF
+ * @param {Object} pageSize - Optional page size {width, height} in microns
+ * @returns {Promise<{success: boolean, filePath?: string, canceled?: boolean, error?: string}>}
+ */
+export async function printToPdf(defaultName, pageSize = null) {
+  if (isElectron) {
+    return await window.electron.printToPdf({ defaultName, pageSize });
+  }
+  
+  // Not available in web
+  return { success: false, error: 'Native PDF generation not available in browser' };
 }

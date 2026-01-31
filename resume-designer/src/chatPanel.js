@@ -3,8 +3,8 @@
  * AI chat interface with message history and actions
  */
 
-import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders, generateResumeChanges, getDefaultModelId } from './aiService.js';
-import { getSettings, saveSettings } from './persistence.js';
+import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders, generateResumeChanges, getDefaultModelId, profileInterviewChat, extractProfileFromInterview, saveExtractedProfile } from './aiService.js';
+import { getSettings, saveSettings, getUserProfile } from './persistence.js';
 import { store } from './store.js';
 import { marked } from 'marked';
 import { createChangeSet, diffResumeData } from './diffEngine.js';
@@ -21,6 +21,12 @@ let isLoading = false;
 let onApplyCallback = null;
 let isPanelOpen = false;
 
+// Resize state
+let resizeHandle = null;
+let isResizing = false;
+const MIN_PANEL_WIDTH = 240;
+const MAX_PANEL_WIDTH = 500;
+
 // Context chips storage
 let contextChips = [];
 
@@ -31,6 +37,26 @@ let currentThreadId = null;
 // Chat options state
 let currentReasoningEffort = 'medium'; // 'none', 'low', 'medium', 'high'
 let webSearchEnabled = false;
+
+// Profile interview mode
+let isProfileInterviewMode = false;
+let profileInterviewMessages = [];
+
+// Slash command autocomplete
+let slashCommandsPopup = null;
+let selectedCommandIndex = 0;
+
+// Available slash commands
+const SLASH_COMMANDS = [
+  { command: '/feedback', description: 'Get detailed resume feedback', icon: 'message-circle' },
+  { command: '/improve', description: 'Improve a section (e.g., /improve summary)', icon: 'edit' },
+  { command: '/generate', description: 'Generate bullet points from context', icon: 'zap' },
+  { command: '/profile', description: 'Start AI interview to fill your profile', icon: 'user' },
+  { command: '/done', description: 'Finish profile interview and save', icon: 'check' },
+  { command: '/debug', description: 'Show current profile status', icon: 'help-circle' },
+  { command: '/clear', description: 'Clear chat history', icon: 'trash' },
+  { command: '/help', description: 'Show available commands', icon: 'help-circle' }
+];
 
 const STORAGE_KEY = 'resume-designer-chat-history';
 const THREADS_KEY = 'resume-designer-chat-threads';
@@ -116,8 +142,73 @@ export function initChatPanel(onApply) {
   // Set up panel toggle
   setupPanelToggle();
   
+  // Initialize resize functionality
+  initPanelResize();
+  
   // Check if API keys are configured and render appropriate view
   renderChatView();
+}
+
+// Initialize panel resize functionality
+function initPanelResize() {
+  resizeHandle = document.getElementById('chat-resize-handle');
+  const panel = document.getElementById('chat-panel');
+  
+  if (!resizeHandle || !panel) return;
+  
+  // Load saved panel width
+  const settings = getSettings();
+  if (settings.chatPanelWidth) {
+    const savedWidth = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, settings.chatPanelWidth));
+    document.documentElement.style.setProperty('--chat-panel-width', `${savedWidth}px`);
+  }
+  
+  // Mouse down - start resizing
+  resizeHandle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    isResizing = true;
+    resizeHandle.classList.add('active');
+    panel.classList.add('resizing');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    
+    // Add document-level listeners
+    document.addEventListener('mousemove', handleResizeMove);
+    document.addEventListener('mouseup', handleResizeEnd);
+  });
+}
+
+// Handle resize mouse move
+function handleResizeMove(e) {
+  if (!isResizing) return;
+  
+  // Calculate new width based on mouse position
+  const newWidth = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, e.clientX));
+  document.documentElement.style.setProperty('--chat-panel-width', `${newWidth}px`);
+}
+
+// Handle resize mouse up
+function handleResizeEnd(e) {
+  if (!isResizing) return;
+  
+  isResizing = false;
+  const panel = document.getElementById('chat-panel');
+  
+  resizeHandle?.classList.remove('active');
+  panel?.classList.remove('resizing');
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  
+  // Remove document-level listeners
+  document.removeEventListener('mousemove', handleResizeMove);
+  document.removeEventListener('mouseup', handleResizeEnd);
+  
+  // Save the new width
+  const computedStyle = getComputedStyle(document.documentElement);
+  const currentWidth = parseInt(computedStyle.getPropertyValue('--chat-panel-width'), 10);
+  if (currentWidth && !isNaN(currentWidth)) {
+    saveSettings({ chatPanelWidth: currentWidth });
+  }
 }
 
 // Map provider keys to display names
@@ -507,16 +598,50 @@ function setupEventListeners() {
   
   // Send on Enter (Shift+Enter for new line)
   inputEl?.addEventListener('keydown', (e) => {
+    // Handle slash command navigation
+    if (slashCommandsPopup?.classList.contains('show')) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        navigateSlashCommands(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        navigateSlashCommands(-1);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        selectSlashCommand();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        hideSlashCommands();
+        return;
+      }
+    }
+    
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   });
   
-  // Auto-resize textarea
+  // Auto-resize textarea and handle slash commands
   inputEl?.addEventListener('input', () => {
     inputEl.style.height = 'auto';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
+    
+    // Check for slash command input
+    handleSlashCommandInput();
+  });
+  
+  // Hide slash commands on blur (with delay to allow click)
+  inputEl?.addEventListener('blur', () => {
+    setTimeout(() => {
+      hideSlashCommands();
+    }, 150);
   });
   
   // Shortcut buttons
@@ -542,6 +667,9 @@ function setupEventListeners() {
   
   // Chat option buttons
   setupChatOptions();
+  
+  // Initialize slash commands popup
+  initSlashCommandsPopup();
 }
 
 // Set up chat option buttons (search, reasoning)
@@ -638,6 +766,159 @@ function showTemporaryTooltip(element, message) {
   }, 2000);
 }
 
+// ============================================
+// Slash Command Autocomplete
+// ============================================
+
+// Initialize slash commands popup
+function initSlashCommandsPopup() {
+  if (slashCommandsPopup) return;
+  
+  const inputWrapper = document.querySelector('.chat-input-wrapper');
+  if (!inputWrapper) return;
+  
+  // Create popup element
+  slashCommandsPopup = document.createElement('div');
+  slashCommandsPopup.className = 'slash-commands-popup';
+  slashCommandsPopup.id = 'slash-commands-popup';
+  
+  // Insert before input wrapper
+  inputWrapper.parentNode.insertBefore(slashCommandsPopup, inputWrapper);
+}
+
+// Handle slash command input detection
+function handleSlashCommandInput() {
+  const value = inputEl?.value || '';
+  
+  // Check if input starts with /
+  if (value.startsWith('/')) {
+    const query = value.slice(1).toLowerCase();
+    const filteredCommands = SLASH_COMMANDS.filter(cmd => 
+      cmd.command.slice(1).toLowerCase().includes(query) ||
+      cmd.description.toLowerCase().includes(query)
+    );
+    
+    if (filteredCommands.length > 0) {
+      showSlashCommands(filteredCommands);
+    } else {
+      hideSlashCommands();
+    }
+  } else {
+    hideSlashCommands();
+  }
+}
+
+// Show slash commands popup
+function showSlashCommands(commands) {
+  if (!slashCommandsPopup) return;
+  
+  selectedCommandIndex = 0;
+  
+  slashCommandsPopup.innerHTML = `
+    <div class="slash-commands-header">Commands</div>
+    <div class="slash-commands-list">
+      ${commands.map((cmd, index) => `
+        <button class="slash-command-item ${index === 0 ? 'selected' : ''}" 
+                data-command="${cmd.command}" 
+                data-index="${index}"
+                type="button">
+          <div class="slash-command-icon">
+            ${getCommandIcon(cmd.icon)}
+          </div>
+          <div class="slash-command-info">
+            <span class="slash-command-name">${cmd.command}</span>
+            <span class="slash-command-desc">${cmd.description}</span>
+          </div>
+        </button>
+      `).join('')}
+    </div>
+  `;
+  
+  // Add click handlers
+  slashCommandsPopup.querySelectorAll('.slash-command-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const command = item.dataset.command;
+      if (command) {
+        inputEl.value = command + ' ';
+        inputEl.focus();
+        hideSlashCommands();
+      }
+    });
+    
+    item.addEventListener('mouseenter', () => {
+      const index = parseInt(item.dataset.index);
+      updateSelectedCommand(index);
+    });
+  });
+  
+  slashCommandsPopup.classList.add('show');
+}
+
+// Hide slash commands popup
+function hideSlashCommands() {
+  slashCommandsPopup?.classList.remove('show');
+}
+
+// Navigate through slash commands
+function navigateSlashCommands(direction) {
+  const items = slashCommandsPopup?.querySelectorAll('.slash-command-item');
+  if (!items || items.length === 0) return;
+  
+  selectedCommandIndex = (selectedCommandIndex + direction + items.length) % items.length;
+  updateSelectedCommand(selectedCommandIndex);
+}
+
+// Update selected command visual
+function updateSelectedCommand(index) {
+  const items = slashCommandsPopup?.querySelectorAll('.slash-command-item');
+  if (!items) return;
+  
+  items.forEach((item, i) => {
+    item.classList.toggle('selected', i === index);
+  });
+  
+  selectedCommandIndex = index;
+  
+  // Scroll selected item into view
+  items[index]?.scrollIntoView({ block: 'nearest' });
+}
+
+// Select the current slash command
+function selectSlashCommand() {
+  const items = slashCommandsPopup?.querySelectorAll('.slash-command-item');
+  if (!items || items.length === 0) return;
+  
+  const selectedItem = items[selectedCommandIndex];
+  const command = selectedItem?.dataset.command;
+  
+  if (command) {
+    // For commands that take arguments, add space
+    const needsArgs = ['/improve', '/generate'].includes(command);
+    inputEl.value = command + (needsArgs ? ' ' : '');
+    inputEl.focus();
+    hideSlashCommands();
+    
+    // If command doesn't need args, execute it
+    if (!needsArgs) {
+      // Trigger send on next tick to allow UI to update
+      setTimeout(() => handleSend(), 10);
+    }
+  }
+}
+
+// Get icon SVG for command
+function getCommandIcon(iconName) {
+  const icons = {
+    'message-circle': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+    'edit': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+    'zap': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    'user': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    'check': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
+    'trash': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    'help-circle': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+  };
+  return icons[iconName] || icons['help-circle'];
+}
 
 // Render the chat view based on API key configuration
 function renderChatView() {
@@ -751,6 +1032,12 @@ async function handleSend() {
   // Clear context chips after sending
   clearContextChips();
   
+  // Check if we're in profile interview mode
+  if (isProfileInterviewMode) {
+    await continueProfileInterview(text);
+    return;
+  }
+  
   // Determine if this is a change request or a general question
   if (isChangeRequest(text)) {
     // User wants changes - use the change generation flow
@@ -798,8 +1085,24 @@ async function handleCommand(command) {
       showHelp();
       break;
       
+    case '/profile':
+      await startProfileInterview();
+      break;
+      
+    case '/done':
+      if (isProfileInterviewMode) {
+        await finishProfileInterview();
+      } else {
+        addMessage('assistant', 'No active interview to finish. Use `/profile` to start a profile interview.');
+      }
+      break;
+    
+    case '/debug':
+      showDebugInfo();
+      break;
+      
     default:
-      addMessage('assistant', `Unknown command: ${cmd}\n\nAvailable commands:\n• /feedback - Get resume feedback\n• /improve [section] - Improve a section\n• /generate [context] - Generate bullet points\n• /clear - Clear chat history\n• /help - Show this help`);
+      addMessage('assistant', `Unknown command: ${cmd}\n\nAvailable commands:\n• /feedback - Get resume feedback\n• /improve [section] - Improve a section\n• /generate [context] - Generate bullet points\n• /profile - Start AI interview to fill your profile\n• /done - Finish profile interview and save\n• /clear - Clear chat history\n• /help - Show this help`);
   }
 }
 
@@ -953,6 +1256,163 @@ async function getAIGenerateBullets(context) {
     setLoading(false);
     addMessage('error', error.message);
   }
+}
+
+// Start profile interview mode
+async function startProfileInterview() {
+  const configuredProviders = getConfiguredProviders();
+  if (configuredProviders.length === 0) {
+    addMessage('error', 'Please configure an API key in settings before starting a profile interview.');
+    return;
+  }
+  
+  isProfileInterviewMode = true;
+  profileInterviewMessages = [];
+  
+  // Add a system message to the UI
+  addMessage('assistant', `**Profile Interview Started**
+
+I'll ask you some questions to learn about your professional background. This information will help me give you better resume suggestions.
+
+When you're done, type \`/done\` to save the information to your profile.
+
+Let's begin!`);
+  
+  setLoading(true);
+  
+  try {
+    addThinkingStep('Starting interview...');
+    
+    // Get the first interview question
+    const firstMessage = { role: 'user', content: 'Please start the interview.' };
+    profileInterviewMessages.push(firstMessage);
+    
+    const response = await profileInterviewChat(currentModel, profileInterviewMessages);
+    profileInterviewMessages.push({ role: 'assistant', content: response });
+    
+    completeThinkingStep('Ready');
+    setLoading(false);
+    addMessage('assistant', response);
+  } catch (error) {
+    setLoading(false);
+    isProfileInterviewMode = false;
+    addMessage('error', 'Failed to start interview: ' + error.message);
+  }
+}
+
+// Continue profile interview with user response
+async function continueProfileInterview(userMessage) {
+  profileInterviewMessages.push({ role: 'user', content: userMessage });
+  
+  setLoading(true);
+  
+  try {
+    addThinkingStep('Thinking...');
+    
+    const response = await profileInterviewChat(currentModel, profileInterviewMessages);
+    profileInterviewMessages.push({ role: 'assistant', content: response });
+    
+    completeThinkingStep('Response ready');
+    setLoading(false);
+    addMessage('assistant', response);
+  } catch (error) {
+    setLoading(false);
+    addMessage('error', error.message);
+  }
+}
+
+// Finish profile interview and extract data
+async function finishProfileInterview() {
+  console.log('[ProfileInterview] Finishing interview with messages:', profileInterviewMessages.length);
+  
+  if (profileInterviewMessages.length < 4) {
+    addMessage('assistant', "We haven't talked enough yet! Please answer a few more questions so I have information to save.");
+    return;
+  }
+  
+  setLoading(true);
+  
+  try {
+    addThinkingStep('Analyzing conversation...');
+    
+    console.log('[ProfileInterview] Extracting profile from conversation...');
+    // Extract profile data from conversation
+    const extractedProfile = await extractProfileFromInterview(currentModel, profileInterviewMessages);
+    console.log('[ProfileInterview] Extracted profile:', extractedProfile);
+    
+    completeThinkingStep('Saving to profile...');
+    
+    // Save the extracted data
+    console.log('[ProfileInterview] Saving extracted profile...');
+    const savedProfile = saveExtractedProfile(extractedProfile);
+    console.log('[ProfileInterview] Profile saved:', savedProfile);
+    
+    completeThinkingStep('Profile updated!');
+    setLoading(false);
+    
+    // Exit interview mode
+    isProfileInterviewMode = false;
+    profileInterviewMessages = [];
+    
+    // Show summary of what was saved
+    let summary = '**Profile Updated!**\n\nI\'ve saved the following information to your profile:\n\n';
+    
+    if (extractedProfile.personalSummary) {
+      summary += '- Personal summary\n';
+    }
+    if (extractedProfile.careerGoals) {
+      summary += '- Career goals\n';
+    }
+    if (extractedProfile.workExperience?.length > 0) {
+      summary += `- ${extractedProfile.workExperience.length} work experience entries\n`;
+    }
+    if (extractedProfile.skills?.length > 0) {
+      summary += `- ${extractedProfile.skills.length} skills\n`;
+    }
+    if (extractedProfile.education?.length > 0) {
+      summary += `- ${extractedProfile.education.length} education entries\n`;
+    }
+    if (extractedProfile.projects?.length > 0) {
+      summary += `- ${extractedProfile.projects.length} projects\n`;
+    }
+    if (extractedProfile.certifications?.length > 0) {
+      summary += `- ${extractedProfile.certifications.length} certifications\n`;
+    }
+    if (extractedProfile.achievements?.length > 0) {
+      summary += `- ${extractedProfile.achievements.length} achievements\n`;
+    }
+    if (extractedProfile.industryKnowledge) {
+      summary += '- Industry knowledge\n';
+    }
+    if (extractedProfile.preferences) {
+      summary += '- Work preferences\n';
+    }
+    
+    summary += '\nYou can view and edit your profile from **Tools > User Profile**.';
+    
+    addMessage('assistant', summary);
+    
+  } catch (error) {
+    setLoading(false);
+    addMessage('error', 'Failed to extract profile: ' + error.message + '\n\nYou can try `/done` again or continue the conversation.');
+  }
+}
+
+// Export function to start profile interview from outside (e.g., from profile panel)
+export function startProfileInterviewFromPanel() {
+  // Open chat panel if closed
+  if (!isPanelOpen) {
+    const chatPanel = document.getElementById('chat-panel');
+    chatPanel?.classList.remove('closed');
+    isPanelOpen = true;
+  }
+  
+  // Clear input and start interview
+  if (inputEl) {
+    inputEl.value = '';
+  }
+  
+  startProfileInterview();
 }
 
 // Check if the user's message is requesting changes to the resume
@@ -1390,13 +1850,50 @@ function showHelp() {
 • **/improve summary** - Get an improved version of your summary
 • **/improve [section]** - Get suggestions for a specific section
 • **/generate [context]** - Generate bullet points based on context
+• **/profile** - Start AI interview to fill your profile
+• **/done** - Finish profile interview and save
 • **/clear** - Clear chat history
 • **/help** - Show this help message
 
 **Tips:**
 - You can also just type naturally and ask questions about your resume
 - Click "Apply to Resume" buttons to directly update your resume
-- Use the shortcut buttons below the input for quick actions`);
+- Use the shortcut buttons below the input for quick actions
+- Your User Profile info is automatically included in AI context`);
+}
+
+// Show debug info about current state
+function showDebugInfo() {
+  const profile = getUserProfile();
+  const hasProfile = profile && (
+    profile.personalSummary || 
+    profile.careerGoals || 
+    (profile.workExperience && profile.workExperience.length > 0) ||
+    (profile.skills && profile.skills.length > 0)
+  );
+  
+  let debugMsg = `**Debug Information:**\n\n`;
+  debugMsg += `**Profile Interview Mode:** ${isProfileInterviewMode ? 'Active' : 'Inactive'}\n`;
+  debugMsg += `**Interview Messages:** ${profileInterviewMessages.length}\n\n`;
+  
+  debugMsg += `**User Profile Status:**\n`;
+  if (!profile) {
+    debugMsg += `- Profile: Not found\n`;
+  } else {
+    debugMsg += `- Personal Summary: ${profile.personalSummary ? 'Set (' + profile.personalSummary.length + ' chars)' : 'Empty'}\n`;
+    debugMsg += `- Career Goals: ${profile.careerGoals ? 'Set' : 'Empty'}\n`;
+    debugMsg += `- Work Experience: ${profile.workExperience?.length || 0} entries\n`;
+    debugMsg += `- Skills: ${profile.skills?.length || 0} entries\n`;
+    debugMsg += `- Education: ${profile.education?.length || 0} entries\n`;
+    debugMsg += `- Projects: ${profile.projects?.length || 0} entries\n`;
+    debugMsg += `- Industry Knowledge: ${profile.industryKnowledge ? 'Set' : 'Empty'}\n`;
+    debugMsg += `- Preferences: ${profile.preferences ? 'Set' : 'Empty'}\n`;
+  }
+  
+  debugMsg += `\n**AI Context:** ${hasProfile ? 'Profile will be included in AI requests' : 'Profile is empty, not included in AI requests'}`;
+  
+  console.log('[Debug] Current profile state:', profile);
+  addMessage('assistant', debugMsg);
 }
 
 // Save chat history to localStorage

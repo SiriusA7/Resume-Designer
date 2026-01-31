@@ -11,11 +11,15 @@
   }
   
   /* Hide app chrome */
-  .sidebar,
-  .app-title,
-  .app-subtitle,
-  .variant-nav,
-  .export-controls {
+  .header-bar,
+  .chat-panel,
+  .structure-panel,
+  .zoom-controls,
+  .edit-mode-hint,
+  .undo-redo-controls,
+  .modal-overlay,
+  .onboarding-overlay,
+  #download-pdf {
     display: none !important;
   }
   
@@ -40,14 +44,14 @@
     max-width: none;
     box-shadow: none;
     border-radius: 0;
+    transform: none !important;
   }
   
   .resume {
-    width: 8.5in;
-    min-height: 11in;
     margin: 0 auto;
     padding: 0;
     background: white;
+    box-shadow: none;
   }
   
   /* Ensure colors print */
@@ -55,27 +59,6 @@
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
     color-adjust: exact !important;
-  }
-  
-  /* Typography adjustments for print */
-  .resume {
-    font-size: 10pt;
-  }
-  
-  .resume-name {
-    font-size: 24pt;
-  }
-  
-  .resume-tagline {
-    font-size: 11pt;
-  }
-  
-  .section-title {
-    font-size: 12pt;
-  }
-  
-  .sidebar-title {
-    font-size: 9pt;
   }
   
   /* Prevent page breaks inside elements */
@@ -89,60 +72,14 @@
     break-inside: avoid;
   }
   
-  /* Remove hover states and transitions */
+  /* Remove hover states */
   a {
     text-decoration: none !important;
   }
   
-  /* Hide interactive elements */
+  /* Hide buttons */
   .btn,
   button {
     display: none !important;
-  }
-  
-  /* Ensure links are readable */
-  .contact-item {
-    color: rgba(255, 255, 255, 0.9) !important;
-  }
-  
-  /* Optimize header for print */
-  .resume-header {
-    background: #2d2a26 !important;
-    padding: 0.6in 0.75in 0.5in;
-  }
-  
-  .header-contact {
-    font-size: 9pt;
-  }
-  
-  /* Optimize sidebar for print */
-  .resume-sidebar {
-    background: #f4e8e4 !important;
-    padding: 0.5in 0.4in;
-  }
-  
-  .sidebar-content {
-    font-size: 9pt;
-  }
-  
-  /* Optimize main content for print */
-  .resume-main {
-    padding: 0.5in 0.6in;
-  }
-  
-  .experience-bullets {
-    font-size: 9pt;
-  }
-  
-  /* Grid adjustments */
-  .resume-body {
-    grid-template-columns: 2in 1fr;
-  }
-}
-
-/* High-quality print (for PDF export) */
-@media print and (min-resolution: 300dpi) {
-  .resume {
-    font-size: 10pt;
   }
 }

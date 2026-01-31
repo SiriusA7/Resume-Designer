@@ -1,13 +1,13 @@
 /**
  * PDF Export Utilities
- * Handles PDF generation via html2pdf.js and print functionality
+ * Uses html2pdf.js for PDF generation with custom page sizes
  */
 
 import { isElectron, saveFile } from './native.js';
 
 let html2pdfModule = null;
 
-// Dynamically import html2pdf.js
+// Dynamically import html2pdf.js (browser fallback)
 async function loadHtml2Pdf() {
   if (!html2pdfModule) {
     const module = await import('html2pdf.js');
@@ -18,10 +18,8 @@ async function loadHtml2Pdf() {
 
 export function initPdfExport() {
   const downloadBtn = document.getElementById('download-pdf');
-  const printBtn = document.getElementById('print-resume');
   
   downloadBtn.addEventListener('click', showPdfDialog);
-  printBtn.addEventListener('click', handlePrint);
   
   // Initialize the PDF dialog
   initPdfDialog();
@@ -125,10 +123,21 @@ function closePdfDialog() {
 
 async function handleDownloadPdf(customFilename) {
   const resumeEl = document.getElementById('resume');
-  const downloadBtn = document.getElementById('pdf-dialog-download');
   
   // Close dialog
   closePdfDialog();
+  
+  // Validate resume element exists
+  if (!resumeEl) {
+    console.error('PDF generation failed: Resume element not found');
+    alert('Failed to generate PDF: Resume content not found.');
+    return;
+  }
+  
+  // Use custom filename or default
+  const filename = customFilename ? 
+    (customFilename.endsWith('.pdf') ? customFilename : `${customFilename}.pdf`) : 
+    'Resume.pdf';
   
   // Show loading state on header button
   const headerBtn = document.getElementById('download-pdf');
@@ -143,60 +152,13 @@ async function handleDownloadPdf(customFilename) {
   }
   
   try {
-    const html2pdf = await loadHtml2Pdf();
-    
-    // Use custom filename or default
-    const filename = customFilename ? 
-      (customFilename.endsWith('.pdf') ? customFilename : `${customFilename}.pdf`) : 
-      'Resume.pdf';
-    
-    // Fixed width (8.5 inches), adaptive height based on content
-    const pageWidthInches = 8.5;
-    
-    // Get actual content height
-    const contentHeight = resumeEl.scrollHeight;
-    const contentHeightInches = contentHeight / 96;
-    
-    // Use content height, but minimum of 11 inches (letter size)
-    const pageHeightInches = Math.max(11, contentHeightInches);
-    
-    const options = {
-      margin: 0,
-      filename: filename,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { 
-        scale: 2,
-        useCORS: true,
-        letterRendering: true
-      },
-      jsPDF: { 
-        unit: 'in', 
-        format: [pageWidthInches, pageHeightInches],
-        orientation: 'portrait'
-      }
-    };
-    
-    if (isElectron) {
-      // In Electron: Generate PDF as blob and use native save dialog
-      const pdfBlob = await html2pdf().set(options).from(resumeEl).outputPdf('blob');
-      
-      const result = await saveFile(pdfBlob, filename, [
-        { name: 'PDF Documents', extensions: ['pdf'] }
-      ]);
-      
-      if (result.success) {
-        console.log('PDF saved to:', result.filePath);
-      } else if (!result.canceled) {
-        throw new Error(result.error || 'Failed to save PDF');
-      }
-    } else {
-      // In browser: Use default download behavior
-      await html2pdf().set(options).from(resumeEl).save();
-    }
+    // Use html2pdf.js for PDF generation (supports custom page sizes, preserves text)
+    console.log('PDF Export: Using html2pdf.js...');
+    await generatePdfWithHtml2Pdf(resumeEl, filename);
     
   } catch (error) {
     console.error('PDF generation failed:', error);
-    alert('Failed to generate PDF. Please try the Print option instead.');
+    alert(`Failed to generate PDF: ${error.message || 'Unknown error'}. Check the console for details.`);
   } finally {
     // Restore button state
     if (headerBtn) {
@@ -213,6 +175,84 @@ async function handleDownloadPdf(customFilename) {
   }
 }
 
-function handlePrint() {
-  window.print();
+// Generate PDF using html2pdf.js (preserves text for ATS compatibility)
+async function generatePdfWithHtml2Pdf(resumeEl, filename) {
+  // Load html2pdf library
+  console.log('PDF Export: Loading html2pdf.js...');
+  let html2pdf;
+  try {
+    html2pdf = await loadHtml2Pdf();
+    console.log('PDF Export: html2pdf.js loaded successfully');
+  } catch (loadError) {
+    console.error('PDF Export: Failed to load html2pdf.js', loadError);
+    throw new Error(`Failed to load PDF library: ${loadError.message}`);
+  }
+  
+  // Get the resume's actual rendered dimensions
+  const resumeWidth = resumeEl.offsetWidth;
+  const resumeHeight = resumeEl.offsetHeight; // Use offsetHeight for more accurate measurement
+  
+  // Convert pixels to inches (96 DPI)
+  const pageWidthInches = resumeWidth / 96;
+  // Add a tiny buffer (0.01") to prevent content from spilling to next page
+  const pageHeightInches = (resumeHeight / 96) + 0.01;
+  
+  console.log(`PDF Export: Resume dimensions - ${resumeWidth}px x ${resumeHeight}px (${pageWidthInches.toFixed(2)}" x ${pageHeightInches.toFixed(2)}")`);
+  
+  // html2canvas options for high quality output
+  const options = {
+    margin: 0,
+    filename: filename,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { 
+      scale: 2,                      // 2x scale for high quality
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      foreignObjectRendering: false,
+      removeContainer: true,
+      backgroundColor: '#ffffff',
+      imageTimeout: 0,
+      height: resumeHeight,          // Explicitly set height to match element
+      windowHeight: resumeHeight,
+      ignoreElements: (element) => {
+        const tag = element.tagName?.toLowerCase();
+        return tag === 'script' || tag === 'noscript' || tag === 'iframe';
+      }
+    },
+    jsPDF: { 
+      unit: 'in', 
+      format: [pageWidthInches, pageHeightInches],
+      orientation: 'portrait'
+    }
+  };
+  
+  console.log('PDF Export: Starting PDF generation...');
+  
+  try {
+    if (isElectron) {
+      // In Electron: Generate as blob and use native save dialog
+      const pdfBlob = await html2pdf().set(options).from(resumeEl).outputPdf('blob');
+      console.log('PDF Export: PDF blob generated, opening save dialog...');
+      
+      const result = await saveFile(pdfBlob, filename, [
+        { name: 'PDF Documents', extensions: ['pdf'] }
+      ]);
+      
+      if (result.success) {
+        console.log('PDF Export: PDF saved to:', result.filePath);
+      } else if (result.canceled) {
+        console.log('PDF Export: Save canceled by user');
+      } else {
+        throw new Error(result.error || 'Failed to save PDF file');
+      }
+    } else {
+      // In browser: Direct download
+      await html2pdf().set(options).from(resumeEl).save();
+      console.log('PDF Export: PDF download initiated');
+    }
+  } catch (renderError) {
+    console.error('PDF Export: Render failed', renderError);
+    throw new Error(`PDF rendering failed: ${renderError.message}`);
+  }
 }

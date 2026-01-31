@@ -45,7 +45,7 @@ const DEFAULT_ACCENT = {
   underlineWidth: 2,      // px
   bulletStyle: 'disc',
   borderRadius: 'subtle',
-  skillTagStyle: 'filled', // 'filled', 'outlined', 'minimal', 'plain'
+  skillTagStyle: 'plain', // 'filled', 'outlined', 'minimal', 'plain'
   showCornerTriangle: true,
   showSidebarGradient: true
 };
@@ -78,18 +78,10 @@ export function applyAccentSettings(settings) {
   
   const s = { ...DEFAULT_ACCENT, ...settings };
   
-  // Underline style
-  if (s.underlineStyle === 'gradient') {
-    resume.style.setProperty('--title-underline-style', 'solid');
-    resume.classList.add('gradient-underlines');
-  } else if (s.underlineStyle === 'none') {
-    resume.style.setProperty('--title-underline-style', 'none');
-    resume.classList.remove('gradient-underlines');
-  } else {
-    resume.style.setProperty('--title-underline-style', s.underlineStyle);
-    resume.classList.remove('gradient-underlines');
-  }
+  // Underline style - use data attribute for CSS targeting
+  resume.dataset.underlineStyle = s.underlineStyle;
   
+  // Underline width
   resume.style.setProperty('--title-underline-width', `${s.underlineWidth}px`);
   
   // Bullet style
