@@ -1819,7 +1819,12 @@ html[data-theme="dark"] .theme-option + .theme-option {
   }
   
   .preview-area {
-    padding: var(--space-lg);
+    padding: 0;
+  }
+  
+  .resume-scroller {
+    padding: var(--space-md);
+    padding-bottom: 80px;
   }
 }
 
@@ -1866,6 +1871,12 @@ html[data-theme="dark"] .theme-option + .theme-option {
     padding: var(--space-xs);
     font-size: 0.8rem;
   }
+  
+  /* Minimal resume scroller padding */
+  .resume-scroller {
+    padding: var(--space-sm);
+    padding-bottom: 70px;
+  }
 }
 
 /* 500px: Sixth stage - very small screens */
@@ -1900,6 +1911,12 @@ html[data-theme="dark"] .theme-option + .theme-option {
     right: var(--space-sm);
     left: var(--space-sm);
     width: auto;
+  }
+  
+  /* Minimal resume scroller padding */
+  .resume-scroller {
+    padding: var(--space-xs);
+    padding-bottom: 60px;
   }
 }
 
