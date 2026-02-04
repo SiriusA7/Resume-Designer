@@ -19,10 +19,11 @@ import {
 
 import { analyzeAgainstJobs, tailorForJob, generateResumeChanges } from './aiService.js';
 import { getConfiguredProviders, getAllModels, isProviderConfigured } from './aiService.js';
-import { getSettings } from './persistence.js';
+import { getSettings, saveVariantAnalysis, getVariantAnalysis } from './persistence.js';
 import { createChangeSet } from './diffEngine.js';
 import { showDiffView } from './diffView.js';
 import { store } from './store.js';
+import { getCurrentId } from './headerBar.js';
 
 let panelContainer = null;
 let isAnalyzing = false;
@@ -32,6 +33,10 @@ let jobSelectionModal = null;
 let selectedJobsForAnalysis = new Set();
 let selectedModelForAnalysis = null;
 let contentClickListenerAdded = false;
+let collapsedCards = new Set(); // Track which cards are collapsed (default: all collapsed)
+let allCardsInitialized = false; // Track if we've initialized the collapse state
+let showRecentOnly = true; // Show only recent JDs by default
+const RECENT_JD_LIMIT = 5; // Number of JDs to show when "recent only" is enabled
 
 /**
  * Initialize job description panel
@@ -39,6 +44,27 @@ let contentClickListenerAdded = false;
 export function initJobDescriptionPanel() {
   initJobDescriptions();
   createPanel();
+}
+
+/**
+ * Handle variant change - reload or clear analysis for new variant
+ * Called from main.js when user switches resumes
+ */
+export function onJobPanelVariantChange() {
+  const currentVariantId = getCurrentId();
+  if (currentVariantId) {
+    // Load analysis for the new variant (may be null)
+    analysisResults = getVariantAnalysis(currentVariantId);
+    appliedRecommendations = new Set();
+  } else {
+    analysisResults = null;
+    appliedRecommendations = new Set();
+  }
+  
+  // If panel is open, re-render to show/hide analysis
+  if (panelContainer?.classList.contains('show')) {
+    renderContent();
+  }
 }
 
 /**
@@ -96,6 +122,13 @@ function createPanel() {
  */
 export function openJobDescriptionPanel() {
   createPanel();
+  
+  // Load analysis results for current variant
+  const currentVariantId = getCurrentId();
+  if (currentVariantId) {
+    analysisResults = getVariantAnalysis(currentVariantId);
+  }
+  
   renderContent();
   panelContainer?.classList.add('show');
   document.body.style.overflow = 'hidden';
@@ -118,6 +151,12 @@ function renderContent() {
   
   const jobDescriptions = getAllJobDescriptions();
   const activeJDs = getActiveJobDescriptions();
+  
+  // Initialize all cards as collapsed by default on first render
+  if (!allCardsInitialized && jobDescriptions.length > 0) {
+    jobDescriptions.forEach(jd => collapsedCards.add(jd.id));
+    allCardsInitialized = true;
+  }
   
   content.innerHTML = `
     <div class="jd-panel-section">
@@ -149,8 +188,26 @@ function renderContent() {
     
     <div class="jd-panel-section">
       <div class="jd-section-header">
-        <h3>Your Job Descriptions (${jobDescriptions.length})</h3>
+        <h3>Your Job Descriptions ${jobDescriptions.length > 0 ? `(${getDisplayedJobDescriptions(jobDescriptions).length}${showRecentOnly && jobDescriptions.length > RECENT_JD_LIMIT ? ` of ${jobDescriptions.length}` : ''})` : ''}</h3>
         <div class="jd-section-actions">
+          ${jobDescriptions.length > 1 ? `
+            <button class="jd-icon-btn" id="jd-collapse-all" title="Collapse All">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="4 14 10 14 10 20"/>
+                <polyline points="20 10 14 10 14 4"/>
+                <line x1="14" y1="10" x2="21" y2="3"/>
+                <line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+            <button class="jd-icon-btn" id="jd-expand-all" title="Expand All">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 3 21 3 21 9"/>
+                <polyline points="9 21 3 21 3 15"/>
+                <line x1="21" y1="3" x2="14" y2="10"/>
+                <line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+          ` : ''}
           <button class="jd-icon-btn" id="jd-import-btn" title="Import from JSON">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -168,6 +225,20 @@ function renderContent() {
         </div>
       </div>
       
+      ${jobDescriptions.length > 0 ? `
+        <div class="jd-filter-bar">
+          <span class="jd-filter-label">Show:</span>
+          <div class="jd-filter-toggle">
+            <button class="jd-filter-option ${showRecentOnly ? 'active' : ''}" id="jd-filter-recent">
+              Recent (${Math.min(jobDescriptions.length, RECENT_JD_LIMIT)})
+            </button>
+            <button class="jd-filter-option ${!showRecentOnly ? 'active' : ''}" id="jd-filter-all">
+              All (${jobDescriptions.length})
+            </button>
+          </div>
+        </div>
+      ` : ''}
+      
       <div class="jd-list" id="jd-list">
         ${jobDescriptions.length === 0 ? `
           <div class="jd-empty">
@@ -180,7 +251,7 @@ function renderContent() {
             <p>No job descriptions added yet</p>
             <span>Add target jobs to analyze your resume fit</span>
           </div>
-        ` : jobDescriptions.map(jd => renderJobDescriptionCard(jd)).join('')}
+        ` : getDisplayedJobDescriptions(jobDescriptions).map(jd => renderJobDescriptionCard(jd)).join('')}
       </div>
     </div>
     
@@ -219,16 +290,36 @@ function renderContent() {
 }
 
 /**
+ * Get job descriptions to display based on recent-only filter
+ */
+function getDisplayedJobDescriptions(jobDescriptions) {
+  if (!showRecentOnly || jobDescriptions.length <= RECENT_JD_LIMIT) {
+    return jobDescriptions;
+  }
+  // Sort by date added (most recent first) and take the limit
+  return [...jobDescriptions]
+    .sort((a, b) => new Date(b.dateAdded) - new Date(a.dateAdded))
+    .slice(0, RECENT_JD_LIMIT);
+}
+
+/**
  * Render a single job description card
  */
 function renderJobDescriptionCard(jd) {
   const preview = jd.description.length > 150 
     ? jd.description.substring(0, 150) + '...' 
     : jd.description;
+  
+  const isCollapsed = collapsedCards.has(jd.id);
     
   return `
-    <div class="jd-card ${jd.isActive ? 'active' : ''}" data-id="${jd.id}">
+    <div class="jd-card ${jd.isActive ? 'active' : ''} ${isCollapsed ? 'collapsed' : ''}" data-id="${jd.id}">
       <div class="jd-card-header">
+        <button class="jd-card-expand ${isCollapsed ? '' : 'expanded'}" data-id="${jd.id}" title="${isCollapsed ? 'Expand' : 'Collapse'}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
         <div class="jd-card-info">
           <h4 class="jd-card-title">${escapeHtml(jd.title)}</h4>
           <span class="jd-card-company">${escapeHtml(jd.company)}</span>
@@ -489,6 +580,29 @@ function setupEventListeners() {
   document.getElementById('jd-analyze-btn')?.addEventListener('click', handleAnalyze);
   document.getElementById('jd-tailor-btn')?.addEventListener('click', handleTailor);
   
+  // Collapse/Expand All buttons
+  document.getElementById('jd-collapse-all')?.addEventListener('click', () => {
+    const jobDescriptions = getAllJobDescriptions();
+    jobDescriptions.forEach(jd => collapsedCards.add(jd.id));
+    renderContent();
+  });
+  
+  document.getElementById('jd-expand-all')?.addEventListener('click', () => {
+    collapsedCards.clear();
+    renderContent();
+  });
+  
+  // Filter toggle buttons
+  document.getElementById('jd-filter-recent')?.addEventListener('click', () => {
+    showRecentOnly = true;
+    renderContent();
+  });
+  
+  document.getElementById('jd-filter-all')?.addEventListener('click', () => {
+    showRecentOnly = false;
+    renderContent();
+  });
+  
   // Card actions (delegated) - only add once since content element persists
   if (!contentClickListenerAdded) {
     contentClickListenerAdded = true;
@@ -500,12 +614,21 @@ function setupEventListeners() {
  * Handle clicks on content area (delegated event handler)
  */
 function handleContentClick(e) {
+  const expandBtn = e.target.closest('.jd-card-expand');
   const toggleBtn = e.target.closest('.jd-card-toggle');
   const editBtn = e.target.closest('.jd-card-edit');
   const deleteBtn = e.target.closest('.jd-card-delete');
   const applyRecBtn = e.target.closest('.jd-apply-rec');
   
-  if (toggleBtn) {
+  if (expandBtn) {
+    const id = expandBtn.dataset.id;
+    if (collapsedCards.has(id)) {
+      collapsedCards.delete(id);
+    } else {
+      collapsedCards.add(id);
+    }
+    renderContent();
+  } else if (toggleBtn) {
     const id = toggleBtn.dataset.id;
     toggleJobDescriptionActive(id);
     renderContent();
@@ -729,6 +852,13 @@ async function performAnalysis(selectedJDs, modelId) {
   
   try {
     analysisResults = await analyzeAgainstJobs(modelId, selectedJDs);
+    
+    // Save analysis results to current variant for persistence
+    const currentVariantId = getCurrentId();
+    if (currentVariantId && analysisResults) {
+      saveVariantAnalysis(currentVariantId, analysisResults);
+    }
+    
     renderContent();
   } catch (error) {
     alert('Analysis failed: ' + error.message);

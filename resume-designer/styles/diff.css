@@ -3,6 +3,17 @@
  * Git-diff like styling for reviewing AI-proposed changes
  */
 
+/* Hide inline editor hover elements when Diff view is open */
+body:has(.diff-view-overlay.show) .editable-ai-container,
+body:has(.diff-view-overlay.show) .editable-ai-btn,
+body:has(.diff-view-overlay.show) .editable-ai-menu,
+body:has(.diff-view-overlay.show) #editable-ai-menu {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
 /* ============================================
    Overlay and Panel
    ============================================ */

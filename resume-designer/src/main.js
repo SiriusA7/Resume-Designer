@@ -25,7 +25,7 @@ import { initChatPanel, refreshChatPanel, startProfileInterviewFromPanel } from 
 import { initZoomControls } from './zoomControls.js';
 import { migrateBuiltInVariants, saveSettings, getSettings } from './persistence.js';
 import { initTheme, setupThemeToggleAfterRender } from './theme.js';
-import { initJobDescriptionPanel, openJobDescriptionPanel } from './jobDescriptionPanel.js';
+import { initJobDescriptionPanel, openJobDescriptionPanel, onJobPanelVariantChange } from './jobDescriptionPanel.js';
 import { initHistoryPanel, openHistoryPanel } from './historyPanel.js';
 import { initUserProfilePanel, openUserProfilePanel } from './userProfilePanel.js';
 import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
@@ -278,6 +278,8 @@ async function init() {
 // Handle variant change from header bar
 function handleVariantChange(variant) {
   renderCurrentResume();
+  // Update job description panel analysis for new variant
+  onJobPanelVariantChange();
 }
 
 // Handle structure panel changes

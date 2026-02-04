@@ -22,12 +22,111 @@ import { store, generateId, EMPTY_RESUME } from './store.js';
 let currentVariantId = null;
 let onVariantChangeCallback = null;
 
+/**
+ * Show a custom prompt modal (native prompt doesn't work in Electron)
+ * @param {string} message - The prompt message
+ * @param {string} defaultValue - Default input value
+ * @returns {Promise<string|null>} - The input value or null if cancelled
+ */
+function showPromptModal(message, defaultValue = '') {
+  return new Promise((resolve) => {
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'prompt-modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal" style="max-width: 400px;">
+        <div class="modal-header">
+          <h3 class="modal-title">${message}</h3>
+          <button class="modal-close" id="prompt-modal-close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-content">
+          <div class="form-group">
+            <input type="text" class="input" id="prompt-modal-input" value="${defaultValue.replace(/"/g, '&quot;')}" autofocus>
+          </div>
+          <div class="form-actions" style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+            <button class="btn btn-secondary" id="prompt-modal-cancel">Cancel</button>
+            <button class="btn btn-primary" id="prompt-modal-confirm">OK</button>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    // Show with animation
+    requestAnimationFrame(() => {
+      overlay.classList.add('show');
+    });
+    
+    const input = overlay.querySelector('#prompt-modal-input');
+    const closeBtn = overlay.querySelector('#prompt-modal-close');
+    const cancelBtn = overlay.querySelector('#prompt-modal-cancel');
+    const confirmBtn = overlay.querySelector('#prompt-modal-confirm');
+    
+    // Focus and select input
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 100);
+    
+    const cleanup = (result) => {
+      overlay.classList.remove('show');
+      setTimeout(() => {
+        overlay.remove();
+      }, 200);
+      resolve(result);
+    };
+    
+    // Event handlers
+    closeBtn.addEventListener('click', () => cleanup(null));
+    cancelBtn.addEventListener('click', () => cleanup(null));
+    confirmBtn.addEventListener('click', () => {
+      const value = input.value.trim();
+      cleanup(value || null);
+    });
+    
+    // Handle Enter key
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const value = input.value.trim();
+        cleanup(value || null);
+      } else if (e.key === 'Escape') {
+        cleanup(null);
+      }
+    });
+    
+    // Click outside to close
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        cleanup(null);
+      }
+    });
+  });
+}
+
 // Initialize header bar
 export function initHeaderBar(onVariantChange) {
   onVariantChangeCallback = onVariantChange;
   
   // Get current variant from storage
   currentVariantId = getCurrentVariantId();
+  
+  // Expose variant action handlers globally for onclick fallbacks
+  window.handleNewVariant = () => {
+    if (window.showOnboardingWizard) {
+      window.showOnboardingWizard({ skipApiKeyStep: true });
+    }
+  };
+  window.handleDuplicateVariant = () => duplicateVariant();
+  window.handleRenameVariant = () => renameCurrentVariant();
+  window.handleDeleteVariant = () => deleteCurrentVariant();
   
   // Render header UI
   renderHeaderBar();
@@ -118,12 +217,12 @@ export function deleteCurrentVariant() {
 }
 
 // Rename current variant
-export function renameCurrentVariant() {
+export async function renameCurrentVariant() {
   const variants = getVariants();
   const current = variants[currentVariantId];
   
   if (current) {
-    const newName = prompt('Enter new name:', current.name);
+    const newName = await showPromptModal('Enter new name:', current.name);
     if (newName && newName.trim() !== '') {
       renameVariant(currentVariantId, newName.trim());
       renderHeaderBar();
@@ -206,98 +305,151 @@ export function renderHeaderBar() {
         </div>
       </div>
       
-      <div class="header-variant-actions">
-        <button class="header-action-btn" id="btn-new-variant" title="Create new resume">
+      <!-- Individual variant action buttons (visible on wide screens) -->
+      <div class="header-variant-actions-expanded">
+        <button class="header-action-btn" id="btn-new-variant" title="Create new resume" onclick="window.handleNewVariant && window.handleNewVariant()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"/>
             <line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
         </button>
-        <button class="header-action-btn" id="btn-duplicate-variant" title="Duplicate">
+        <button class="header-action-btn" id="btn-duplicate-variant" title="Duplicate" onclick="window.handleDuplicateVariant && window.handleDuplicateVariant()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="9" y="9" width="13" height="13" rx="2"/>
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
         </button>
-        <button class="header-action-btn" id="btn-rename-variant" title="Rename">
+        <button class="header-action-btn" id="btn-rename-variant" title="Rename" onclick="window.handleRenameVariant && window.handleRenameVariant()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
           </svg>
         </button>
-        <button class="header-action-btn danger" id="btn-delete-variant" title="Delete">
+        <button class="header-action-btn danger" id="btn-delete-variant" title="Delete" onclick="window.handleDeleteVariant && window.handleDeleteVariant()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
           </svg>
         </button>
       </div>
-    </div>
-    
-    <div class="header-actions">
-      <!-- Tools Dropdown -->
-      <div class="header-tools-dropdown">
-        <button class="header-tools-btn" id="btn-header-tools" title="Tools">
+      
+      <!-- Collapsed variant actions dropdown (visible on medium screens) -->
+      <div class="header-variant-actions-dropdown">
+        <button class="header-variant-actions-btn" id="btn-variant-actions" title="Resume Actions">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-          </svg>
-          Tools
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="6 9 12 15 18 9"/>
+            <circle cx="12" cy="12" r="1"/>
+            <circle cx="19" cy="12" r="1"/>
+            <circle cx="5" cy="12" r="1"/>
           </svg>
         </button>
-        <div class="header-tools-menu" id="header-tools-menu">
-          <button class="header-tools-option" id="btn-user-profile">
+        <div class="header-variant-actions-menu" id="variant-actions-menu">
+          <button class="header-variant-action-option" id="btn-new-variant-menu" onclick="window.handleNewVariant && window.handleNewVariant()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-              <circle cx="12" cy="7" r="4"/>
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
-            User Profile
+            New Resume
           </button>
-          <button class="header-tools-option" id="btn-job-descriptions">
+          <button class="header-variant-action-option" id="btn-duplicate-variant-menu" onclick="window.handleDuplicateVariant && window.handleDuplicateVariant()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
+              <rect x="9" y="9" width="13" height="13" rx="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
             </svg>
-            Job Descriptions
+            Duplicate
           </button>
-          <button class="header-tools-option" id="btn-history">
+          <button class="header-variant-action-option" id="btn-rename-variant-menu" onclick="window.handleRenameVariant && window.handleRenameVariant()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <polyline points="12 6 12 12 16 14"/>
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
             </svg>
-            Version History
+            Rename
+          </button>
+          <button class="header-variant-action-option danger" id="btn-delete-variant-menu" onclick="window.handleDeleteVariant && window.handleDeleteVariant()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+            Delete
           </button>
         </div>
       </div>
-      
-      <label class="header-import-btn" title="Import resume">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="17 8 12 3 7 8"/>
-          <line x1="12" y1="3" x2="12" y2="15"/>
+    </div>
+    
+    <div class="header-actions">
+      <!-- Mobile Menu Button (hidden on desktop) -->
+      <button class="header-mobile-menu-btn" id="btn-mobile-menu" title="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
         </svg>
-        Import
-        <input type="file" id="header-import-file" accept=".json,.md,.markdown" hidden>
-      </label>
+      </button>
       
-      <div class="header-export-dropdown">
-        <button class="header-export-btn" id="btn-header-export">
+      <!-- Desktop Actions (hidden on mobile) -->
+      <div class="header-desktop-actions">
+        <!-- Tools Dropdown -->
+        <div class="header-tools-dropdown">
+          <button class="header-tools-btn" id="btn-header-tools" title="Tools">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <span class="btn-text">Tools</span>
+            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          <div class="header-tools-menu" id="header-tools-menu">
+            <button class="header-tools-option" id="btn-user-profile">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              User Profile
+            </button>
+            <button class="header-tools-option" id="btn-job-descriptions">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+              Job Descriptions
+            </button>
+            <button class="header-tools-option" id="btn-history">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+              Version History
+            </button>
+          </div>
+        </div>
+        
+        <label class="header-import-btn" title="Import resume">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          Export
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </button>
-        <div class="header-export-menu" id="header-export-menu">
-          <button class="header-export-option" data-format="json">Export as JSON</button>
-          <button class="header-export-option" data-format="md">Export as Markdown</button>
+          <span class="btn-text">Import</span>
+          <input type="file" id="header-import-file" accept=".json,.md,.markdown" hidden>
+        </label>
+        
+        <div class="header-export-dropdown">
+          <button class="header-export-btn" id="btn-header-export">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span class="btn-text">Export</span>
+            <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          <div class="header-export-menu" id="header-export-menu">
+            <button class="header-export-option" data-format="json">Export as JSON</button>
+            <button class="header-export-option" data-format="md">Export as Markdown</button>
+          </div>
         </div>
       </div>
       
@@ -363,8 +515,96 @@ export function renderHeaderBar() {
           <line x1="16" y1="17" x2="8" y2="17"/>
           <polyline points="10 9 9 9 8 9"/>
         </svg>
-        PDF
+        <span class="btn-text">PDF</span>
       </button>
+    </div>
+    
+    <!-- Mobile Menu Drawer -->
+    <div class="header-mobile-menu" id="header-mobile-menu">
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Resume</div>
+        <button class="mobile-menu-option" id="mobile-new-variant">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          New Resume
+        </button>
+        <button class="mobile-menu-option" id="mobile-duplicate-variant">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          Duplicate
+        </button>
+        <button class="mobile-menu-option" id="mobile-rename-variant">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+          </svg>
+          Rename
+        </button>
+        <button class="mobile-menu-option danger" id="mobile-delete-variant">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+          Delete
+        </button>
+      </div>
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Tools</div>
+        <button class="mobile-menu-option" id="mobile-user-profile">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          User Profile
+        </button>
+        <button class="mobile-menu-option" id="mobile-job-descriptions">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          Job Descriptions
+        </button>
+        <button class="mobile-menu-option" id="mobile-history">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          Version History
+        </button>
+      </div>
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">File</div>
+        <label class="mobile-menu-option" id="mobile-import">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Import
+          <input type="file" id="mobile-import-file" accept=".json,.md,.markdown" hidden>
+        </label>
+        <button class="mobile-menu-option" id="mobile-export-json">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Export as JSON
+        </button>
+        <button class="mobile-menu-option" id="mobile-export-md">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Export as Markdown
+        </button>
+      </div>
     </div>
   `;
   
@@ -454,6 +694,18 @@ function setupHeaderEventListeners() {
       if (menu) {
         menu.classList.toggle('show');
       }
+      // Close variant actions menu
+      document.getElementById('variant-actions-menu')?.classList.remove('show');
+    }
+    
+    // Variant actions dropdown button
+    if (target.id === 'btn-variant-actions') {
+      const menu = document.getElementById('variant-actions-menu');
+      if (menu) {
+        menu.classList.toggle('show');
+      }
+      // Close tools menu
+      document.getElementById('header-tools-menu')?.classList.remove('show');
     }
     
     // User Profile
@@ -519,6 +771,77 @@ function setupHeaderEventListeners() {
     }
     if (!e.target.closest('.header-tools-dropdown')) {
       document.getElementById('header-tools-menu')?.classList.remove('show');
+    }
+    if (!e.target.closest('.header-variant-actions-dropdown')) {
+      document.getElementById('variant-actions-menu')?.classList.remove('show');
+    }
+    // Close mobile menu when clicking outside (but not on the menu button)
+    if (!e.target.closest('.header-mobile-menu') && !e.target.closest('.header-mobile-menu-btn')) {
+      document.getElementById('header-mobile-menu')?.classList.remove('show');
+    }
+    
+    // Mobile menu button toggle
+    if (e.target.closest('#btn-mobile-menu')) {
+      e.stopPropagation();
+      document.getElementById('header-mobile-menu')?.classList.toggle('show');
+      return;
+    }
+    
+    // Mobile menu options (using event delegation)
+    const mobileOption = e.target.closest('.mobile-menu-option');
+    if (mobileOption) {
+      const closeMobileMenu = () => {
+        document.getElementById('header-mobile-menu')?.classList.remove('show');
+      };
+      
+      if (mobileOption.id === 'mobile-new-variant') {
+        closeMobileMenu();
+        if (window.showOnboardingWizard) {
+          window.showOnboardingWizard({ skipApiKeyStep: true });
+        }
+      } else if (mobileOption.id === 'mobile-duplicate-variant') {
+        closeMobileMenu();
+        duplicateVariant();
+      } else if (mobileOption.id === 'mobile-rename-variant') {
+        closeMobileMenu();
+        renameCurrentVariant();
+      } else if (mobileOption.id === 'mobile-delete-variant') {
+        closeMobileMenu();
+        deleteCurrentVariant();
+      } else if (mobileOption.id === 'mobile-user-profile') {
+        closeMobileMenu();
+        if (window.openUserProfilePanel) {
+          window.openUserProfilePanel();
+        }
+      } else if (mobileOption.id === 'mobile-job-descriptions') {
+        closeMobileMenu();
+        if (window.openJobDescriptionPanel) {
+          window.openJobDescriptionPanel();
+        }
+      } else if (mobileOption.id === 'mobile-history') {
+        closeMobileMenu();
+        if (window.openHistoryPanel) {
+          window.openHistoryPanel();
+        }
+      } else if (mobileOption.id === 'mobile-export-json') {
+        closeMobileMenu();
+        exportCurrentVariant('json');
+      } else if (mobileOption.id === 'mobile-export-md') {
+        closeMobileMenu();
+        exportCurrentVariant('md');
+      }
+    }
+  });
+  
+  // Mobile import file change (using event delegation)
+  document.addEventListener('change', (e) => {
+    if (e.target.id === 'mobile-import-file') {
+      const file = e.target.files[0];
+      if (file) {
+        document.getElementById('header-mobile-menu')?.classList.remove('show');
+        importVariant(file);
+        e.target.value = '';
+      }
     }
   });
 }

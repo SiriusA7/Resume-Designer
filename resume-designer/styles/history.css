@@ -3,6 +3,17 @@
  * Timeline-based version history visualization
  */
 
+/* Hide inline editor hover elements when History panel is open */
+body:has(.history-panel-overlay.show) .editable-ai-container,
+body:has(.history-panel-overlay.show) .editable-ai-btn,
+body:has(.history-panel-overlay.show) .editable-ai-menu,
+body:has(.history-panel-overlay.show) #editable-ai-menu {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
 /* ============================================
    Panel Overlay
    ============================================ */

@@ -2,6 +2,17 @@
  * Job Description Panel Styles
  */
 
+/* Hide inline editor hover elements when JD panel is open */
+body:has(.jd-panel-overlay.show) .editable-ai-container,
+body:has(.jd-panel-overlay.show) .editable-ai-btn,
+body:has(.jd-panel-overlay.show) .editable-ai-menu,
+body:has(.jd-panel-overlay.show) #editable-ai-menu {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
 /* ============================================
    Panel Overlay
    ============================================ */
@@ -331,6 +342,116 @@
 .jd-card-date {
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+/* ============================================
+   Card Expand/Collapse
+   ============================================ */
+
+.jd-card-expand {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.jd-card-expand:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.jd-card-expand svg {
+  transition: transform 0.2s ease;
+}
+
+.jd-card-expand:not(.expanded) svg {
+  transform: rotate(-90deg);
+}
+
+.jd-card-expand.expanded svg {
+  transform: rotate(0deg);
+}
+
+/* Collapsed card state */
+.jd-card.collapsed .jd-card-preview {
+  display: none;
+}
+
+.jd-card.collapsed .jd-card-footer {
+  display: none;
+}
+
+.jd-card.collapsed {
+  padding: 10px 14px;
+}
+
+.jd-card.collapsed .jd-card-header {
+  margin-bottom: 0;
+}
+
+/* ============================================
+   Filter Bar
+   ============================================ */
+
+.jd-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.jd-filter-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.jd-filter-toggle {
+  display: flex;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.jd-filter-option {
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.jd-filter-option:not(:last-child) {
+  border-right: 1px solid var(--color-border);
+}
+
+.jd-filter-option:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.jd-filter-option.active {
+  background: var(--color-accent);
+  color: white;
+}
+
+.jd-filter-option.active:hover {
+  background: var(--color-accent);
 }
 
 /* ============================================

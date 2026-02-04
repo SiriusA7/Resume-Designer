@@ -234,12 +234,18 @@ body {
 
 /* All interactive elements in header should not be draggable */
 .header-bar button,
+.header-bar button *,
 .header-bar select,
 .header-bar input,
 .header-bar a,
+.header-bar label,
+.header-bar label *,
 .header-bar .custom-dropdown,
+.header-bar .custom-dropdown *,
 .header-bar .header-variant,
-.header-bar .header-actions {
+.header-bar .header-variant *,
+.header-bar .header-actions,
+.header-bar .header-actions * {
   -webkit-app-region: no-drag;
 }
 
@@ -256,10 +262,10 @@ body {
 .header-variant {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  flex: 1;
-  justify-content: center;
-  max-width: 500px;
+  gap: var(--space-xs);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 320px;
 }
 
 .header-variant-select {
@@ -293,9 +299,109 @@ html[data-theme="dark"] .header-variant-select {
   border-color: var(--color-accent);
 }
 
-.header-variant-actions {
+/* Expanded variant actions (individual buttons - visible on wide screens) */
+.header-variant-actions-expanded {
   display: flex;
   gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+/* Collapsed variant actions dropdown (visible on medium screens) */
+.header-variant-actions-dropdown {
+  display: none;
+  position: relative;
+  -webkit-app-region: no-drag;
+}
+
+.header-variant-actions-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.header-variant-actions-btn:hover {
+  background: var(--color-hover-bg);
+  color: var(--color-text);
+}
+
+.header-variant-actions-btn svg {
+  pointer-events: none;
+}
+
+.header-variant-actions-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px);
+  transition: all var(--transition-fast);
+}
+
+.header-variant-actions-menu.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.header-variant-action-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: none;
+  border: none;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.header-variant-action-option:first-child {
+  border-radius: 7px 7px 0 0;
+}
+
+.header-variant-action-option:last-child {
+  border-radius: 0 0 7px 7px;
+}
+
+.header-variant-action-option:hover {
+  background: var(--color-hover-bg);
+}
+
+.header-variant-action-option.danger {
+  color: var(--color-danger);
+}
+
+.header-variant-action-option.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.header-variant-action-option svg {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.header-variant-action-option.danger svg {
+  color: var(--color-danger);
 }
 
 .header-action-btn {
@@ -310,6 +416,13 @@ html[data-theme="dark"] .header-variant-select {
   color: var(--color-text-muted);
   cursor: pointer;
   transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 10;
+}
+
+.header-action-btn svg {
+  pointer-events: none;
 }
 
 .header-action-btn:hover {
@@ -905,19 +1018,23 @@ html[data-theme="dark"] .header-variant-select {
 .custom-dropdown {
   position: relative;
   display: inline-block;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .custom-dropdown-trigger {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: var(--space-xs) var(--space-md);
+  padding: var(--space-xs) var(--space-sm);
   background: var(--color-input-bg);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   color: var(--color-text);
   font-family: var(--font-body);
-  font-size: 0.9rem;
+  font-size: 0.875rem;
+  max-width: 100%;
+  min-width: 0;
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
@@ -926,6 +1043,14 @@ html[data-theme="dark"] .header-variant-select {
 .custom-dropdown-trigger:hover {
   border-color: var(--color-text-muted);
   background: var(--color-hover-bg);
+}
+
+.custom-dropdown-trigger .dropdown-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .custom-dropdown-trigger .dropdown-chevron {
@@ -939,8 +1064,10 @@ html[data-theme="dark"] .header-variant-select {
 .custom-dropdown-menu {
   position: absolute;
   top: 100%;
-  left: 0;
-  min-width: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  min-width: 280px;
+  max-width: calc(100vw - 32px);
   margin-top: 4px;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-border);
@@ -949,7 +1076,6 @@ html[data-theme="dark"] .header-variant-select {
   overflow: hidden;
   opacity: 0;
   visibility: hidden;
-  transform: translateY(-8px);
   transition: all var(--transition-fast);
   z-index: 500;
   max-height: 320px;
@@ -959,7 +1085,7 @@ html[data-theme="dark"] .header-variant-select {
 .custom-dropdown.open .custom-dropdown-menu {
   opacity: 1;
   visibility: visible;
-  transform: translateY(0);
+  transform: translateX(-50%) translateY(0);
 }
 
 .custom-dropdown-group-label {
@@ -1466,19 +1592,230 @@ html[data-theme="dark"] .theme-option + .theme-option {
 }
 
 /* ==========================================================================
-   Responsive
+   Header Actions Wrapper
    ========================================================================== */
 
+.header-desktop-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* Mobile menu button - hidden by default on desktop */
+.header-mobile-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.header-mobile-menu-btn:hover {
+  background: var(--color-hover-bg);
+  color: var(--color-text);
+}
+
+/* Mobile menu drawer - hidden by default */
+.header-mobile-menu {
+  position: absolute;
+  top: 100%;
+  right: var(--space-md);
+  width: 220px;
+  max-height: calc(100vh - var(--header-height) - 20px);
+  overflow-y: auto;
+  background: var(--color-panel-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px);
+  transition: all var(--transition-fast);
+}
+
+.header-mobile-menu.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.mobile-menu-section {
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.mobile-menu-section:last-child {
+  border-bottom: none;
+}
+
+.mobile-menu-section-title {
+  padding: var(--space-xs) var(--space-md);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.mobile-menu-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: none;
+  border: none;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.mobile-menu-option:hover {
+  background: var(--color-hover-bg);
+  color: var(--color-accent);
+}
+
+.mobile-menu-option.danger:hover {
+  background: rgba(220, 53, 69, 0.1);
+  color: #dc2626;
+}
+
+.mobile-menu-option svg {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.mobile-menu-option:hover svg {
+  color: inherit;
+}
+
+/* Button text spans for responsive hiding */
+.btn-text {
+  white-space: nowrap;
+}
+
+.dropdown-arrow {
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Responsive - Progressive Header Collapse
+   ========================================================================== */
+
+/* 1400px: First stage - collapse variant buttons to dropdown */
+@media (max-width: 1400px) {
+  /* Hide expanded variant action buttons */
+  .header-variant-actions-expanded {
+    display: none;
+  }
+  
+  /* Show variant actions dropdown instead */
+  .header-variant-actions-dropdown {
+    display: block;
+  }
+  
+  /* Reduce header gap */
+  .header-bar {
+    gap: var(--space-md);
+  }
+  
+  /* Shrink variant section */
+  .header-variant {
+    max-width: 340px;
+  }
+}
+
+/* 1200px: Second stage - collapse button text */
 @media (max-width: 1200px) {
   :root {
     --chat-panel-width: 280px;
     --structure-panel-width: 340px;
   }
+  
+  /* Hide Tools button text and arrow */
+  .header-tools-btn .btn-text,
+  .header-tools-btn .dropdown-arrow {
+    display: none;
+  }
+  
+  .header-tools-btn {
+    padding: var(--space-xs);
+    min-width: 32px;
+    justify-content: center;
+  }
+  
+  /* Hide PDF button text */
+  .header-pdf-btn .btn-text {
+    display: none;
+  }
+  
+  .header-pdf-btn {
+    padding: var(--space-xs) var(--space-sm);
+  }
+  
+  /* Shrink variant section */
+  .header-variant {
+    max-width: 300px;
+  }
 }
 
-@media (max-width: 1024px) {
+/* 1050px: Third stage - collapse more buttons */
+@media (max-width: 1050px) {
   :root {
     --chat-panel-width: 260px;
+  }
+  
+  /* Hide Import/Export text */
+  .header-import-btn .btn-text,
+  .header-export-btn .btn-text {
+    display: none;
+  }
+  
+  .header-export-btn .dropdown-arrow {
+    display: none;
+  }
+  
+  .header-import-btn,
+  .header-export-btn {
+    padding: var(--space-xs);
+    min-width: 32px;
+    justify-content: center;
+  }
+  
+  .header-desktop-actions {
+    gap: var(--space-xs);
+  }
+  
+  /* Further shrink variant section */
+  .header-variant {
+    max-width: 240px;
+  }
+}
+
+/* 900px: Fourth stage - tighter layout */
+@media (max-width: 900px) {
+  /* Shrink variant selector */
+  .header-variant {
+    max-width: 180px;
+  }
+  
+  /* Reduce header actions gap */
+  .header-actions {
+    gap: var(--space-xs);
+  }
+  
+  .header-desktop-actions {
+    gap: 2px;
   }
   
   .preview-area {
@@ -1486,13 +1823,96 @@ html[data-theme="dark"] .theme-option + .theme-option {
   }
 }
 
+/* 768px: Fifth stage - mobile layout */
 @media (max-width: 768px) {
+  /* Keep variant selector but make it compact */
   .header-variant {
+    max-width: 160px;
+    flex: 1;
+  }
+  
+  /* Hide variant actions dropdown */
+  .header-variant-actions-dropdown {
     display: none;
   }
   
-  .header-import-btn span,
-  .header-export-btn span {
+  /* Hide desktop actions, show mobile menu */
+  .header-desktop-actions {
     display: none;
   }
+  
+  .header-mobile-menu-btn {
+    display: flex;
+  }
+  
+  /* Smaller title */
+  .header-title {
+    font-size: 1rem;
+  }
+  
+  /* Tighter header */
+  .header-bar {
+    gap: var(--space-sm);
+    padding: 0 var(--space-md);
+  }
+  
+  /* Keep PDF and theme always visible */
+  .header-pdf-btn {
+    padding: var(--space-xs);
+  }
+  
+  /* Compact dropdown trigger */
+  .custom-dropdown-trigger {
+    padding: var(--space-xs);
+    font-size: 0.8rem;
+  }
+}
+
+/* 500px: Sixth stage - very small screens */
+@media (max-width: 500px) {
+  /* Even smaller header */
+  .header-title {
+    font-size: 0.9rem;
+  }
+  
+  /* Even smaller variant selector */
+  .header-variant {
+    max-width: 120px;
+  }
+  
+  .header-action-btn {
+    width: 28px;
+    height: 28px;
+  }
+  
+  .header-mobile-menu-btn {
+    width: 32px;
+    height: 32px;
+  }
+  
+  /* Smaller padding on Electron mac */
+  .electron-mac .header-bar {
+    padding-left: 70px;
+  }
+  
+  /* Mobile menu full width */
+  .header-mobile-menu {
+    right: var(--space-sm);
+    left: var(--space-sm);
+    width: auto;
+  }
+}
+
+/* Prevent header items from shrinking and overlapping */
+.header-actions > * {
+  flex-shrink: 0;
+}
+
+.header-brand {
+  flex-shrink: 0;
+}
+
+.header-variant {
+  flex-shrink: 1;
+  min-width: 0;
 }

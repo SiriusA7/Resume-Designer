@@ -170,6 +170,33 @@ export function renameVariant(id, newName) {
   }
 }
 
+// Save job analysis results for a specific variant
+export function saveVariantAnalysis(variantId, analysis) {
+  const storage = loadFromStorage();
+  if (storage.variants[variantId]) {
+    storage.variants[variantId].jobAnalysis = analysis;
+    storage.variants[variantId].analysisUpdatedAt = new Date().toISOString();
+    saveToStorage(storage);
+  }
+}
+
+// Get job analysis results for a specific variant
+export function getVariantAnalysis(variantId) {
+  const storage = loadFromStorage();
+  const variant = storage.variants[variantId];
+  return variant?.jobAnalysis || null;
+}
+
+// Clear job analysis results for a specific variant
+export function clearVariantAnalysis(variantId) {
+  const storage = loadFromStorage();
+  if (storage.variants[variantId]) {
+    storage.variants[variantId].jobAnalysis = null;
+    storage.variants[variantId].analysisUpdatedAt = null;
+    saveToStorage(storage);
+  }
+}
+
 // Save settings
 export function saveSettings(settings) {
   const storage = loadFromStorage();

@@ -125,8 +125,8 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 1000,
-    minHeight: 700,
+    minWidth: 750,
+    minHeight: 600,
     title: 'Resume Designer',
     webPreferences: {
       nodeIntegration: false,

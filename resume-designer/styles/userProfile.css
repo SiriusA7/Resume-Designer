@@ -2,6 +2,17 @@
  * User Profile Panel Styles
  */
 
+/* Hide inline editor hover elements when User Profile panel is open */
+body:has(.profile-panel-overlay.show) .editable-ai-container,
+body:has(.profile-panel-overlay.show) .editable-ai-btn,
+body:has(.profile-panel-overlay.show) .editable-ai-menu,
+body:has(.profile-panel-overlay.show) #editable-ai-menu {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
 /* ============================================
    Panel Overlay
    ============================================ */

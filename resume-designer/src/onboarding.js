@@ -1935,11 +1935,8 @@ function renderReviewStep(content, footer) {
     // Save variant using persistence function (id, name, data)
     saveVariant(variantId, variantName, resumeData);
     
-    // Set as current and load it
-    setCurrentVariantId(variantId);
-    
-    // Store the data in the store directly
-    store.setData(resumeData);
+    // Load the new variant properly (this sets current ID, initializes persistence, and triggers callbacks)
+    loadVariant(variantId);
     
     // Refresh the header bar dropdown to show the new variant
     renderHeaderBar();
