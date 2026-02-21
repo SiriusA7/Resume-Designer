@@ -338,9 +338,11 @@ export function checkProfileHasData() {
  * Generate a complete resume from user profile, tailored for a specific job
  * @param {string} modelId - The AI model to use
  * @param {Object} jobDescription - The job description object { title, company, description }
+ * @param {Object} options - Additional options
+ * @param {string} options.reasoningEffort - Reasoning effort level: 'none', 'low', 'medium', 'high'
  * @returns {Object} Generated resume data
  */
-export async function generateResumeFromProfileForJob(modelId, jobDescription) {
+export async function generateResumeFromProfileForJob(modelId, jobDescription, options = {}) {
   const profile = getUserProfile();
   
   if (!profile || isProfileEmpty(profile)) {
@@ -528,7 +530,10 @@ IMPORTANT:
   const messages = [{ role: 'user', content: prompt }];
   
   let response;
-  const featureOptions = { feature: 'generate-from-profile' };
+  const featureOptions = { 
+    feature: 'generate-from-profile',
+    reasoningEffort: options.reasoningEffort
+  };
   
   switch (modelConfig.provider) {
     case 'anthropic':
@@ -1301,6 +1306,29 @@ export async function generateResumeChanges(modelId, instruction, targetPath = n
 
 // API calls with custom system prompts
 async function callAnthropicWithSystem(modelConfig, messages, apiKey, systemPrompt, options = {}) {
+  const { reasoningEffort } = options;
+  
+  const requestBody = {
+    model: modelConfig.model,
+    max_tokens: modelConfig.maxTokens,
+    system: systemPrompt,
+    messages: messages.map(m => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.content
+    }))
+  };
+  
+  // Add extended thinking if reasoning effort is specified
+  if (reasoningEffort && reasoningEffort !== 'none' && ANTHROPIC_THINKING_BUDGETS[reasoningEffort]) {
+    const budgetTokens = ANTHROPIC_THINKING_BUDGETS[reasoningEffort];
+    // Ensure max_tokens is greater than budget_tokens
+    requestBody.max_tokens = Math.max(modelConfig.maxTokens, budgetTokens + 2048);
+    requestBody.thinking = {
+      type: 'enabled',
+      budget_tokens: budgetTokens
+    };
+  }
+  
   const response = await fetch(ENDPOINTS.anthropic, {
     method: 'POST',
     headers: {
@@ -1309,15 +1337,7 @@ async function callAnthropicWithSystem(modelConfig, messages, apiKey, systemProm
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true'
     },
-    body: JSON.stringify({
-      model: modelConfig.model,
-      max_tokens: modelConfig.maxTokens,
-      system: systemPrompt,
-      messages: messages.map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content
-      }))
-    })
+    body: JSON.stringify(requestBody)
   });
   
   if (!response.ok) {
@@ -1340,10 +1360,20 @@ async function callAnthropicWithSystem(modelConfig, messages, apiKey, systemProm
     });
   }
   
+  // Handle response with extended thinking (may have multiple content blocks)
+  if (Array.isArray(data.content)) {
+    const textBlock = data.content.find(block => block.type === 'text');
+    if (textBlock?.text) {
+      return textBlock.text;
+    }
+  }
+  
   return data.content[0].text;
 }
 
 async function callOpenAIWithSystem(modelConfig, messages, apiKey, systemPrompt, options = {}) {
+  const { reasoningEffort } = options;
+  
   // GPT-5.x models require the Responses API (not Chat Completions)
   const isGpt5 = modelConfig.model.startsWith('gpt-5');
   if (isGpt5) {
@@ -1370,17 +1400,24 @@ async function callOpenAIWithSystem(modelConfig, messages, apiKey, systemPrompt,
         }))
       ];
   
+  const requestBody = {
+    model: modelConfig.model,
+    max_completion_tokens: modelConfig.maxTokens,
+    messages: apiMessages
+  };
+  
+  // Add reasoning_effort for o1 models
+  if (reasoningEffort && OPENAI_REASONING_EFFORT[reasoningEffort] && isO1Model) {
+    requestBody.reasoning_effort = OPENAI_REASONING_EFFORT[reasoningEffort];
+  }
+  
   const response = await fetch(ENDPOINTS.openai, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
     },
-    body: JSON.stringify({
-      model: modelConfig.model,
-      max_completion_tokens: modelConfig.maxTokens,
-      messages: apiMessages
-    })
+    body: JSON.stringify(requestBody)
   });
   
   if (!response.ok) {
@@ -1514,9 +1551,11 @@ async function callGeminiWithSystem(modelConfig, messages, apiKey, systemPrompt,
  * Analyze resume against job descriptions
  * @param {string} modelId - Model to use
  * @param {Array} jobDescriptions - Array of job description objects
+ * @param {Object} options - Additional options
+ * @param {string} options.reasoningEffort - Reasoning effort level: 'none', 'low', 'medium', 'high'
  * @returns {Object} Analysis results
  */
-export async function analyzeAgainstJobs(modelId, jobDescriptions) {
+export async function analyzeAgainstJobs(modelId, jobDescriptions, options = {}) {
   // Validate and potentially migrate the model ID
   const validModelId = validateModelId(modelId);
   const modelConfig = MODELS[validModelId];
@@ -1554,7 +1593,10 @@ export async function analyzeAgainstJobs(modelId, jobDescriptions) {
   prompt += `\nProvide your analysis as a JSON object. No markdown, just raw JSON.`;
   
   const messages = [{ role: 'user', content: prompt }];
-  const featureOptions = { feature: 'analyze' };
+  const featureOptions = { 
+    feature: 'analyze',
+    reasoningEffort: options.reasoningEffort
+  };
   
   let response;
   switch (modelConfig.provider) {

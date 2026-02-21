@@ -6,7 +6,7 @@
 import { store } from './store.js';
 import { getSettings, saveSettings, getVariants, saveVariant, setCurrentVariantId, initPersistence, generateUniqueVariantName, getUserProfile } from './persistence.js';
 import { getConfiguredProviders, getDefaultModelId, generateResumeChanges, chat, generateResumeFromProfileForJob, checkProfileHasData, getAllModels, isProviderConfigured } from './aiService.js';
-import { loadVariant } from './variantManager.js';
+import { loadVariant } from './headerBar.js';
 import { refreshChatPanel } from './chatPanel.js';
 import { parseResumeText } from './resumeParser.js';
 import { addJobDescription } from './jobDescriptions.js';
@@ -107,6 +107,9 @@ let wizardData = {
 
 // Track selected model for job-based resume generation
 let selectedModelForJobGeneration = null;
+
+// Track selected reasoning level for job-based resume generation
+let selectedReasoningForJobGeneration = 'medium';
 
 /**
  * Get available models for the model selector dropdown
@@ -1337,23 +1340,27 @@ function renderJobInputStep(content, footer) {
           Paste from Clipboard
         </button>
         
-        <div class="job-model-selector">
-          <label for="job-model-select">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2a4 4 0 0 1 4 4c0 1.1-.9 2-2 2h-4a2 2 0 0 1-2-2 4 4 0 0 1 4-4z"/>
-              <path d="M12 8v8"/>
-              <path d="M8 12h8"/>
-              <circle cx="12" cy="20" r="2"/>
-            </svg>
-            AI Model
-          </label>
-          <select id="job-model-select" class="job-model-select">
-            ${availableModels.map(m => `
-              <option value="${m.id}" ${m.id === defaultModel ? 'selected' : ''}>
-                ${escapeHtml(m.label)}
-              </option>
-            `).join('')}
-          </select>
+        <div class="job-ai-options">
+          <div class="job-model-selector">
+            <label for="job-model-select">Model</label>
+            <select id="job-model-select" class="job-model-select">
+              ${availableModels.map(m => `
+                <option value="${m.id}" ${m.id === defaultModel ? 'selected' : ''}>
+                  ${escapeHtml(m.label)}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+          
+          <div class="job-reasoning-selector">
+            <label for="job-reasoning-select">Reasoning</label>
+            <select id="job-reasoning-select" class="job-reasoning-select">
+              <option value="none" ${selectedReasoningForJobGeneration === 'none' ? 'selected' : ''}>Off</option>
+              <option value="low" ${selectedReasoningForJobGeneration === 'low' ? 'selected' : ''}>Low</option>
+              <option value="medium" ${selectedReasoningForJobGeneration === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="high" ${selectedReasoningForJobGeneration === 'high' ? 'selected' : ''}>High</option>
+            </select>
+          </div>
         </div>
       </div>
       
@@ -1442,6 +1449,11 @@ function renderJobInputStep(content, footer) {
     const selectedModel = modelSelect?.value || getDefaultModelId();
     selectedModelForJobGeneration = selectedModel; // Save for future use
     
+    // Get the selected reasoning level from dropdown
+    const reasoningSelect = document.getElementById('job-reasoning-select');
+    const selectedReasoning = reasoningSelect?.value || 'medium';
+    selectedReasoningForJobGeneration = selectedReasoning; // Save for future use
+    
     const btn = document.getElementById('generate-btn');
     if (btn) {
       btn.disabled = true;
@@ -1454,8 +1466,8 @@ function renderJobInputStep(content, footer) {
         throw new Error('No AI model configured');
       }
       
-      console.log('[Onboarding] Using model:', selectedModel);
-      wizardData.parsedResume = await generateResumeFromProfileForJob(selectedModel, wizardData.targetJob);
+      console.log('[Onboarding] Using model:', selectedModel, 'with reasoning:', selectedReasoning);
+      wizardData.parsedResume = await generateResumeFromProfileForJob(selectedModel, wizardData.targetJob, { reasoningEffort: selectedReasoning });
       console.log('[Onboarding] Generated resume from profile:', wizardData.parsedResume);
       
       // Skip the optional JD step (step 3) since we already have the JD

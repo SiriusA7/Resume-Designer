@@ -988,7 +988,7 @@ html[data-theme="dark"] .jd-impact-badge.low {
   background: var(--color-panel-bg);
   border-radius: 12px;
   width: 90%;
-  max-width: 500px;
+  max-width: 560px;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
@@ -1173,53 +1173,70 @@ html[data-theme="dark"] .jd-impact-badge.low {
 }
 
 /* ============================================
-   Model Selector
+   AI Options (Model + Reasoning Selectors)
    ============================================ */
 
-.jd-model-selector {
+.jd-ai-options {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  gap: 8px;
   margin-bottom: 16px;
 }
 
-.jd-model-selector label {
+/* Shared styles for model and reasoning selectors */
+.jd-model-selector,
+.jd-reasoning-selector {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.jd-model-selector {
+  flex: 1;
+  min-width: 0;
+}
+
+.jd-reasoning-selector {
+  flex-shrink: 0;
+}
+
+.jd-model-selector label,
+.jd-reasoning-selector label {
+  font-size: 12px;
   font-weight: 500;
   color: var(--color-text-muted);
   white-space: nowrap;
 }
 
-.jd-model-selector label svg {
-  color: var(--color-accent);
-}
-
-.jd-model-select {
-  flex: 1;
-  padding: 8px 12px;
+.jd-model-select,
+.jd-reasoning-select {
+  padding: 6px 10px;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--color-text);
   cursor: pointer;
   transition: border-color 0.15s;
 }
 
-.jd-model-select:focus {
+.jd-model-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.jd-model-select:focus,
+.jd-reasoning-select:focus {
   outline: none;
   border-color: var(--color-accent);
 }
 
-.jd-model-select:hover {
+.jd-model-select:hover,
+.jd-reasoning-select:hover {
   border-color: var(--color-text-muted);
 }
 

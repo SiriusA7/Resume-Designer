@@ -1225,6 +1225,10 @@ body:has(.onboarding-overlay.show) #editable-ai-menu {
     width: 100%;
     justify-content: center;
   }
+  
+  .job-ai-options {
+    flex-direction: column;
+  }
 }
 
 /* ============================================
@@ -1592,7 +1596,7 @@ body:has(.onboarding-overlay.show) #editable-ai-menu {
 }
 
 .job-input-form {
-  max-width: 480px;
+  max-width: 520px;
   margin: 0 auto;
   text-align: left;
 }
@@ -1682,52 +1686,68 @@ body:has(.onboarding-overlay.show) #editable-ai-menu {
   opacity: 0.7;
 }
 
-/* Model selector in job input step */
-.job-model-selector {
+/* AI options container (model + reasoning selectors) */
+.job-ai-options {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  gap: 8px;
   margin-top: 4px;
 }
 
-.job-model-selector label {
+/* Shared styles for model and reasoning selectors */
+.job-model-selector,
+.job-reasoning-selector {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.job-model-selector {
+  flex: 1;
+  min-width: 0;
+}
+
+.job-reasoning-selector {
+  flex-shrink: 0;
+}
+
+.job-model-selector label,
+.job-reasoning-selector label {
+  font-size: 12px;
   font-weight: 600;
   color: var(--color-text-muted);
   white-space: nowrap;
   margin: 0;
 }
 
-.job-model-selector label svg {
-  color: var(--color-accent);
-  opacity: 0.8;
-}
-
-.job-model-select {
-  flex: 1;
-  padding: 8px 12px;
+.job-model-select,
+.job-reasoning-select {
+  padding: 6px 10px;
   background: var(--color-input-bg);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--color-text);
   cursor: pointer;
   transition: border-color 0.15s;
 }
 
-.job-model-select:hover {
+.job-model-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.job-model-select:hover,
+.job-reasoning-select:hover {
   border-color: var(--color-text-muted);
 }
 
-.job-model-select:focus {
+.job-model-select:focus,
+.job-reasoning-select:focus {
   outline: none;
   border-color: var(--color-accent);
 }

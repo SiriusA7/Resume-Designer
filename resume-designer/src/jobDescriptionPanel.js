@@ -32,6 +32,7 @@ let appliedRecommendations = new Set();
 let jobSelectionModal = null;
 let selectedJobsForAnalysis = new Set();
 let selectedModelForAnalysis = null;
+let selectedReasoningForAnalysis = 'medium';
 let contentClickListenerAdded = false;
 let collapsedCards = new Set(); // Track which cards are collapsed (default: all collapsed)
 let allCardsInitialized = false; // Track if we've initialized the collapse state
@@ -741,11 +742,12 @@ function handleAnalyze() {
     return;
   }
   
-  // Reset selected model to use default
+  // Reset selected model and reasoning to use defaults
   selectedModelForAnalysis = null;
+  selectedReasoningForAnalysis = 'medium';
   
-  showJobSelectionModal(async (selectedJDs, modelId) => {
-    await performAnalysis(selectedJDs, modelId);
+  showJobSelectionModal(async (selectedJDs, modelId, reasoningEffort) => {
+    await performAnalysis(selectedJDs, modelId, reasoningEffort);
   });
 }
 
@@ -836,11 +838,16 @@ function hideAnalysisLoadingOverlay() {
 /**
  * Perform the actual analysis with selected job descriptions
  */
-async function performAnalysis(selectedJDs, modelId) {
+async function performAnalysis(selectedJDs, modelId, reasoningEffort) {
   // Use provided model or fall back to default
   if (!modelId) {
     const settings = getSettings();
     modelId = settings.defaultModel || 'anthropic:claude-sonnet-4-5';
+  }
+  
+  // Use provided reasoning effort or fall back to medium
+  if (!reasoningEffort) {
+    reasoningEffort = 'medium';
   }
   
   isAnalyzing = true;
@@ -851,7 +858,7 @@ async function performAnalysis(selectedJDs, modelId) {
   showAnalysisLoadingOverlay();
   
   try {
-    analysisResults = await analyzeAgainstJobs(modelId, selectedJDs);
+    analysisResults = await analyzeAgainstJobs(modelId, selectedJDs, { reasoningEffort });
     
     // Save analysis results to current variant for persistence
     const currentVariantId = getCurrentId();
@@ -1512,23 +1519,27 @@ function renderJobSelectionModalContent(jobDescriptions) {
         <button class="jd-select-close" id="jd-select-close">&times;</button>
       </div>
       <div class="jd-select-body">
-        <div class="jd-model-selector">
-          <label for="jd-model-select">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2a4 4 0 0 1 4 4c0 1.1-.9 2-2 2h-4a2 2 0 0 1-2-2 4 4 0 0 1 4-4z"/>
-              <path d="M12 8v8"/>
-              <path d="M8 12h8"/>
-              <circle cx="12" cy="20" r="2"/>
-            </svg>
-            AI Model
-          </label>
-          <select id="jd-model-select" class="jd-model-select">
-            ${availableModels.map(m => `
-              <option value="${m.id}" ${m.id === defaultModel ? 'selected' : ''}>
-                ${escapeHtml(m.label)}
-              </option>
-            `).join('')}
-          </select>
+        <div class="jd-ai-options">
+          <div class="jd-model-selector">
+            <label for="jd-model-select">Model</label>
+            <select id="jd-model-select" class="jd-model-select">
+              ${availableModels.map(m => `
+                <option value="${m.id}" ${m.id === defaultModel ? 'selected' : ''}>
+                  ${escapeHtml(m.label)}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+          
+          <div class="jd-reasoning-selector">
+            <label for="jd-reasoning-select">Reasoning</label>
+            <select id="jd-reasoning-select" class="jd-reasoning-select">
+              <option value="none" ${selectedReasoningForAnalysis === 'none' ? 'selected' : ''}>Off</option>
+              <option value="low" ${selectedReasoningForAnalysis === 'low' ? 'selected' : ''}>Low</option>
+              <option value="medium" ${selectedReasoningForAnalysis === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="high" ${selectedReasoningForAnalysis === 'high' ? 'selected' : ''}>High</option>
+            </select>
+          </div>
         </div>
         
         <div class="jd-select-section-label">Select Job Description(s)</div>
@@ -1636,6 +1647,17 @@ function setupJobSelectionModalEvents(onConfirm) {
   if (modelSelect) {
     selectedModelForAnalysis = modelSelect.value;
   }
+  
+  // Reasoning selector change
+  modal.querySelector('#jd-reasoning-select')?.addEventListener('change', (e) => {
+    selectedReasoningForAnalysis = e.target.value;
+  });
+  
+  // Initialize selected reasoning from dropdown
+  const reasoningSelect = modal.querySelector('#jd-reasoning-select');
+  if (reasoningSelect) {
+    selectedReasoningForAnalysis = reasoningSelect.value;
+  }
 
   // Confirm button
   modal.querySelector('#jd-select-confirm')?.addEventListener('click', () => {
@@ -1644,8 +1666,9 @@ function setupJobSelectionModalEvents(onConfirm) {
     }
     const selectedJDs = getAllJobDescriptions().filter(jd => selectedJobsForAnalysis.has(jd.id));
     const modelId = selectedModelForAnalysis;
+    const reasoningEffort = selectedReasoningForAnalysis;
     closeJobSelectionModal();
-    onConfirm(selectedJDs, modelId);
+    onConfirm(selectedJDs, modelId, reasoningEffort);
   });
 
   // ESC to close

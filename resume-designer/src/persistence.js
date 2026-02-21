@@ -103,7 +103,10 @@ export function saveVariant(id, name, data) {
     name,
     data,
     createdAt: existingVariant?.createdAt || now, // Preserve original creation time
-    updatedAt: now
+    updatedAt: now,
+    // Preserve job analysis data if it exists
+    jobAnalysis: existingVariant?.jobAnalysis || null,
+    analysisUpdatedAt: existingVariant?.analysisUpdatedAt || null
   };
   saveToStorage(storage);
 }

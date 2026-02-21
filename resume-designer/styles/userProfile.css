@@ -60,6 +60,7 @@ body:has(.profile-panel-overlay.show) #editable-ai-menu {
 .profile-panel-header {
   padding: 16px 20px;
   border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
 
 .profile-panel-title-row {
@@ -211,6 +212,7 @@ body:has(.profile-panel-overlay.show) #editable-ai-menu {
   border-bottom: 1px solid var(--color-border);
   overflow-x: auto;
   scrollbar-width: none;
+  flex-shrink: 0;
 }
 
 .profile-panel-tabs::-webkit-scrollbar {
