@@ -194,14 +194,47 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      - name: Validate macOS update manifest asset paths
+        run: |
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const releaseDir = path.resolve('resume-designer/release');
+          const manifestPath = path.join(releaseDir, 'latest-mac.yml');
+          const manifest = fs.readFileSync(manifestPath, 'utf8');
+
+          const requiredAssets = new Set();
+          for (const line of manifest.split(/\r?\n/)) {
+            const match = line.match(/^\s*(?:url|path):\s*(.+?)\s*$/);
+            if (!match) {
+              continue;
+            }
+            const value = match[1].trim().replace(/^['"]|['"]$/g, '');
+            if (!value || /^https?:\/\//i.test(value)) {
+              continue;
+            }
+            requiredAssets.add(value);
+          }
+
+          const missing = [...requiredAssets].filter((fileName) => !fs.existsSync(path.join(releaseDir, fileName)));
+          if (missing.length > 0) {
+            console.error('latest-mac.yml references missing assets:');
+            for (const fileName of missing) {
+              console.error(`- ${fileName}`);
+            }
+            process.exit(1);
+          }
+          EOF
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
           path: |
             resume-designer/release/*.dmg
-            resume-designer/release/*-mac.zip
-            resume-designer/release/*-mac.zip.blockmap
+            resume-designer/release/*.zip
+            resume-designer/release/*.zip.blockmap
             resume-designer/release/latest-mac.yml
           if-no-files-found: error
 
@@ -232,6 +265,40 @@ jobs:
       - name: Build Windows artifacts
         run: npm run build && npx electron-builder --win nsis --publish never
         working-directory: resume-designer
+
+      - name: Validate Windows update manifest asset paths
+        shell: bash
+        run: |
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const releaseDir = path.resolve('resume-designer/release');
+          const manifestPath = path.join(releaseDir, 'latest.yml');
+          const manifest = fs.readFileSync(manifestPath, 'utf8');
+
+          const requiredAssets = new Set();
+          for (const line of manifest.split(/\r?\n/)) {
+            const match = line.match(/^\s*(?:url|path):\s*(.+?)\s*$/);
+            if (!match) {
+              continue;
+            }
+            const value = match[1].trim().replace(/^['"]|['"]$/g, '');
+            if (!value || /^https?:\/\//i.test(value)) {
+              continue;
+            }
+            requiredAssets.add(value);
+          }
+
+          const missing = [...requiredAssets].filter((fileName) => !fs.existsSync(path.join(releaseDir, fileName)));
+          if (missing.length > 0) {
+            console.error('latest.yml references missing assets:');
+            for (const fileName of missing) {
+              console.error(`- ${fileName}`);
+            }
+            process.exit(1);
+          }
+          EOF
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -312,8 +379,8 @@ jobs:
           body_path: release-notes.md
           files: |
             release-assets/macos/**/*.dmg
-            release-assets/macos/**/*-mac.zip
-            release-assets/macos/**/*-mac.zip.blockmap
+            release-assets/macos/**/*.zip
+            release-assets/macos/**/*.zip.blockmap
             release-assets/macos/**/latest-mac.yml
             release-assets/windows/**/*Setup*.exe
             release-assets/windows/**/*Setup*.exe.blockmap

@@ -43,6 +43,7 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns",
+      "artifactName": "Resume-Designer-${version}-${arch}.${ext}",
       "target": [
         "dmg",
         "zip"
@@ -56,6 +57,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "Resume-Designer-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
