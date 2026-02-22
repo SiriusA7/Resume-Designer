@@ -198,7 +198,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
-          path: resume-designer/release/**/*
+          path: |
+            resume-designer/release/*.dmg
+            resume-designer/release/*.zip
+            resume-designer/release/*.blockmap
+            resume-designer/release/latest-mac.yml
           if-no-files-found: error
 
   build-windows:
@@ -233,7 +237,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-windows
-          path: resume-designer/release/**/*
+          path: |
+            resume-designer/release/*.exe
+            resume-designer/release/*.blockmap
+            resume-designer/release/latest.yml
           if-no-files-found: error
 
   release:
@@ -271,8 +278,13 @@ jobs:
           name: Resume Designer ${{ needs.prepare.outputs.version }}
           body_path: release-notes.md
           files: |
-            release-assets/macos/**/*
-            release-assets/windows/**/*
+            release-assets/macos/**/*.dmg
+            release-assets/macos/**/*.zip
+            release-assets/macos/**/*.blockmap
+            release-assets/macos/**/latest-mac.yml
+            release-assets/windows/**/*.exe
+            release-assets/windows/**/*.blockmap
+            release-assets/windows/**/latest.yml
           fail_on_unmatched_files: true
           overwrite_files: true
           make_latest: true
