@@ -17,7 +17,7 @@ concurrency:
 jobs:
   prepare:
     permissions:
-      contents: read
+      contents: write
       models: read
     runs-on: ubuntu-latest
     outputs:
