@@ -5,6 +5,8 @@ const { autoUpdater } = require('electron-updater');
 
 // Keep a global reference of the window object
 let mainWindow = null;
+let isCheckingForUpdates = false;
+let lastUpdateCheckSource = 'auto';
 
 // Determine if we're in development or production
 const isDev = !app.isPackaged;
@@ -41,6 +43,50 @@ autoUpdater.logger = require('electron').app.isPackaged ? null : console;
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
 
+function sendUpdateStatus(status, data = {}) {
+  mainWindow?.webContents.send('update-status', {
+    status,
+    timestamp: Date.now(),
+    ...data
+  });
+}
+
+function checkForUpdates(source = 'auto') {
+  if (isDev) {
+    sendUpdateStatus('disabled', {
+      source,
+      message: 'Updates are disabled in development builds.'
+    });
+    return { started: false, reason: 'disabled' };
+  }
+
+  if (isCheckingForUpdates) {
+    sendUpdateStatus('checking', {
+      source,
+      message: 'Already checking for updates...'
+    });
+    return { started: false, reason: 'already-checking' };
+  }
+
+  isCheckingForUpdates = true;
+  lastUpdateCheckSource = source;
+  sendUpdateStatus('checking', {
+    source,
+    message: 'Checking for updates...'
+  });
+
+  autoUpdater.checkForUpdates().catch((err) => {
+    sendUpdateStatus('error', {
+      source,
+      message: `Update check failed: ${err.message}`
+    });
+  }).finally(() => {
+    isCheckingForUpdates = false;
+  });
+
+  return { started: true };
+}
+
 function setupAutoUpdater() {
   // Only check for updates in production
   if (isDev) {
@@ -49,12 +95,16 @@ function setupAutoUpdater() {
   }
 
   // Check for updates after app is ready
-  autoUpdater.checkForUpdates().catch(err => {
-    console.log('Auto-update check failed:', err.message);
-  });
+  checkForUpdates('startup');
 
   // Update available
   autoUpdater.on('update-available', (info) => {
+    sendUpdateStatus('available', {
+      source: lastUpdateCheckSource,
+      version: info.version,
+      message: `Version ${info.version} is available.`
+    });
+
     dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: 'Update Available',
@@ -63,25 +113,59 @@ function setupAutoUpdater() {
       defaultId: 0
     }).then(result => {
       if (result.response === 0) {
-        autoUpdater.downloadUpdate();
+        sendUpdateStatus('download-started', {
+          source: lastUpdateCheckSource,
+          version: info.version,
+          message: `Downloading version ${info.version}...`
+        });
+
+        autoUpdater.downloadUpdate().catch((err) => {
+          sendUpdateStatus('error', {
+            source: lastUpdateCheckSource,
+            message: `Failed to download update: ${err.message}`
+          });
+        });
+
         // Notify renderer about download start
         mainWindow?.webContents.send('update-downloading');
+      } else {
+        sendUpdateStatus('deferred', {
+          source: lastUpdateCheckSource,
+          version: info.version,
+          message: 'Update download postponed.'
+        });
       }
     });
   });
 
   // Update not available
-  autoUpdater.on('update-not-available', () => {
+  autoUpdater.on('update-not-available', (info) => {
     console.log('App is up to date');
+    sendUpdateStatus('up-to-date', {
+      source: lastUpdateCheckSource,
+      version: info?.version,
+      message: 'You are on the latest version.'
+    });
   });
 
   // Download progress
   autoUpdater.on('download-progress', (progress) => {
     mainWindow?.webContents.send('update-progress', progress.percent);
+    sendUpdateStatus('downloading', {
+      source: lastUpdateCheckSource,
+      percent: progress.percent,
+      message: `Downloading update... ${Math.round(progress.percent)}%`
+    });
   });
 
   // Update downloaded
   autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateStatus('downloaded', {
+      source: lastUpdateCheckSource,
+      version: info.version,
+      message: `Version ${info.version} is ready to install.`
+    });
+
     dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: 'Update Ready',
@@ -90,7 +174,18 @@ function setupAutoUpdater() {
       defaultId: 0
     }).then(result => {
       if (result.response === 0) {
+        sendUpdateStatus('installing', {
+          source: lastUpdateCheckSource,
+          version: info.version,
+          message: 'Restarting to install update...'
+        });
         autoUpdater.quitAndInstall(false, true);
+      } else {
+        sendUpdateStatus('restart-deferred', {
+          source: lastUpdateCheckSource,
+          version: info.version,
+          message: 'Update downloaded. Restart when ready to install.'
+        });
       }
     });
   });
@@ -98,6 +193,10 @@ function setupAutoUpdater() {
   // Error handling
   autoUpdater.on('error', (err) => {
     console.error('Auto-update error:', err.message);
+    sendUpdateStatus('error', {
+      source: lastUpdateCheckSource,
+      message: `Updater error: ${err.message}`
+    });
   });
 }
 
@@ -267,12 +366,13 @@ ipcMain.handle('check-for-updates', async () => {
   if (isDev) {
     return { checking: false, message: 'Updates disabled in development' };
   }
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    return { checking: true, currentVersion: app.getVersion() };
-  } catch (error) {
-    return { checking: false, error: error.message };
-  }
+
+  const result = checkForUpdates('manual');
+  return {
+    checking: result.started,
+    currentVersion: app.getVersion(),
+    reason: result.reason || null
+  };
 });
 
 // Generate PDF using native Electron printToPDF
