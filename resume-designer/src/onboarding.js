@@ -4,7 +4,7 @@
  */
 
 import { store } from './store.js';
-import { getSettings, saveSettings, getVariants, saveVariant, setCurrentVariantId, initPersistence, generateUniqueVariantName, getUserProfile } from './persistence.js';
+import { getSettings, saveSettings, getVariants, saveVariant, setCurrentVariantId, initPersistence, generateUniqueVariantName, getUserProfile, SETTINGS_UPDATED_EVENT } from './persistence.js';
 import { getConfiguredProviders, getDefaultModelId, generateResumeChanges, chat, generateResumeFromProfileForJob, checkProfileHasData, getAllModels, isProviderConfigured } from './aiService.js';
 import { loadVariant } from './headerBar.js';
 import { refreshChatPanel } from './chatPanel.js';
@@ -91,6 +91,7 @@ function showApiKeyStatus(message, success) {
 }
 
 let wizardContainer = null;
+let settingsSyncListenerAttached = false;
 let currentStep = 0;
 let isNewResumeMode = false; // true when launched from plus button (skips API step)
 let wizardData = {
@@ -110,6 +111,19 @@ let selectedModelForJobGeneration = null;
 
 // Track selected reasoning level for job-based resume generation
 let selectedReasoningForJobGeneration = 'medium';
+
+function attachSettingsSyncListener() {
+  if (settingsSyncListenerAttached) return;
+  settingsSyncListenerAttached = true;
+
+  window.addEventListener(SETTINGS_UPDATED_EVENT, () => {
+    // Keep onboarding controls and chat availability in sync while wizard is open.
+    if (wizardContainer?.classList.contains('show')) {
+      renderStep();
+    }
+    refreshChatPanel();
+  });
+}
 
 /**
  * Get available models for the model selector dropdown
@@ -287,6 +301,7 @@ export function showOnboardingWizard(options = {}) {
   interviewAnswers = {};
   
   try {
+    attachSettingsSyncListener();
     console.log('[Onboarding] Creating wizard...');
     createWizard();
     console.log('[Onboarding] Rendering step...');
@@ -306,6 +321,7 @@ export function showOnboardingWizard(options = {}) {
 export function closeOnboardingWizard() {
   wizardContainer?.classList.remove('show');
   document.body.style.overflow = '';
+  refreshChatPanel();
 }
 
 /**
@@ -495,6 +511,7 @@ function renderApiKeyStep(content, footer) {
       const anthropicKey = anthropicInput?.value.trim() || '';
       const openaiKey = openaiInput?.value.trim() || '';
       const geminiKey = geminiInput?.value.trim() || '';
+      const enteredKeys = { anthropicKey, openaiKey, geminiKey };
       
       // Check if any keys entered
       if (!anthropicKey && !openaiKey && !geminiKey) {
@@ -515,6 +532,10 @@ function renderApiKeyStep(content, footer) {
         }
         return;
       }
+
+      // Persist entered keys immediately so every AI entry point can use them.
+      saveSettings(enteredKeys);
+      refreshChatPanel();
       
       // Show loading state
       continueBtn.disabled = true;
@@ -531,7 +552,6 @@ function renderApiKeyStep(content, footer) {
       if (resultDiv) resultDiv.innerHTML = '';
       
       // Validate keys
-      const validKeys = {};
       const errors = [];
       let validCount = 0;
       
@@ -541,7 +561,6 @@ function renderApiKeyStep(content, footer) {
         const status = document.getElementById('anthropic-status');
         const group = document.getElementById('anthropic-group');
         if (valid) {
-          validKeys.anthropicKey = anthropicKey;
           status.innerHTML = '✓';
           status.className = 'api-input-status valid';
           group?.classList.add('validated');
@@ -560,7 +579,6 @@ function renderApiKeyStep(content, footer) {
         const status = document.getElementById('openai-status');
         const group = document.getElementById('openai-group');
         if (valid) {
-          validKeys.openaiKey = openaiKey;
           status.innerHTML = '✓';
           status.className = 'api-input-status valid';
           group?.classList.add('validated');
@@ -579,7 +597,6 @@ function renderApiKeyStep(content, footer) {
         const status = document.getElementById('gemini-status');
         const group = document.getElementById('gemini-group');
         if (valid) {
-          validKeys.geminiKey = geminiKey;
           status.innerHTML = '✓';
           status.className = 'api-input-status valid';
           group?.classList.add('validated');
@@ -592,12 +609,7 @@ function renderApiKeyStep(content, footer) {
         }
       }
       
-      // Save valid keys
-      if (Object.keys(validKeys).length > 0) {
-        saveSettings(validKeys);
-      }
-      
-      // Show result and proceed or show error
+      // Show result and proceed
       if (validCount > 0) {
         if (resultDiv) {
           resultDiv.innerHTML = `
@@ -621,21 +633,23 @@ function renderApiKeyStep(content, footer) {
       } else {
         if (resultDiv) {
           resultDiv.innerHTML = `
-            <div class="validation-error">
+            <div class="validation-warning">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
-                <line x1="15" y1="9" x2="9" y2="15"/>
-                <line x1="9" y1="9" x2="15" y2="15"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
               <div>
-                <strong>Invalid key${errors.length > 1 ? 's' : ''}: ${errors.join(', ')}</strong>
-                <p>Please check your API key and try again.</p>
+                <strong>Could not validate key${errors.length > 1 ? 's' : ''}: ${errors.join(', ')}</strong>
+                <p>We saved your keys and you can continue. You can re-check them later in Settings.</p>
               </div>
             </div>
           `;
         }
-        continueBtn.disabled = false;
-        continueBtn.innerHTML = 'Validate & Continue';
+        setTimeout(() => {
+          currentStep = 1;
+          renderStep();
+        }, 1200);
       }
     };
   }

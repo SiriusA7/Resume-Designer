@@ -694,6 +694,9 @@ html[data-theme="dark"] .header-variant-select {
   transform: translateX(-50%);
   z-index: 50;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-width: calc(100vw - 24px);
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .zoom-btn {
@@ -733,6 +736,34 @@ html[data-theme="dark"] .header-variant-select {
   height: 20px;
   background: rgba(248, 246, 243, 0.2);
   margin: 0 var(--space-xs);
+}
+
+.text-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.text-tool-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.text-size-level {
+  min-width: 46px;
+  padding: 0 4px;
+}
+
+.text-tool-underline {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+
+.text-tool-btn.active {
+  background: rgba(248, 246, 243, 0.18);
+  color: var(--color-sidebar-text);
 }
 
 .zoom-btn:disabled,

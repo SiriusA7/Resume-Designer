@@ -18,12 +18,12 @@ import {
   renderResumeCreative
 } from './renderer.js';
 import { initPdfExport } from './pdf.js';
-import { initInlineEditor, refreshInlineEditor } from './inlineEditor.js';
+import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from './inlineEditor.js';
 import { initStructurePanel, setDesignSettings } from './structurePanel.js';
 import { initHeaderBar, getCurrentId, loadVariant } from './headerBar.js';
 import { initChatPanel, refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initZoomControls } from './zoomControls.js';
-import { migrateBuiltInVariants, saveSettings, getSettings } from './persistence.js';
+import { migrateBuiltInVariants, saveSettings, getSettings, SETTINGS_UPDATED_EVENT } from './persistence.js';
 import { initTheme, setupThemeToggleAfterRender } from './theme.js';
 import { initJobDescriptionPanel, openJobDescriptionPanel, onJobPanelVariantChange } from './jobDescriptionPanel.js';
 import { initHistoryPanel, openHistoryPanel } from './historyPanel.js';
@@ -31,7 +31,7 @@ import { initUserProfilePanel, openUserProfilePanel } from './userProfilePanel.j
 import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
 import { initFontService } from './fontService.js';
 import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from './headerStyleService.js';
-import { initSpacingService, applySpacingSettings } from './spacingService.js';
+import { initSpacingService, applySpacingSettings, getSpacingSettings, saveSpacingSettings } from './spacingService.js';
 import { initAccentService, applyAccentSettings } from './accentService.js';
 import { initPhotoService, applyPhotoSettings } from './photoService.js';
 import { 
@@ -220,6 +220,9 @@ async function init() {
   
   // Initialize undo/redo
   initUndoRedo();
+
+  // Initialize shared text formatting tools in bottom toolbar
+  initTextTools();
   
   // Check for first-time user onboarding
   console.log('[Main] Setting up onboarding check...');
@@ -254,6 +257,15 @@ async function init() {
   
   // Initialize settings modal
   initSettingsModal();
+
+  // Keep settings UI synchronized across onboarding/chat/settings flows.
+  window.addEventListener(SETTINGS_UPDATED_EVENT, () => {
+    const modal = document.getElementById('settings-modal');
+    if (modal?.classList.contains('show')) {
+      loadApiKeysToModal();
+    }
+    refreshChatPanel();
+  });
   
   // Subscribe to store changes for re-rendering
   store.subscribe((event, payload) => {
@@ -527,6 +539,290 @@ function initUndoRedo() {
   
   // Initial state
   updateButtons();
+}
+
+let lastFormattingTarget = null;
+
+function isTextInputElement(element) {
+  return !!element && (
+    element.tagName === 'TEXTAREA' ||
+    (element.tagName === 'INPUT' && (element.type === 'text' || element.type === 'search' || element.type === 'url' || element.type === 'email'))
+  );
+}
+
+function isEditableFormattingTarget(element) {
+  return isTextInputElement(element) || !!element?.isContentEditable;
+}
+
+function getSelectionOffsetsInEditable(editable) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    const length = editable.textContent?.length || 0;
+    return { start: length, end: length };
+  }
+
+  const range = selection.getRangeAt(0);
+  if (!editable.contains(range.commonAncestorContainer)) {
+    const length = editable.textContent?.length || 0;
+    return { start: length, end: length };
+  }
+
+  const beforeStart = document.createRange();
+  beforeStart.selectNodeContents(editable);
+  beforeStart.setEnd(range.startContainer, range.startOffset);
+
+  const beforeEnd = document.createRange();
+  beforeEnd.selectNodeContents(editable);
+  beforeEnd.setEnd(range.endContainer, range.endOffset);
+
+  return {
+    start: beforeStart.toString().length,
+    end: beforeEnd.toString().length
+  };
+}
+
+function setSelectionInEditable(editable, start, end) {
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const textNode = editable.firstChild || editable.appendChild(document.createTextNode(''));
+  const maxLen = textNode.textContent?.length || 0;
+  const safeStart = Math.max(0, Math.min(start, maxLen));
+  const safeEnd = Math.max(0, Math.min(end, maxLen));
+
+  const range = document.createRange();
+  range.setStart(textNode, safeStart);
+  range.setEnd(textNode, safeEnd);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function toggleWrappedRange(value, start, end, marker) {
+  const selectionStart = Math.min(start, end);
+  const selectionEnd = Math.max(start, end);
+  const selected = value.slice(selectionStart, selectionEnd);
+  const markerLength = marker.length;
+
+  if (selectionStart === selectionEnd) {
+    const hasOuterMarker = selectionStart >= markerLength &&
+      value.slice(selectionStart - markerLength, selectionStart) === marker &&
+      value.slice(selectionStart, selectionStart + markerLength) === marker;
+
+    if (hasOuterMarker) {
+      const nextValue = value.slice(0, selectionStart - markerLength) + value.slice(selectionStart + markerLength);
+      const cursor = selectionStart - markerLength;
+      return { value: nextValue, start: cursor, end: cursor };
+    }
+
+    const insertion = `${marker}${marker}`;
+    const nextValue = value.slice(0, selectionStart) + insertion + value.slice(selectionStart);
+    const cursor = selectionStart + markerLength;
+    return { value: nextValue, start: cursor, end: cursor };
+  }
+
+  if (
+    selected.startsWith(marker) &&
+    selected.endsWith(marker) &&
+    selected.length >= markerLength * 2
+  ) {
+    const unwrapped = selected.slice(markerLength, -markerLength);
+    const nextValue = value.slice(0, selectionStart) + unwrapped + value.slice(selectionEnd);
+    return { value: nextValue, start: selectionStart, end: selectionStart + unwrapped.length };
+  }
+
+  const hasOuterMarker = selectionStart >= markerLength &&
+    value.slice(selectionStart - markerLength, selectionStart) === marker &&
+    value.slice(selectionEnd, selectionEnd + markerLength) === marker;
+
+  if (hasOuterMarker) {
+    const nextValue = value.slice(0, selectionStart - markerLength) + selected + value.slice(selectionEnd + markerLength);
+    return {
+      value: nextValue,
+      start: selectionStart - markerLength,
+      end: selectionEnd - markerLength
+    };
+  }
+
+  const nextValue = value.slice(0, selectionStart) + `${marker}${selected}${marker}` + value.slice(selectionEnd);
+  return {
+    value: nextValue,
+    start: selectionStart + markerLength,
+    end: selectionEnd + markerLength
+  };
+}
+
+function toggleBulletedLines(value, start, end) {
+  const selectionStart = Math.min(start, end);
+  const selectionEnd = Math.max(start, end);
+
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const endMarker = value.indexOf('\n', selectionEnd);
+  const lineEnd = endMarker === -1 ? value.length : endMarker;
+
+  const segment = value.slice(lineStart, lineEnd);
+  const lines = segment.split('\n');
+  const hasContent = lines.some(line => line.trim().length > 0);
+  if (!hasContent) {
+    return { value, start: selectionStart, end: selectionEnd };
+  }
+
+  const allBulleted = lines
+    .filter(line => line.trim().length > 0)
+    .every(line => /^\s*[-*•]\s+/.test(line));
+
+  const nextLines = lines.map((line) => {
+    if (!line.trim()) return line;
+    if (allBulleted) {
+      return line.replace(/^(\s*)[-*•]\s+/, '$1');
+    }
+    return line.replace(/^(\s*)/, '$1- ');
+  });
+
+  const nextSegment = nextLines.join('\n');
+  const nextValue = value.slice(0, lineStart) + nextSegment + value.slice(lineEnd);
+  return { value: nextValue, start: lineStart, end: lineStart + nextSegment.length };
+}
+
+function clearInlineFormatting(value, start, end) {
+  const selectionStart = Math.min(start, end);
+  const selectionEnd = Math.max(start, end);
+  const hasSelection = selectionStart !== selectionEnd;
+
+  const source = hasSelection
+    ? value.slice(selectionStart, selectionEnd)
+    : value;
+
+  const cleared = source
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\+\+([^+\n]+)\+\+/g, '$1')
+    .replace(/_([^_\n]+)_/g, '$1');
+
+  if (!hasSelection) {
+    return { value: cleared, start: selectionStart, end: selectionEnd };
+  }
+
+  const nextValue = value.slice(0, selectionStart) + cleared + value.slice(selectionEnd);
+  return { value: nextValue, start: selectionStart, end: selectionStart + cleared.length };
+}
+
+function applyTextCommand(command) {
+  const active = document.activeElement;
+  const inlineActive = getActiveInlineEditable();
+
+  let target = isEditableFormattingTarget(active) ? active : null;
+  if (!target && inlineActive) {
+    target = inlineActive;
+    if (!inlineActive.isContentEditable) {
+      inlineActive.click();
+      target = inlineActive.isContentEditable ? inlineActive : null;
+    }
+  }
+  if (!target && lastFormattingTarget && document.contains(lastFormattingTarget)) {
+    target = lastFormattingTarget;
+  }
+  if (!target) return;
+
+  if (isTextInputElement(target)) {
+    const start = target.selectionStart ?? 0;
+    const end = target.selectionEnd ?? start;
+    let result = null;
+
+    if (command === 'bold') result = toggleWrappedRange(target.value || '', start, end, '**');
+    if (command === 'italic') result = toggleWrappedRange(target.value || '', start, end, '_');
+    if (command === 'underline') result = toggleWrappedRange(target.value || '', start, end, '++');
+    if (command === 'bullets') result = toggleBulletedLines(target.value || '', start, end);
+    if (command === 'clear') result = clearInlineFormatting(target.value || '', start, end);
+    if (!result) return;
+
+    target.value = result.value;
+    target.focus();
+    target.setSelectionRange(result.start, result.end);
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+
+  if (!target.isContentEditable) return;
+
+  const value = target.textContent || '';
+  const offsets = getSelectionOffsetsInEditable(target);
+  let result = null;
+
+  if (command === 'bold') result = toggleWrappedRange(value, offsets.start, offsets.end, '**');
+  if (command === 'italic') result = toggleWrappedRange(value, offsets.start, offsets.end, '_');
+  if (command === 'underline') result = toggleWrappedRange(value, offsets.start, offsets.end, '++');
+  if (command === 'bullets') result = toggleBulletedLines(value, offsets.start, offsets.end);
+  if (command === 'clear') result = clearInlineFormatting(value, offsets.start, offsets.end);
+  if (!result) return;
+
+  target.textContent = result.value;
+  target.focus();
+  setSelectionInEditable(target, result.start, result.end);
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function adjustGlobalFontScale(delta) {
+  const spacing = getSpacingSettings();
+  const next = Math.max(0.75, Math.min(1.35, (spacing.fontScale || 1) + delta));
+  spacing.fontScale = Math.round(next * 100) / 100;
+  saveSpacingSettings(spacing);
+  applySpacingSettings(spacing);
+  updateTextToolbarState();
+}
+
+function updateTextToolbarState() {
+  const target = isEditableFormattingTarget(document.activeElement)
+    ? document.activeElement
+    : getActiveInlineEditable();
+  const hasTarget = !!target;
+
+  ['text-bold', 'text-italic', 'text-underline', 'text-bullets', 'text-clear-format'].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.classList.toggle('active', hasTarget);
+  });
+
+  const textSizeLevel = document.getElementById('text-size-level');
+  if (textSizeLevel) {
+    const spacing = getSpacingSettings();
+    textSizeLevel.textContent = `${Math.round((spacing.fontScale || 1) * 100)}%`;
+  }
+}
+
+function initTextTools() {
+  const toolbar = document.getElementById('zoom-controls');
+  if (!toolbar) return;
+
+  document.addEventListener('focusin', (e) => {
+    const target = e.target;
+    if (isEditableFormattingTarget(target)) {
+      lastFormattingTarget = target;
+      updateTextToolbarState();
+    }
+  });
+
+  document.addEventListener('selectionchange', () => {
+    updateTextToolbarState();
+  });
+
+  toolbar.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.text-tool-btn')) {
+      // Keep focus in the current editor while applying toolbar commands.
+      e.preventDefault();
+    }
+  });
+
+  const bind = (id, handler) => {
+    document.getElementById(id)?.addEventListener('click', handler);
+  };
+
+  bind('text-bold', () => applyTextCommand('bold'));
+  bind('text-italic', () => applyTextCommand('italic'));
+  bind('text-underline', () => applyTextCommand('underline'));
+  bind('text-bullets', () => applyTextCommand('bullets'));
+  bind('text-clear-format', () => applyTextCommand('clear'));
+  bind('text-size-decrease', () => adjustGlobalFontScale(-0.05));
+  bind('text-size-increase', () => adjustGlobalFontScale(0.05));
+
+  updateTextToolbarState();
 }
 
 // Initialize settings modal
@@ -847,6 +1143,7 @@ function renderCurrentResume() {
   
   // Refresh inline editor
   refreshInlineEditor();
+  updateTextToolbarState();
 }
 
 // Start the app

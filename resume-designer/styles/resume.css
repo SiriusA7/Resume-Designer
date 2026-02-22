@@ -174,8 +174,8 @@
   opacity: 0.5;
 }
 
-.tools-list .skill-tag:not(:last-child)::after {
-  content: none;
+.skill-tag-row {
+  display: inline;
 }
 
 /* Skill tag style variants */
@@ -236,7 +236,7 @@
 }
 
 .highlight-bullet::before {
-  content: '–';
+  content: var(--bullet-char, "•");
   position: absolute;
   left: 0;
   color: var(--resume-accent);
@@ -639,7 +639,7 @@
 }
 
 .stacked-vertical-section.highlight-section .highlight-bullet::before {
-  content: "•";
+  content: var(--bullet-char, "•");
   position: absolute;
   left: 0;
   color: var(--resume-accent);
@@ -1041,10 +1041,20 @@
 }
 
 .classic-featured-highlight-content .highlight-bullet::before {
-  content: "•";
+  content: var(--bullet-char, "•");
   position: absolute;
   left: 0;
   color: var(--resume-accent);
+}
+
+.classic-skill-content .highlight-item {
+  margin: 0;
+  width: 100%;
+}
+
+.creative-card-content .highlight-item {
+  margin: 0;
+  width: 100%;
 }
 
 /* Skills at bottom - same as classic */

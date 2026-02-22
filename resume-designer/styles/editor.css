@@ -843,6 +843,44 @@ html[data-theme="dark"] .editable-ai-menu-actions .apply-btn svg {
   padding: var(--space-md);
 }
 
+.panel-text-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 0 var(--space-md) var(--space-sm);
+  border-bottom: 1px solid var(--color-border-light);
+  background: var(--color-bg-dark);
+}
+
+.panel-text-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.panel-text-btn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.panel-text-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.panel-text-hint {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 /* Structure Panel Toggle Button */
 .structure-panel-toggle {
   position: fixed;
@@ -1058,7 +1096,7 @@ html[data-theme="dark"] .editable-ai-menu-actions .apply-btn svg {
    ========================================================================== */
 
 [draggable="true"] {
-  cursor: grab;
+  cursor: default;
 }
 
 [draggable="true"].dragging {
@@ -1202,6 +1240,52 @@ html[data-theme="dark"] .editable-ai-menu-actions .apply-btn svg {
 .section-title-input {
   font-weight: 600;
   margin-bottom: var(--space-sm);
+}
+
+.section-mode-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+  gap: var(--space-sm);
+}
+
+.section-mode-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+
+.section-mode-options {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--color-bg-dark);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.section-mode-btn {
+  border: none;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.section-mode-btn:hover {
+  color: var(--color-text);
+}
+
+.section-mode-btn.active {
+  background: var(--color-input-bg);
+  color: var(--color-accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .section-content-list {

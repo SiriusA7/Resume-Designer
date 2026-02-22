@@ -4,7 +4,7 @@
  */
 
 import { chat, rewriteText, generateBullets, getFeedback, improveSummary, isProviderConfigured, getConfiguredProviders, generateResumeChanges, getDefaultModelId, profileInterviewChat, extractProfileFromInterview, saveExtractedProfile } from './aiService.js';
-import { getSettings, saveSettings, getUserProfile } from './persistence.js';
+import { getSettings, saveSettings, getUserProfile, SETTINGS_UPDATED_EVENT } from './persistence.js';
 import { store } from './store.js';
 import { marked } from 'marked';
 import { createChangeSet, diffResumeData } from './diffEngine.js';
@@ -45,6 +45,7 @@ let profileInterviewMessages = [];
 // Slash command autocomplete
 let slashCommandsPopup = null;
 let selectedCommandIndex = 0;
+let settingsEventBound = false;
 
 // Available slash commands
 const SLASH_COMMANDS = [
@@ -147,6 +148,13 @@ export function initChatPanel(onApply) {
   
   // Check if API keys are configured and render appropriate view
   renderChatView();
+
+  if (!settingsEventBound) {
+    settingsEventBound = true;
+    window.addEventListener(SETTINGS_UPDATED_EVENT, () => {
+      refreshChatPanel();
+    });
+  }
 }
 
 // Initialize panel resize functionality
@@ -320,6 +328,12 @@ function initModelDropdown() {
 
 // Open the settings modal
 function openSettingsModal() {
+  const settingsBtn = document.getElementById('chat-settings-btn');
+  if (settingsBtn) {
+    settingsBtn.click();
+    return;
+  }
+
   const modal = document.getElementById('settings-modal');
   if (modal) {
     modal.classList.add('show');

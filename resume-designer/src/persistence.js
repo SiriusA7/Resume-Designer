@@ -7,6 +7,7 @@ import { store, generateId } from './store.js';
 import { parseResume } from './parser.js';
 
 const STORAGE_KEY = 'resume-designer-data';
+export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
 
 // Storage structure
 const DEFAULT_STORAGE = {
@@ -205,6 +206,12 @@ export function saveSettings(settings) {
   const storage = loadFromStorage();
   storage.settings = { ...storage.settings, ...settings };
   saveToStorage(storage);
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
+      detail: { settings: storage.settings }
+    }));
+  }
 }
 
 // Get settings
