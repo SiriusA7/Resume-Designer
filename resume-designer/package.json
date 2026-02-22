@@ -1,7 +1,7 @@
 {
   "name": "resume-designer",
   "version": "1.0.0",
-  "description": "Creative resume designer for artist portfolios",
+  "description": "Creative resume designer and generator.",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -61,8 +61,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "YOUR_GITHUB_USERNAME",
-      "repo": "resume-designer"
+      "owner": "SiriusA7",
+      "repo": "Resume-Designer"
     }
   }
 }

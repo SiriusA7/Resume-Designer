@@ -65,24 +65,27 @@ Best for open source or small distribution:
    git remote add origin https://github.com/YOUR_USERNAME/resume-designer.git
    ```
 
-2. **Update package.json** - Replace `YOUR_GITHUB_USERNAME`:
+2. **Update package.json**:
    ```json
    "publish": {
      "provider": "github",
-     "owner": "YOUR_GITHUB_USERNAME",
-     "repo": "resume-designer"
+     "owner": "SiriusA7",
+     "repo": "Resume-Designer"
    }
    ```
 
-3. **Set GitHub Token** (for publishing):
-   ```bash
-   export GH_TOKEN=your_github_personal_access_token
-   ```
+3. **Enable CI release workflow**:
+   - Workflow file: `.github/workflows/release.yml`
+   - Trigger: every push to `main` (including merged PRs)
+   - Output: new GitHub Release with macOS + Windows artifacts
 
-4. **Publish a release**:
-   ```bash
-   npm run electron:publish
-   ```
+4. **Configure repository secrets/variables**:
+   - Required:
+     - `GITHUB_TOKEN` (provided automatically by GitHub Actions)
+   - Required workflow permission:
+     - `models: read` (already declared in `.github/workflows/release.yml`)
+   - Optional:
+     - customize changelog categories in `.github/release.yml`
 
 5. Users download from your GitHub Releases page
 
@@ -120,27 +123,28 @@ Auto-updates are configured to work with GitHub Releases.
 ### Setting Up Auto-Updates
 
 1. **GitHub Releases** (already configured):
-   - Just publish releases with `npm run electron:publish`
-   - Include `latest.yml` (macOS) or `latest.yml` (Windows) - auto-generated
+   - CI creates a release on every `main` push
+   - CI computes the next semantic version from commit messages:
+     - `major` when commits contain `BREAKING CHANGE` or `!`
+     - `minor` when commits include `feat:`
+     - otherwise `patch`
+   - CI builds installers and uploads updater metadata (`latest*.yml`)
+   - CI first generates baseline notes using GitHub release notes + `.github/release.yml`
+   - CI then attempts a GitHub Models rewrite for more user-facing notes
+   - If AI rewrite fails, CI automatically falls back to baseline notes
 
-2. **Version Bumping**:
-   ```bash
-   # Update version in package.json before publishing
-   npm version patch  # 1.0.0 -> 1.0.1
-   npm version minor  # 1.0.0 -> 1.1.0
-   npm version major  # 1.0.0 -> 2.0.0
-   
-   npm run electron:publish
-   ```
+2. **No manual version bump needed** for CI releases:
+   - Workflow applies the computed version during build
+   - Source files are not modified by the workflow commit-wise
 
 ### Testing Updates
 
 To test the update flow locally:
 
-1. Build version 1.0.0 and install it
-2. Bump version to 1.0.1 in package.json
-3. Publish 1.0.1 to GitHub Releases
-4. Open the installed 1.0.0 app - it should detect the update
+1. Install an older release build from GitHub Releases
+2. Merge a PR into `main` (or push directly to `main`)
+3. Wait for `.github/workflows/release.yml` to publish the new release
+4. Open the installed older app - it should detect and prompt for the update
 
 ## Code Signing
 
@@ -201,8 +205,9 @@ Required for distributing outside the Mac App Store:
 
 **Auto-update not working**
 - Check that `publish` config in package.json is correct
-- Ensure GitHub token has `repo` scope
 - Verify release assets include `latest.yml` / `latest-mac.yml`
+- Ensure release artifacts include platform installers and `.blockmap` files
+- If AI notes fail, workflow falls back to baseline GitHub notes
 
 **Build fails on Windows**
 - Install Visual Studio Build Tools

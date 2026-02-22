@@ -1,0 +1,31 @@
+changelog:
+  categories:
+    - title: Highlights
+      labels:
+        - feature
+        - enhancement
+        - ux
+        - ui
+    - title: Fixes
+      labels:
+        - bug
+        - fix
+        - regression
+    - title: Performance
+      labels:
+        - performance
+        - optimization
+    - title: Maintenance
+      labels:
+        - chore
+        - dependencies
+        - refactor
+        - docs
+    - title: Other Changes
+      labels:
+        - "*"
+  exclude:
+    labels:
+      - skip-changelog
+      - internal
+      - ci
