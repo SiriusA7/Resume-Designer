@@ -270,6 +270,39 @@ jobs:
           name: release-windows
           path: release-assets/windows
 
+      - name: Remove existing release assets for tag
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = process.env.RELEASE_TAG;
+
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag
+              });
+
+              for (const asset of release.assets) {
+                core.info(`Deleting existing asset: ${asset.name}`);
+                await github.rest.repos.deleteReleaseAsset({
+                  owner,
+                  repo,
+                  asset_id: asset.id
+                });
+              }
+            } catch (error) {
+              if (error.status === 404) {
+                core.info(`No existing release found for tag ${tag}; skipping cleanup.`);
+              } else {
+                throw error;
+              }
+            }
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
