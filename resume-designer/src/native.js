@@ -163,6 +163,41 @@ export async function getAppInfo() {
 }
 
 /**
+ * Check for app updates (Electron only)
+ * @returns {Promise<{checking: boolean, currentVersion?: string, message?: string, reason?: string, error?: string}>}
+ */
+export async function checkForUpdates() {
+  if (isElectron && window.electron?.checkForUpdates) {
+    return await window.electron.checkForUpdates();
+  }
+
+  return {
+    checking: false,
+    message: 'Update checks are only available in the desktop app.'
+  };
+}
+
+/**
+ * Listen for update progress events (Electron only)
+ * @param {(percent: number) => void} callback
+ */
+export function onUpdateProgress(callback) {
+  if (isElectron && window.electron?.onUpdateProgress) {
+    window.electron.onUpdateProgress(callback);
+  }
+}
+
+/**
+ * Listen for update status events (Electron only)
+ * @param {(payload: {status: string, message?: string, percent?: number, source?: string, version?: string}) => void} callback
+ */
+export function onUpdateStatus(callback) {
+  if (isElectron && window.electron?.onUpdateStatus) {
+    window.electron.onUpdateStatus(callback);
+  }
+}
+
+/**
  * Generate PDF using native Electron printToPDF (Electron only)
  * @param {string} defaultName - Default filename for the PDF
  * @param {Object} pageSize - Optional page size {width, height} in INCHES

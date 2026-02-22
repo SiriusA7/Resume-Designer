@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Listen for update events
   onUpdateDownloading: (callback) => ipcRenderer.on('update-downloading', callback),
   onUpdateProgress: (callback) => ipcRenderer.on('update-progress', (_, percent) => callback(percent)),
+  onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_, payload) => callback(payload)),
   
   // Check if running in Electron
   isElectron: true,

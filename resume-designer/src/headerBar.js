@@ -18,9 +18,17 @@ import {
   generateUniqueVariantName
 } from './persistence.js';
 import { store, generateId, EMPTY_RESUME } from './store.js';
+import {
+  isElectron,
+  checkForUpdates,
+  onUpdateStatus
+} from './native.js';
 
 let currentVariantId = null;
 let onVariantChangeCallback = null;
+let updateListenersInitialized = false;
+let updateToastTimer = null;
+let manualUpdateCheckActive = false;
 
 /**
  * Show a custom prompt modal (native prompt doesn't work in Electron)
@@ -133,6 +141,7 @@ export function initHeaderBar(onVariantChange) {
   
   // Set up event listeners
   setupHeaderEventListeners();
+  initUpdateUi();
   
   // Load current variant into store
   if (currentVariantId) {
@@ -421,6 +430,17 @@ export function renderHeaderBar() {
               </svg>
               Version History
             </button>
+            ${isElectron ? `
+            <button class="header-tools-option" id="btn-check-updates">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 2v6h-6"/>
+                <path d="M3 12a9 9 0 0 1 15-6l3 2"/>
+                <path d="M3 22v-6h6"/>
+                <path d="M21 12a9 9 0 0 1-15 6l-3-2"/>
+              </svg>
+              Check for Updates
+            </button>
+            ` : ''}
           </div>
         </div>
         
@@ -576,6 +596,17 @@ export function renderHeaderBar() {
           </svg>
           Version History
         </button>
+        ${isElectron ? `
+        <button class="mobile-menu-option" id="mobile-check-updates">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 2v6h-6"/>
+            <path d="M3 12a9 9 0 0 1 15-6l3 2"/>
+            <path d="M3 22v-6h6"/>
+            <path d="M21 12a9 9 0 0 1-15 6l-3-2"/>
+          </svg>
+          Check for Updates
+        </button>
+        ` : ''}
       </div>
       <div class="mobile-menu-section">
         <div class="mobile-menu-section-title">File</div>
@@ -610,6 +641,7 @@ export function renderHeaderBar() {
   
   // Setup variant dropdown events
   setupVariantDropdown();
+  setUpdateButtonsDisabled(manualUpdateCheckActive);
 }
 
 // Setup variant dropdown events
@@ -731,6 +763,12 @@ function setupHeaderEventListeners() {
         window.openHistoryPanel();
       }
     }
+
+    // Check for updates
+    if (target.id === 'btn-check-updates') {
+      document.getElementById('header-tools-menu')?.classList.remove('show');
+      triggerManualUpdateCheck();
+    }
     
     // Export button
     if (target.id === 'btn-header-export') {
@@ -823,6 +861,9 @@ function setupHeaderEventListeners() {
         if (window.openHistoryPanel) {
           window.openHistoryPanel();
         }
+      } else if (mobileOption.id === 'mobile-check-updates') {
+        closeMobileMenu();
+        triggerManualUpdateCheck();
       } else if (mobileOption.id === 'mobile-export-json') {
         closeMobileMenu();
         exportCurrentVariant('json');
@@ -844,6 +885,176 @@ function setupHeaderEventListeners() {
       }
     }
   });
+}
+
+function initUpdateUi() {
+  if (!isElectron || updateListenersInitialized) return;
+  updateListenersInitialized = true;
+
+  onUpdateStatus((payload = {}) => {
+    handleUpdateStatus(payload);
+  });
+}
+
+async function triggerManualUpdateCheck() {
+  if (!isElectron) return;
+
+  manualUpdateCheckActive = true;
+  setUpdateButtonsDisabled(true);
+  showUpdateToast('Checking for updates...', 'info', true);
+
+  try {
+    const result = await checkForUpdates();
+    if (!result?.checking) {
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+
+      if (result?.reason === 'already-checking') {
+        showUpdateToast('Already checking for updates...', 'info');
+      } else if (result?.message) {
+        showUpdateToast(result.message, 'warning');
+      }
+    }
+  } catch (error) {
+    manualUpdateCheckActive = false;
+    setUpdateButtonsDisabled(false);
+    showUpdateToast(`Could not check for updates: ${error.message}`, 'error');
+  }
+}
+
+function handleUpdateStatus(payload) {
+  if (!payload?.status) return;
+
+  const status = payload.status;
+  const source = payload.source || 'auto';
+  const isManualFlow = source === 'manual' || manualUpdateCheckActive;
+  const percent = typeof payload.percent === 'number' ? Math.round(payload.percent) : null;
+  const version = payload.version ? ` ${payload.version}` : '';
+
+  switch (status) {
+    case 'checking':
+      if (isManualFlow) {
+        setUpdateButtonsDisabled(true);
+        showUpdateToast(payload.message || 'Checking for updates...', 'info', true);
+      }
+      break;
+
+    case 'up-to-date':
+      if (isManualFlow) {
+        showUpdateToast(payload.message || 'You are on the latest version.', 'success');
+      }
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+      break;
+
+    case 'available':
+      showUpdateToast(
+        payload.message || `Update${version} is available. Choose Download in the dialog to continue.`,
+        'info'
+      );
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+      break;
+
+    case 'download-started':
+      setUpdateButtonsDisabled(true);
+      showUpdateToast(payload.message || 'Downloading update... 0%', 'info', true);
+      break;
+
+    case 'downloading':
+      setUpdateButtonsDisabled(true);
+      showUpdateToast(
+        payload.message || `Downloading update... ${percent || 0}%`,
+        'info',
+        true
+      );
+      break;
+
+    case 'downloaded':
+      showUpdateToast(
+        payload.message || `Update${version} downloaded. Choose Restart Now in the dialog to install.`,
+        'success'
+      );
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+      break;
+
+    case 'restart-deferred':
+      showUpdateToast(
+        payload.message || 'Update downloaded. Restart the app later to finish installation.',
+        'info'
+      );
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+      break;
+
+    case 'deferred':
+      showUpdateToast(payload.message || 'Update download postponed.', 'info');
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+      break;
+
+    case 'installing':
+      showUpdateToast(payload.message || 'Restarting to install update...', 'info', true);
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(true);
+      break;
+
+    case 'disabled':
+      if (isManualFlow) {
+        showUpdateToast(payload.message || 'Updates are disabled in development builds.', 'warning');
+      }
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+      break;
+
+    case 'error':
+      if (isManualFlow || source === 'startup') {
+        showUpdateToast(payload.message || 'Could not check for updates.', 'error');
+      }
+      manualUpdateCheckActive = false;
+      setUpdateButtonsDisabled(false);
+      break;
+
+    default:
+      break;
+  }
+}
+
+function setUpdateButtonsDisabled(disabled) {
+  if (!isElectron) return;
+
+  const desktopBtn = document.getElementById('btn-check-updates');
+  const mobileBtn = document.getElementById('mobile-check-updates');
+
+  if (desktopBtn) desktopBtn.disabled = disabled;
+  if (mobileBtn) mobileBtn.disabled = disabled;
+}
+
+function showUpdateToast(message, tone = 'info', persistent = false) {
+  if (!isElectron || !message) return;
+
+  let toast = document.getElementById('update-status-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'update-status-toast';
+    toast.className = 'update-status-toast';
+    document.body.appendChild(toast);
+  }
+
+  toast.textContent = message;
+  toast.className = `update-status-toast tone-${tone} show`;
+
+  if (updateToastTimer) {
+    clearTimeout(updateToastTimer);
+    updateToastTimer = null;
+  }
+
+  if (!persistent) {
+    updateToastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+    }, 4500);
+  }
 }
 
 // Format a date for display (relative or absolute)
