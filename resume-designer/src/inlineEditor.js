@@ -679,11 +679,6 @@ function handleClick(e) {
   // Don't start editing if already editing
   if (editable.isContentEditable) return;
   
-  // Don't start editing if element has pending AI changes - use the hover menu instead
-  if (editable.dataset.hasChange) {
-    return;
-  }
-  
   startEditing(editable);
 }
 
@@ -701,6 +696,18 @@ function startEditing(element) {
   
   activeElement = element;
   
+  const path = element.dataset.editable;
+  if (path) {
+    const sourceValue = store.get(path);
+    if (typeof sourceValue === 'string') {
+      element.textContent = sourceValue;
+    } else if (sourceValue === null || sourceValue === undefined) {
+      element.textContent = '';
+    } else {
+      element.textContent = String(sourceValue);
+    }
+  }
+
   // Make editable
   element.contentEditable = 'true';
   element.classList.add('editing');
@@ -769,18 +776,30 @@ function extractEditedValue(element, path) {
   }
   
   // Check for highlight bullets (need to restore the "- " prefix)
-  const highlightBullet = element.querySelector('.highlight-bullet');
-  if (highlightBullet) {
-    // Restore the "- " prefix that was stripped during rendering
-    const content = highlightBullet.textContent.trim();
-    // Also preserve **bold** formatting if present
-    const strongTags = highlightBullet.querySelectorAll('strong');
-    let result = content;
-    strongTags.forEach(strong => {
-      const boldText = strong.textContent;
-      result = result.replace(boldText, `**${boldText}**`);
-    });
-    return '- ' + result;
+  const highlightBullets = element.querySelectorAll('.highlight-bullet');
+  if (highlightBullets.length > 0) {
+    const serialized = Array.from(highlightBullets).map((bulletEl) => {
+      const content = bulletEl.textContent.trim();
+      const strongTags = bulletEl.querySelectorAll('strong');
+      const italicTags = bulletEl.querySelectorAll('em');
+      const underlineTags = bulletEl.querySelectorAll('u');
+      let result = content;
+      strongTags.forEach((strong) => {
+        const boldText = strong.textContent;
+        result = result.replace(boldText, `**${boldText}**`);
+      });
+      italicTags.forEach((italic) => {
+        const italicText = italic.textContent;
+        result = result.replace(italicText, `_${italicText}_`);
+      });
+      underlineTags.forEach((underline) => {
+        const underlineText = underline.textContent;
+        result = result.replace(underlineText, `++${underlineText}++`);
+      });
+      return result ? `- ${result}` : '';
+    }).filter(Boolean);
+
+    return serialized.join(' • ');
   }
   
   // For tools field, also check for skill tags
@@ -812,6 +831,13 @@ function handleBlur(e) {
 function handleKeyDown(e) {
   const editable = e.target.closest('[data-editable]');
   if (!editable || !editable.isContentEditable) return;
+
+  const modKey = e.metaKey || e.ctrlKey;
+  if (modKey && !e.altKey && e.key.toLowerCase() === 'b') {
+    e.preventDefault();
+    toggleBoldInEditable(editable);
+    return;
+  }
   
   // Enter key finishes editing (except for multiline fields)
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -851,6 +877,87 @@ function handleKeyDown(e) {
   }
 }
 
+function toggleBoldInEditable(editable) {
+  // Skip structural rich text nodes that are reconstructed by specialized extractors.
+  if (editable.querySelector('.skill-tag, .skill-tag-inline, .highlight-bullet')) {
+    return;
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+
+  const range = selection.getRangeAt(0);
+  if (!editable.contains(range.commonAncestorContainer)) return;
+
+  const start = getTextOffset(editable, range.startContainer, range.startOffset);
+  const end = getTextOffset(editable, range.endContainer, range.endOffset);
+  const result = toggleBoldMarkdown(editable.textContent || '', start, end);
+
+  editable.textContent = result.value;
+  setSelectionInEditable(editable, result.start, result.end);
+}
+
+function getTextOffset(root, container, offset) {
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.setEnd(container, offset);
+  return range.toString().length;
+}
+
+function setSelectionInEditable(editable, start, end) {
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const textNode = editable.firstChild || editable.appendChild(document.createTextNode(''));
+  const maxLen = textNode.textContent?.length || 0;
+  const safeStart = Math.max(0, Math.min(start, maxLen));
+  const safeEnd = Math.max(0, Math.min(end, maxLen));
+
+  const range = document.createRange();
+  range.setStart(textNode, safeStart);
+  range.setEnd(textNode, safeEnd);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function toggleBoldMarkdown(value, start, end) {
+  const selectionStart = Math.min(start, end);
+  const selectionEnd = Math.max(start, end);
+  const selected = value.slice(selectionStart, selectionEnd);
+
+  if (selectionStart === selectionEnd) {
+    const hasOuterBold = selectionStart >= 2 &&
+      value.slice(selectionStart - 2, selectionStart) === '**' &&
+      value.slice(selectionStart, selectionStart + 2) === '**';
+
+    if (hasOuterBold) {
+      const nextValue = value.slice(0, selectionStart - 2) + value.slice(selectionStart + 2);
+      return { value: nextValue, start: selectionStart - 2, end: selectionStart - 2 };
+    }
+
+    const nextValue = value.slice(0, selectionStart) + '****' + value.slice(selectionStart);
+    return { value: nextValue, start: selectionStart + 2, end: selectionStart + 2 };
+  }
+
+  if (selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4) {
+    const unwrapped = selected.slice(2, -2);
+    const nextValue = value.slice(0, selectionStart) + unwrapped + value.slice(selectionEnd);
+    return { value: nextValue, start: selectionStart, end: selectionStart + unwrapped.length };
+  }
+
+  const hasOuterBold = selectionStart >= 2 &&
+    value.slice(selectionStart - 2, selectionStart) === '**' &&
+    value.slice(selectionEnd, selectionEnd + 2) === '**';
+
+  if (hasOuterBold) {
+    const nextValue = value.slice(0, selectionStart - 2) + selected + value.slice(selectionEnd + 2);
+    return { value: nextValue, start: selectionStart - 2, end: selectionEnd - 2 };
+  }
+
+  const nextValue = value.slice(0, selectionStart) + `**${selected}**` + value.slice(selectionEnd);
+  return { value: nextValue, start: selectionStart + 2, end: selectionEnd + 2 };
+}
+
 // Handle input for validation/feedback
 function handleInput(e) {
   const editable = e.target.closest('[data-editable]');
@@ -878,4 +985,8 @@ export function refreshInlineEditor() {
       }
     }
   }
+}
+
+export function getActiveInlineEditable() {
+  return activeElement && document.contains(activeElement) ? activeElement : null;
 }

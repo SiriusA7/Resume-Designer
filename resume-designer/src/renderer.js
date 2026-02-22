@@ -3,6 +3,122 @@
  * Converts parsed resume data into styled HTML with inline editing support
  */
 
+function normalizeSectionType(type) {
+  return type === 'skills' ? 'skills' : 'list';
+}
+
+function splitByBulletSeparators(line) {
+  if (line === null || line === undefined) return [];
+  return String(line)
+    .split('•')
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+function stripLeadingBulletMarker(text) {
+  return text.replace(/^[\-*•]\s*/, '').trim();
+}
+
+function normalizeLineItems(line, mode) {
+  const items = splitByBulletSeparators(line);
+  if (mode === 'list') {
+    return items.map(stripLeadingBulletMarker).filter(Boolean);
+  }
+  return items;
+}
+
+function formatInlineMarkdown(text) {
+  const escaped = escapeHtmlRaw(text);
+  return escaped
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\+\+([^+\n]+)\+\+/g, '<u>$1</u>')
+    .replace(/(^|[\s([{"'`])_([^_\n]+)_(?=$|[\s)\]}"'`.,!?;:])/g, '$1<em>$2</em>');
+}
+
+function formatListLine(line) {
+  const items = normalizeLineItems(line, 'list');
+  return items.map(item => `<span class="highlight-bullet">${formatInlineMarkdown(item)}</span>`).join('');
+}
+
+function formatSkillsLine(line) {
+  const items = normalizeLineItems(line, 'skills');
+  return items.map(item => `<span class="skill-tag">${formatInlineMarkdown(item)}</span>`).join('');
+}
+
+function formatSkillsLineStacked(line) {
+  const items = normalizeLineItems(line, 'skills');
+  return items
+    .map(item => `<span class="skill-tag-inline">${formatInlineMarkdown(item)}</span>`)
+    .join('<span class="skill-sep">•</span>');
+}
+
+function renderSectionLine(line, mode, variant = 'sidebar') {
+  if (normalizeSectionType(mode) === 'list') {
+    return formatListLine(line);
+  }
+  return variant === 'stacked' ? formatSkillsLineStacked(line) : formatSkillsLine(line);
+}
+
+function renderSectionContent(section, sIdx, variant = 'sidebar') {
+  const mode = normalizeSectionType(section?.type);
+  return (section.content || [])
+    .map((line, i) => `
+      <p data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode, variant)}</p>
+    `)
+    .join('');
+}
+
+function renderClassicSectionContent(section, sIdx) {
+  const mode = normalizeSectionType(section?.type);
+  if (mode === 'list') {
+    return (section.content || [])
+      .map((line, i) => `<p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
+      .join('');
+  }
+  return (section.content || [])
+    .map((line, i) => `<span class="classic-skill-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</span>`)
+    .join('');
+}
+
+function renderCreativeSectionContent(section, sIdx) {
+  const mode = normalizeSectionType(section?.type);
+  if (mode === 'list') {
+    return (section.content || [])
+      .map((line, i) => `<p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
+      .join('');
+  }
+  return (section.content || [])
+    .map((line, i) => `<span class="creative-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</span>`)
+    .join('');
+}
+
+function splitSectionsByMode(sections = []) {
+  const lists = [];
+  const skills = [];
+
+  sections.forEach((section, sIdx) => {
+    if (normalizeSectionType(section?.type) === 'skills') {
+      skills.push({ section, sIdx });
+    } else {
+      lists.push({ section, sIdx });
+    }
+  });
+
+  return { lists, skills };
+}
+
+function normalizeTools(tools) {
+  const raw = Array.isArray(tools) ? tools.join(' • ') : (tools || '');
+  return splitByBulletSeparators(raw);
+}
+
+function renderToolsInline(tools, editablePath = null) {
+  const tokens = normalizeTools(tools);
+  if (tokens.length === 0) return '';
+  const editableAttr = editablePath ? ` data-editable="${editablePath}"` : '';
+  return `<span class="skill-tag-row"${editableAttr}>${tokens.map(token => `<span class="skill-tag">${formatInlineMarkdown(token)}</span>`).join('')}</span>`;
+}
+
 // Sidebar layout (default)
 export function renderResume(data) {
   return `
@@ -149,7 +265,7 @@ function renderStackedVerticalSections(data) {
         <div class="section stacked-vertical-section">
           <h3 class="section-title">Tools</h3>
           <div class="stacked-vertical-content">
-            <p data-editable="tools">${formatSkillLineStacked(data.tools)}</p>
+            <p data-editable="tools">${formatSkillsLineStacked(data.tools)}</p>
           </div>
         </div>
       `;
@@ -157,28 +273,15 @@ function renderStackedVerticalSections(data) {
     return html;
   }
   
-  // Separate highlights (bullet sections) from skills
-  const highlights = [];
-  const skills = [];
-  
-  data.sections.forEach((section, sIdx) => {
-    const isHighlight = section.content.some(line => line && line.startsWith('- '));
-    if (isHighlight) {
-      highlights.push({ section, sIdx });
-    } else {
-      skills.push({ section, sIdx });
-    }
-  });
+  const { lists, skills } = splitSectionsByMode(data.sections);
   
   // Render highlights first (full width)
-  highlights.forEach(({ section, sIdx }) => {
+  lists.forEach(({ section, sIdx }) => {
     html += `
       <div class="section stacked-vertical-section highlight-section" data-section-id="${section.id || sIdx}">
         <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
         <div class="stacked-vertical-content">
-          ${section.content.map((line, i) => `
-            <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLineStacked(line)}</p>
-          `).join('')}
+          ${renderSectionContent(section, sIdx, 'stacked')}
         </div>
       </div>
     `;
@@ -190,9 +293,7 @@ function renderStackedVerticalSections(data) {
       <div class="section stacked-vertical-section skill-section" data-section-id="${section.id || sIdx}">
         <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
         <div class="stacked-vertical-content">
-          ${section.content.map((line, i) => `
-            <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLineStacked(line)}</p>
-          `).join('')}
+          ${renderSectionContent(section, sIdx, 'stacked')}
         </div>
       </div>
     `;
@@ -204,7 +305,7 @@ function renderStackedVerticalSections(data) {
       <div class="section stacked-vertical-section">
         <h3 class="section-title">Tools</h3>
         <div class="stacked-vertical-content">
-          <p data-editable="tools">${formatSkillLineStacked(data.tools)}</p>
+          <p data-editable="tools">${formatSkillsLineStacked(data.tools)}</p>
         </div>
       </div>
     `;
@@ -276,13 +377,14 @@ function renderStackedSections(data) {
     if (data.sections) {
       for (let sIdx = 0; sIdx < data.sections.length; sIdx++) {
         const section = data.sections[sIdx];
+        const sectionClass = normalizeSectionType(section?.type) === 'skills'
+          ? 'stacked-skill-section'
+          : 'stacked-skill-section highlight-section';
         html += `
-          <div class="stacked-skill-section" data-section-id="${section.id || sIdx}">
+          <div class="${sectionClass}" data-section-id="${section.id || sIdx}">
             <h3 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
             <div class="stacked-skill-content">
-              ${section.content.map((line, i) => `
-                <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLineStacked(line)}</p>
-              `).join('')}
+              ${renderSectionContent(section, sIdx, 'stacked')}
             </div>
           </div>
         `;
@@ -294,7 +396,7 @@ function renderStackedSections(data) {
         <div class="stacked-skill-section">
           <h3 class="section-title">Tools</h3>
           <div class="stacked-skill-content tools-list">
-            <p data-editable="tools">${formatSkillLineStacked(data.tools)}</p>
+            <p data-editable="tools">${formatSkillsLineStacked(data.tools)}</p>
           </div>
         </div>
       `;
@@ -306,53 +408,35 @@ function renderStackedSections(data) {
   return html;
 }
 
-function formatSkillLineStacked(line) {
-  if (!line) return '';
-  
-  // Handle bullet point lines (from Highlights sections)
-  if (line.startsWith('- ')) {
-    const content = line.substring(2).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    return `<span class="highlight-bullet">${content}</span>`;
-  }
-  
-  // Convert **text** to <strong>text</strong>
-  const formatted = escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Convert bullet separators to styled inline elements
-  return formatted.split('•').map(skill => 
-    `<span class="skill-tag-inline">${skill.trim()}</span>`
-  ).join('<span class="skill-sep">•</span>');
-}
-
 function renderSidebar(data) {
   let html = '';
   
-  // Render skill sections
+  // Render sidebar sections
   if (data.sections) {
     for (let sIdx = 0; sIdx < data.sections.length; sIdx++) {
       const section = data.sections[sIdx];
-      
-      // Check if this is a highlights/bullet section (lines start with "- ")
-      const isHighlightSection = section.content.some(line => line && line.startsWith('- '));
-      
-      if (isHighlightSection) {
+      const mode = normalizeSectionType(section?.type);
+
+      if (mode === 'list') {
         // Render as block-level bullets
         html += `
           <div class="sidebar-section" data-section-id="${section.id || sIdx}">
             <h3 class="sidebar-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
             <div class="sidebar-content">
-              ${section.content.map((line, i) => `
-                <p data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</p>
-              `).join('')}
+              ${renderSectionContent(section, sIdx)}
             </div>
           </div>
         `;
       } else {
-        // Render as inline skill tags - combine all lines into one flow
-        const allSkills = section.content
-          .filter(line => line && line.trim())
-          .map((line, i) => `<span class="skill-tag" data-editable="sections[${sIdx}].content[${i}]">${escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</span>`)
-          .join('');
-        
+        const allSkills = (section.content || [])
+          .map((line, i) => {
+            const rendered = renderSectionLine(line, 'skills');
+            if (!rendered) return '';
+            return `<span class="skill-tag-row" data-editable="sections[${sIdx}].content[${i}]">${rendered}</span>`;
+          })
+          .filter(Boolean)
+          .join('<span class="skill-sep">•</span>');
+
         html += `
           <div class="sidebar-section" data-section-id="${section.id || sIdx}">
             <h3 class="sidebar-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
@@ -367,22 +451,12 @@ function renderSidebar(data) {
   
   // Render tools - always render as inline skill tags
   if (data.tools) {
-    // Tools can be a string with bullets or an array
-    const toolsContent = Array.isArray(data.tools) 
-      ? data.tools.join(' • ')
-      : data.tools;
-    
-    // Split by bullet and render as inline tags
-    const toolTags = toolsContent.split('•')
-      .map(tool => tool.trim())
-      .filter(tool => tool)
-      .map(tool => `<span class="skill-tag">${escapeHtml(tool)}</span>`)
-      .join('');
+    const toolTags = renderToolsInline(data.tools, 'tools');
     
     html += `
       <div class="sidebar-section">
         <h3 class="sidebar-title">Tools</h3>
-        <div class="sidebar-content sidebar-skills tools-list" data-editable="tools">
+        <div class="sidebar-content sidebar-skills tools-list">
           ${toolTags}
         </div>
       </div>
@@ -390,23 +464,6 @@ function renderSidebar(data) {
   }
   
   return html;
-}
-
-function formatSkillLine(line) {
-  if (!line) return '';
-  
-  // Handle bullet point lines (from Highlights sections)
-  if (line.startsWith('- ')) {
-    const content = line.substring(2).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    return `<span class="highlight-bullet">${content}</span>`;
-  }
-  
-  // Convert **text** to <strong>text</strong>
-  const formatted = escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Convert bullet separators to styled elements
-  return formatted.split('•').map(skill => 
-    `<span class="skill-tag">${skill.trim()}</span>`
-  ).join('');
 }
 
 function renderExperience(exp, index) {
@@ -432,24 +489,21 @@ function renderExperience(exp, index) {
 function formatBullet(text) {
   if (!text) return '';
   
-  // If text already contains HTML strong tags, just return it
+  // If text already contains supported formatting tags, just return it
   // (data from parser already has HTML)
-  if (text.includes('<strong>') || text.includes('</strong>')) {
+  if (
+    text.includes('<strong>') || text.includes('</strong>') ||
+    text.includes('<em>') || text.includes('</em>') ||
+    text.includes('<u>') || text.includes('</u>')
+  ) {
     return text;
   }
-  
-  // Otherwise, convert markdown bold to HTML
-  // First escape any dangerous characters, then convert **text** to <strong>
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  
-  return escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+  return formatInlineMarkdown(text);
 }
 
 // HTML escape utility to prevent XSS
-function escapeHtml(str) {
+function escapeHtmlRaw(str) {
   if (!str) return '';
   return String(str)
     .replace(/&/g, '&amp;')
@@ -457,6 +511,10 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function escapeHtml(str) {
+  return formatInlineMarkdown(str);
 }
 
 // Right Sidebar layout (sidebar on the right)
@@ -665,9 +723,7 @@ export function renderResumeClassic(data) {
             <div class="section">
               <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
               <div class="classic-skill-content">
-                ${section.content.map((line, i) => `
-                  <span class="classic-skill-item" data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</span>
-                `).join('')}
+                ${renderClassicSectionContent(section, sIdx)}
               </div>
             </div>
           `).join('')}
@@ -679,20 +735,7 @@ export function renderResumeClassic(data) {
 
 // Classic Featured layout - highlights after summary, skills at bottom
 export function renderResumeClassicFeatured(data) {
-  // Separate highlights (bullet sections) from skills
-  const highlights = [];
-  const skills = [];
-  
-  if (data.sections) {
-    data.sections.forEach((section, sIdx) => {
-      const isHighlight = section.content.some(line => line && line.startsWith('- '));
-      if (isHighlight) {
-        highlights.push({ section, sIdx });
-      } else {
-        skills.push({ section, sIdx });
-      }
-    });
-  }
+  const { lists: highlights, skills } = splitSectionsByMode(data.sections || []);
   
   return `
     <header class="resume-header classic-header">
@@ -719,9 +762,7 @@ export function renderResumeClassicFeatured(data) {
             <div class="section highlight-section">
               <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
               <div class="classic-featured-highlight-content">
-                ${section.content.map((line, i) => `
-                  <p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${formatHighlightLine(line)}</p>
-                `).join('')}
+                ${renderClassicSectionContent(section, sIdx)}
               </div>
             </div>
           `).join('')}
@@ -752,9 +793,7 @@ export function renderResumeClassicFeatured(data) {
             <div class="section">
               <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
               <div class="classic-skill-content">
-                ${section.content.map((line, i) => `
-                  <span class="classic-skill-item" data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</span>
-                `).join('')}
+                ${renderClassicSectionContent(section, sIdx)}
               </div>
             </div>
           `).join('')}
@@ -762,19 +801,6 @@ export function renderResumeClassicFeatured(data) {
       ` : ''}
     </div>
   `;
-}
-
-// Helper to format highlight lines (with bullets)
-function formatHighlightLine(line) {
-  if (!line) return '';
-  
-  // Handle bullet point lines
-  if (line.startsWith('- ')) {
-    const content = line.substring(2).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    return `<span class="highlight-bullet">${escapeHtml(content).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</span>`;
-  }
-  
-  return escapeHtml(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
 
 // Classic contact renderer
@@ -963,9 +989,7 @@ export function renderResumeCreative(data) {
             <div class="creative-card">
               <h3 class="creative-card-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
               <div class="creative-card-content">
-                ${section.content.map((line, i) => `
-                  <span class="creative-item" data-editable="sections[${sIdx}].content[${i}]">${formatSkillLine(line)}</span>
-                `).join('')}
+                ${renderCreativeSectionContent(section, sIdx)}
               </div>
             </div>
           `).join('')}

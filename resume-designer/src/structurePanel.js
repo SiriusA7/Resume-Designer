@@ -83,6 +83,10 @@ let currentAccent = getAccentSettings();
 // Photo settings
 let currentPhoto = getPhotoSettings();
 
+// Prevent panel re-renders while typing in local inputs
+let isHandlingLocalFieldUpdate = false;
+let activeTextField = null;
+
 // Section collapse state - tracks which sections are collapsed
 // Key format: "tabName-sectionId" e.g., "design-color-theme", "header-name-title"
 let collapsedSections = {};
@@ -112,6 +116,32 @@ const SECTION_TEMPLATES = {
   interests: { title: 'Interests', type: 'skills', content: ['Interest 1', 'Interest 2'] }
 };
 
+function normalizeSectionType(type) {
+  return type === 'skills' ? 'skills' : 'list';
+}
+
+function normalizeToolsItems(tools) {
+  if (Array.isArray(tools)) {
+    return tools.map(item => String(item || '').trim()).filter(Boolean);
+  }
+
+  if (tools === null || tools === undefined) {
+    return [];
+  }
+
+  return String(tools)
+    .split(/[\n•]/g)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function serializeToolsItems(items) {
+  return items
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .join(' • ');
+}
+
 // Initialize structure panel
 export function initStructurePanel(onChange, onDesignChange) {
   onChangeCallback = onChange;
@@ -132,7 +162,7 @@ export function initStructurePanel(onChange, onDesignChange) {
   // Subscribe to store changes
   store.subscribe((event) => {
     if (event === 'dataLoaded' || event === 'change') {
-      if (isPanelOpen) {
+      if (isPanelOpen && !isHandlingLocalFieldUpdate) {
         renderPanel();
       }
     }
@@ -248,6 +278,13 @@ function renderPanel(preserveScroll = true) {
         `).join('')}
       </div>
     </div>
+
+    <div class="panel-text-toolbar">
+      <button class="panel-text-btn" data-action="toggle-bold" type="button" title="Bold (Cmd/Ctrl+B)">
+        <strong>B</strong>
+      </button>
+      <span class="panel-text-hint">Format selected text</span>
+    </div>
     
     <!-- Tab Content -->
     <div class="panel-tab-content">
@@ -260,6 +297,7 @@ function renderPanel(preserveScroll = true) {
   
   // Setup dropdown toggle
   setupSectionDropdown();
+  updateBoldToolbarState();
   
   // Restore scroll position after render
   if (preserveScroll && scrollTop > 0) {
@@ -359,10 +397,25 @@ function renderSidebarTab(data) {
     </div>
   `;
 
+  const toolItems = normalizeToolsItems(data.tools);
   const toolsContent = `
-    <div class="form-group">
-      <textarea class="form-textarea" data-field="tools" rows="3" placeholder="Tool 1 • Tool 2 • Tool 3">${escapeAttr(data.tools || '')}</textarea>
-      <small class="form-hint">Separate tools with • (bullet)</small>
+    <div class="sortable-list" id="tools-list" data-sortable="tools">
+      ${toolItems.map((tool, i) => `
+        <div class="sortable-item tool-item" data-index="${i}" draggable="true">
+          <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+          <input type="text"
+                 class="form-input flex-grow"
+                 data-action="update-tool"
+                 data-index="${i}"
+                 value="${escapeAttr(tool)}"
+                 placeholder="Tool name">
+          <button class="item-delete-btn"
+                  data-action="delete-tool"
+                  data-index="${i}"
+                  title="Delete">×</button>
+        </div>
+      `).join('')}
+      <button class="add-item-btn" data-action="add-tool">+ Add tool</button>
     </div>
   `;
 
@@ -1481,6 +1534,8 @@ function generateLightColor(hex) {
 
 // Render a sidebar section item
 function renderSectionItem(section, index) {
+  const sectionType = normalizeSectionType(section?.type);
+
   return `
     <div class="sortable-item section-item" data-index="${index}" data-section-id="${section.id || index}" draggable="true">
       <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
@@ -1488,6 +1543,25 @@ function renderSectionItem(section, index) {
         <input type="text" class="form-input section-title-input" 
                data-field="sections[${index}].title" 
                value="${escapeAttr(section.title)}">
+        <div class="section-mode-control">
+          <span class="section-mode-label">Display</span>
+          <div class="section-mode-options">
+            <button class="section-mode-btn ${sectionType === 'list' ? 'active' : ''}"
+                    type="button"
+                    data-action="set-section-type"
+                    data-section="${index}"
+                    data-type="list">
+              Bulleted
+            </button>
+            <button class="section-mode-btn ${sectionType === 'skills' ? 'active' : ''}"
+                    type="button"
+                    data-action="set-section-type"
+                    data-section="${index}"
+                    data-type="skills">
+              Inline Tags
+            </button>
+          </div>
+        </div>
         <div class="section-content-list" data-sortable="sections[${index}].content">
           ${(section.content || []).map((item, i) => `
             <div class="section-content-item" data-index="${i}" draggable="true">
@@ -1564,6 +1638,41 @@ function renderExperienceItem(exp, index) {
 function setupEventHandlers() {
   const panel = document.getElementById('structure-panel');
   if (!panel) return;
+
+  panel.addEventListener('focusin', (e) => {
+    const field = e.target.closest('.form-input, .form-textarea');
+    if (field) {
+      activeTextField = field;
+      updateBoldToolbarState();
+    }
+  });
+
+  panel.addEventListener('focusout', () => {
+    requestAnimationFrame(() => {
+      const focused = panel.querySelector('.form-input:focus, .form-textarea:focus');
+      activeTextField = focused || null;
+      updateBoldToolbarState();
+    });
+  });
+
+  panel.addEventListener('keydown', (e) => {
+    const modKey = e.metaKey || e.ctrlKey;
+    if (!modKey || e.altKey || e.key.toLowerCase() !== 'b') return;
+
+    const field = e.target.closest('.form-input, .form-textarea');
+    if (!field) return;
+
+    e.preventDefault();
+    toggleBoldInTextField(field);
+  });
+
+  // Keep input focus when using formatting buttons
+  panel.addEventListener('mousedown', (e) => {
+    const target = e.target.closest('[data-action="toggle-bold"]');
+    if (target) {
+      e.preventDefault();
+    }
+  });
   
   // Section dropdown switching
   panel.addEventListener('click', (e) => {
@@ -1577,10 +1686,16 @@ function setupEventHandlers() {
   
   // Input changes
   panel.addEventListener('input', (e) => {
+    if (e.target.dataset.action === 'update-tool') {
+      updateTool(parseInt(e.target.dataset.index, 10), e.target.value);
+      if (onChangeCallback) onChangeCallback();
+      return;
+    }
+
     if (e.target.matches('.form-input, .form-textarea')) {
       const field = e.target.dataset.field;
       if (field) {
-        store.update(field, e.target.value);
+        updateFieldValue(field, e.target.value);
         if (onChangeCallback) onChangeCallback();
       }
     }
@@ -1623,6 +1738,18 @@ function setupEventHandlers() {
         
       case 'add-section-content':
         addSectionContent(parseInt(target.dataset.section));
+        break;
+
+      case 'set-section-type':
+        setSectionType(parseInt(target.dataset.section), target.dataset.type);
+        break;
+
+      case 'add-tool':
+        addTool();
+        break;
+
+      case 'delete-tool':
+        deleteTool(parseInt(target.dataset.index, 10));
         break;
         
       case 'delete-experience':
@@ -1764,6 +1891,10 @@ function setupEventHandlers() {
       case 'set-photo-scale':
         handlePhotoChange('scale', parseFloat(target.value) / 100);
         break;
+
+      case 'toggle-bold':
+        handleToggleBoldAction(panel);
+        break;
     }
   });
   
@@ -1841,12 +1972,100 @@ function setupEventHandlers() {
   setupDragAndDrop(panel);
 }
 
+function updateFieldValue(path, value) {
+  isHandlingLocalFieldUpdate = true;
+  try {
+    store.update(path, value);
+  } finally {
+    isHandlingLocalFieldUpdate = false;
+  }
+}
+
+function handleToggleBoldAction(panel) {
+  const focused = panel.querySelector('.form-input:focus, .form-textarea:focus');
+  const field = focused || activeTextField;
+  if (!field) return;
+  toggleBoldInTextField(field);
+}
+
+function toggleBoldInTextField(field) {
+  if (!field || typeof field.selectionStart !== 'number' || typeof field.selectionEnd !== 'number') {
+    return;
+  }
+
+  const result = toggleBoldMarkdown(field.value || '', field.selectionStart, field.selectionEnd);
+  field.value = result.value;
+  field.focus();
+  field.setSelectionRange(result.start, result.end);
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  updateBoldToolbarState();
+}
+
+function toggleBoldMarkdown(value, start, end) {
+  const selectionStart = Math.min(start, end);
+  const selectionEnd = Math.max(start, end);
+  const selected = value.slice(selectionStart, selectionEnd);
+
+  // Toggle markers around caret when no text is selected.
+  if (selectionStart === selectionEnd) {
+    const hasOuterBold = selectionStart >= 2 &&
+      value.slice(selectionStart - 2, selectionStart) === '**' &&
+      value.slice(selectionStart, selectionStart + 2) === '**';
+
+    if (hasOuterBold) {
+      const nextValue = value.slice(0, selectionStart - 2) + value.slice(selectionStart + 2);
+      return { value: nextValue, start: selectionStart - 2, end: selectionStart - 2 };
+    }
+
+    const nextValue = value.slice(0, selectionStart) + '****' + value.slice(selectionStart);
+    return { value: nextValue, start: selectionStart + 2, end: selectionStart + 2 };
+  }
+
+  // Selected text already includes bold markers.
+  if (selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4) {
+    const unwrapped = selected.slice(2, -2);
+    const nextValue = value.slice(0, selectionStart) + unwrapped + value.slice(selectionEnd);
+    return { value: nextValue, start: selectionStart, end: selectionStart + unwrapped.length };
+  }
+
+  // Selected text is inside bold markers.
+  const hasOuterBold = selectionStart >= 2 &&
+    value.slice(selectionStart - 2, selectionStart) === '**' &&
+    value.slice(selectionEnd, selectionEnd + 2) === '**';
+
+  if (hasOuterBold) {
+    const nextValue = value.slice(0, selectionStart - 2) + selected + value.slice(selectionEnd + 2);
+    return { value: nextValue, start: selectionStart - 2, end: selectionEnd - 2 };
+  }
+
+  // Wrap selection.
+  const nextValue = value.slice(0, selectionStart) + `**${selected}**` + value.slice(selectionEnd);
+  return { value: nextValue, start: selectionStart + 2, end: selectionEnd + 2 };
+}
+
+function updateBoldToolbarState() {
+  const btn = document.querySelector('#structure-panel .panel-text-btn[data-action="toggle-bold"]');
+  if (!btn) return;
+
+  const field = activeTextField && document.contains(activeTextField) ? activeTextField : null;
+  activeTextField = field;
+  const isEnabled = !!field && !field.disabled;
+  btn.disabled = !isEnabled;
+}
+
 // Setup drag and drop
 function setupDragAndDrop(panel) {
   panel.addEventListener('dragstart', (e) => {
+    const handle = e.target.closest('.drag-handle');
     const item = e.target.closest('[draggable="true"]');
     if (!item) return;
-    
+
+    // Only start reordering when dragging from the explicit handle.
+    if (!handle || !item.contains(handle)) {
+      e.preventDefault();
+      return;
+    }
+
     draggedItem = item;
     item.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
@@ -1918,9 +2137,14 @@ function setupDragAndDrop(panel) {
     }
     
     if (fromIndex !== toIndex && !isNaN(fromIndex) && !isNaN(toIndex)) {
-      store.moveInArray(sortablePath, fromIndex, toIndex);
-      renderPanel();
-      
+      if (sortablePath === 'tools') {
+        moveTool(fromIndex, toIndex);
+      } else {
+        store.moveInArray(sortablePath, fromIndex, toIndex);
+        renderPanel();
+        if (onChangeCallback) onChangeCallback();
+      }
+
       // Restore scroll position after re-render
       requestAnimationFrame(() => {
         const newTabContent = document.querySelector('#structure-panel-content .panel-tab-content');
@@ -1928,8 +2152,6 @@ function setupDragAndDrop(panel) {
           newTabContent.scrollTop = scrollTop;
         }
       });
-      
-      if (onChangeCallback) onChangeCallback();
     }
   });
 }
@@ -1967,7 +2189,7 @@ function addSection(templateKey) {
     const newSection = {
       id: generateId('section'),
       title: title,
-      type: 'skills',
+      type: 'list',
       content: ['Item 1']
     };
     store.addToArray('sections', newSection);
@@ -1982,6 +2204,13 @@ function addSection(templateKey) {
     }
   }
   
+  renderPanel();
+  if (onChangeCallback) onChangeCallback();
+}
+
+function setSectionType(sectionIndex, type) {
+  const nextType = normalizeSectionType(type);
+  updateFieldValue(`sections[${sectionIndex}].type`, nextType);
   renderPanel();
   if (onChangeCallback) onChangeCallback();
 }
@@ -2008,6 +2237,57 @@ function addSectionContent(sectionIndex) {
 // Delete content from a section
 function deleteSectionContent(sectionIndex, contentIndex) {
   store.removeFromArray(`sections[${sectionIndex}].content`, contentIndex);
+  renderPanel();
+  if (onChangeCallback) onChangeCallback();
+}
+
+function getToolItems() {
+  return normalizeToolsItems(store.get('tools'));
+}
+
+function setToolItems(items) {
+  updateFieldValue('tools', serializeToolsItems(items));
+}
+
+function addTool() {
+  const items = getToolItems();
+  items.push('New tool');
+  setToolItems(items);
+  renderPanel();
+  if (onChangeCallback) onChangeCallback();
+}
+
+function updateTool(index, value) {
+  const items = getToolItems();
+  if (index < 0 || index >= items.length) return;
+  items[index] = value;
+  setToolItems(items);
+}
+
+function deleteTool(index) {
+  const items = getToolItems();
+  if (index < 0 || index >= items.length) return;
+  items.splice(index, 1);
+  setToolItems(items);
+  renderPanel();
+  if (onChangeCallback) onChangeCallback();
+}
+
+function moveTool(fromIndex, toIndex) {
+  const items = getToolItems();
+  if (
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= items.length ||
+    toIndex >= items.length ||
+    fromIndex === toIndex
+  ) {
+    return;
+  }
+
+  const [moved] = items.splice(fromIndex, 1);
+  items.splice(toIndex, 0, moved);
+  setToolItems(items);
   renderPanel();
   if (onChangeCallback) onChangeCallback();
 }
