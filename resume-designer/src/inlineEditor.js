@@ -695,9 +695,12 @@ function startEditing(element) {
   hoveredElement = null;
   
   activeElement = element;
-  
+
+  element.dataset.originalEditValue = element.textContent || '';
+
   const path = element.dataset.editable;
-  if (path) {
+  const isInlineToolToken = path === 'tools' && element.matches('.tool-token, .skill-tag, .skill-tag-inline');
+  if (path && !isInlineToolToken) {
     const sourceValue = store.get(path);
     if (typeof sourceValue === 'string') {
       element.textContent = sourceValue;
@@ -759,6 +762,8 @@ function finishEditing(element) {
   if (activeElement === element) {
     activeElement = null;
   }
+
+  delete element.dataset.originalEditValue;
   
   // Auto-dismiss hint after first successful edit
   if (hasEditedOnce && !hintDismissed) {
@@ -804,8 +809,9 @@ function extractEditedValue(element, path) {
   
   // For tools field, also check for skill tags
   if (path === 'tools') {
-    const toolTags = element.querySelectorAll('.skill-tag');
-    if (toolTags.length > 0) {
+    const toolScope = element.closest('.tools-list') || element.closest('.skill-tag-row') || element.parentElement;
+    const toolTags = toolScope?.querySelectorAll('.tool-token, .skill-tag[data-editable="tools"], .skill-tag-inline[data-editable="tools"]');
+    if (toolTags && toolTags.length > 0) {
       return Array.from(toolTags).map(tag => tag.textContent.trim()).filter(t => t).join(' • ');
     }
   }
@@ -852,6 +858,13 @@ function handleKeyDown(e) {
   if (e.key === 'Escape') {
     e.preventDefault();
     // Restore original value
+    const originalInlineValue = editable.dataset.originalEditValue;
+    if (originalInlineValue !== undefined) {
+      editable.textContent = originalInlineValue;
+      finishEditing(editable);
+      return;
+    }
+
     const path = editable.dataset.editable;
     const originalValue = store.get(path);
     editable.textContent = originalValue || '';
