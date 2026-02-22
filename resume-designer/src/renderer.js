@@ -116,7 +116,7 @@ function renderToolsInline(tools, editablePath = null) {
   const tokens = normalizeTools(tools);
   if (tokens.length === 0) return '';
   const editableAttr = editablePath ? ` data-editable="${editablePath}"` : '';
-  return `<span class="skill-tag-row"${editableAttr}>${tokens.map(token => `<span class="skill-tag">${formatInlineMarkdown(token)}</span>`).join('')}</span>`;
+  return `<span class="skill-tag-row">${tokens.map(token => `<span class="skill-tag tool-token"${editableAttr}>${formatInlineMarkdown(token)}</span>`).join('<span class="skill-sep">•</span>')}</span>`;
 }
 
 // Sidebar layout (default)

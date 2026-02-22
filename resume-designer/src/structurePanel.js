@@ -377,7 +377,7 @@ function renderHeaderTab(data) {
 // Render Sidebar tab content
 function renderSidebarTab(data) {
   const addButton = `
-    <button class="panel-add-btn" id="add-section-btn" title="Add section">
+    <button class="panel-add-btn" id="add-section-btn" data-action="add-section" type="button" title="Add section">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <line x1="12" y1="5" x2="12" y2="19"/>
         <line x1="5" y1="12" x2="19" y2="12"/>
@@ -434,7 +434,7 @@ function renderMainTab(data) {
   `;
 
   const experienceAddButton = `
-    <button class="panel-add-btn" id="add-experience-btn" title="Add experience">
+    <button class="panel-add-btn" id="add-experience-btn" data-action="add-experience" type="button" title="Add experience">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <line x1="12" y1="5" x2="12" y2="19"/>
         <line x1="5" y1="12" x2="19" y2="12"/>
@@ -449,7 +449,7 @@ function renderMainTab(data) {
   `;
 
   const educationAddButton = `
-    <button class="panel-add-btn" id="add-education-btn" title="Add education">
+    <button class="panel-add-btn" id="add-education-btn" data-action="add-education" type="button" title="Add education">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <line x1="12" y1="5" x2="12" y2="19"/>
         <line x1="5" y1="12" x2="19" y2="12"/>
@@ -1744,12 +1744,24 @@ function setupEventHandlers() {
         setSectionType(parseInt(target.dataset.section), target.dataset.type);
         break;
 
+      case 'add-section':
+        toggleAddSectionMenu();
+        break;
+
       case 'add-tool':
         addTool();
         break;
 
       case 'delete-tool':
         deleteTool(parseInt(target.dataset.index, 10));
+        break;
+
+      case 'add-experience':
+        addExperience();
+        break;
+
+      case 'add-education':
+        addEducation();
         break;
         
       case 'delete-experience':

@@ -178,6 +178,15 @@
   display: inline;
 }
 
+.tools-list .skill-tag:not(:last-child)::after {
+  content: none !important;
+}
+
+.tools-list .skill-sep {
+  margin: 0 0.15rem;
+  opacity: 0.5;
+}
+
 /* Skill tag style variants */
 .resume[data-skill-tag-style="filled"] .skill-tag {
   background: var(--resume-accent);
