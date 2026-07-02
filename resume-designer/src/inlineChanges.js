@@ -24,6 +24,11 @@ export function initInlineChanges() {
  * @param {Object} changeSet - Change set from diffEngine
  */
 export function showInlineChanges(changeSet) {
+  // A new change set supersedes any still-pending one. Unwind it through the
+  // normal cleanup FIRST — clearing highlightElements without restoring the
+  // elements would leak the old proposed text and data-has-change markers into
+  // the resume with no banner left to dismiss them.
+  if (isActive) hideInlineChanges();
   currentChangeSet = changeSet;
   appliedChanges.clear();
   highlightElements.clear();
