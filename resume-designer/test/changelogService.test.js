@@ -32,6 +32,18 @@ describe('normalizeRelease', () => {
     expect(r.version).toBe('1.4.0');
     expect(r.summary).toBe('');
   });
+  it('prefers the version stamped in the body heading over the tag (beta/next releases)', () => {
+    const r = normalizeRelease({
+      tag_name: 'next',
+      published_at: '2026-07-01T00:00:00Z',
+      body: '## Resume Designer 1.2.3-next.7\n- feat: beta thing',
+    });
+    expect(r.version).toBe('1.2.3-next.7');
+  });
+  it('falls back to the tag when the body has no version heading', () => {
+    const r = normalizeRelease({ tag_name: 'v1.6.0', body: 'Just some notes without our heading' });
+    expect(r.version).toBe('1.6.0');
+  });
 });
 
 describe('mergeReleases', () => {
@@ -48,5 +60,18 @@ describe('mergeReleases', () => {
   it('handles double-digit version components correctly', () => {
     const out = mergeReleases([], [{ version: '1.9.0' }, { version: '1.10.0' }]);
     expect(out.map((r) => r.version)).toEqual(['1.10.0', '1.9.0']);
+  });
+  it('orders prerelease (-next.N) builds under their stable release and by run number', () => {
+    const out = mergeReleases([], [
+      { version: '1.2.3-next.2' },
+      { version: '1.2.2' },
+      { version: '1.2.3' },
+      { version: '1.2.3-next.9' },
+    ]);
+    expect(out.map((r) => r.version)).toEqual(['1.2.3', '1.2.3-next.9', '1.2.3-next.2', '1.2.2']);
+  });
+  it('sorts unparseable versions last', () => {
+    const out = mergeReleases([], [{ version: 'next' }, { version: '1.0.0' }]);
+    expect(out.map((r) => r.version)).toEqual(['1.0.0', 'next']);
   });
 });

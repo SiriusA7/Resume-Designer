@@ -21,26 +21,44 @@ function stripV(tag) {
   return String(tag || '').replace(/^v/, '');
 }
 
+// The release workflow stamps the true build version into the body's first
+// heading ("## Resume Designer $VERSION", release.yml). Beta builds publish
+// under the rolling `next` TAG while the app version is x.y.z-next.N, so the
+// tag alone can't identify the build — prefer the heading, fall back to tag.
+function versionFromBody(body) {
+  const m = String(body || '').match(/^##\s+Resume Designer\s+(\S+)\s*$/m);
+  return m ? m[1] : null;
+}
+
 // A GitHub release payload → our shape. Phase 1: summary === full === body.
 export function normalizeRelease(release) {
   const body = release?.body || '';
   return {
-    version: stripV(release?.tag_name),
+    version: versionFromBody(body) || stripV(release?.tag_name),
     date: release?.published_at || null,
     summary: body,
     full: body,
   };
 }
 
-// Newest-first by semver; each component compared numerically so 1.10 > 1.9.
-// Missing components sort as -1 (so a shorter/unparseable version sorts last).
+// Newest-first by semver, prerelease-aware: x.y.z-next.N sorts under its
+// stable x.y.z (stable gets Infinity in the prerelease slot) and by run
+// number among betas. Unparseable versions (e.g. a bare rolling tag) sort last.
+const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)(?:-next\.(\d+))?$/;
+function sortKey(version) {
+  const m = String(version || '').match(SEMVER_RE);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? Infinity : Number(m[4])];
+}
 function bySemverDesc(a, b) {
-  const pa = a.version.split('.').map(Number);
-  const pb = b.version.split('.').map(Number);
-  for (let i = 0; i < 3; i += 1) {
-    const x = Number.isFinite(pa[i]) ? pa[i] : -1;
-    const y = Number.isFinite(pb[i]) ? pb[i] : -1;
-    if (x !== y) return y - x;
+  const ka = sortKey(a.version);
+  const kb = sortKey(b.version);
+  if (!ka && !kb) return 0;
+  if (!ka) return 1;
+  if (!kb) return -1;
+  for (let i = 0; i < 4; i += 1) {
+    // Infinity !== Infinity is false, so equal slots fall through (no NaN).
+    if (ka[i] !== kb[i]) return kb[i] - ka[i];
   }
   return 0;
 }
@@ -69,12 +87,6 @@ export async function fetchReleaseHistory() {
   }
 }
 
-// Notes for one specific version (the after-update "what's new" source).
-export async function fetchNotesForVersion(version) {
-  const all = await fetchReleaseHistory();
-  return all.find((r) => r.version === version) || null;
-}
-
 const SEEN_KEY = 'changelogLastSeenVersion';
 
 // On launch: if the running version differs from the last one we recorded, an
@@ -89,12 +101,22 @@ export async function maybeShowPostUpdateChangelog() {
   const current = await getAppInfo().then((i) => i.version).catch(() => null);
   if (!current) return;
   const seen = getSettings()[SEEN_KEY];
-  if (justUpdated(seen, current)) {
-    const rel = await fetchNotesForVersion(current);
-    if (rel) {
-      const { showUpdateNotes } = await import('./components/ui/updateNotes.jsx');
-      await showUpdateNotes({ version: current, notes: rel.summary, full: rel.full, mode: 'whatsnew' });
-    }
+  if (seen === current) return;
+  if (!justUpdated(seen, current)) {
+    // First run: record silently, never show a panel.
+    saveSettings({ [SEEN_KEY]: current });
+    return;
+  }
+  // An update landed. Distinguish "couldn't load history" (empty fetch —
+  // network failure / rate limit: leave the seen version stale so the next
+  // launch retries) from "history loaded but has no notes for this build"
+  // (record it — don't refetch forever for a release that has none).
+  const releases = await fetchReleaseHistory();
+  if (!releases.length) return;
+  const rel = releases.find((r) => r.version === current) || null;
+  if (rel) {
+    const { showUpdateNotes } = await import('./components/ui/updateNotes.jsx');
+    await showUpdateNotes({ version: current, notes: rel.summary, full: rel.full, mode: 'whatsnew' });
   }
   saveSettings({ [SEEN_KEY]: current });
 }
