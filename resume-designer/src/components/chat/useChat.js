@@ -394,6 +394,17 @@ export function useChat() {
     try {
       addThinkingStep('Reading current summary...');
       await new Promise((r) => setTimeout(r, 200));
+      // improveSummary builds its prompt from the ACTIVE résumé only now — if
+      // the user switched résumés during the wait, generating would produce the
+      // other résumé's summary stamped (and Apply-gated) as this one's, and
+      // applying it would overwrite this résumé with the other's summary. Bail
+      // to a note instead, matching the change-request cross-résumé pattern.
+      if (getCurrentId() !== startVariantId) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          'The active résumé changed while I was reading the summary — switch back to the résumé you want improved and resend /improve summary.');
+        return;
+      }
       completeThinkingStep('Writing improved summary...');
       const response = await improveSummary(modelRef.current);
       completeThinkingStep('Summary improved');
