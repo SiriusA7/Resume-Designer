@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Settings2, X } from 'lucide-react';
+import { Settings2, Square, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 
 import { getSettings, saveSettings } from '../../persistence.js';
 import { openSettings } from '../../settingsModal.js';
+import { getThreadDisplayName } from '../../chatThreads.js';
 import { useVariants } from '../../hooks/useVariants.js';
 import { useChat } from './useChat.js';
 import { MessageList } from './MessageList.jsx';
@@ -129,6 +130,15 @@ export default function ChatPanel() {
   const crossResume = openHome !== null && openHome !== chat.currentVariantId;
   const homeName = variants.list.find((v) => v.id === openHome)?.name;
 
+  // A reply may still be streaming in a thread OTHER than the one on screen: the
+  // user switched away mid-response and it keeps running, committing to its origin
+  // thread. Surface a pinned banner so that hidden run stays visible and cancellable
+  // — otherwise the composer sits disabled (loading) with no Stop anywhere in view.
+  const bgStreamThread =
+    chat.loading && chat.streamThreadId && chat.streamThreadId !== chat.currentThreadId
+      ? chat.threads.find((t) => t.id === chat.streamThreadId)
+      : null;
+
   if (!host) return null;
 
   return createPortal(
@@ -217,6 +227,36 @@ export default function ChatPanel() {
         onStop={chat.stop}
         onJumpVariant={chat.jumpToVariant}
       />
+
+      {/* Background-stream banner: a reply is still generating in a thread other than
+          the one on screen. Restores visibility + a Stop for that hidden run (which
+          leaves the composer disabled) — click the name to hop back to it. */}
+      {chat.configured && bgStreamThread && (
+        <div className="flex shrink-0 items-center gap-2 border-t bg-primary/5 px-3 py-2 text-[12px] text-muted-foreground">
+          <span
+            className="size-2 shrink-0 rounded-full bg-primary motion-safe:animate-pulse"
+            aria-hidden="true"
+          />
+          <span className="shrink-0">Still generating in</span>
+          <button
+            type="button"
+            className="min-w-0 truncate font-medium text-foreground hover:underline"
+            title={`Open «${getThreadDisplayName(bgStreamThread)}»`}
+            onClick={() => chat.switchThread(bgStreamThread.id)}
+          >
+            {getThreadDisplayName(bgStreamThread)}
+          </button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-6 shrink-0 gap-1 text-[11px]"
+            onClick={chat.stop}
+          >
+            <Square className="size-3" />
+            Stop
+          </Button>
+        </div>
+      )}
 
       {chat.configured && (
         <ChatComposer

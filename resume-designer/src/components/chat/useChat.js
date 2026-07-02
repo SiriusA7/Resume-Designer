@@ -143,8 +143,11 @@ export function useChat() {
   const abortRef = useRef(null);
   // The thread the in-flight `abortRef` stream ORIGINATED from, so deleting a thread
   // aborts the stream only when that thread is its origin — a reply that kept running
-  // after the user switched away must survive deletion of the now-active thread.
-  const streamThreadRef = useRef(null);
+  // after the user switched away must survive deletion of the now-active thread. Also
+  // exposed as state (streamThreadId) so the panel can show a "still generating in …"
+  // banner with Stop when that origin isn't the thread currently on screen; the ref
+  // half is read synchronously by deleteThread.
+  const [streamThreadId, setStreamThreadId, streamThreadRef] = useStateRef(null);
   const flushRaf = useRef(0);
 
   const interviewModeRef = useRef(false);
@@ -279,7 +282,7 @@ export function useChat() {
     setStreamingMessage(null);
     streamingRef.current = null;
     abortRef.current = null;
-    streamThreadRef.current = null;
+    setStreamThreadId(null);
   };
   // Drop the live streaming display from the CURRENT view WITHOUT aborting the
   // request or discarding its buffer — used on a thread switch so an in-flight
@@ -304,7 +307,7 @@ export function useChat() {
     setLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
-    streamThreadRef.current = startThreadId;
+    setStreamThreadId(startThreadId);
     // Last 10 user/assistant turns; replace the final turn with the
     // context-augmented version we actually want to send. reasoningDetails ride
     // along on assistant turns for Anthropic thinking continuity.
@@ -408,7 +411,7 @@ export function useChat() {
     setLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
-    streamThreadRef.current = startThreadId;
+    setStreamThreadId(startThreadId);
     // Stream the model's reasoning live (the JSON answer is buffered and parsed
     // into a diff when the stream completes).
     setStreamingMessage({
@@ -944,7 +947,7 @@ Let's begin!`);
 
   return {
     // state
-    messages, threads, currentThreadId, loading, thinking, streamingMessage, contextChips,
+    messages, threads, currentThreadId, loading, thinking, streamingMessage, streamThreadId, contextChips,
     currentModel, reasoningEffort, webSearchEnabled,
     configured, configuredProviders, reasoningSupported, customModels,
     // active résumé (re-read each render; the follow effect re-renders on switch)
