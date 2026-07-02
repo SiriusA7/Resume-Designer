@@ -3,7 +3,7 @@ import {
   makeThread, migrateThreads, groupThreadsByHome, pickCurrentThreadId,
   chooseThreadAfterDelete,
   lastTurnVariantId, withContextMarker,
-  reassignThreadsForDeletedVariant,
+  reassignThreadsForDeletedVariant, threadIdsForVariant,
 } from '../src/chatThreads.js';
 
 describe('makeThread homeVariantId', () => {
@@ -132,5 +132,24 @@ describe('reassignThreadsForDeletedVariant', () => {
   it("mode 'delete' removes the deleted variant's threads", () => {
     const out = reassignThreadsForDeletedVariant(threads, 'v1', 'delete');
     expect(out.map((t) => t.id)).toEqual(['b', 'c']);
+  });
+});
+
+describe('threadIdsForVariant', () => {
+  const threads = [
+    { id: 'a', homeVariantId: 'v1' }, { id: 'b', homeVariantId: 'v2' },
+    { id: 'c', homeVariantId: null }, { id: 'd', homeVariantId: 'v1' },
+  ];
+  it("returns exactly the ids a 'delete' reassign would drop", () => {
+    const ids = threadIdsForVariant(threads, 'v1');
+    expect(ids).toEqual(['a', 'd']);
+    const kept = reassignThreadsForDeletedVariant(threads, 'v1', 'delete').map((t) => t.id);
+    expect(kept.filter((id) => ids.includes(id))).toEqual([]);
+  });
+  it('treats a missing homeVariantId as General (null)', () => {
+    expect(threadIdsForVariant([{ id: 'x' }], null)).toEqual(['x']);
+  });
+  it('returns [] for a non-array', () => {
+    expect(threadIdsForVariant(undefined, 'v1')).toEqual([]);
   });
 });

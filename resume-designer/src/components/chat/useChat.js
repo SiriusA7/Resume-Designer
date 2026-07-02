@@ -968,6 +968,26 @@ Let's begin!`);
     return () => window.removeEventListener(SETTINGS_UPDATED_EVENT, onSettings);
   }, [refresh]);
 
+  // Deleting a résumé WITH its threads (Header.handleDelete) drops them straight
+  // in storage — it can't go through deleteThread. If the in-flight stream's
+  // origin is among the dropped ids, its commit target is gone and the banner
+  // can no longer render it (the thread lookup fails) while `loading` keeps the
+  // composer disabled — so abort it, mirroring deleteThread's origin-abort.
+  // Refs only, so the mount-once closure stays correct.
+  useEffect(() => {
+    const onThreadsDeleted = (e) => {
+      const ids = e.detail?.threadIds;
+      if (!Array.isArray(ids) || !abortRef.current) return;
+      if (ids.includes(streamThreadRef.current)) {
+        abortRef.current.abort();
+        clearStreaming();
+      }
+    };
+    window.addEventListener('rd:threads-deleted', onThreadsDeleted);
+    return () => window.removeEventListener('rd:threads-deleted', onThreadsDeleted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return {
     // state
     messages, threads, currentThreadId, loading, thinking, streamingMessage, streamThreadId, contextChips,

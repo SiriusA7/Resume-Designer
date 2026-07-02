@@ -26,6 +26,7 @@ import {
 } from '../variantManager.js';
 import {
   loadThreads, persistThreads, reassignThreadsForDeletedVariant, countThreadsForVariant,
+  threadIdsForVariant,
 } from '../chatThreads.js';
 import { askDeleteVariantThreads } from './chat/DeleteVariantThreadsDialog.jsx';
 import { openSettings } from '../settingsModal.js';
@@ -147,6 +148,17 @@ export default function Header() {
       persistThreads(
         reassignThreadsForDeletedVariant(all, deletingId, choice === 'delete' ? 'delete' : 'general')
       );
+      // Dropping threads bypasses useChat.deleteThread, so a reply still
+      // streaming in one of them would keep running with its commit target
+      // gone — and the background-stream banner can't render it (the thread
+      // no longer exists to look up). Tell the chat engine which ids were
+      // deleted so it can abort an orphaned in-flight stream. (Keeping
+      // threads → General leaves the stream valid; no event needed.)
+      if (choice === 'delete') {
+        window.dispatchEvent(new CustomEvent('rd:threads-deleted', {
+          detail: { threadIds: threadIdsForVariant(all, deletingId) },
+        }));
+      }
     } else {
       const ok = await confirmDestructive({
         title: 'Delete this resume?',
