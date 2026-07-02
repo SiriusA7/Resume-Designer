@@ -221,6 +221,7 @@ export default function ChatPanel() {
         configured={chat.configured}
         currentThreadId={chat.currentThreadId}
         variants={variants.list}
+        currentVariantId={chat.currentVariantId}
         onReviewChanges={chat.openDiffForMessage}
         onApply={chat.applyAction}
         onConfigure={openApiSettings}
