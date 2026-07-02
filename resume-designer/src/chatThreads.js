@@ -180,10 +180,16 @@ export function reassignThreadsForDeletedVariant(threads, deletedVariantId, mode
     (t.homeVariantId ?? null) === deletedVariantId ? { ...t, homeVariantId: null } : t);
 }
 
+/** Ids of the threads homed to a given variant (what a 'delete' reassign drops). */
+export function threadIdsForVariant(threads, variantId) {
+  return (Array.isArray(threads) ? threads : [])
+    .filter((t) => (t.homeVariantId ?? null) === variantId)
+    .map((t) => t.id);
+}
+
 /** Count threads homed to a given variant (for the delete prompt). */
 export function countThreadsForVariant(threads, variantId) {
-  return (Array.isArray(threads) ? threads : [])
-    .filter((t) => (t.homeVariantId ?? null) === variantId).length;
+  return threadIdsForVariant(threads, variantId).length;
 }
 
 export function persistThreads(threads) {
