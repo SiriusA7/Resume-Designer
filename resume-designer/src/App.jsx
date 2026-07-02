@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import shellHtml from './shell/appShell.html?raw';
 import { Toaster } from '@/components/ui/sonner';
 import { ConfirmHost } from '@/components/ui/confirm';
+import { UpdateNotesHost } from '@/components/ui/updateNotes.jsx';
 import { DeleteVariantThreadsHost } from './components/chat/DeleteVariantThreadsDialog.jsx';
 import Header from './components/Header.jsx';
 import SettingsDialog from './components/SettingsDialog.jsx';
@@ -98,6 +99,7 @@ export default function App() {
       {storageReady && <PdfDialog />}
       <Toaster />
       <ConfirmHost />
+      <UpdateNotesHost />
       <DeleteVariantThreadsHost />
     </>
   );

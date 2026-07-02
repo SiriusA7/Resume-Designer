@@ -475,7 +475,14 @@ export async function init() {
   startupUpdateCheck().catch((err) =>
     console.warn('[Update] startup check failed:', err)
   );
-  
+
+  // After an update lands, show that release's notes once (compares the running
+  // version against the last one seen). Fire-and-forget; lazy import so the
+  // React dialog host it pulls in stays out of the print window's static graph.
+  import('./changelogService.js')
+    .then(({ maybeShowPostUpdateChangelog }) => maybeShowPostUpdateChangelog())
+    .catch((err) => console.warn('[Changelog] post-update check failed:', err));
+
   // Check onboarding after a short delay to ensure UI is ready
   console.log('[Main] Scheduling onboarding check in 300ms...');
   setTimeout(() => {

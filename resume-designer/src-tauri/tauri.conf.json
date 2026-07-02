@@ -33,8 +33,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'sha256-GP4MzNSj0LFdsPQ+Gf3V8Jg4DTzjdKkf2eGyZDBrFqI='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com data:; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com data:; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: https://ipc.localhost https://openrouter.ai; worker-src 'self' blob:;",
-      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com data:; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com data:; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: https://ipc.localhost https://openrouter.ai ws://localhost:3000 ws://localhost:3001 http://localhost:3000; worker-src 'self' blob:;"
+      "csp": "default-src 'self'; script-src 'self' 'sha256-GP4MzNSj0LFdsPQ+Gf3V8Jg4DTzjdKkf2eGyZDBrFqI='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com data:; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com data:; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: https://ipc.localhost https://openrouter.ai https://api.github.com; worker-src 'self' blob:;",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com data:; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com data:; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: https://ipc.localhost https://openrouter.ai https://api.github.com ws://localhost:3000 ws://localhost:3001 http://localhost:3000; worker-src 'self' blob:;"
     }
   },
   "bundle": {

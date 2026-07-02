@@ -278,6 +278,7 @@ export async function checkForUpdates(source = 'manual', { notifyOnly = false } 
       version: update.version,
       currentVersion,
       notifyOnly,
+      notes: update.notes || '',
       message: `Version ${update.version} is available.`,
     });
 
@@ -289,10 +290,17 @@ export async function checkForUpdates(source = 'manual', { notifyOnly = false } 
       return { checking: true, available: true, version: update.version };
     }
 
-    const wantsDownload = await dialog.ask(
-      `A new version (${update.version}) is available. Would you like to download it now?`,
-      { title: 'Update Available', okLabel: 'Download', cancelLabel: 'Later' }
-    );
+    // Rich release-notes dialog (React host, promise-returning — same pattern as
+    // confirmDestructive) replaces the plain native ask so the user sees what's
+    // new before downloading. Dynamic import keeps native.js's static graph lean.
+    const { showUpdateNotes } = await import('./components/ui/updateNotes.jsx');
+    const decision = await showUpdateNotes({
+      version: update.version,
+      currentVersion,
+      notes: update.notes || '',
+      mode: 'update',
+    });
+    const wantsDownload = decision === 'download';
     if (!wantsDownload) {
       emitStatus({
         status: 'deferred',
