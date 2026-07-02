@@ -290,7 +290,25 @@ export function useChat() {
   // gated hooks below won't repaint it in the thread we switched to.
   const clearStreamingDisplay = () => {
     if (flushRaf.current) { cancelAnimationFrame(flushRaf.current); flushRaf.current = 0; }
+    const buffered = streamingRef.current;
     setStreamingMessage(null);
+    // setStreamingMessage syncs streamingRef, so put the buffer back afterwards:
+    // this is a DISPLAY-only clear. The buffered partial reply must survive so
+    // reopening the origin thread can repaint it (syncStreamingDisplay below).
+    streamingRef.current = buffered;
+  };
+  // Called whenever a navigation makes `threadId` current: repaint the buffered
+  // live stream if that thread owns the in-flight request, else drop the display
+  // from this view. Without the repaint, reopening the origin thread showed
+  // nothing until the next delta — the banner hides (origin is now current), no
+  // StreamingBubble/Stop renders, and the composer stays disabled, so a stalled
+  // request left no visible way to cancel from the very thread that owns it.
+  const syncStreamingDisplay = (threadId) => {
+    if (abortRef.current && streamThreadRef.current === threadId) {
+      scheduleFlush(() => ({}));
+    } else {
+      clearStreamingDisplay();
+    }
   };
   const stop = () => { if (abortRef.current) abortRef.current.abort(); };
 
@@ -727,13 +745,14 @@ Let's begin!`);
 
   // ── threads ────────────────────────────────────────────────────────────
   const switchThread = (threadId, save = true) => {
-    // Drop the in-flight stream's live display from this view but DON'T abort it —
-    // it keeps running and commits to its origin thread via commitToThread (the
-    // captured start id). Aborting here would turn a mid-response switch into a
-    // lost "(stopped)" turn. Explicit Stop still aborts (see stop()).
-    clearStreamingDisplay();
     const thread = threadsRef.current.find((t) => t.id === threadId);
     if (!thread) return;
+    // Never abort the in-flight stream on a switch — it keeps running and commits
+    // to its origin thread via commitToThread (the captured start id). Aborting
+    // here would turn a mid-response switch into a lost "(stopped)" turn. Sync the
+    // display instead: repaint the buffered bubble when switching BACK TO the
+    // stream's origin (incl. via the background-stream banner), drop it otherwise.
+    syncStreamingDisplay(threadId);
     // Save the outgoing thread's messages AND bump the target's updatedAt in one
     // write. Variant/startup selection (pickCurrentThreadId) opens the most-
     // recently-updated thread, so without bumping the target the saved-on-exit
@@ -783,6 +802,9 @@ Let's begin!`);
       persistThreads(next);
       setCurrentThreadId(pick);
       setMessages(next.find((t) => t.id === pick)?.messages || []);
+      // The pick can be the origin of a stream still running in the background
+      // (deleting thread B while A streams hidden) — repaint its bubble.
+      syncStreamingDisplay(pick);
     } else {
       const next = threadsRef.current.filter((t) => t.id !== threadId);
       setThreads(next);
@@ -926,9 +948,10 @@ Let's begin!`);
         cid = t.id;
       }
       // Navigating résumés must NOT abort an in-flight reply — it commits to its
-      // origin thread via commitToThread(startThreadId), so just drop its live
-      // display from this view (the gated stream hooks won't repaint it here).
-      clearStreamingDisplay();
+      // origin thread via commitToThread(startThreadId). Sync the display: the
+      // selection can land on the stream's own origin thread (a pinned jump-back
+      // or most-recent pick), where the buffered bubble must repaint.
+      syncStreamingDisplay(cid);
       // Persist unconditionally so the migration write-back is guaranteed,
       // matching the init effect (whether or not a fresh thread was created).
       persistThreads(next);
