@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { Check, KeyRound, Loader2, MessageCircle, Pencil, Settings2, Square } from 'lucide-react';
+import { ArrowRightLeft, Check, KeyRound, Loader2, MessageCircle, Pencil, Settings2, Square } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -72,7 +72,7 @@ function StreamingBubble({ msg, onStop, onRender }) {
   );
 }
 
-function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants }) {
+function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants, currentVariantId }) {
   // Context-switch divider: a "Now discussing «Name»" row whose button makes that
   // résumé active WITHOUT leaving this thread (onJumpVariant pins it). The name is
   // resolved live from the variant list so it tracks renames and so older markers
@@ -109,6 +109,15 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants 
 
   const isUser = msg.role === 'user';
   const hasActions = msg.applyData || msg.pendingChanges;
+  // Apply/Review mutate or diff the ACTIVE résumé (store-wide), but in a
+  // cross-résumé thread this message may have been generated against another
+  // one. When the stamps disagree, offer the switch instead of the actions —
+  // jumpToVariant keeps this thread open, and once the origin résumé is active
+  // the real buttons render. Messages predating variant stamping (no
+  // msg.variantId) keep the old behavior; we can't know their origin.
+  const actionsForeign =
+    !!hasActions && !!msg.variantId && !!currentVariantId && msg.variantId !== currentVariantId;
+  const originVariant = actionsForeign ? variants?.find((v) => v.id === msg.variantId) : null;
 
   return (
     <div
@@ -129,26 +138,47 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants 
 
       {hasActions && (
         <div className="mt-2.5 flex flex-wrap gap-2 border-t pt-2.5">
-          {msg.applyData && (
-            <Button
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => onApply(msg.applyData.action, msg.applyData.value)}
-            >
-              <Check className="size-3.5" />
-              Apply to Resume
-            </Button>
-          )}
-          {msg.pendingChanges && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => onReviewChanges(msg.id)}
-            >
-              <Pencil className="size-3.5" />
-              Review Changes
-            </Button>
+          {actionsForeign ? (
+            originVariant ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 max-w-full text-xs"
+                onClick={() => onJumpVariant?.(msg.variantId)}
+                title={`These edits were made for «${originVariant.name}» — switch to it to apply. This thread stays open.`}
+              >
+                <ArrowRightLeft className="size-3.5 shrink-0" />
+                <span className="truncate">Switch to «{originVariant.name}» to apply</span>
+              </Button>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">
+                These edits were for a résumé that no longer exists.
+              </span>
+            )
+          ) : (
+            <>
+              {msg.applyData && (
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => onApply(msg.applyData.action, msg.applyData.value)}
+                >
+                  <Check className="size-3.5" />
+                  Apply to Resume
+                </Button>
+              )}
+              {msg.pendingChanges && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => onReviewChanges(msg.id)}
+                >
+                  <Pencil className="size-3.5" />
+                  Review Changes
+                </Button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -196,7 +226,7 @@ function Welcome() {
  */
 export function MessageList({
   messages, thinking, streamingMessage, configured, currentThreadId, variants,
-  onReviewChanges, onApply, onConfigure, onStop, onJumpVariant,
+  currentVariantId, onReviewChanges, onApply, onConfigure, onStop, onJumpVariant,
 }) {
   const scrollerRef = useRef(null);
   // Whether the viewport is parked at the bottom. While it is, new content sticks;
@@ -252,6 +282,7 @@ export function MessageList({
               onApply={onApply}
               onJumpVariant={onJumpVariant}
               variants={variants}
+              currentVariantId={currentVariantId}
             />
           ))}
           {streamingMessage && <StreamingBubble msg={streamingMessage} onStop={onStop} onRender={followStream} />}

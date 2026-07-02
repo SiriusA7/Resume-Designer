@@ -48,12 +48,26 @@ export function createStreamAccumulator() {
       content += delta.content;
       events.push({ type: 'content', delta: delta.content, full: content });
     }
-    if (typeof delta.reasoning === 'string' && delta.reasoning) {
+    const hasPlainReasoning = typeof delta.reasoning === 'string' && !!delta.reasoning;
+    if (hasPlainReasoning) {
       reasoning += delta.reasoning;
       events.push({ type: 'reasoning', delta: delta.reasoning, full: reasoning });
     }
     if (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length) {
       mergeReasoningDetails(delta.reasoning_details);
+      // Some providers stream thinking ONLY as reasoning_details. Derive the
+      // display text from them so the live panel gets events and the committed
+      // turn keeps its reasoning — but only when this delta carried no plain
+      // `reasoning` string, which is the same text already counted above.
+      if (!hasPlainReasoning) {
+        const derived = delta.reasoning_details
+          .map((d) => (d && (d.text || d.summary)) || '')
+          .join('');
+        if (derived) {
+          reasoning += derived;
+          events.push({ type: 'reasoning', delta: derived, full: reasoning });
+        }
+      }
     }
     if (Array.isArray(delta.annotations) && delta.annotations.length) {
       annotations = annotations.concat(delta.annotations);

@@ -33,3 +33,10 @@ Icon
 
 # Local brainstorm / visual-companion scratch dir
 .superpowers/
+
+# Claude session-memory plugin state (machine-local, regenerated)
+.remember/
+
+# Stray root-level dependency/cache dirs (the app's real node_modules lives in
+# resume-designer/ and is ignored there; tooling occasionally writes a cache here)
+/node_modules/

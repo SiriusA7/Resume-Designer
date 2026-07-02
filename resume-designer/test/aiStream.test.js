@@ -40,6 +40,33 @@ describe('createStreamAccumulator', () => {
     expect(acc.result().reasoning).toBe('');
   });
 
+  // Some providers stream thinking ONLY as reasoning_details (no plain
+  // delta.reasoning). The display text must be derived from the details so the
+  // live panel gets events and the committed turn keeps its reasoning.
+  it('derives reasoning text and events from details-only deltas', () => {
+    const acc = createStreamAccumulator();
+    const e1 = acc.push(frame({ choices: [{ delta: { reasoning_details: [{ index: 0, type: 'reasoning.text', text: 'think ' }] } }] }));
+    const e2 = acc.push(frame({ choices: [{ delta: { reasoning_details: [{ index: 1, type: 'reasoning.summary', summary: 'more' }] } }] }));
+    expect(e1).toEqual([{ type: 'reasoning', delta: 'think ', full: 'think ' }]);
+    expect(e2).toEqual([{ type: 'reasoning', delta: 'more', full: 'think more' }]);
+    expect(acc.result().reasoning).toBe('think more');
+  });
+
+  it('does not double-count when a delta carries both reasoning and reasoning_details', () => {
+    const acc = createStreamAccumulator();
+    const events = acc.push(frame({
+      choices: [{
+        delta: {
+          reasoning: 'think',
+          reasoning_details: [{ index: 0, type: 'reasoning.text', text: 'think' }],
+        },
+      }],
+    }));
+    expect(events).toEqual([{ type: 'reasoning', delta: 'think', full: 'think' }]);
+    expect(acc.result().reasoning).toBe('think');
+    expect(acc.result().reasoningDetails[0].text).toBe('think'); // continuity payload intact
+  });
+
   it('collects url_citation annotations', () => {
     const acc = createStreamAccumulator();
     const events = acc.push(frame({ choices: [{ delta: { annotations: [{ type: 'url_citation', url: 'https://x.com', title: 'X' }] } }] }));

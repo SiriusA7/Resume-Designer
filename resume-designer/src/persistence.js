@@ -438,6 +438,22 @@ export function exportFullBackup(filename) {
  * store re-reads from storage (via reload, or by running this
  * BEFORE the store first reads).
  */
+// Legacy Electron stores can hold job descriptions as an id-keyed OBJECT map —
+// a shape the Rust migration probe explicitly counts as valid and the envelope
+// passes through verbatim — but jobDescriptions.js requires an array (it
+// spreads/filters the parsed value). Canonicalize on import; anything else
+// (already an array, unparseable) is written unchanged.
+function normalizeImportedValue(key, value) {
+  if (key !== 'resume-designer-job-descriptions') return value;
+  try {
+    const jd = JSON.parse(value);
+    if (jd && typeof jd === 'object' && !Array.isArray(jd)) {
+      return JSON.stringify(Object.values(jd));
+    }
+  } catch { /* leave malformed JSON as-is; initJobDescriptions handles it */ }
+  return value;
+}
+
 export function importFullBackupFromEnvelope(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
@@ -494,7 +510,7 @@ export function importFullBackupFromEnvelope(parsed) {
   const history = entries.filter(([k]) => k.startsWith(BACKUP_HISTORY_PREFIX));
 
   for (const [k, v] of nonHistory) {
-    appStorage.setItem(k, v);
+    appStorage.setItem(k, normalizeImportedValue(k, v));
   }
   let historySkipped = 0;
   for (const [k, v] of history) {
