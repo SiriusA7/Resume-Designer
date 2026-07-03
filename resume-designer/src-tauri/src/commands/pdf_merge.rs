@@ -17,13 +17,15 @@
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
-// Page attributes a page may INHERIT from an ancestor `/Pages` node instead of
-// carrying directly (PDF 1.7 §7.7.3.4). Both merge fns reparent each captured
-// page onto a fresh, attribute-less `/Pages` tree, which severs any such
-// inheritance — losing `/Resources` blanks fonts/images/XObjects. `/MediaBox`
-// is already re-asserted explicitly by each fn from the known dimensions, so
-// it's covered separately; these are the rest worth carrying over.
-const INHERITABLE_ATTRS: [&[u8]; 3] = [b"Resources", b"CropBox", b"Rotate"];
+// Page attributes to carry over from an ancestor `/Pages` node when a page
+// doesn't hold them directly. `/Resources` and `/Rotate` are inheritable per
+// PDF 1.7 §7.7.3.4; the geometry boxes are included so nothing `scale_page_boxes`
+// later scales can be silently dropped by the reparent (some engines emit
+// `/BleedBox`/`/TrimBox`/`/ArtBox` on the page tree even though the spec doesn't
+// list them as inheritable). `/MediaBox` is excluded — each fn re-asserts it
+// explicitly from the known dimensions.
+const INHERITABLE_ATTRS: [&[u8]; 6] =
+    [b"Resources", b"Rotate", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"];
 
 /// Resolve inheritable page attributes that live on an ancestor `/Pages` node
 /// (not on the page itself) by walking the page's `/Parent` chain in `src`.
@@ -388,6 +390,10 @@ mod tests {
             "CropBox",
             vec![Object::Real(0.0), Object::Real(0.0), Object::Real(200.0), Object::Real(300.0)],
         );
+        pages.set(
+            "BleedBox",
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(200.0), Object::Real(300.0)],
+        );
         doc.objects.insert(pages_id, Object::Dictionary(pages));
 
         let mut catalog = Dictionary::new();
@@ -521,6 +527,16 @@ mod tests {
         // Windows path is physical size — the materialized /CropBox stays as-is.
         let merged = merge_concat(vec![(pdf_with_inherited_resources(), 200.0, 300.0)]).unwrap();
         assert_eq!(page_box(&merged, b"CropBox"), vec![0.0, 0.0, 200.0, 300.0]);
+    }
+
+    #[test]
+    fn inherited_bleedbox_is_materialized_and_scaled() {
+        // Every geometry box scale_page_boxes handles must also be materialized
+        // from inheritance — otherwise the reparent drops it before scaling.
+        let scaled = merge_scaled(vec![(pdf_with_inherited_resources(), 200.0, 300.0)], 0.5).unwrap();
+        assert_eq!(page_box(&scaled, b"BleedBox"), vec![0.0, 0.0, 100.0, 150.0]);
+        let concat = merge_concat(vec![(pdf_with_inherited_resources(), 200.0, 300.0)]).unwrap();
+        assert_eq!(page_box(&concat, b"BleedBox"), vec![0.0, 0.0, 200.0, 300.0]);
     }
 
     #[test]
