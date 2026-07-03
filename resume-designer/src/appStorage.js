@@ -33,6 +33,13 @@ const IS_TAURI =
 // cache, the electron-migration flag). Used only by the one-time adoption.
 const OWNED_PREFIX = 'resume-';
 
+// Written to the DISK store before the one-time adoption copies its first key
+// and deleted only after every key landed — so a boot that finds it knows a
+// previous adoption was KILLED mid-copy (partial disk snapshot; localStorage
+// still intact, since it's cleared only after the marker is gone) and must
+// redo the copy. Deliberately outside OWNED_PREFIX so backups never carry it.
+const ADOPTION_PENDING_KEY = '__adoption_pending__';
+
 let mode = 'passthrough'; // 'passthrough' | 'cached'
 let readOnly = false;
 let backendImpl = null;
@@ -288,8 +295,13 @@ export async function initAppStorage({ backend = null, readOnly: ro = false } = 
   cache = new Map(Object.entries(loaded));
   mode = 'cached';
 
-  // One-time adoption: disk empty + localStorage has owned keys.
-  if (!readOnly && cache.size === 0) {
+  // One-time adoption: disk empty + localStorage has owned keys. A surviving
+  // ADOPTION_PENDING_KEY means a previous adoption was KILLED mid-copy — the
+  // disk holds a partial snapshot while localStorage still has the complete
+  // set (it's cleared only after the marker is deleted) — so redo the copy;
+  // localStorage stays authoritative until the marker is gone.
+  const adoptionPending = cache.has(ADOPTION_PENDING_KEY);
+  if (!readOnly && (cache.size === 0 || adoptionPending)) {
     const owned = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -297,13 +309,20 @@ export async function initAppStorage({ backend = null, readOnly: ro = false } = 
     }
     if (owned.length) {
       try {
+        // Marker FIRST: if this boot dies mid-copy, the next one sees it and
+        // redoes the copy from the still-intact localStorage.
+        await backendImpl.write(ADOPTION_PENDING_KEY, '1');
+        cache.set(ADOPTION_PENDING_KEY, '1');
         for (const k of owned) {
           const v = localStorage.getItem(k);
           if (v === null) continue;
           await backendImpl.write(k, v); // sequential; throw aborts adoption
           cache.set(k, v);
         }
-        // Every write landed — localStorage is no longer the source of truth.
+        // Every write landed — retire the marker, THEN hand over: localStorage
+        // is no longer the source of truth.
+        await backendImpl.delete(ADOPTION_PENDING_KEY);
+        cache.delete(ADOPTION_PENDING_KEY);
         for (const k of owned) localStorage.removeItem(k);
         console.log(`[appStorage] adopted ${owned.length} keys from localStorage to disk`);
       } catch (err) {
@@ -313,8 +332,10 @@ export async function initAppStorage({ backend = null, readOnly: ro = false } = 
         // Best-effort: wipe whatever partial copy landed before the failure.
         // Leaving even one file behind would make the next boot see a
         // non-empty store, skip adoption forever, and silently shadow the
-        // newer localStorage data. Safe by precondition — the store was
-        // empty before adoption started, so clear() cannot destroy anything.
+        // newer localStorage data. Safe: everything on disk at this point is a
+        // shadow copy of keys still present in localStorage (empty-store
+        // precondition, or a partial copy from the interrupted run being
+        // redone), so clear() cannot destroy the only copy of anything.
         try {
           await backendImpl.clear();
         } catch (clearErr) {
@@ -329,6 +350,15 @@ export async function initAppStorage({ backend = null, readOnly: ro = false } = 
         dirty = new Map();
         mode = 'passthrough';
         backendImpl = null;
+      }
+    } else if (adoptionPending) {
+      // Marker with nothing left to adopt (shouldn't happen given the write
+      // ordering) — drop it best-effort; a failure just retries next boot.
+      try {
+        await backendImpl.delete(ADOPTION_PENDING_KEY);
+        cache.delete(ADOPTION_PENDING_KEY);
+      } catch (err) {
+        console.error('[appStorage] could not clear a stale adoption marker:', err);
       }
     }
   }

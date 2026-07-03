@@ -215,6 +215,51 @@ describe('boot migration (localStorage → disk adoption)', () => {
     expect(localStorage.getItem('resume-designer-data')).toBe('{"stale":"localStorage"}');
   });
 
+  // A hard kill mid-adoption (after some disk writes, before localStorage is
+  // cleared) must not strand the user on a partial disk snapshot: the pending
+  // marker written before the first key flags the interruption, and the next
+  // boot redoes the copy from the still-intact localStorage.
+  it('re-adopts from localStorage when the pending marker survives a killed run', async () => {
+    localStorage.setItem('resume-designer-data', '{"v":"FULL"}');
+    localStorage.setItem('resume-zoom', '2');
+    const backend = makeBackend({
+      '__adoption_pending__': '1',
+      'resume-designer-data': '{"v":"PARTIAL"}',
+    });
+    await initAppStorage({ backend });
+    expect(appStorage.getItem('resume-designer-data')).toBe('{"v":"FULL"}');
+    expect(appStorage.getItem('resume-zoom')).toBe('2');
+    expect(backend.files.get('resume-designer-data')).toBe('{"v":"FULL"}');
+    expect(backend.files.has('__adoption_pending__')).toBe(false);
+    // Adoption completed this time — localStorage handed over.
+    expect(localStorage.getItem('resume-designer-data')).toBeNull();
+  });
+
+  it('writes the pending marker before the first key and removes it after the last', async () => {
+    localStorage.setItem('resume-designer-data', '{"v":1}');
+    localStorage.setItem('resume-zoom', '1.5');
+    const backend = makeBackend();
+    const order = [];
+    backend.write.mockImplementation(async (k, v) => { order.push(`write:${k}`); backend.files.set(k, v); });
+    backend.delete.mockImplementation(async (k) => { order.push(`delete:${k}`); backend.files.delete(k); });
+    await initAppStorage({ backend });
+    expect(order[0]).toBe('write:__adoption_pending__');
+    expect(order[order.length - 1]).toBe('delete:__adoption_pending__');
+    expect(backend.files.has('__adoption_pending__')).toBe(false);
+  });
+
+  it('clears a stale marker when there is nothing left to adopt', async () => {
+    // Killed between marker-removal steps in a way that left the marker but no
+    // owned localStorage keys — must not loop forever; just drop the marker.
+    const backend = makeBackend({
+      '__adoption_pending__': '1',
+      'resume-designer-data': '{"v":"DISK"}',
+    });
+    await initAppStorage({ backend });
+    expect(backend.files.has('__adoption_pending__')).toBe(false);
+    expect(appStorage.getItem('resume-designer-data')).toBe('{"v":"DISK"}');
+  });
+
   it('aborts adoption and leaves localStorage intact if a disk write fails', async () => {
     localStorage.setItem('resume-designer-data', '{"v":1}');
     const backend = makeBackend();
