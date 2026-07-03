@@ -5,7 +5,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { SafeMarkdown } from '@/components/ui/SafeMarkdown';
-import { REPO_URL } from '../../changelogService.js';
+import { CHANGELOG_LINK_BASE } from '../../changelogService.js';
 
 // Imperative, promise-returning update-notes dialog — same pattern as
 // confirm.jsx. `mode: 'update'` resolves 'download' | 'later'; `mode: 'whatsnew'`
@@ -50,12 +50,12 @@ export function UpdateNotesHost() {
         </DialogHeader>
         <div className="max-h-[50vh] overflow-y-auto pr-1">
           {opts?.notes
-            ? <SafeMarkdown className="chat-markdown text-sm" content={opts.notes} baseUrl={REPO_URL} />
+            ? <SafeMarkdown className="chat-markdown text-sm" content={opts.notes} baseUrl={CHANGELOG_LINK_BASE} />
             : <p className="text-sm text-muted-foreground">No release notes for this version.</p>}
           {hasFull && (
             <details className="mt-3">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Full changelog</summary>
-              <SafeMarkdown className="chat-markdown mt-2 text-xs" content={opts.full} baseUrl={REPO_URL} />
+              <SafeMarkdown className="chat-markdown mt-2 text-xs" content={opts.full} baseUrl={CHANGELOG_LINK_BASE} />
             </details>
           )}
         </div>
