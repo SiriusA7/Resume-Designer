@@ -216,7 +216,10 @@ export default function ChatPanel() {
 
       <MessageList
         messages={chat.messages}
-        thinking={chat.thinking}
+        // Helper runs (feedback / improve / bullets / interview) are origin-
+        // bound: their ThinkingBlock renders only in the thread that started
+        // them; the background-stream banner below covers them elsewhere.
+        thinking={chat.streamThreadId && chat.streamThreadId !== chat.currentThreadId ? null : chat.thinking}
         streamingMessage={chat.streamingMessage}
         configured={chat.configured}
         currentThreadId={chat.currentThreadId}

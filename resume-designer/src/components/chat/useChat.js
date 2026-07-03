@@ -241,13 +241,25 @@ export function useChat() {
     });
 
   // ── animated "thinking" process ────────────────────────────────────────
-  const beginThinking = () => {
+  // Helper flows (feedback / improve / bullets / interview) are origin-bound
+  // like the streamed ones: beginThinking records the origin thread (so the
+  // ThinkingBlock renders only there and the background banner covers it
+  // elsewhere) and arms an AbortController (so the banner's Stop and the
+  // thread/résumé delete paths can cancel it). Returns the signal for the flow
+  // to pass into its aiService call.
+  const beginThinking = (originThreadId = null) => {
     setLoading(true);
     setThinking({ steps: [], phase: 'active' });
+    const controller = new AbortController();
+    abortRef.current = controller;
+    if (originThreadId) setStreamThreadId(originThreadId);
+    return controller.signal;
   };
   const endThinking = () => {
     setLoading(false);
     setThinking(null);
+    abortRef.current = null;
+    setStreamThreadId(null);
   };
   const addThinkingStep = (text) =>
     setThinking((t) => {
@@ -304,7 +316,11 @@ export function useChat() {
   // StreamingBubble/Stop renders, and the composer stays disabled, so a stalled
   // request left no visible way to cancel from the very thread that owns it.
   const syncStreamingDisplay = (threadId) => {
-    if (abortRef.current && streamThreadRef.current === threadId) {
+    // The streamingRef guard keeps this to STREAMED flows (which always seed a
+    // buffer at request start): helper flows now also own abortRef/the origin
+    // thread but paint through the ThinkingBlock, not a streaming bubble —
+    // repainting for them would conjure an empty bubble beside the thinker.
+    if (abortRef.current && streamThreadRef.current === threadId && streamingRef.current) {
       scheduleFlush(() => ({}));
     } else {
       clearStreamingDisplay();
@@ -374,23 +390,33 @@ export function useChat() {
   const getAIFeedback = async () => {
     const startThreadId = currentThreadIdRef.current;
     const startVariantId = getCurrentId();
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Analyzing your resume...');
-      const response = await getFeedback(modelRef.current);
+      const response = await getFeedback(modelRef.current, { signal });
+      // chat()'s stream path RESOLVES with partial text on abort (the stopped
+      // flag is dropped for plain-string callers) — don't present a truncated
+      // reply as a finished one.
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Feedback ready');
       endThinking();
       commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
     } catch (error) {
       endThinking();
-      commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
   const getAIImproveSummary = async () => {
     const startThreadId = currentThreadIdRef.current;
     const startVariantId = getCurrentId();
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Reading current summary...');
       await new Promise((r) => setTimeout(r, 200));
@@ -406,29 +432,46 @@ export function useChat() {
         return;
       }
       completeThinkingStep('Writing improved summary...');
-      const response = await improveSummary(modelRef.current);
+      const response = await improveSummary(modelRef.current, { signal });
+      // On abort the call RESOLVES with partial/empty text — committing it with
+      // apply-summary would offer an Apply that overwrites the real summary
+      // with a truncated one. Commit a stopped note with NO applyData instead.
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Summary improved');
       endThinking();
       commitHelperTurn(startThreadId, startVariantId, 'assistant', response, { action: 'apply-summary', value: response });
     } catch (error) {
       endThinking();
-      commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
   const getAIGenerateBullets = async (context) => {
     const startThreadId = currentThreadIdRef.current;
     const startVariantId = getCurrentId();
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Generating bullet points...');
-      const response = await generateBullets(modelRef.current, context, 3);
+      const response = await generateBullets(modelRef.current, context, 3, { signal });
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Bullets generated');
       endThinking();
       commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
     } catch (error) {
       endThinking();
-      commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
@@ -521,6 +564,13 @@ export function useChat() {
       addMessage('error', 'Please configure an API key in settings before starting a profile interview.');
       return;
     }
+    // The Profile dialog fires rd:chat-start-interview directly, bypassing
+    // send()'s loading guard — starting here mid-request would overwrite the
+    // running request's abortRef/streamThreadId and orphan its Stop.
+    if (loadingRef.current) {
+      addMessage('error', 'Another request is still running — stop it or let it finish before starting the interview.');
+      return;
+    }
     interviewModeRef.current = true;
     const startThreadId = currentThreadIdRef.current;
     const startVariantId = getCurrentId();
@@ -534,11 +584,18 @@ When you're done, type \`/done\` to save the information to your profile.
 
 Let's begin!`);
 
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Starting interview...');
       interviewMsgsRef.current.push({ role: 'user', content: 'Please start the interview.' });
-      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current);
+      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current, { signal });
+      if (signal.aborted) {
+        endThinking();
+        interviewModeRef.current = false;
+        interviewThreadIdRef.current = null;
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       interviewMsgsRef.current.push({ role: 'assistant', content: response });
       completeThinkingStep('Ready');
       endThinking();
@@ -547,7 +604,8 @@ Let's begin!`);
       endThinking();
       interviewModeRef.current = false;
       interviewThreadIdRef.current = null;
-      commitHelperTurn(startThreadId, startVariantId, 'error', `Failed to start interview: ${error.message}`);
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', `Failed to start interview: ${error.message}`);
     }
   };
 
@@ -555,17 +613,24 @@ Let's begin!`);
     const startThreadId = currentThreadIdRef.current;
     const startVariantId = getCurrentId();
     interviewMsgsRef.current.push({ role: 'user', content: userMessage });
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Thinking...');
-      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current);
+      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current, { signal });
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       interviewMsgsRef.current.push({ role: 'assistant', content: response });
       completeThinkingStep('Response ready');
       endThinking();
       commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
     } catch (error) {
       endThinking();
-      commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
+      // On abort the interview stays active — the user can just answer again.
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
@@ -576,10 +641,17 @@ Let's begin!`);
       commitHelperTurn(startThreadId, startVariantId, 'assistant', "We haven't talked enough yet! Please answer a few more questions so I have information to save.");
       return;
     }
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Analyzing conversation...');
-      const extracted = await extractProfileFromInterview(modelRef.current, interviewMsgsRef.current);
+      const extracted = await extractProfileFromInterview(modelRef.current, interviewMsgsRef.current, { signal });
+      // Never save a profile parsed from an aborted (possibly truncated) call;
+      // the interview stays active so /done can simply be sent again.
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Saving to profile...');
       saveExtractedProfile(extracted);
       completeThinkingStep('Profile updated!');
@@ -604,7 +676,9 @@ Let's begin!`);
       commitHelperTurn(startThreadId, startVariantId, 'assistant', summary);
     } catch (error) {
       endThinking();
-      commitHelperTurn(startThreadId, startVariantId, 'error', `Failed to extract profile: ${error.message}\n\nYou can try \`/done\` again or continue the conversation.`);
+      // Abort keeps the interview active so /done can simply be sent again.
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', `Failed to extract profile: ${error.message}\n\nYou can try \`/done\` again or continue the conversation.`);
     }
   };
 
@@ -802,6 +876,11 @@ Let's begin!`);
     if (abortRef.current && streamThreadRef.current === threadId) {
       abortRef.current.abort();
       clearStreaming();
+      // The aborted run may be a HELPER (ThinkingBlock UI): clearStreaming
+      // drops streamThreadId, so without this the still-set thinking/loading
+      // would paint the spinner into the replacement thread until the aborted
+      // call settles. No-op for streams (thinking is already null).
+      endThinking();
     }
     if (threadId === currentThreadIdRef.current) {
       // Keep selection within the active résumé — open its most-recent remaining
@@ -992,6 +1071,10 @@ Let's begin!`);
       if (ids.includes(streamThreadRef.current)) {
         abortRef.current.abort();
         clearStreaming();
+        // Helper runs paint through thinking/loading — clear them too so the
+        // spinner can't leak into whichever thread becomes current (no-op for
+        // streams, whose thinking is already null).
+        endThinking();
       }
     };
     window.addEventListener('rd:threads-deleted', onThreadsDeleted);

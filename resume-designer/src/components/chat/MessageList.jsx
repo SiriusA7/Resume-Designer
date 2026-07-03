@@ -14,7 +14,7 @@ import { RunMeta } from './RunMeta.jsx';
 // token stream. The streamed flows (chat reply, change-requests) use
 // <StreamingBubble> instead. Mockup `.think`: bordered card, spinner, pulsing
 // primary dots, green check steps.
-function ThinkingBlock({ thinking }) {
+function ThinkingBlock({ thinking, onStop }) {
   const done = thinking.phase === 'done';
   return (
     <div className="w-[92%] self-start rounded-xl border bg-background px-3 py-2.5">
@@ -25,6 +25,13 @@ function ThinkingBlock({ thinking }) {
           <Loader2 className="size-3.5 animate-spin text-primary" />
         )}
         <span>{done ? 'Complete' : 'Processing…'}</span>
+        {/* Helper runs are abortable like streams — expose the same Stop here,
+            since in the origin thread this block is the only in-flight UI. */}
+        {!done && onStop && (
+          <Button variant="outline" size="sm" className="ml-auto h-6 gap-1 text-[11px]" onClick={onStop}>
+            <Square className="size-3" /> Stop
+          </Button>
+        )}
       </div>
       {thinking.steps.length > 0 && (
         <div className="mt-2 space-y-1">
@@ -286,7 +293,7 @@ export function MessageList({
             />
           ))}
           {streamingMessage && <StreamingBubble msg={streamingMessage} onStop={onStop} onRender={followStream} />}
-          {thinking && <ThinkingBlock thinking={thinking} />}
+          {thinking && <ThinkingBlock thinking={thinking} onStop={onStop} />}
         </>
       )}
     </div>
