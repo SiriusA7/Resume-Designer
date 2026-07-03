@@ -383,16 +383,21 @@ jobs:
         run: |
           # Accept the AI rewrite only if it kept the whole structure. A
           # truncated response is still a "successful" step, so guard against
-          # publishing incomplete notes: it must carry the version heading and
-          # at least as many "###" sections as the grouped source.
+          # publishing incomplete notes: it must carry the version heading, at
+          # least as many "###" sections, and at least as many bullets as the
+          # grouped source. The bullet count is what catches a truncation that
+          # lands after the last "###" header but drops that section's bullets.
           if [ "$AI_OK" = "true" ] && [ -n "$AI_TEXT" ]; then
             printf '%s\n' "$AI_TEXT" > release-notes.ai.md
-            want=$(grep -c '^### ' grouped-changelog.md || true)
-            got=$(grep -c '^### ' release-notes.ai.md || true)
-            if grep -q '^## Resume Designer' release-notes.ai.md && [ "$got" -ge "$want" ]; then
+            want_h=$(grep -c '^### ' grouped-changelog.md || true)
+            got_h=$(grep -c '^### ' release-notes.ai.md || true)
+            want_b=$(grep -c '^[-*] ' grouped-changelog.md || true)
+            got_b=$(grep -c '^[-*] ' release-notes.ai.md || true)
+            if grep -q '^## Resume Designer' release-notes.ai.md \
+              && [ "$got_h" -ge "$want_h" ] && [ "$got_b" -ge "$want_b" ]; then
               mv release-notes.ai.md release-notes.md
             else
-              echo "AI rewrite looks incomplete (sections want=$want got=$got) — using the grouped changelog." >&2
+              echo "AI rewrite looks incomplete (sections $got_h/$want_h, bullets $got_b/$want_b) — using the grouped changelog." >&2
               cp grouped-changelog.md release-notes.md
             fi
           else
