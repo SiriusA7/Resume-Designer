@@ -87,6 +87,29 @@ fn scale_annotation_coords(dict: &mut Dictionary, scale: f64) {
     }
 }
 
+// Optional page-space boxes that, like `/MediaBox`, are in default user space
+// and must shrink with the content in the scaled (macOS) path. `/MediaBox` is
+// excluded — each fn re-asserts it explicitly from the known dimensions.
+const SCALABLE_PAGE_BOXES: [&[u8]; 4] = [b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"];
+
+/// Scale a page's optional geometry boxes (`/CropBox` etc.) by `scale`, in place
+/// on the page dict. Covers both a box carried directly on the page and one
+/// materialized from an inherited attribute — either way it must track the
+/// scaled `/MediaBox`, or the exported page shows the wrong visible region.
+/// No-op for the boxes a page doesn't define. Only the scaled (macOS) path calls
+/// this; `merge_concat` keeps physical size, so its boxes stay as captured.
+fn scale_page_boxes(page: &mut Dictionary, scale: f64) {
+    for key in SCALABLE_PAGE_BOXES {
+        let scaled = match page.get(key) {
+            Ok(Object::Array(arr)) => Some(arr.iter().map(|o| scale_number(o, scale)).collect::<Vec<_>>()),
+            _ => None,
+        };
+        if let Some(scaled) = scaled {
+            page.set(key.to_vec(), scaled);
+        }
+    }
+}
+
 /// Scale a page's annotations to match content scaled by `scale`. `merge_scaled`
 /// shrinks the content stream + `/MediaBox` from the origin, but `/Annots` live
 /// on the page dict in default user space — untouched, a link captured at CSS-px
@@ -205,6 +228,9 @@ pub fn merge_scaled(pages: Vec<(Vec<u8>, f64, f64)>, scale: f64) -> Result<Vec<u
         for (key, value) in inherited {
             page.set(key, value);
         }
+        // Scale the page's geometry boxes (direct or just-materialized) into the
+        // shrunk coordinate space, matching the /MediaBox re-asserted below.
+        scale_page_boxes(page, scale);
         page.set("Parent", pages_id);
         page.set(
             "MediaBox",
@@ -358,6 +384,10 @@ mod tests {
             "MediaBox",
             vec![Object::Real(0.0), Object::Real(0.0), Object::Real(200.0), Object::Real(300.0)],
         );
+        pages.set(
+            "CropBox",
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(200.0), Object::Real(300.0)],
+        );
         doc.objects.insert(pages_id, Object::Dictionary(pages));
 
         let mut catalog = Dictionary::new();
@@ -461,6 +491,36 @@ mod tests {
                 _ => panic!("rect coord not numeric"),
             })
             .collect()
+    }
+
+    fn page_box(bytes: &[u8], key: &[u8]) -> Vec<f32> {
+        let (doc, page_id) = merged_page(bytes);
+        let page = doc.get_object(page_id).unwrap().as_dict().unwrap();
+        page.get(key)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| match o {
+                Object::Real(r) => *r,
+                Object::Integer(n) => *n as f32,
+                _ => panic!("box coord not numeric"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merge_scaled_scales_inherited_cropbox() {
+        // Inherited /CropBox [0,0,200,300] must shrink with the page (× 0.5).
+        let merged = merge_scaled(vec![(pdf_with_inherited_resources(), 200.0, 300.0)], 0.5).unwrap();
+        assert_eq!(page_box(&merged, b"CropBox"), vec![0.0, 0.0, 100.0, 150.0]);
+    }
+
+    #[test]
+    fn merge_concat_keeps_inherited_cropbox_unscaled() {
+        // Windows path is physical size — the materialized /CropBox stays as-is.
+        let merged = merge_concat(vec![(pdf_with_inherited_resources(), 200.0, 300.0)]).unwrap();
+        assert_eq!(page_box(&merged, b"CropBox"), vec![0.0, 0.0, 200.0, 300.0]);
     }
 
     #[test]
