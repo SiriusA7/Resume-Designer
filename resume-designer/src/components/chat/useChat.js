@@ -394,6 +394,15 @@ export function useChat() {
     try {
       addThinkingStep('Analyzing your resume...');
       const response = await getFeedback(modelRef.current, { signal });
+      // chat()'s stream path RESOLVES with partial text on abort (the stopped
+      // flag is dropped for plain-string callers) — don't present a truncated
+      // reply as a finished one.
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Feedback ready');
       endThinking();
       commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
@@ -424,6 +433,15 @@ export function useChat() {
       }
       completeThinkingStep('Writing improved summary...');
       const response = await improveSummary(modelRef.current, { signal });
+      // On abort the call RESOLVES with partial/empty text — committing it with
+      // apply-summary would offer an Apply that overwrites the real summary
+      // with a truncated one. Commit a stopped note with NO applyData instead.
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Summary improved');
       endThinking();
       commitHelperTurn(startThreadId, startVariantId, 'assistant', response, { action: 'apply-summary', value: response });
@@ -441,6 +459,12 @@ export function useChat() {
     try {
       addThinkingStep('Generating bullet points...');
       const response = await generateBullets(modelRef.current, context, 3, { signal });
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Bullets generated');
       endThinking();
       commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
@@ -558,6 +582,13 @@ Let's begin!`);
       addThinkingStep('Starting interview...');
       interviewMsgsRef.current.push({ role: 'user', content: 'Please start the interview.' });
       const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current, { signal });
+      if (signal.aborted) {
+        endThinking();
+        interviewModeRef.current = false;
+        interviewThreadIdRef.current = null;
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       interviewMsgsRef.current.push({ role: 'assistant', content: response });
       completeThinkingStep('Ready');
       endThinking();
@@ -579,6 +610,11 @@ Let's begin!`);
     try {
       addThinkingStep('Thinking...');
       const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current, { signal });
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       interviewMsgsRef.current.push({ role: 'assistant', content: response });
       completeThinkingStep('Response ready');
       endThinking();
@@ -602,6 +638,13 @@ Let's begin!`);
     try {
       addThinkingStep('Analyzing conversation...');
       const extracted = await extractProfileFromInterview(modelRef.current, interviewMsgsRef.current, { signal });
+      // Never save a profile parsed from an aborted (possibly truncated) call;
+      // the interview stays active so /done can simply be sent again.
+      if (signal.aborted) {
+        endThinking();
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Saving to profile...');
       saveExtractedProfile(extracted);
       completeThinkingStep('Profile updated!');
