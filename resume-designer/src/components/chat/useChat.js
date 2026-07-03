@@ -564,6 +564,13 @@ export function useChat() {
       addMessage('error', 'Please configure an API key in settings before starting a profile interview.');
       return;
     }
+    // The Profile dialog fires rd:chat-start-interview directly, bypassing
+    // send()'s loading guard — starting here mid-request would overwrite the
+    // running request's abortRef/streamThreadId and orphan its Stop.
+    if (loadingRef.current) {
+      addMessage('error', 'Another request is still running — stop it or let it finish before starting the interview.');
+      return;
+    }
     interviewModeRef.current = true;
     const startThreadId = currentThreadIdRef.current;
     const startVariantId = getCurrentId();
@@ -869,6 +876,11 @@ Let's begin!`);
     if (abortRef.current && streamThreadRef.current === threadId) {
       abortRef.current.abort();
       clearStreaming();
+      // The aborted run may be a HELPER (ThinkingBlock UI): clearStreaming
+      // drops streamThreadId, so without this the still-set thinking/loading
+      // would paint the spinner into the replacement thread until the aborted
+      // call settles. No-op for streams (thinking is already null).
+      endThinking();
     }
     if (threadId === currentThreadIdRef.current) {
       // Keep selection within the active résumé — open its most-recent remaining
@@ -1059,6 +1071,10 @@ Let's begin!`);
       if (ids.includes(streamThreadRef.current)) {
         abortRef.current.abort();
         clearStreaming();
+        // Helper runs paint through thinking/loading — clear them too so the
+        // spinner can't leak into whichever thread becomes current (no-op for
+        // streams, whose thinking is already null).
+        endThinking();
       }
     };
     window.addEventListener('rd:threads-deleted', onThreadsDeleted);
