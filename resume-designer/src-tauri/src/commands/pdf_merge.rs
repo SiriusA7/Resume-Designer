@@ -17,6 +17,52 @@
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
+// Page attributes a page may INHERIT from an ancestor `/Pages` node instead of
+// carrying directly (PDF 1.7 §7.7.3.4). Both merge fns reparent each captured
+// page onto a fresh, attribute-less `/Pages` tree, which severs any such
+// inheritance — losing `/Resources` blanks fonts/images/XObjects. `/MediaBox`
+// is already re-asserted explicitly by each fn from the known dimensions, so
+// it's covered separately; these are the rest worth carrying over.
+const INHERITABLE_ATTRS: [&[u8]; 3] = [b"Resources", b"CropBox", b"Rotate"];
+
+/// Resolve inheritable page attributes that live on an ancestor `/Pages` node
+/// (not on the page itself) by walking the page's `/Parent` chain in `src`.
+/// Returns `(key, value)` for each attribute NOT already on the page dict, so
+/// the caller can materialize them onto the page before reparenting. Must run
+/// while `src` is still intact — i.e. before its objects are moved into the
+/// output. A cloned `/Resources` reference stays valid because the object it
+/// points to is copied into the output alongside the page.
+fn inherited_page_attrs(src: &Document, page_id: ObjectId) -> Vec<(&'static [u8], Object)> {
+    let page = match src.get_object(page_id).and_then(Object::as_dict) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let mut resolved = Vec::new();
+    for key in INHERITABLE_ATTRS {
+        if page.get(key).is_ok() {
+            continue; // already on the page — survives reparenting untouched
+        }
+        let mut next = page.get(b"Parent").and_then(Object::as_reference).ok();
+        let mut hops = 0;
+        while let Some(pid) = next {
+            hops += 1;
+            if hops > 32 {
+                break; // malformed / cyclic page tree — stop rather than spin
+            }
+            let dict = match src.get_object(pid).and_then(Object::as_dict) {
+                Ok(d) => d,
+                Err(_) => break,
+            };
+            if let Ok(value) = dict.get(key) {
+                resolved.push((key, value.clone()));
+                break;
+            }
+            next = dict.get(b"Parent").and_then(Object::as_reference).ok();
+        }
+    }
+    resolved
+}
+
 /// Merge single-page PDFs into one document, scaling each page's content and
 /// MediaBox by `scale`. `pages` is `(pdf_bytes, width_px, height_px)`; the
 /// width/height are the captured CSS-px dimensions (== createPDF's point size,
@@ -55,6 +101,11 @@ pub fn merge_scaled(pages: Vec<(Vec<u8>, f64, f64)>, scale: f64) -> Result<Vec<u
             }
         };
 
+        // Resolve inherited page attributes BEFORE the objects move (needs the
+        // intact source page tree) so `/Resources` etc. can be pinned onto the
+        // page once it's reparented below.
+        let inherited = inherited_page_attrs(&src, page_id);
+
         // Move every source object into the output document (keeps the page's
         // own Resources/fonts intact; the orphaned source catalog is harmless).
         let src_max = src.max_id;
@@ -88,6 +139,10 @@ pub fn merge_scaled(pages: Vec<(Vec<u8>, f64, f64)>, scale: f64) -> Result<Vec<u
             .ok_or_else(|| "page missing after merge".to_string())?
             .as_dict_mut()
             .map_err(|e| format!("page dict: {}", e))?;
+        // Pin inherited attributes onto the page before it loses its old parent.
+        for (key, value) in inherited {
+            page.set(key, value);
+        }
         page.set("Parent", pages_id);
         page.set(
             "MediaBox",
@@ -130,6 +185,12 @@ pub fn merge_concat(pages: Vec<(Vec<u8>, f64, f64)>) -> Result<Vec<u8>, String> 
             .next()
             .ok_or_else(|| "captured PDF has no page".to_string())?;
 
+        // Resolve inherited page attributes BEFORE moving the objects (needs the
+        // intact source page tree). WebView2 can leave `/Resources` on the page
+        // tree rather than the page; without this, reparenting below would drop
+        // it and the merged page would render blank.
+        let inherited = inherited_page_attrs(&src, page_id);
+
         let src_max = src.max_id;
         for (id, obj) in std::mem::take(&mut src.objects) {
             output.objects.insert(id, obj);
@@ -144,6 +205,10 @@ pub fn merge_concat(pages: Vec<(Vec<u8>, f64, f64)>) -> Result<Vec<u8>, String> 
             .ok_or_else(|| "page missing after merge".to_string())?
             .as_dict_mut()
             .map_err(|e| format!("page dict: {}", e))?;
+        // Pin inherited attributes onto the page before it loses its old parent.
+        for (key, value) in inherited {
+            page.set(key, value);
+        }
         page.set("Parent", pages_id);
         page.set(
             "MediaBox",
@@ -154,7 +219,8 @@ pub fn merge_concat(pages: Vec<(Vec<u8>, f64, f64)>) -> Result<Vec<u8>, String> 
                 Object::Real(h_pt as f32),
             ],
         );
-        // Contents + Resources are left exactly as WebView2 produced them.
+        // Content streams are left exactly as WebView2 produced them; `/Resources`
+        // is now guaranteed on the page (materialized above if it was inherited).
         kid_ids.push(page_id);
     }
 
@@ -184,4 +250,129 @@ fn finish(mut output: Document, pages_id: ObjectId, kid_ids: Vec<ObjectId>) -> R
     let mut buf = Vec::new();
     output.save_to(&mut buf).map_err(|e| format!("save: {}", e))?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A one-page PDF whose `/Resources` lives on the `/Pages` node (inherited),
+    // NOT on the page — the exact shape a print engine can emit and the shape
+    // the merge must preserve across reparenting.
+    fn pdf_with_inherited_resources() -> Vec<u8> {
+        let mut doc = Document::with_version("1.5");
+        let content_id = doc.add_object(Stream::new(Dictionary::new(), b"BT ET".to_vec()));
+
+        let font_id = doc.add_object(Object::Dictionary({
+            let mut f = Dictionary::new();
+            f.set("Type", Object::Name(b"Font".to_vec()));
+            f.set("Subtype", Object::Name(b"Type1".to_vec()));
+            f.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+            f
+        }));
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", font_id);
+        let mut resources = Dictionary::new();
+        resources.set("Font", fonts);
+
+        let pages_id = doc.new_object_id();
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", pages_id);
+        page.set("Contents", content_id);
+        // Deliberately NO /Resources and NO /MediaBox on the page — both inherited.
+        let page_id = doc.add_object(Object::Dictionary(page));
+
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", vec![Object::Reference(page_id)]);
+        pages.set("Count", 1i64);
+        pages.set("Resources", resources); // <-- inherited by the page
+        pages.set(
+            "MediaBox",
+            vec![Object::Real(0.0), Object::Real(0.0), Object::Real(200.0), Object::Real(300.0)],
+        );
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", pages_id);
+        let catalog_id = doc.add_object(Object::Dictionary(catalog));
+        doc.trailer.set("Root", catalog_id);
+
+        let mut buf = Vec::new();
+        doc.save_to(&mut buf).unwrap();
+        buf
+    }
+
+    // Fetch the merged output's single page dict.
+    fn merged_page(bytes: &[u8]) -> (Document, ObjectId) {
+        let doc = Document::load_mem(bytes).unwrap();
+        let page_id = doc.get_pages().into_values().next().unwrap();
+        (doc, page_id)
+    }
+
+    // The materialized /Resources (possibly indirect) must still reach the font.
+    fn assert_resources_reach_font(doc: &Document, page: &Dictionary) {
+        let res = page
+            .get(b"Resources")
+            .expect("page must carry /Resources after merge");
+        let res_dict = match res {
+            Object::Reference(id) => doc.get_object(*id).unwrap().as_dict().unwrap(),
+            Object::Dictionary(d) => d,
+            other => panic!("/Resources is not a dict: {:?}", other),
+        };
+        assert!(res_dict.get(b"Font").is_ok(), "materialized /Resources lost /Font");
+    }
+
+    #[test]
+    fn merge_concat_materializes_inherited_resources() {
+        let merged = merge_concat(vec![(pdf_with_inherited_resources(), 200.0, 300.0)]).unwrap();
+        let (doc, page_id) = merged_page(&merged);
+        let page = doc.get_object(page_id).unwrap().as_dict().unwrap();
+        assert_resources_reach_font(&doc, page);
+    }
+
+    #[test]
+    fn merge_scaled_materializes_inherited_resources() {
+        let merged = merge_scaled(vec![(pdf_with_inherited_resources(), 200.0, 300.0)], 0.75).unwrap();
+        let (doc, page_id) = merged_page(&merged);
+        let page = doc.get_object(page_id).unwrap().as_dict().unwrap();
+        assert_resources_reach_font(&doc, page);
+    }
+
+    #[test]
+    fn direct_resources_are_left_untouched() {
+        // A page that already carries /Resources directly must merge unchanged
+        // (the fix only fills gaps, never clobbers).
+        let mut doc = Document::with_version("1.5");
+        let content_id = doc.add_object(Stream::new(Dictionary::new(), b"BT ET".to_vec()));
+        let mut res = Dictionary::new();
+        res.set("ProcSet", vec![Object::Name(b"PDF".to_vec())]);
+        let pages_id = doc.new_object_id();
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", pages_id);
+        page.set("Contents", content_id);
+        page.set("Resources", res);
+        let page_id = doc.add_object(Object::Dictionary(page));
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", vec![Object::Reference(page_id)]);
+        pages.set("Count", 1i64);
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", pages_id);
+        let catalog_id = doc.add_object(Object::Dictionary(catalog));
+        doc.trailer.set("Root", catalog_id);
+        let mut buf = Vec::new();
+        doc.save_to(&mut buf).unwrap();
+
+        let merged = merge_concat(vec![(buf, 200.0, 300.0)]).unwrap();
+        let (doc, page_id) = merged_page(&merged);
+        let page = doc.get_object(page_id).unwrap().as_dict().unwrap();
+        let res = page.get(b"Resources").unwrap().as_dict().unwrap();
+        assert!(res.get(b"ProcSet").is_ok(), "direct /Resources must be preserved");
+    }
 }
