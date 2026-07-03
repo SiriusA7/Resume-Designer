@@ -10,6 +10,14 @@
 const RELEASES_API =
   'https://api.github.com/repos/ashproto/Resume-Designer/releases?per_page=30';
 
+// Base for resolving relative links in fetched release notes. Release-note
+// relative links are almost always repo FILE paths (README.md, docs/*.md), and
+// GitHub serves files under `/blob/<branch>/…` — resolving against the repo
+// root would produce github.com 404s. `/blob/main/` (trailing slash) gives a
+// valid file route for bare-relative links, while root-relative links (`/x`)
+// still resolve to the origin. Used by the changelog UI as SafeMarkdown baseUrl.
+export const CHANGELOG_LINK_BASE = 'https://github.com/ashproto/Resume-Designer/blob/main/';
+
 // True only when we have a prior version on record AND it differs from the one
 // now running — i.e. an update landed since last launch. First run (no record)
 // must NOT trigger a "what's new" panel.

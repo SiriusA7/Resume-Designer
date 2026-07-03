@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { fetchReleaseHistory } from '../changelogService.js';
+import { fetchReleaseHistory, CHANGELOG_LINK_BASE } from '../changelogService.js';
 import { SafeMarkdown } from '@/components/ui/SafeMarkdown';
 
 // The Settings → Updates "What's new" list. Phase 1 sources history by fetching
@@ -36,7 +36,7 @@ export function ChangelogHistory() {
               </span>
             )}
           </summary>
-          <SafeMarkdown className="chat-markdown mt-2 text-sm" content={r.summary} />
+          <SafeMarkdown className="chat-markdown mt-2 text-sm" content={r.summary} baseUrl={CHANGELOG_LINK_BASE} />
         </details>
       ))}
     </div>
