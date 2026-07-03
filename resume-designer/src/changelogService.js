@@ -10,6 +10,10 @@
 const RELEASES_API =
   'https://api.github.com/repos/ashproto/Resume-Designer/releases?per_page=30';
 
+// Base for resolving relative links in fetched release notes (trailing slash so
+// `new URL('docs/x', REPO_URL)` keeps the repo path). Used by the changelog UI.
+export const REPO_URL = 'https://github.com/ashproto/Resume-Designer/';
+
 // True only when we have a prior version on record AND it differs from the one
 // now running — i.e. an update landed since last launch. First run (no record)
 // must NOT trigger a "what's new" panel.
