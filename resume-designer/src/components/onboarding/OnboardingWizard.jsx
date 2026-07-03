@@ -243,9 +243,19 @@ export default function OnboardingWizard() {
   const addJob = useCallback((jd) => setJobDescriptions((prev) => [...prev, jd]), []);
   const removeJob = useCallback((i) => setJobDescriptions((prev) => prev.filter((_, idx) => idx !== i)), []);
 
+  // Jobs already persisted this session, tracked by object identity. Reaching
+  // Review runs commitJobsAndTailor, and Back→Tailor re-enters it — since
+  // addJobDescription mints a fresh id per call, re-committing the same
+  // in-memory jobs would save duplicates. Only newly-added jobs are committed.
+  const committedJobsRef = useRef(new Set());
+
   const commitJobsAndTailor = useCallback(async () => {
-    // Commit every added JD (matches the vanilla step-3 "next" handler).
-    commitJobDescriptions(jobDescriptions);
+    const committed = committedJobsRef.current;
+    const fresh = jobDescriptions.filter((jd) => !committed.has(jd));
+    if (fresh.length > 0) {
+      commitJobDescriptions(fresh);
+      fresh.forEach((jd) => committed.add(jd));
+    }
     if (jobDescriptions.length > 0 && getConfiguredProviders().length > 0) {
       try {
         const tailored = await tailorResume(parsedResume, jobDescriptions);
