@@ -22,13 +22,21 @@ pub fn run() {
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.manage(commands::updater::PendingUpdate::default());
+            }
 
-                // Add "Settings…" and "Check for Updates…" to the application
-                // (app-name) menu, just under "About" and above the Services separator.
-                // We start from the platform default menu so every standard item (Edit,
-                // Window, Hide, Quit, …) is preserved, and only insert the two extra
-                // items. Each click emits an event the frontend routes to the existing
-                // flow (Settings dialog / manual update-check).
+            // Add "Settings…" and "Check for Updates…" to the application
+            // (app-name) menu, just under "About" and above the Services separator.
+            // We start from the platform default menu so every standard item (Edit,
+            // Window, Hide, Quit, …) is preserved, and only insert the two extra
+            // items. Each click emits an event the frontend routes to the existing
+            // flow (Settings dialog / manual update-check).
+            //
+            // macOS ONLY: on Windows/Linux Tauri renders app menus INSIDE the
+            // window, which would stack an unexpected menu bar over the app's
+            // custom header. Those platforms reach Settings / Check for Updates
+            // through the in-app UI instead (Settings dialog + Updates tab).
+            #[cfg(target_os = "macos")]
+            {
                 use tauri::menu::{Menu, MenuItem};
                 use tauri::Emitter;
                 let menu = Menu::default(app.handle())?;
