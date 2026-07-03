@@ -63,6 +63,68 @@ fn inherited_page_attrs(src: &Document, page_id: ObjectId) -> Vec<(&'static [u8]
     resolved
 }
 
+/// Scale a numeric PDF object (Integer/Real) by `scale`; pass anything else
+/// through untouched.
+fn scale_number(o: &Object, scale: f64) -> Object {
+    match o {
+        Object::Integer(n) => Object::Real((*n as f64 * scale) as f32),
+        Object::Real(r) => Object::Real((*r as f64 * scale) as f32),
+        other => other.clone(),
+    }
+}
+
+/// Scale an annotation dict's page-space geometry (`/Rect`, `/QuadPoints`) by
+/// `scale`. No-op for annotations without those keys.
+fn scale_annotation_coords(dict: &mut Dictionary, scale: f64) {
+    for key in [b"Rect".as_slice(), b"QuadPoints".as_slice()] {
+        let scaled = match dict.get(key) {
+            Ok(Object::Array(arr)) => Some(arr.iter().map(|o| scale_number(o, scale)).collect::<Vec<_>>()),
+            _ => None,
+        };
+        if let Some(scaled) = scaled {
+            dict.set(key.to_vec(), scaled);
+        }
+    }
+}
+
+/// Scale a page's annotations to match content scaled by `scale`. `merge_scaled`
+/// shrinks the content stream + `/MediaBox` from the origin, but `/Annots` live
+/// on the page dict in default user space — untouched, a link captured at CSS-px
+/// coordinates would sit in the wrong place (or off-page) on the shrunk page.
+/// Scaling their `/Rect`/`/QuadPoints` by the same factor keeps clickable areas
+/// aligned. No-op when the page has no annotations.
+fn scale_page_annotations(output: &mut Document, page_id: ObjectId, scale: f64) {
+    let annots = match output.objects.get(&page_id).and_then(|o| o.as_dict().ok()) {
+        Some(d) => match d.get(b"Annots") {
+            Ok(Object::Array(a)) => a.clone(),
+            _ => return,
+        },
+        None => return,
+    };
+    // Indirect annotations: scale them in the object store.
+    for id in annots.iter().filter_map(|o| o.as_reference().ok()) {
+        if let Some(dict) = output.objects.get_mut(&id).and_then(|o| o.as_dict_mut().ok()) {
+            scale_annotation_coords(dict, scale);
+        }
+    }
+    // Inline-dict annotations: scale copies and rewrite the page's /Annots.
+    if annots.iter().any(|o| matches!(o, Object::Dictionary(_))) {
+        let rebuilt: Vec<Object> = annots
+            .into_iter()
+            .map(|o| match o {
+                Object::Dictionary(mut d) => {
+                    scale_annotation_coords(&mut d, scale);
+                    Object::Dictionary(d)
+                }
+                other => other,
+            })
+            .collect();
+        if let Some(dict) = output.objects.get_mut(&page_id).and_then(|o| o.as_dict_mut().ok()) {
+            dict.set("Annots", rebuilt);
+        }
+    }
+}
+
 /// Merge single-page PDFs into one document, scaling each page's content and
 /// MediaBox by `scale`. `pages` is `(pdf_bytes, width_px, height_px)`; the
 /// width/height are the captured CSS-px dimensions (== createPDF's point size,
@@ -158,6 +220,10 @@ pub fn merge_scaled(pages: Vec<(Vec<u8>, f64, f64)>, scale: f64) -> Result<Vec<u
         contents.extend(content_ids.into_iter().map(Object::Reference));
         contents.push(Object::Reference(post));
         page.set("Contents", contents);
+
+        // Content + MediaBox were scaled from the origin; bring the page's
+        // annotations (link rects etc.) along so they don't drift off-target.
+        scale_page_annotations(&mut output, page_id, scale);
 
         kid_ids.push(page_id);
     }
@@ -339,6 +405,76 @@ mod tests {
         let (doc, page_id) = merged_page(&merged);
         let page = doc.get_object(page_id).unwrap().as_dict().unwrap();
         assert_resources_reach_font(&doc, page);
+    }
+
+    // One-page PDF carrying a Link annotation at a known rect.
+    fn pdf_with_link_annotation() -> Vec<u8> {
+        let mut doc = Document::with_version("1.5");
+        let content_id = doc.add_object(Stream::new(Dictionary::new(), b"BT ET".to_vec()));
+        let mut annot = Dictionary::new();
+        annot.set("Type", Object::Name(b"Annot".to_vec()));
+        annot.set("Subtype", Object::Name(b"Link".to_vec()));
+        annot.set(
+            "Rect",
+            vec![Object::Real(10.0), Object::Real(20.0), Object::Real(110.0), Object::Real(40.0)],
+        );
+        let annot_id = doc.add_object(Object::Dictionary(annot));
+
+        let pages_id = doc.new_object_id();
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", pages_id);
+        page.set("Resources", Dictionary::new());
+        page.set("Contents", content_id);
+        page.set("Annots", vec![Object::Reference(annot_id)]);
+        let page_id = doc.add_object(Object::Dictionary(page));
+
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", vec![Object::Reference(page_id)]);
+        pages.set("Count", 1i64);
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", pages_id);
+        let catalog_id = doc.add_object(Object::Dictionary(catalog));
+        doc.trailer.set("Root", catalog_id);
+        let mut buf = Vec::new();
+        doc.save_to(&mut buf).unwrap();
+        buf
+    }
+
+    fn first_annot_rect(bytes: &[u8]) -> Vec<f32> {
+        let (doc, page_id) = merged_page(bytes);
+        let page = doc.get_object(page_id).unwrap().as_dict().unwrap();
+        let annots = page.get(b"Annots").unwrap().as_array().unwrap();
+        let annot = doc.get_object(annots[0].as_reference().unwrap()).unwrap().as_dict().unwrap();
+        annot
+            .get(b"Rect")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| match o {
+                Object::Real(r) => *r,
+                Object::Integer(n) => *n as f32,
+                _ => panic!("rect coord not numeric"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merge_scaled_scales_annotation_rects() {
+        let merged = merge_scaled(vec![(pdf_with_link_annotation(), 200.0, 300.0)], 0.5).unwrap();
+        // [10,20,110,40] * 0.5
+        assert_eq!(first_annot_rect(&merged), vec![5.0, 10.0, 55.0, 20.0]);
+    }
+
+    #[test]
+    fn merge_concat_leaves_annotation_rects_unscaled() {
+        // Windows path prints at physical size — annotations must NOT be scaled.
+        let merged = merge_concat(vec![(pdf_with_link_annotation(), 200.0, 300.0)]).unwrap();
+        assert_eq!(first_annot_rect(&merged), vec![10.0, 20.0, 110.0, 40.0]);
     }
 
     #[test]
