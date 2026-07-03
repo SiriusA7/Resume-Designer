@@ -11,6 +11,10 @@ import { store } from './store.js';
 
 // Map section name to store path and apply the change. Returns true if applied.
 export function applyRecommendationToStore(sectionName, currentValue, suggestedValue) {
+  // Recommendations come from model JSON, not a validated schema — an item may
+  // omit `section` entirely. Normalize so the matching below returns false
+  // (letting the UI show its "could not apply" toast) instead of throwing.
+  sectionName = typeof sectionName === 'string' ? sectionName : '';
   const data = store.getData();
   if (!data) return false;
 
