@@ -27,17 +27,18 @@ Your résumé data never leaves your machine except for the AI calls you explici
 - **11 layouts** — Sidebar, Stacked, Stacked Vertical, Right Sidebar, Compact, Executive, Classic, Classic Featured, Modern, Timeline, and Creative.
 - Click-to-edit **inline editing**, drag-to-reorder sections, add/remove/restructure from a structure panel.
 - **Version history** so you can step back through changes, plus zoom and live text-formatting tools.
+- **Page setup** — choose page size (Letter / A4) and margins; content **paginates across multiple pages**, both on screen and in the exported PDF.
 
 **AI assistant (bring your own key)**
 - One [OpenRouter](https://openrouter.ai) key → many models (Claude, GPT, Gemini, and more), with a model picker and per-model reasoning-effort control.
 - **Generate a résumé for a job**: paste a posting and the assistant builds a brand-new tailored variant from your master profile.
 - **Tailor an existing résumé**: the assistant rewrites it for a posting — applied as **inline diffs you review** before they land.
 - Responses **stream live, including the model's reasoning**, with a stop control, web-search **citations**, and per-run token/cost stats.
-- A chat panel for free-form drafting/feedback, with **token-usage and cost tracking** across every feature.
+- A chat panel for free-form drafting/feedback with **per-résumé conversation threads**, plus **token-usage and cost tracking** across every feature.
 
 **Import & export**
 - **Import an existing résumé** from PDF or Word (`.docx`) to bootstrap your profile.
-- **Export to PDF** (native, high-fidelity capture on the desktop app).
+- **Export to PDF** — true vector, multi-page PDF with per-page sizing (native print-to-PDF on the desktop app; image-based fallback in the browser).
 - **Back up and restore** all your data as a JSON file.
 
 **Make it yours**
@@ -46,7 +47,8 @@ Your résumé data never leaves your machine except for the AI calls you explici
 - Light / dark themes, plus a translucent **"liquid glass"** treatment on the desktop app.
 
 **Desktop**
-- Native macOS and Windows builds with **automatic updates**.
+- Native macOS and Windows builds with **automatic updates** — the **release changelog** is shown before and after updating, with a browsable **"What's new" history** in Settings.
+- macOS **app menu** with Settings and Check for Updates.
 
 ## Download
 
