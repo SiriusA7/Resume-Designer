@@ -29,6 +29,9 @@ pub struct PreviewPdfPath(pub Mutex<Option<PathBuf>>);
 mod pdf_macos;
 #[cfg(target_os = "windows")]
 mod pdf_windows;
+// Shared per-sheet → multi-page PDF merge (pure lopdf) for both desktop captures.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod pdf_merge;
 
 // `pub` so `generate_handler!` in lib.rs can name the commands as
 // `commands::migration::probe_legacy_electron_data`. The macro
@@ -215,23 +218,17 @@ pub async fn capture_pdf_from_window(
     };
     #[cfg(target_os = "windows")]
     let result = {
-        let _ = capture_rect;
-        // Print against ONE sheet's size so WebView2 paginates the stacked,
-        // fixed-height `.resume-page` sheets into one PDF page each. Passing the
-        // full `#resume` bounds (the whole multi-sheet column) instead yields a
-        // single very long page. Margins are 0 and scale is 1.0, and the sheets
-        // are a uniform fixed height with no gap (print.css), so Chromium's page
-        // breaks land on the sheet seams. One rect (single page / continuous)
-        // keeps the whole-view page_size.
-        let sheet_size = capture_rects
-            .as_ref()
-            .filter(|rects| rects.len() > 1)
-            .map(|rects| PageSize {
-                width: rects[0].width / 96.0,
-                height: rects[0].height / 96.0,
-            })
-            .or(page_size);
-        pdf_windows::capture_pdf(target, save_path, sheet_size).await
+        let _ = page_size;
+        // Per-sheet capture (mirror macOS): one PDF page per `.resume-page` sheet,
+        // each printed at its own size, so an oversized `.is-overflowing` sheet on
+        // ANY page exports at its true height instead of being split against the
+        // first sheet's size (which mis-paginated multi-page resumes). Fall back to
+        // the single whole-view rect for the empty / older-caller case.
+        let rects = capture_rects
+            .filter(|v| !v.is_empty())
+            .or_else(|| capture_rect.clone().map(|r| vec![r]))
+            .unwrap_or_default();
+        pdf_windows::capture_pdf(target, save_path, rects).await
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let result = {

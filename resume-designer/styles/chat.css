@@ -125,6 +125,40 @@
    Preflight zeroes margins/list styles on rendered markdown elements.
    ========================================================================== */
 
+/* Keep content inside the bubble: break long words/URLs rather than spilling past the
+   right edge, and let wide blocks (code fences, tables — the "graphs" the model
+   sometimes emits) scroll within their own box instead of stretching the bubble. */
+.chat-markdown {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.chat-markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* htmlToBlocks() wraps each <table> in this so a wide table scrolls within the bubble
+   while the <table> keeps its native (screen-reader) semantics. */
+.chat-markdown .rd-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: var(--space-sm) 0;
+}
+
+.chat-markdown table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid var(--color-border-light);
+  padding: 3px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
 .chat-markdown p {
   margin: 0 0 var(--space-sm);
 }
@@ -144,6 +178,7 @@
   background: var(--color-code-bg);
   padding: var(--space-sm);
   border-radius: 6px;
+  max-width: 100%;
   overflow-x: auto;
   margin: var(--space-sm) 0;
 }
@@ -222,6 +257,49 @@
 
 .chat-markdown em {
   font-style: italic;
+}
+
+/* ==========================================================================
+   Streaming entrance
+   <StreamingMarkdown> tags each brand-new block with .rd-stream-in for a one-shot
+   fade+rise, and wraps the trailing characters in .rd-stream-edge so text materializes
+   softly at the live edge as the reveal buffer pays it out.
+   ========================================================================== */
+
+.chat-markdown .rd-stream-in {
+  animation: rdStreamIn 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes rdStreamIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Soft materialize at the live edge: the reveal buffer wraps the trailing characters in
+   .rd-stream-edge each frame, and this mask ramps them from solid on the left to faint at
+   the very end — so streamed text fades up as the cursor moves past it. A POSITIONAL ramp
+   (not a time animation) is what survives the live block's per-frame rebuild. */
+.chat-markdown .rd-stream-edge {
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 30%, rgba(0, 0, 0, 0.2) 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 30%, rgba(0, 0, 0, 0.2) 100%);
+}
+
+/* Respect reduced-motion: no rise, no edge fade — content just appears. The reveal
+   buffer also pays text out instantly under reduced-motion (see StreamingMarkdown). */
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown .rd-stream-in {
+    animation: none;
+  }
+  .chat-markdown .rd-stream-edge {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 
 /* ==========================================================================

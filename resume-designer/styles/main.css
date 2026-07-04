@@ -933,6 +933,13 @@ html[data-theme="dark"] .header-variant-select {
   height: auto;
   min-height: 0;
 }
+/* A sheet holding an atomic block taller than one page: let it grow instead of
+   clipping the overflow via the fixed inline height + overflow:hidden. The
+   paginator tags only these sheets (see overflowingPages in pagination.js). */
+.resume-page.is-overflowing {
+  height: auto !important;
+  overflow: visible;
+}
 
 /* Loading state */
 .resume.loading {

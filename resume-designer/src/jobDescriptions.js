@@ -19,7 +19,14 @@ export function initJobDescriptions() {
   try {
     const stored = appStorage.getItem(STORAGE_KEY);
     if (stored) {
-      jobDescriptions = JSON.parse(stored);
+      const parsed = JSON.parse(stored);
+      // Self-heal an id-keyed OBJECT map (a legacy Electron shape that earlier
+      // migrations wrote through verbatim — stores migrated before the import
+      // normalizer still hold it). This module requires an array; spreading an
+      // object here threw and killed the Jobs dialog.
+      jobDescriptions = Array.isArray(parsed)
+        ? parsed
+        : (parsed && typeof parsed === 'object' ? Object.values(parsed) : []);
     }
   } catch (e) {
     console.error('Failed to load job descriptions:', e);

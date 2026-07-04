@@ -60,9 +60,6 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSString", "NSGeometry"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-app-kit"] }
 block2 = "0.6"
-# Pure-Rust PDF writer: merge the per-sheet WKWebView captures into one
-# multi-page PDF and scale each page to its true physical size (Phase B export).
-lopdf = "0.36"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # windows 0.61 matches the transitive version webview2-com 0.38 pulls in;
@@ -70,6 +67,13 @@ lopdf = "0.36"
 # so type-resolution works for WebView2's COM cast chain.
 webview2-com = "0.38"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com"] }
+
+# Pure-Rust PDF writer shared by the macOS + Windows PDF export: merge the
+# per-sheet WebView captures into one multi-page PDF (commands/pdf_merge.rs).
+# macOS scales each WKWebView page from CSS px to physical size; Windows
+# concatenates per-sheet WebView2 prints that are already physically sized.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+lopdf = "0.36"
 
 [profile.release]
 panic = "abort"

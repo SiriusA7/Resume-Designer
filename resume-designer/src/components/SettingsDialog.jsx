@@ -34,6 +34,7 @@ import {
 } from '../tokenTrackingService.js';
 import { triggerManualUpdateCheck } from '../updateFlow.js';
 import { useUpdateBusy } from '../hooks/useUpdateBusy.js';
+import { ChangelogHistory } from './ChangelogHistory.jsx';
 import { exportFullBackupWithFeedback, importBackupFromFile, importLegacyElectronWithFeedback } from '../backupFlow.js';
 
 // Settings panel — composed from genuine shadcn primitives following shadcn's own
@@ -420,6 +421,12 @@ export default function SettingsDialog() {
                   <Button type="button" variant="outline" onClick={triggerManualUpdateCheck} disabled={updateBusy}>
                     {updateBusy ? 'Checking…' : 'Check for Updates'}
                   </Button>
+                </section>
+
+                <Separator />
+                <section>
+                  <SectionHeader title="What's new" description="Recent releases." />
+                  <ChangelogHistory />
                 </section>
               </div>
             )}

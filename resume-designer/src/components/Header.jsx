@@ -22,8 +22,13 @@ import { cn } from '@/lib/utils';
 import { useVariants } from '../hooks/useVariants.js';
 import {
   loadVariant, duplicateVariant, deleteCurrentVariant, renameCurrentVariant,
-  importVariant, exportCurrentVariant,
+  importVariant, exportCurrentVariant, getCurrentId,
 } from '../variantManager.js';
+import {
+  loadThreads, persistThreads, reassignThreadsForDeletedVariant, countThreadsForVariant,
+  threadIdsForVariant,
+} from '../chatThreads.js';
+import { askDeleteVariantThreads } from './chat/DeleteVariantThreadsDialog.jsx';
 import { openSettings } from '../settingsModal.js';
 
 // Format a variant's updatedAt for the selector menu (relative, then absolute).
@@ -130,12 +135,39 @@ export default function Header() {
       toast.info("You can't delete your only resume.");
       return;
     }
-    const ok = await confirmDestructive({
-      title: 'Delete this resume?',
-      description: `"${currentName}" will be permanently deleted. This can't be undone.`,
-      actionLabel: 'Delete',
-    });
-    if (ok) deleteCurrentVariant();
+    // If the résumé has chat threads, ask whether to keep (→General) or delete
+    // them, and reassign BEFORE deleteCurrentVariant() so the id still exists.
+    // After delete, loadVariant(newId) fires dataLoaded and useChat's follow
+    // effect reloads threads, so the change is reflected automatically.
+    const deletingId = getCurrentId();
+    const all = loadThreads().threads;
+    const n = countThreadsForVariant(all, deletingId);
+    if (n > 0) {
+      const choice = await askDeleteVariantThreads({ name: currentName, count: n });
+      if (choice === 'cancel') return;
+      persistThreads(
+        reassignThreadsForDeletedVariant(all, deletingId, choice === 'delete' ? 'delete' : 'general')
+      );
+      // Dropping threads bypasses useChat.deleteThread, so a reply still
+      // streaming in one of them would keep running with its commit target
+      // gone — and the background-stream banner can't render it (the thread
+      // no longer exists to look up). Tell the chat engine which ids were
+      // deleted so it can abort an orphaned in-flight stream. (Keeping
+      // threads → General leaves the stream valid; no event needed.)
+      if (choice === 'delete') {
+        window.dispatchEvent(new CustomEvent('rd:threads-deleted', {
+          detail: { threadIds: threadIdsForVariant(all, deletingId) },
+        }));
+      }
+    } else {
+      const ok = await confirmDestructive({
+        title: 'Delete this resume?',
+        description: `"${currentName}" will be permanently deleted. This can't be undone.`,
+        actionLabel: 'Delete',
+      });
+      if (!ok) return;
+    }
+    deleteCurrentVariant();
   };
 
   // Variant action items reused by the expanded icon buttons, the kebab menu, and
@@ -237,13 +269,13 @@ export default function Header() {
                 <VariantMenuItems actions={variantActions} />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={pickImport}>
-                  <Upload className="size-4" /> Import…
+                  <Download className="size-4" /> Import…
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => exportCurrentVariant('json')}>
-                  <Download className="size-4" /> Export as JSON
+                  <Upload className="size-4" /> Export as JSON
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => exportCurrentVariant('md')}>
-                  <Download className="size-4" /> Export as Markdown
+                  <Upload className="size-4" /> Export as Markdown
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -323,13 +355,13 @@ export default function Header() {
               <DropdownMenuSeparator />
               <DropdownMenuLabel>File</DropdownMenuLabel>
               <DropdownMenuItem onSelect={pickImport}>
-                <Upload className="size-4" /> Import
+                <Download className="size-4" /> Import
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => exportCurrentVariant('json')}>
-                <Download className="size-4" /> Export as JSON
+                <Upload className="size-4" /> Export as JSON
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => exportCurrentVariant('md')}>
-                <Download className="size-4" /> Export as Markdown
+                <Upload className="size-4" /> Export as Markdown
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

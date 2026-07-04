@@ -12,7 +12,9 @@ import { showDiffView } from '../../diffView.js';
 import { showInlineChanges } from '../../inlineChanges.js';
 import {
   loadThreads, persistThreads, makeThread, trimMessages, clearLegacyHistory,
+  migrateThreads, pickCurrentThreadId, chooseThreadAfterDelete, withContextMarker,
 } from '../../chatThreads.js';
+import { getCurrentId, loadVariant, getVariantList } from '../../variantManager.js';
 
 // AI model catalog, derived from aiService's curated MODELS (single source of
 // truth). Shape: [{ group, options: [{ value: slug, label }] }]. Custom slugs
@@ -139,11 +141,26 @@ export function useChat() {
   // separate from the synthetic `thinking` steps the non-streamed flows still use.
   const [streamingMessage, setStreamingMessage, streamingRef] = useStateRef(null);
   const abortRef = useRef(null);
+  // The thread the in-flight `abortRef` stream ORIGINATED from, so deleting a thread
+  // aborts the stream only when that thread is its origin — a reply that kept running
+  // after the user switched away must survive deletion of the now-active thread. Also
+  // exposed as state (streamThreadId) so the panel can show a "still generating in …"
+  // banner with Stop when that origin isn't the thread currently on screen; the ref
+  // half is read synchronously by deleteThread.
+  const [streamThreadId, setStreamThreadId, streamThreadRef] = useStateRef(null);
   const flushRaf = useRef(0);
 
   const interviewModeRef = useRef(false);
   const interviewMsgsRef = useRef([]);
+  // The thread `/profile` was started in. The interview only routes messages
+  // (and honors /done) while that thread is active, so switching threads can't
+  // funnel an unrelated thread's chat into the interview or let /done save from it.
+  const interviewThreadIdRef = useRef(null);
   const idCounterRef = useRef(0);
+  // Set by jumpToVariant() to the thread to KEEP open across the imminent résumé
+  // switch, so the variant-follow effect re-selects it instead of the target
+  // résumé's home thread. One-shot: the follow effect reads then clears it.
+  const pinThreadIdRef = useRef(null);
 
   // Settings/catalog-derived values, held as state and refreshed explicitly at
   // the moments they can change (API keys saved, a model picked, the live model
@@ -176,7 +193,25 @@ export function useChat() {
   };
 
   const addMessage = (role, content, applyData = null) =>
-    appendMessage({ id: uid(), role, content, applyData, timestamp: new Date().toISOString() });
+    appendMessage({ id: uid(), role, content, applyData, variantId: getCurrentId(), timestamp: new Date().toISOString() });
+
+  // Insert a context-switch divider into the current thread when the active
+  // résumé differs from the thread's last turn (no-op otherwise). Called at the
+  // start of send() and handleCommand() so every flow is preceded by a divider
+  // when the résumé changed.
+  // The active variant's LABEL (e.g. "Backend SWE") for the context divider — NOT
+  // store.getData()?.name, which is the person's NAME printed on the résumé and so
+  // mislabelled every divider with the candidate's name instead of the résumé.
+  const activeVariantLabel = () =>
+    getVariantList().find((v) => v.id === getCurrentId())?.name || '';
+
+  const markContextIfSwitched = () => {
+    const withMarker = withContextMarker(messagesRef.current, getCurrentId(), activeVariantLabel());
+    if (withMarker !== messagesRef.current) {
+      setMessages(withMarker);
+      persistCurrentThread(withMarker);
+    }
+  };
 
   // Commit a finished turn to the thread that was active when the flow STARTED.
   // If the user switched threads mid-stream, persist into that original thread
@@ -195,14 +230,42 @@ export function useChat() {
     persistThreads(next);
   };
 
+  // Commit a non-streamed helper turn (/feedback, /improve, /generate, interview)
+  // to the thread + résumé active when the flow STARTED (captured by the caller),
+  // so a mid-request thread/résumé switch can't misroute or mis-stamp it — the same
+  // guarantee the streamed flows already get.
+  const commitHelperTurn = (startThreadId, startVariantId, role, content, applyData = null) =>
+    commitToThread(startThreadId, {
+      id: uid(), role, content, applyData,
+      variantId: startVariantId, timestamp: new Date().toISOString(),
+    });
+
   // ── animated "thinking" process ────────────────────────────────────────
-  const beginThinking = () => {
+  // Helper flows (feedback / improve / bullets / interview) are origin-bound
+  // like the streamed ones: beginThinking records the origin thread (so the
+  // ThinkingBlock renders only there and the background banner covers it
+  // elsewhere) and arms an AbortController (so the banner's Stop and the
+  // thread/résumé delete paths can cancel it). Returns the signal for the flow
+  // to pass into its aiService call.
+  const beginThinking = (originThreadId = null) => {
     setLoading(true);
     setThinking({ steps: [], phase: 'active' });
+    const controller = new AbortController();
+    abortRef.current = controller;
+    if (originThreadId) setStreamThreadId(originThreadId);
+    return controller.signal;
   };
-  const endThinking = () => {
+  const endThinking = (ownerSignal) => {
+    // A superseded async helper (its thread was deleted, or the user started
+    // another request first) must NOT reset the shared abort/loading state on
+    // its late completion — that would wipe the newer request's Stop control and
+    // leave a stale loading flag. Gate by controller identity; deleteThread and
+    // the rd:threads-deleted handler call with no owner to force an immediate clear.
+    if (ownerSignal !== undefined && abortRef.current?.signal !== ownerSignal) return;
     setLoading(false);
     setThinking(null);
+    abortRef.current = null;
+    setStreamThreadId(null);
   };
   const addThinkingStep = (text) =>
     setThinking((t) => {
@@ -237,6 +300,47 @@ export function useChat() {
     setStreamingMessage(null);
     streamingRef.current = null;
     abortRef.current = null;
+    setStreamThreadId(null);
+  };
+  // Reset the shared streaming + loading state ONLY when `controller` is still
+  // the current request. A superseded streamed run (its thread deleted, or the
+  // user started another request first) commits its own turn but must not clear
+  // the newer request's abortRef/stream/loading — that would break its Stop and
+  // show a stale loading state.
+  const finishRequest = (controller) => {
+    if (abortRef.current !== controller) return;
+    clearStreaming();
+    setLoading(false);
+  };
+  // Drop the live streaming display from the CURRENT view WITHOUT aborting the
+  // request or discarding its buffer — used on a thread switch so an in-flight
+  // reply keeps running and commits to its origin thread (commitToThread); the
+  // gated hooks below won't repaint it in the thread we switched to.
+  const clearStreamingDisplay = () => {
+    if (flushRaf.current) { cancelAnimationFrame(flushRaf.current); flushRaf.current = 0; }
+    const buffered = streamingRef.current;
+    setStreamingMessage(null);
+    // setStreamingMessage syncs streamingRef, so put the buffer back afterwards:
+    // this is a DISPLAY-only clear. The buffered partial reply must survive so
+    // reopening the origin thread can repaint it (syncStreamingDisplay below).
+    streamingRef.current = buffered;
+  };
+  // Called whenever a navigation makes `threadId` current: repaint the buffered
+  // live stream if that thread owns the in-flight request, else drop the display
+  // from this view. Without the repaint, reopening the origin thread showed
+  // nothing until the next delta — the banner hides (origin is now current), no
+  // StreamingBubble/Stop renders, and the composer stays disabled, so a stalled
+  // request left no visible way to cancel from the very thread that owns it.
+  const syncStreamingDisplay = (threadId) => {
+    // The streamingRef guard keeps this to STREAMED flows (which always seed a
+    // buffer at request start): helper flows now also own abortRef/the origin
+    // thread but paint through the ThinkingBlock, not a streaming bubble —
+    // repainting for them would conjure an empty bubble beside the thinker.
+    if (abortRef.current && streamThreadRef.current === threadId && streamingRef.current) {
+      scheduleFlush(() => ({}));
+    } else {
+      clearStreamingDisplay();
+    }
   };
   const stop = () => { if (abortRef.current) abortRef.current.abort(); };
 
@@ -244,9 +348,16 @@ export function useChat() {
   const getAIResponse = async (userMessage, hasExplicitContext = false) => {
     const modelId = modelRef.current;
     const startThreadId = currentThreadIdRef.current;
+    // Capture the active résumé at request START. The reply commits to
+    // startThreadId, so it must also be stamped with the variant that thread
+    // belongs to — using getCurrentId() at completion would mis-stamp the turn
+    // (and corrupt lastTurnVariantId/context dividers) if the user switched
+    // résumés mid-stream.
+    const startVariantId = getCurrentId();
     setLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
+    setStreamThreadId(startThreadId);
     // Last 10 user/assistant turns; replace the final turn with the
     // context-augmented version we actually want to send. reasoningDetails ride
     // along on assistant turns for Anthropic thinking continuity.
@@ -268,76 +379,125 @@ export function useChat() {
         signal: controller.signal,
         structured: true,
         hooks: {
-          onReasoning: (_d, full) => scheduleFlush(() => ({ reasoning: full })),
-          onContent: (_d, full) => scheduleFlush(() => ({ content: full })),
-          onAnnotations: (list) => scheduleFlush(() => ({ annotations: list })),
+          // Only paint the live stream while its origin thread is in view — if the
+          // user switched away, keep buffering/finishing but don't leak it into the
+          // thread they're now looking at (the full reply still commits below).
+          onReasoning: (_d, full) => { if (currentThreadIdRef.current === startThreadId) scheduleFlush(() => ({ reasoning: full })); },
+          onContent: (_d, full) => { if (currentThreadIdRef.current === startThreadId) scheduleFlush(() => ({ content: full })); },
+          onAnnotations: (list) => { if (currentThreadIdRef.current === startThreadId) scheduleFlush(() => ({ annotations: list })); },
         },
       });
-      clearStreaming();
-      setLoading(false);
+      finishRequest(controller);
       commitToThread(startThreadId, {
         id: uid(), role: 'assistant',
         content: res.stopped ? (res.text ? `${res.text}\n\n_(stopped)_` : '_(stopped)_') : res.text,
         reasoning: res.reasoning, reasoningDetails: res.reasoningDetails,
-        annotations: res.annotations, run: res.run, timestamp: new Date().toISOString(),
+        annotations: res.annotations, run: res.run, variantId: startVariantId, timestamp: new Date().toISOString(),
       });
       refreshCustomModels(); // chat() records any newly-used custom slug
     } catch (error) {
-      clearStreaming();
-      setLoading(false);
-      commitToThread(startThreadId, { id: uid(), role: 'error', content: error.message, timestamp: new Date().toISOString() });
+      finishRequest(controller);
+      commitToThread(startThreadId, { id: uid(), role: 'error', content: error.message, variantId: startVariantId, timestamp: new Date().toISOString() });
     }
   };
 
   const getAIFeedback = async () => {
-    beginThinking();
+    const startThreadId = currentThreadIdRef.current;
+    const startVariantId = getCurrentId();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Analyzing your resume...');
-      const response = await getFeedback(modelRef.current);
+      const response = await getFeedback(modelRef.current, { signal });
+      // chat()'s stream path RESOLVES with partial text on abort (the stopped
+      // flag is dropped for plain-string callers) — don't present a truncated
+      // reply as a finished one.
+      if (signal.aborted) {
+        endThinking(signal);
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Feedback ready');
-      endThinking();
-      addMessage('assistant', response);
+      endThinking(signal);
+      commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
     } catch (error) {
-      endThinking();
-      addMessage('error', error.message);
+      endThinking(signal);
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
   const getAIImproveSummary = async () => {
-    beginThinking();
+    const startThreadId = currentThreadIdRef.current;
+    const startVariantId = getCurrentId();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Reading current summary...');
       await new Promise((r) => setTimeout(r, 200));
+      // improveSummary builds its prompt from the ACTIVE résumé only now — if
+      // the user switched résumés during the wait, generating would produce the
+      // other résumé's summary stamped (and Apply-gated) as this one's, and
+      // applying it would overwrite this résumé with the other's summary. Bail
+      // to a note instead, matching the change-request cross-résumé pattern.
+      if (getCurrentId() !== startVariantId) {
+        endThinking(signal);
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          'The active résumé changed while I was reading the summary — switch back to the résumé you want improved and resend /improve summary.');
+        return;
+      }
       completeThinkingStep('Writing improved summary...');
-      const response = await improveSummary(modelRef.current);
+      const response = await improveSummary(modelRef.current, { signal });
+      // On abort the call RESOLVES with partial/empty text — committing it with
+      // apply-summary would offer an Apply that overwrites the real summary
+      // with a truncated one. Commit a stopped note with NO applyData instead.
+      if (signal.aborted) {
+        endThinking(signal);
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Summary improved');
-      endThinking();
-      addMessage('assistant', response, { action: 'apply-summary', value: response });
+      endThinking(signal);
+      commitHelperTurn(startThreadId, startVariantId, 'assistant', response, { action: 'apply-summary', value: response });
     } catch (error) {
-      endThinking();
-      addMessage('error', error.message);
+      endThinking(signal);
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
   const getAIGenerateBullets = async (context) => {
-    beginThinking();
+    const startThreadId = currentThreadIdRef.current;
+    const startVariantId = getCurrentId();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Generating bullet points...');
-      const response = await generateBullets(modelRef.current, context, 3);
+      const response = await generateBullets(modelRef.current, context, 3, { signal });
+      if (signal.aborted) {
+        endThinking(signal);
+        commitHelperTurn(startThreadId, startVariantId, 'assistant',
+          response ? `${response}\n\n_(stopped)_` : '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Bullets generated');
-      endThinking();
-      addMessage('assistant', response);
+      endThinking(signal);
+      commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
     } catch (error) {
-      endThinking();
-      addMessage('error', error.message);
+      endThinking(signal);
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
   const requestAIChanges = async (instruction, targetPath = null) => {
     const startThreadId = currentThreadIdRef.current;
+    // Stamp the committed turns with the résumé active at request START (the one
+    // startThreadId belongs to), not getCurrentId() at completion — see getAIResponse.
+    const startVariantId = getCurrentId();
     setLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
+    setStreamThreadId(startThreadId);
     // Stream the model's reasoning live (the JSON answer is buffered and parsed
     // into a diff when the stream completes).
     setStreamingMessage({
@@ -351,19 +511,37 @@ export function useChat() {
         reasoningEffort: reasoningRef.current,
         signal: controller.signal,
         hooks: {
-          onReasoning: (_d, full) => { capturedReasoning = full; scheduleFlush(() => ({ reasoning: full })); },
+          onReasoning: (_d, full) => {
+            capturedReasoning = full;
+            // Paint live only while the origin thread is in view (see getAIResponse).
+            if (currentThreadIdRef.current === startThreadId) scheduleFlush(() => ({ reasoning: full }));
+          },
           onRun: (r) => { capturedRun = r; },
         },
       });
-      clearStreaming();
-      setLoading(false);
+      finishRequest(controller);
 
       if (!result.changes || Object.keys(result.changes).length === 0) {
         commitToThread(startThreadId, {
           id: uid(), role: 'assistant',
           content: result.explanation || 'No changes were generated. The AI may need more specific instructions.',
           reasoning: capturedReasoning || null, run: capturedRun,
-          timestamp: new Date().toISOString(),
+          variantId: startVariantId, timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const count = Object.keys(result.changes).length;
+      // The edits were generated for the résumé active at request START. If the
+      // user switched résumés before it returned, building the diff against the
+      // now-current store.getData() (and showing/applying it) would write the old
+      // résumé's edits into the new one — so don't; tell them to switch back.
+      if (getCurrentId() !== startVariantId) {
+        commitToThread(startThreadId, {
+          id: uid(), role: 'assistant',
+          content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''}`}\n\nThese edits are for the résumé you started from — switch back to it and resend to apply them.`,
+          reasoning: capturedReasoning || null, run: capturedRun,
+          variantId: startVariantId, timestamp: new Date().toISOString(),
         });
         return;
       }
@@ -371,32 +549,44 @@ export function useChat() {
       const changeSet = createChangeSet(store.getData(), result.changes);
       showInlineChanges(changeSet);
 
-      const count = Object.keys(result.changes).length;
       commitToThread(startThreadId, {
         id: uid(), role: 'assistant',
         content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''} to your resume.`}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review Changes" below for a detailed diff view.`,
         reasoning: capturedReasoning || null, run: capturedRun,
-        timestamp: new Date().toISOString(),
+        variantId: startVariantId, timestamp: new Date().toISOString(),
         pendingChanges: changeSet,
       });
     } catch (error) {
-      clearStreaming();
-      setLoading(false);
+      finishRequest(controller);
       // A user Stop aborts the buffered JSON mid-stream → JSON.parse fails. Show a
       // clean "(stopped)" turn instead of a misleading "not valid JSON" error.
       commitToThread(startThreadId, controller.signal.aborted
-        ? { id: uid(), role: 'assistant', content: '_(stopped)_', timestamp: new Date().toISOString() }
-        : { id: uid(), role: 'error', content: error.message, timestamp: new Date().toISOString() });
+        ? { id: uid(), role: 'assistant', content: '_(stopped)_', variantId: startVariantId, timestamp: new Date().toISOString() }
+        : { id: uid(), role: 'error', content: error.message, variantId: startVariantId, timestamp: new Date().toISOString() });
     }
   };
 
   // ── profile interview ──────────────────────────────────────────────────
+  // True only while an interview is active AND its origin thread is the one in view.
+  const interviewActiveHere = () =>
+    interviewModeRef.current && interviewThreadIdRef.current === currentThreadIdRef.current;
+
   const startInterview = async () => {
     if (getConfiguredProviders().length === 0) {
       addMessage('error', 'Please configure an API key in settings before starting a profile interview.');
       return;
     }
+    // The Profile dialog fires rd:chat-start-interview directly, bypassing
+    // send()'s loading guard — starting here mid-request would overwrite the
+    // running request's abortRef/streamThreadId and orphan its Stop.
+    if (loadingRef.current) {
+      addMessage('error', 'Another request is still running — stop it or let it finish before starting the interview.');
+      return;
+    }
     interviewModeRef.current = true;
+    const startThreadId = currentThreadIdRef.current;
+    const startVariantId = getCurrentId();
+    interviewThreadIdRef.current = startThreadId;
     interviewMsgsRef.current = [];
     addMessage('assistant', `**Profile Interview Started**
 
@@ -406,53 +596,81 @@ When you're done, type \`/done\` to save the information to your profile.
 
 Let's begin!`);
 
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Starting interview...');
       interviewMsgsRef.current.push({ role: 'user', content: 'Please start the interview.' });
-      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current);
+      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current, { signal });
+      if (signal.aborted) {
+        endThinking(signal);
+        interviewModeRef.current = false;
+        interviewThreadIdRef.current = null;
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       interviewMsgsRef.current.push({ role: 'assistant', content: response });
       completeThinkingStep('Ready');
-      endThinking();
-      addMessage('assistant', response);
+      endThinking(signal);
+      commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
     } catch (error) {
-      endThinking();
+      endThinking(signal);
       interviewModeRef.current = false;
-      addMessage('error', `Failed to start interview: ${error.message}`);
+      interviewThreadIdRef.current = null;
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', `Failed to start interview: ${error.message}`);
     }
   };
 
   const continueInterview = async (userMessage) => {
+    const startThreadId = currentThreadIdRef.current;
+    const startVariantId = getCurrentId();
     interviewMsgsRef.current.push({ role: 'user', content: userMessage });
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Thinking...');
-      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current);
+      const response = await profileInterviewChat(modelRef.current, interviewMsgsRef.current, { signal });
+      if (signal.aborted) {
+        endThinking(signal);
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       interviewMsgsRef.current.push({ role: 'assistant', content: response });
       completeThinkingStep('Response ready');
-      endThinking();
-      addMessage('assistant', response);
+      endThinking(signal);
+      commitHelperTurn(startThreadId, startVariantId, 'assistant', response);
     } catch (error) {
-      endThinking();
-      addMessage('error', error.message);
+      endThinking(signal);
+      // On abort the interview stays active — the user can just answer again.
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', error.message);
     }
   };
 
   const finishInterview = async () => {
+    const startThreadId = currentThreadIdRef.current;
+    const startVariantId = getCurrentId();
     if (interviewMsgsRef.current.length < 4) {
-      addMessage('assistant', "We haven't talked enough yet! Please answer a few more questions so I have information to save.");
+      commitHelperTurn(startThreadId, startVariantId, 'assistant', "We haven't talked enough yet! Please answer a few more questions so I have information to save.");
       return;
     }
-    beginThinking();
+    const signal = beginThinking(startThreadId);
     try {
       addThinkingStep('Analyzing conversation...');
-      const extracted = await extractProfileFromInterview(modelRef.current, interviewMsgsRef.current);
+      const extracted = await extractProfileFromInterview(modelRef.current, interviewMsgsRef.current, { signal });
+      // Never save a profile parsed from an aborted (possibly truncated) call;
+      // the interview stays active so /done can simply be sent again.
+      if (signal.aborted) {
+        endThinking(signal);
+        commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+        return;
+      }
       completeThinkingStep('Saving to profile...');
       saveExtractedProfile(extracted);
       completeThinkingStep('Profile updated!');
-      endThinking();
+      endThinking(signal);
 
       interviewModeRef.current = false;
+      interviewThreadIdRef.current = null;
       interviewMsgsRef.current = [];
 
       let summary = "**Profile Updated!**\n\nI've saved the following information to your profile:\n\n";
@@ -467,10 +685,12 @@ Let's begin!`);
       if (extracted.industryKnowledge) summary += '- Industry knowledge\n';
       if (extracted.preferences) summary += '- Work preferences\n';
       summary += '\nYou can view and edit your profile from **Tools > User Profile**.';
-      addMessage('assistant', summary);
+      commitHelperTurn(startThreadId, startVariantId, 'assistant', summary);
     } catch (error) {
-      endThinking();
-      addMessage('error', `Failed to extract profile: ${error.message}\n\nYou can try \`/done\` again or continue the conversation.`);
+      endThinking(signal);
+      // Abort keeps the interview active so /done can simply be sent again.
+      if (signal.aborted) commitHelperTurn(startThreadId, startVariantId, 'assistant', '_(stopped)_');
+      else commitHelperTurn(startThreadId, startVariantId, 'error', `Failed to extract profile: ${error.message}\n\nYou can try \`/done\` again or continue the conversation.`);
     }
   };
 
@@ -531,10 +751,12 @@ Let's begin!`);
 
     switch (cmd) {
       case '/feedback':
+        markContextIfSwitched();
         addMessage('user', 'Please review my resume and provide feedback.');
         await getAIFeedback();
         break;
       case '/improve':
+        markContextIfSwitched();
         if (args.toLowerCase().includes('summary')) {
           addMessage('user', 'Please improve my resume summary.');
           await getAIImproveSummary();
@@ -544,6 +766,7 @@ Let's begin!`);
         }
         break;
       case '/generate':
+        markContextIfSwitched();
         addMessage('user', `Generate content: ${args}`);
         await getAIGenerateBullets(args);
         break;
@@ -554,10 +777,11 @@ Let's begin!`);
         showHelp();
         break;
       case '/profile':
+        markContextIfSwitched();
         await startInterview();
         break;
       case '/done':
-        if (interviewModeRef.current) await finishInterview();
+        if (interviewActiveHere()) { markContextIfSwitched(); await finishInterview(); }
         else addMessage('assistant', 'No active interview to finish. Use `/profile` to start a profile interview.');
         break;
       case '/debug':
@@ -589,11 +813,12 @@ Let's begin!`);
       messageWithContext = `Context from resume:\n${contextText}\n\n---\n\nUser request: ${text}`;
     }
 
+    markContextIfSwitched();
     addMessage('user', text);
     const targetPath = chips.length > 0 ? chips[0].path : null;
     clearChips();
 
-    if (interviewModeRef.current) {
+    if (interviewActiveHere()) {
       await continueInterview(text);
       return;
     }
@@ -617,44 +842,97 @@ Let's begin!`);
 
   // ── threads ────────────────────────────────────────────────────────────
   const switchThread = (threadId, save = true) => {
-    // Abandon any in-flight stream's live display; it still commits to its
-    // original thread via commitToThread (the captured start id).
-    if (abortRef.current) { abortRef.current.abort(); clearStreaming(); }
-    if (save && currentThreadIdRef.current) persistCurrentThread(messagesRef.current);
     const thread = threadsRef.current.find((t) => t.id === threadId);
-    if (thread) {
-      setCurrentThreadId(threadId);
-      setMessages(thread.messages || []);
-    }
+    if (!thread) return;
+    // Never abort the in-flight stream on a switch — it keeps running and commits
+    // to its origin thread via commitToThread (the captured start id). Aborting
+    // here would turn a mid-response switch into a lost "(stopped)" turn. Sync the
+    // display instead: repaint the buffered bubble when switching BACK TO the
+    // stream's origin (incl. via the background-stream banner), drop it otherwise.
+    syncStreamingDisplay(threadId);
+    // Save the outgoing thread's messages AND bump the target's updatedAt in one
+    // write. Variant/startup selection (pickCurrentThreadId) opens the most-
+    // recently-updated thread, so without bumping the target the saved-on-exit
+    // outgoing thread would reopen instead of the one the user switched to.
+    const now = new Date().toISOString();
+    const outgoingId = currentThreadIdRef.current;
+    const next = threadsRef.current.map((t) => {
+      // The selected thread becomes the most-recent so selection reopens it.
+      if (t.id === threadId) return { ...t, updatedAt: now };
+      // Save the outgoing thread's messages but DON'T bump its updatedAt — else
+      // it ties/outranks the target and selection reopens the thread we just left.
+      if (save && outgoingId && t.id === outgoingId) {
+        return { ...t, messages: trimMessages(messagesRef.current) };
+      }
+      return t;
+    });
+    setThreads(next);
+    persistThreads(next);
+    setCurrentThreadId(threadId);
+    setMessages(thread.messages || []);
   };
   const newThread = () => {
-    const t = makeThread('New Chat');
+    const t = makeThread('New Chat', [], getCurrentId());
     const next = [t, ...threadsRef.current];
     setThreads(next);
     persistThreads(next);
     switchThread(t.id, true);
   };
   const deleteThread = (threadId) => {
-    if (abortRef.current) { abortRef.current.abort(); clearStreaming(); }
-    const next = threadsRef.current.filter((t) => t.id !== threadId);
-    if (next.length === threadsRef.current.length) return; // not found
+    if (!threadsRef.current.some((t) => t.id === threadId)) return; // not found
+    // Abort the in-flight reply ONLY when it ORIGINATED from the thread being deleted
+    // (its commit target is about to vanish). Keying off the stream's origin — not
+    // which thread happens to be active — means a reply still streaming in thread A
+    // survives the user switching to and deleting thread B, and conversely a reply
+    // running in a background thread is aborted when THAT thread is deleted.
+    if (abortRef.current && streamThreadRef.current === threadId) {
+      abortRef.current.abort();
+      clearStreaming();
+      // The aborted run may be a HELPER (ThinkingBlock UI): clearStreaming
+      // drops streamThreadId, so without this the still-set thinking/loading
+      // would paint the spinner into the replacement thread until the aborted
+      // call settles. No-op for streams (thinking is already null). No owner —
+      // force the clear now; the aborted run's own late endThinking is gated.
+      endThinking();
+    }
     if (threadId === currentThreadIdRef.current) {
-      if (next.length === 0) {
-        const t = makeThread('New Chat');
-        setThreads([t]);
-        persistThreads([t]);
-        setCurrentThreadId(t.id);
-        setMessages([]);
-      } else {
-        setThreads(next);
-        persistThreads(next);
-        setCurrentThreadId(next[0].id);
-        setMessages(next[0].messages || []);
-      }
+      // Keep selection within the active résumé — open its most-recent remaining
+      // thread or create a fresh homed one, never an unrelated General/other-résumé
+      // thread (and never an empty panel).
+      const { threads: next, currentThreadId: pick } =
+        chooseThreadAfterDelete(threadsRef.current, threadId, getCurrentId());
+      setThreads(next);
+      persistThreads(next);
+      setCurrentThreadId(pick);
+      setMessages(next.find((t) => t.id === pick)?.messages || []);
+      // The pick can be the origin of a stream still running in the background
+      // (deleting thread B while A streams hidden) — repaint its bubble.
+      syncStreamingDisplay(pick);
     } else {
+      const next = threadsRef.current.filter((t) => t.id !== threadId);
       setThreads(next);
       persistThreads(next);
     }
+  };
+  // Switch the active résumé from inside a thread (the context divider or the
+  // cross-résumé banner) WITHOUT losing the open thread. Pin the current thread so
+  // the variant-follow effect re-selects it instead of the target's home thread.
+  const jumpToVariant = (variantId) => {
+    if (!variantId) return;
+    pinThreadIdRef.current = currentThreadIdRef.current;
+    // loadVariant emits 'dataLoaded' → the follow effect consumes the pin. If it
+    // bails (unknown id, no event fired), clear the pin so it can't leak onto a
+    // later, unrelated résumé switch.
+    if (!loadVariant(variantId)) pinThreadIdRef.current = null;
+  };
+
+  // Re-home a thread to the active résumé (the "Move here" affordance).
+  const moveThreadToCurrentVariant = (threadId) => {
+    const activeId = getCurrentId();
+    const next = threadsRef.current.map((t) =>
+      t.id === threadId ? { ...t, homeVariantId: activeId, updatedAt: new Date().toISOString() } : t);
+    setThreads(next);
+    persistThreads(next);
   };
 
   // ── model + options ────────────────────────────────────────────────────
@@ -711,14 +989,81 @@ Let's begin!`);
 
   // ── effects ────────────────────────────────────────────────────────────
   useEffect(() => {
-    const { threads: loaded, currentThreadId: cid } = loadThreads();
-    setThreads(loaded);
+    const { threads: loaded, currentThreadId: persistedCid } = loadThreads();
+    const migrated = migrateThreads(loaded);
+    const activeId = getCurrentId();
+    let cid = pickCurrentThreadId(migrated, activeId);
+    let threadsToSet = migrated;
+    // Open the active variant's most-recent thread. If it has none, create a
+    // fresh homed thread — but only when we actually have an active variant id.
+    // On a falsy active id (shouldn't happen post-init), fall back to the
+    // persisted current thread and let the dataLoaded follow-effect settle it,
+    // rather than creating a stray General (homeVariantId:null) thread.
+    if (!cid) {
+      if (activeId) {
+        const t = makeThread('New Chat', [], activeId);
+        threadsToSet = [t, ...migrated];
+        cid = t.id;
+      } else {
+        cid = persistedCid;
+      }
+    }
+    setThreads(threadsToSet);
+    persistThreads(threadsToSet);
     setCurrentThreadId(cid);
-    setMessages(loaded.find((t) => t.id === cid)?.messages || []);
+    setMessages(threadsToSet.find((t) => t.id === cid)?.messages || []);
     fetchModelCatalog()
       .then(() => setReasoningSupported(modelSupportsReasoning(modelRef.current)))
       .catch(() => {});
   }, [setThreads, setCurrentThreadId, setMessages, modelRef]);
+
+  // Follow the active résumé: when the user switches variants (store emits
+  // 'dataLoaded'), persist the current thread, reload threads from storage (to
+  // pick up any external mutation, e.g. a variant delete), and open that
+  // variant's most-recent thread — creating a fresh homed one if it has none.
+  useEffect(() => {
+    const unsub = store.subscribe((event) => {
+      if (event !== 'dataLoaded') return;
+      const activeId = getCurrentId();
+      // Re-read from storage FIRST so an external mutation in this same tick (e.g. a
+      // variant delete that reassigned/removed threads in Header) is not clobbered by
+      // a stale in-memory write.
+      let next = migrateThreads(loadThreads().threads);
+      // Save the OUTGOING thread's latest messages onto the fresh array — but only if
+      // it still exists (a deleted thread must not be resurrected). trimMessages()
+      // caps the tail + strips heavy reasoning blobs, matching the append/switch
+      // paths so a variant switch can't persist an oversize/quota-busting thread.
+      const prevId = currentThreadIdRef.current;
+      if (prevId && next.some((t) => t.id === prevId)) {
+        next = next.map((t) =>
+          t.id === prevId ? { ...t, messages: trimMessages(messagesRef.current), updatedAt: new Date().toISOString() } : t);
+      }
+      // An explicit in-thread jump (jumpToVariant) pins the thread to KEEP open, so
+      // following the résumé doesn't swap a cross-résumé thread out from under the
+      // user. One-shot — read and clear. Falls through to normal selection if the
+      // pinned thread has since vanished.
+      const pinned = pinThreadIdRef.current;
+      pinThreadIdRef.current = null;
+      let cid = pinned && next.some((t) => t.id === pinned) ? pinned : pickCurrentThreadId(next, activeId);
+      if (!cid && activeId) {
+        const t = makeThread('New Chat', [], activeId);
+        next = [t, ...next];
+        cid = t.id;
+      }
+      // Navigating résumés must NOT abort an in-flight reply — it commits to its
+      // origin thread via commitToThread(startThreadId). Sync the display: the
+      // selection can land on the stream's own origin thread (a pinned jump-back
+      // or most-recent pick), where the buffered bubble must repaint.
+      syncStreamingDisplay(cid);
+      // Persist unconditionally so the migration write-back is guaranteed,
+      // matching the init effect (whether or not a fresh thread was created).
+      persistThreads(next);
+      setThreads(next);
+      setCurrentThreadId(cid);
+      setMessages(next.find((t) => t.id === cid)?.messages || []);
+    });
+    return unsub;
+  }, [setThreads, setCurrentThreadId, setMessages]);
 
   useEffect(() => {
     const onSettings = () => refresh();
@@ -726,15 +1071,42 @@ Let's begin!`);
     return () => window.removeEventListener(SETTINGS_UPDATED_EVENT, onSettings);
   }, [refresh]);
 
+  // Deleting a résumé WITH its threads (Header.handleDelete) drops them straight
+  // in storage — it can't go through deleteThread. If the in-flight stream's
+  // origin is among the dropped ids, its commit target is gone and the banner
+  // can no longer render it (the thread lookup fails) while `loading` keeps the
+  // composer disabled — so abort it, mirroring deleteThread's origin-abort.
+  // Refs only, so the mount-once closure stays correct.
+  useEffect(() => {
+    const onThreadsDeleted = (e) => {
+      const ids = e.detail?.threadIds;
+      if (!Array.isArray(ids) || !abortRef.current) return;
+      if (ids.includes(streamThreadRef.current)) {
+        abortRef.current.abort();
+        clearStreaming();
+        // Helper runs paint through thinking/loading — clear them too so the
+        // spinner can't leak into whichever thread becomes current (no-op for
+        // streams, whose thinking is already null). No owner — force the clear.
+        endThinking();
+      }
+    };
+    window.addEventListener('rd:threads-deleted', onThreadsDeleted);
+    return () => window.removeEventListener('rd:threads-deleted', onThreadsDeleted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return {
     // state
-    messages, threads, currentThreadId, loading, thinking, streamingMessage, contextChips,
+    messages, threads, currentThreadId, loading, thinking, streamingMessage, streamThreadId, contextChips,
     currentModel, reasoningEffort, webSearchEnabled,
     configured, configuredProviders, reasoningSupported, customModels,
+    // active résumé (re-read each render; the follow effect re-renders on switch)
+    currentVariantId: getCurrentId(),
     // actions
     send, stop, selectModel, applyCustomSlug, removeCustomModelEntry,
     setReasoning, toggleWebSearch, addChip, openWithContext, removeChip, clearChips,
-    newThread, switchThread, deleteThread, openDiffForMessage, applyAction,
+    newThread, switchThread, deleteThread, moveThreadToCurrentVariant, jumpToVariant,
+    openDiffForMessage, applyAction,
     startInterview, refresh,
   };
 }

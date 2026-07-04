@@ -132,6 +132,10 @@ export default function ProfileDialog() {
   };
 
   const startInterview = () => {
+    // Persist any pending edit before handing off — this path bypasses
+    // handleOpenChange, so without the flush the last change would sit in the
+    // debounce timer and be lost if the app quits/reloads before it fires.
+    flush();
     setOpen(false);
     // Let the dialog close before the chat panel takes over (matches the old flow).
     setTimeout(() => window.startProfileInterviewFromChat?.(), 200);

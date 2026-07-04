@@ -49,7 +49,9 @@ export default [
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
-      globals: { ...globals.node },
+      // Vitest runs under jsdom (see vitest.config.js), so tests legitimately use
+      // browser globals (document, DOMParser, requestAnimationFrame, …) alongside node.
+      globals: { ...globals.node, ...globals.browser },
     },
   },
   {

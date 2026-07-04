@@ -26,7 +26,7 @@ function randomSuffix() {
   }
 }
 
-export function makeThread(name = 'New Chat', initialMessages = []) {
+export function makeThread(name = 'New Chat', initialMessages = [], homeVariantId = null) {
   const now = new Date().toISOString();
   return {
     id: `thread-${Date.now()}-${randomSuffix()}`,
@@ -34,7 +34,104 @@ export function makeThread(name = 'New Chat', initialMessages = []) {
     messages: Array.isArray(initialMessages) ? initialMessages : [],
     createdAt: now,
     updatedAt: now,
+    homeVariantId,
   };
+}
+
+// Ensure every thread carries homeVariantId (legacy threads predate the field).
+// Missing/undefined → null (the "General" group). Pure; callers persist.
+export function migrateThreads(threads) {
+  if (!Array.isArray(threads)) return [];
+  return threads.map((t) => (t && t.homeVariantId === undefined ? { ...t, homeVariantId: null } : t));
+}
+
+// Newest-first by updatedAt (stable for equal timestamps).
+function byUpdatedDesc(a, b) {
+  return new Date(b.updatedAt) - new Date(a.updatedAt);
+}
+
+/**
+ * Split threads for the selector, relative to the active variant.
+ * A thread whose homeVariantId is null OR points at a variant not in `variants`
+ * falls into `general`. `variants` is [{ id, name }] (useVariants().list).
+ * @returns {{ current: Thread[], general: Thread[],
+ *            others: { variantId, variantName, threads: Thread[] }[] }}
+ */
+export function groupThreadsByHome(threads, currentVariantId, variants = []) {
+  const known = new Map(variants.map((v) => [v.id, v.name]));
+  const current = [];
+  const general = [];
+  const othersByVariant = new Map();
+  for (const t of Array.isArray(threads) ? threads : []) {
+    const home = t.homeVariantId ?? null;
+    if (home === currentVariantId) current.push(t);
+    else if (home === null || !known.has(home)) general.push(t);
+    else {
+      if (!othersByVariant.has(home)) othersByVariant.set(home, []);
+      othersByVariant.get(home).push(t);
+    }
+  }
+  current.sort(byUpdatedDesc);
+  general.sort(byUpdatedDesc);
+  const others = [...othersByVariant.entries()].map(([variantId, ts]) => ({
+    variantId, variantName: known.get(variantId), threads: ts.sort(byUpdatedDesc),
+  }));
+  return { current, general, others };
+}
+
+/** Id of the most-recently-updated thread homed to the active variant, or null. */
+export function pickCurrentThreadId(threads, currentVariantId) {
+  const homed = (Array.isArray(threads) ? threads : [])
+    .filter((t) => (t.homeVariantId ?? null) === currentVariantId)
+    .sort(byUpdatedDesc);
+  return homed.length ? homed[0].id : null;
+}
+
+/**
+ * Decide the thread list + selection after the CURRENT thread is deleted.
+ * Keeps selection within the active résumé: opens its most-recent remaining thread,
+ * or creates a fresh homed one when it has none — never an unrelated General/other-
+ * résumé thread, and never an empty selection.
+ * @returns {{ threads: Thread[], currentThreadId: string, created: Thread|null }}
+ */
+export function chooseThreadAfterDelete(threads, deletedId, activeVariantId) {
+  const next = (Array.isArray(threads) ? threads : []).filter((t) => t.id !== deletedId);
+  let currentThreadId = pickCurrentThreadId(next, activeVariantId);
+  let created = null;
+  if (!currentThreadId) {
+    created = makeThread('New Chat', [], activeVariantId || null);
+    next.unshift(created);
+    currentThreadId = created.id;
+  }
+  return { threads: next, currentThreadId, created };
+}
+
+/** variantId of the last non-context message (the "current context"), or null. */
+export function lastTurnVariantId(messages) {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i] && messages[i].role !== 'context') return messages[i].variantId ?? null;
+  }
+  return null;
+}
+
+/**
+ * Append a `context` divider marker iff the active variant differs from the
+ * thread's last turn AND the thread is non-empty. Returns the SAME array
+ * reference when no marker is needed (cheap no-op for the common case).
+ */
+export function withContextMarker(messages, activeVariantId, activeVariantName) {
+  const list = Array.isArray(messages) ? messages : [];
+  if (list.length === 0) return messages;
+  if (lastTurnVariantId(list) === activeVariantId) return messages;
+  const marker = {
+    id: `ctx-${Date.now()}-${randomSuffix()}`,
+    role: 'context',
+    variantId: activeVariantId,
+    variantName: activeVariantName,
+    timestamp: new Date().toISOString(),
+  };
+  return [...list, marker];
 }
 
 /**
@@ -70,6 +167,29 @@ export function loadThreads() {
     const thread = makeThread('New Chat');
     return { threads: [thread], currentThreadId: thread.id };
   }
+}
+
+/**
+ * When a variant is deleted, either move its threads to General
+ * (mode 'general') or drop them (mode 'delete'). Pure; caller persists.
+ */
+export function reassignThreadsForDeletedVariant(threads, deletedVariantId, mode) {
+  const list = Array.isArray(threads) ? threads : [];
+  if (mode === 'delete') return list.filter((t) => (t.homeVariantId ?? null) !== deletedVariantId);
+  return list.map((t) =>
+    (t.homeVariantId ?? null) === deletedVariantId ? { ...t, homeVariantId: null } : t);
+}
+
+/** Ids of the threads homed to a given variant (what a 'delete' reassign drops). */
+export function threadIdsForVariant(threads, variantId) {
+  return (Array.isArray(threads) ? threads : [])
+    .filter((t) => (t.homeVariantId ?? null) === variantId)
+    .map((t) => t.id);
+}
+
+/** Count threads homed to a given variant (for the delete prompt). */
+export function countThreadsForVariant(threads, variantId) {
+  return threadIdsForVariant(threads, variantId).length;
 }
 
 export function persistThreads(threads) {

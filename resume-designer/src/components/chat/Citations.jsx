@@ -1,12 +1,13 @@
 import { ExternalLink } from 'lucide-react';
 import { isLikelySafeUrl } from '../../htmlEscape.js';
+import { normalizeCitations } from './citations.js';
 
 /**
  * Sources list from OpenRouter url_citation annotations. Only http(s) URLs are
  * linked; anything else renders as inert text.
  */
 export function Citations({ annotations }) {
-  const cites = (annotations || []).filter((a) => a && a.type === 'url_citation' && a.url);
+  const cites = normalizeCitations(annotations);
   if (cites.length === 0) return null;
   return (
     <div className="mt-2.5 border-t pt-2.5">

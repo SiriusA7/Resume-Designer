@@ -1070,7 +1070,15 @@ export async function chat(modelId, messages, includeContext = true, options = {
   }
 
   const { hooks, ...rest } = options;
-  const res = await streamOpenRouter(validModelId, processedMessages, rest, hooks || {});
+  // Always tell the model which résumé is active, so a thread continued under a
+  // different résumé isn't reasoned about against the old one. getResumeContext()
+  // already attaches the résumé's data; this is the explicit one-line cue.
+  const baseSystem = rest.systemPrompt || SYSTEM_PROMPT;
+  const activeName = store.getData()?.name;
+  const systemPrompt = activeName
+    ? `${baseSystem}\n\nThe user is currently working on the résumé "${activeName}".`
+    : baseSystem;
+  const res = await streamOpenRouter(validModelId, processedMessages, { ...rest, systemPrompt }, hooks || {});
   if (options.structured) {
     return {
       text: res.text, thinking: res.reasoning, reasoning: res.reasoning,
@@ -1091,16 +1099,16 @@ export async function rewriteText(modelId, text, instruction = 'Improve this tex
   return chat(modelId, messages, true, { feature: 'generate' });
 }
 
-export async function generateBullets(modelId, context, count = 3) {
+export async function generateBullets(modelId, context, count = 3, options = {}) {
   const messages = [{
     role: 'user',
     content: `Based on the resume and this context: "${context}", generate ${count} impactful bullet points. Format as a numbered list.`
   }];
   
-  return chat(modelId, messages, true, { feature: 'generate' });
+  return chat(modelId, messages, true, { feature: 'generate', ...options });
 }
 
-export async function getFeedback(modelId) {
+export async function getFeedback(modelId, options = {}) {
   const messages = [{
     role: 'user',
     content: `Please review my resume and provide constructive feedback. Focus on:
@@ -1110,16 +1118,16 @@ export async function getFeedback(modelId) {
 4. Any missing elements that would strengthen the resume`
   }];
   
-  return chat(modelId, messages, true, { feature: 'feedback' });
+  return chat(modelId, messages, true, { feature: 'feedback', ...options });
 }
 
-export async function improveSummary(modelId) {
+export async function improveSummary(modelId, options = {}) {
   const messages = [{
     role: 'user',
     content: `Please rewrite my resume summary to be more compelling and impactful. Make it concise but powerful, highlighting key strengths and value proposition. Provide only the improved summary text.`
   }];
   
-  return chat(modelId, messages, true, { feature: 'generate' });
+  return chat(modelId, messages, true, { feature: 'generate', ...options });
 }
 
 /**
@@ -1298,7 +1306,7 @@ export function getAllModels() {
  * @param {Array} conversationHistory - Previous messages in the interview
  * @returns {Promise<string>} AI response
  */
-export async function profileInterviewChat(modelId, conversationHistory) {
+export async function profileInterviewChat(modelId, conversationHistory, options = {}) {
   const validModelId = validateModelId(modelId);
   if (!getApiKey()) {
     throw new Error('No OpenRouter API key configured. Please add your key in settings.');
@@ -1310,7 +1318,8 @@ export async function profileInterviewChat(modelId, conversationHistory) {
   }));
   return callOpenRouter(validModelId, messages, {
     feature: 'profile',
-    systemPrompt: PROFILE_INTERVIEW_PROMPT
+    systemPrompt: PROFILE_INTERVIEW_PROMPT,
+    ...options
   });
 }
 
@@ -1320,7 +1329,7 @@ export async function profileInterviewChat(modelId, conversationHistory) {
  * @param {Array} conversationHistory - The interview conversation
  * @returns {Promise<Object>} Extracted profile data
  */
-export async function extractProfileFromInterview(modelId, conversationHistory) {
+export async function extractProfileFromInterview(modelId, conversationHistory, options = {}) {
   const validModelId = validateModelId(modelId);
   if (!getApiKey()) {
     throw new Error('No OpenRouter API key configured. Please add your key in settings.');
@@ -1336,7 +1345,8 @@ export async function extractProfileFromInterview(modelId, conversationHistory) 
   const messages = [{ role: 'user', content: conversationText }];
   const response = await callOpenRouter(validModelId, messages, {
     feature: 'profile',
-    systemPrompt: PROFILE_EXTRACTION_PROMPT
+    systemPrompt: PROFILE_EXTRACTION_PROMPT,
+    ...options
   });
   
   try {

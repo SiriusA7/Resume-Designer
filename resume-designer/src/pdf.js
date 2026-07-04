@@ -480,16 +480,42 @@ async function generatePdfWithHtml2Pdf(resumeEl, filename) {
     }
   };
 
-  // Fixed page size -> one PDF page per .resume-page sheet (break before each).
-  if (paginated) {
-    options.pagebreak = { mode: ['css', 'legacy'], before: '.resume-page' };
-  }
-
   console.log('PDF Export: Starting PDF generation (image-based)...');
-  
+
   try {
-    // Browser: Direct download
-    await html2pdf().set(options).from(resumeEl).save();
+    if (paginated) {
+      // One PDF page per .resume-page sheet, each sized to THAT sheet — so an
+      // oversized `.is-overflowing` sheet exports at its own (taller) height instead
+      // of being split/clipped against the first sheet's page size. html2pdf's single
+      // `format` can't vary per page, so build the doc by hand: render the first sheet
+      // through the worker to get its jsPDF, then addPage + addImage each remaining
+      // sheet at its own measured size.
+      const sheetCanvas = { ...options.html2canvas };
+      delete sheetCanvas.height; // measure each sheet, not the whole column
+      delete sheetCanvas.windowHeight;
+      let pdf = null;
+      for (let i = 0; i < sheets.length; i++) {
+        const sheet = sheets[i];
+        const wIn = sheet.offsetWidth / 96;
+        const hIn = sheet.offsetHeight / 96;
+        const orientation = wIn > hIn ? 'landscape' : 'portrait';
+        const worker = html2pdf()
+          .set({ margin: 0, image: options.image, html2canvas: sheetCanvas,
+                 jsPDF: { unit: 'in', format: [wIn, hIn], orientation } })
+          .from(sheet);
+        if (i === 0) {
+          pdf = await worker.toPdf().get('pdf');
+        } else {
+          const canvas = await worker.toCanvas().get('canvas');
+          pdf.addPage([wIn, hIn], orientation);
+          pdf.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, wIn, hIn);
+        }
+      }
+      pdf.save(filename);
+    } else {
+      // Continuous: one open-height page for the whole element.
+      await html2pdf().set(options).from(resumeEl).save();
+    }
     console.log('PDF Export: PDF download initiated');
   } catch (renderError) {
     console.error('PDF Export: Render failed', renderError);

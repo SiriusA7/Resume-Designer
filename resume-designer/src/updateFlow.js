@@ -15,7 +15,9 @@
  */
 
 import { toast } from 'sonner';
-import { isElectron, checkForUpdates, onUpdateStatus, getAutoUpdateCheck } from './native.js';
+import {
+  isElectron, checkForUpdates, onUpdateStatus, getAutoUpdateCheck, onMenuCheckUpdates,
+} from './native.js';
 
 const UPDATE_TOAST_ID = 'rd-update-status';
 
@@ -84,6 +86,9 @@ export function initUpdateFlow() {
   if (!isElectron || initialized) return;
   initialized = true;
   onUpdateStatus((payload = {}) => handleUpdateStatus(payload));
+  // The macOS app-menu "Check for Updates…" item runs the same flow as the
+  // Settings → Updates button. Fire-and-forget the async listener registration.
+  onMenuCheckUpdates(() => triggerManualUpdateCheck()).catch(() => {});
   startBackgroundPolling();
 }
 

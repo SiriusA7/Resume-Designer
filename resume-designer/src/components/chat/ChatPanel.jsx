@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Settings2, X } from 'lucide-react';
+import { Settings2, Square, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 
 import { getSettings, saveSettings } from '../../persistence.js';
 import { openSettings } from '../../settingsModal.js';
+import { getThreadDisplayName } from '../../chatThreads.js';
+import { useVariants } from '../../hooks/useVariants.js';
 import { useChat } from './useChat.js';
 import { MessageList } from './MessageList.jsx';
 import { ChatComposer } from './ChatComposer.jsx';
@@ -27,6 +29,7 @@ const MAX_WIDTH = 500;
  */
 export default function ChatPanel() {
   const chat = useChat();
+  const variants = useVariants();
   const [host] = useState(() => document.getElementById('chat-panel'));
   const [open, setOpen] = useState(false);
 
@@ -56,6 +59,10 @@ export default function ChatPanel() {
   // Reflect open/closed on the host; focus the input when opening.
   useEffect(() => {
     host?.classList.toggle('closed', !open);
+    // The ≤768px stylesheet keeps .chat-panel off-canvas and slides it in only
+    // for .chat-panel.open, so toggle `open` too — otherwise opening on a narrow
+    // viewport gives the panel width but leaves it translated off-screen.
+    host?.classList.toggle('open', open);
     if (open) {
       const t = setTimeout(() => document.getElementById('chat-input')?.focus(), 300);
       return () => clearTimeout(t);
@@ -116,6 +123,22 @@ export default function ChatPanel() {
 
   const openApiSettings = () => openSettings('api-keys');
 
+  // Cross-résumé state: is the open thread homed to a DIFFERENT résumé than the
+  // active one? If so, surface a slim banner with a Jump to its home résumé.
+  const openThread = chat.threads.find((t) => t.id === chat.currentThreadId);
+  const openHome = openThread?.homeVariantId ?? null;
+  const crossResume = openHome !== null && openHome !== chat.currentVariantId;
+  const homeName = variants.list.find((v) => v.id === openHome)?.name;
+
+  // A reply may still be streaming in a thread OTHER than the one on screen: the
+  // user switched away mid-response and it keeps running, committing to its origin
+  // thread. Surface a pinned banner so that hidden run stays visible and cancellable
+  // — otherwise the composer sits disabled (loading) with no Stop anywhere in view.
+  const bgStreamThread =
+    chat.loading && chat.streamThreadId && chat.streamThreadId !== chat.currentThreadId
+      ? chat.threads.find((t) => t.id === chat.streamThreadId)
+      : null;
+
   if (!host) return null;
 
   return createPortal(
@@ -160,24 +183,84 @@ export default function ChatPanel() {
             <ThreadSelector
               threads={chat.threads}
               currentThreadId={chat.currentThreadId}
+              currentVariantId={chat.currentVariantId}
+              variants={variants.list}
               onSwitch={chat.switchThread}
               onNew={chat.newThread}
               onDelete={chat.deleteThread}
+              onMoveToCurrent={chat.moveThreadToCurrentVariant}
             />
           </div>
         )}
       </div>
 
+      {/* Cross-résumé banner: pinned slim row when the open thread belongs to a
+          different résumé than the active one, with a Jump to its home. */}
+      {chat.configured && crossResume && homeName && (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-muted/40 px-4 py-1.5 text-[11px] text-muted-foreground">
+          <span className="flex min-w-0 items-center" title={`Thread from «${homeName}»`}>
+            <span className="shrink-0">Thread from&nbsp;«</span>
+            <span className="truncate">{homeName}</span>
+            <span className="shrink-0">»</span>
+          </span>
+          <button
+            type="button"
+            className="shrink-0 font-medium text-foreground hover:underline"
+            onClick={() => chat.jumpToVariant(openHome)}
+            title={`Make «${homeName}» the active résumé — this thread stays open`}
+          >
+            Switch résumé
+          </button>
+        </div>
+      )}
+
       <MessageList
         messages={chat.messages}
-        thinking={chat.thinking}
+        // Helper runs (feedback / improve / bullets / interview) are origin-
+        // bound: their ThinkingBlock renders only in the thread that started
+        // them; the background-stream banner below covers them elsewhere.
+        thinking={chat.streamThreadId && chat.streamThreadId !== chat.currentThreadId ? null : chat.thinking}
         streamingMessage={chat.streamingMessage}
         configured={chat.configured}
+        currentThreadId={chat.currentThreadId}
+        variants={variants.list}
+        currentVariantId={chat.currentVariantId}
         onReviewChanges={chat.openDiffForMessage}
         onApply={chat.applyAction}
         onConfigure={openApiSettings}
         onStop={chat.stop}
+        onJumpVariant={chat.jumpToVariant}
       />
+
+      {/* Background-stream banner: a reply is still generating in a thread other than
+          the one on screen. Restores visibility + a Stop for that hidden run (which
+          leaves the composer disabled) — click the name to hop back to it. */}
+      {chat.configured && bgStreamThread && (
+        <div className="flex shrink-0 items-center gap-2 border-t bg-primary/5 px-3 py-2 text-[12px] text-muted-foreground">
+          <span
+            className="size-2 shrink-0 rounded-full bg-primary motion-safe:animate-pulse"
+            aria-hidden="true"
+          />
+          <span className="shrink-0">Still generating in</span>
+          <button
+            type="button"
+            className="min-w-0 truncate font-medium text-foreground hover:underline"
+            title={`Open «${getThreadDisplayName(bgStreamThread)}»`}
+            onClick={() => chat.switchThread(bgStreamThread.id)}
+          >
+            {getThreadDisplayName(bgStreamThread)}
+          </button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-6 shrink-0 gap-1 text-[11px]"
+            onClick={chat.stop}
+          >
+            <Square className="size-3" />
+            Stop
+          </Button>
+        </div>
+      )}
 
       {chat.configured && (
         <ChatComposer

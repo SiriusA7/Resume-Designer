@@ -279,6 +279,9 @@ html.pdf-export-mode button {
      avoids a trailing blank page. macOS createPDF ignores @media print, so this
      only affects the Windows export and browser Cmd+P. */
   .resume-page:not(:last-child) { break-after: page; }
+  /* An oversize-atomic sheet keeps growing in print/PDF too, beating the inline
+     height (hence !important) so its overflow isn't clipped on the page. */
+  .resume-page.is-overflowing { height: auto !important; overflow: visible !important; }
 }
 
 html.pdf-export-mode #resume.is-paginated {
@@ -289,4 +292,8 @@ html.pdf-export-mode .resume-pages { gap: 0 !important; }
 html.pdf-export-mode .resume-page {
   box-shadow: none !important;
   border-radius: 0 !important;
+}
+html.pdf-export-mode .resume-page.is-overflowing {
+  height: auto !important;
+  overflow: visible !important;
 }

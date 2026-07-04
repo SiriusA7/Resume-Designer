@@ -4,6 +4,7 @@
 
 **An AI-assisted résumé builder that turns one master profile into polished, job-tailored résumés — privately, on your own machine.**
 
+[![Website](https://img.shields.io/badge/website-ashproto.github.io-c45c3e.svg)](https://ashproto.github.io/Resume-Designer/)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/ashproto/Resume-Designer?label=download)](https://github.com/ashproto/Resume-Designer/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Browser-lightgrey.svg)](#download)

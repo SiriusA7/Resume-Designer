@@ -56,6 +56,28 @@ export function assignBlocksToPages(blockHeightsPx, { firstPageContentPx, pageCo
   return pages;
 }
 
+/**
+ * Page indices whose assigned units sum to more than that page's content budget —
+ * i.e. a single atomic (non-breakable) block, or an unsplittable remainder, taller
+ * than the sheet. assignBlocksToPages deliberately lets such a block overflow the
+ * sheet bottom rather than emit a blank page, but a fixed-height sheet with
+ * `overflow: hidden` would clip it. The paginator tags these sheets with
+ * `.is-overflowing` so CSS can let just those grow (height:auto) instead of
+ * cutting content off on screen and in the PDF.
+ * @param {number[]} blockHeightsPx
+ * @param {number[]} assign - page index per block (from assignBlocksToPages)
+ * @param {{firstPageContentPx:number, pageContentPx:number}} budgets
+ * @returns {Set<number>} 0-based page indices that overflow their budget.
+ */
+export function overflowingPages(blockHeightsPx, assign, { firstPageContentPx, pageContentPx }) {
+  const used = [];
+  for (let i = 0; i < assign.length; i++) used[assign[i]] = (used[assign[i]] || 0) + blockHeightsPx[i];
+  const out = new Set();
+  // +0.5 epsilon so sub-pixel float drift on an exact fit doesn't flag a sheet.
+  used.forEach((u, p) => { if (u > (p === 0 ? firstPageContentPx : pageContentPx) + 0.5) out.add(p); });
+  return out;
+}
+
 // --- measurement (getBoundingClientRect is VISUAL px; divide by the zoom scale
 // on .resume-container to recover layout px) ---
 
@@ -95,26 +117,56 @@ function splittableConfig(el) {
     return { head: [':scope > .section-title'], itemWrap: ':scope > .education-content', itemSel: ':scope > p' };
   }
   if (el.classList.contains('sidebar-section')) {
+    const content = el.querySelector(':scope > .sidebar-content');
+    // Bulleted tools/highlights: split on the .highlight-bullet blocks (inside the
+    // .tools-bulleted wrapper for tools, or directly under .sidebar-content).
+    if (content && content.querySelector(':scope > .tools-bulleted > .highlight-bullet')) {
+      return { head: [':scope > .sidebar-title'], itemWrap: ':scope > .sidebar-content > .tools-bulleted', itemSel: ':scope > .highlight-bullet' };
+    }
+    // Inline skills/tools render as .skill-tag-row spans with .skill-sep / <wbr>
+    // separators BETWEEN them (not <p>). Treat every direct child as a unit so the
+    // section flows across pages and the separators ride along, instead of the whole
+    // section being an unsplittable block that overflows/clips a fixed-size sheet.
+    if (content && (content.classList.contains('sidebar-skills') || content.querySelector(':scope > .skill-tag-row'))) {
+      return { head: [':scope > .sidebar-title'], itemWrap: ':scope > .sidebar-content', itemSel: ':scope > *' };
+    }
     return { head: [':scope > .sidebar-title'], itemWrap: ':scope > .sidebar-content', itemSel: ':scope > p' };
+  }
+  // Inline Tools (renderToolsInline) wrap EVERY .tool-token in a single
+  // .skill-tag-row, so the sidebar-section split above sees that row as one
+  // atomic child. Make the row itself splittable on its tokens (+ separators) so
+  // a long inline Tools list flows across sidebar pages instead of being clipped.
+  // Skills phrase-rows carry no .tool-token and stay atomic — phrases never break.
+  if (el.classList.contains('skill-tag-row') && el.querySelector(':scope > .tool-token')) {
+    return { head: [], itemWrap: null, itemSel: ':scope > *' };
   }
   return null;
 }
 
 // Build a flow node: a GROUP (splittable: head + child nodes) or a LEAF (atomic).
 // Falls back to a leaf when the container has nothing to split (e.g. no bullets).
-function makeNode(el) {
+export function makeNode(el) {
   const cfg = splittableConfig(el);
   if (!cfg) return { group: false, el };
   const wrapEl = cfg.itemWrap ? el.querySelector(cfg.itemWrap) : el;
   const items = wrapEl ? Array.from(wrapEl.querySelectorAll(cfg.itemSel)) : [];
   if (items.length < 1) return { group: false, el };
   const head = cfg.head.map((s) => el.querySelector(s)).filter(Boolean);
-  return { group: true, el, head, wrapEl: wrapEl === el ? null : wrapEl, children: items.map(makeNode) };
+  // The FULL wrapper chain from `el`'s child down to itemWrap (outer→inner), so a
+  // rebuilt page reproduces every intermediate wrapper — e.g. the
+  // `.sidebar-content.tools-list` around `.tools-bulleted` — and keeps its styles
+  // (font-size, line-height, overflow-wrap), not just the innermost itemWrap element.
+  let wrapChain = null;
+  if (wrapEl && wrapEl !== el) {
+    wrapChain = [];
+    for (let w = wrapEl; w && w !== el; w = w.parentElement) wrapChain.unshift(w);
+  }
+  return { group: true, el, head, wrapChain, children: items.map(makeNode) };
 }
 
 // Flatten the tree to leaf UNITS in document order, each carrying its chain of
 // ancestor groups; firstOf marks the groups a unit opens (so heads emit once).
-function flatten(node, chain, out) {
+export function flatten(node, chain, out) {
   if (!node.group) { out.push({ leaf: node.el, chain }); return; }
   const ch = chain.concat([node]);
   for (const child of node.children) flatten(child, ch, out);
@@ -147,7 +199,7 @@ function measureUnits(units, scale) {
 // Rebuild a column from the units assigned to one page. Group wrappers are cloned
 // and reused while consecutive units share them; a group's head is emitted only
 // on the page where the group first appears (no repeated titles/entry headers).
-function buildColumnRecursive(targetEl, units) {
+export function buildColumnRecursive(targetEl, units) {
   let open = []; // [{ group, content }] — currently-open cloned chain, outer→inner
   for (const u of units) {
     let common = 0;
@@ -164,7 +216,9 @@ function buildColumnRecursive(targetEl, units) {
       clone.style.flex = '0 0 auto';
       if (u.firstOf.includes(group)) for (const h of group.head) clone.appendChild(h);
       let content = clone;
-      if (group.wrapEl) { const w = group.wrapEl.cloneNode(false); clone.appendChild(w); content = w; }
+      if (group.wrapChain) {
+        for (const wrap of group.wrapChain) { const w = wrap.cloneNode(false); content.appendChild(w); content = w; }
+      }
       (d === 0 ? targetEl : open[d - 1].content).appendChild(clone);
       open.push({ group, content });
     }
@@ -247,11 +301,13 @@ function paginateSingle(resumeEl, cfg, widthPx, heightPx, scale) {
   const pageContentPx = Math.max(1, heightPx - pad);
   const firstPageContentPx = Math.max(1, pageContentPx - headerH);
   const assign = assignBlocksToPages(heights, { firstPageContentPx, pageContentPx });
+  const overflow = overflowingPages(heights, assign, { firstPageContentPx, pageContentPx });
   const numPages = Math.max(1, (assign[assign.length - 1] ?? 0) + 1);
 
   const pages = makePagesContainer();
   for (let p = 0; p < numPages; p++) {
     const page = makeSheet(widthPx, heightPx);
+    if (overflow.has(p)) page.classList.add('is-overflowing');
     if (p === 0 && header) page.appendChild(header);
     const bodyClone = body.cloneNode(false); // shallow: keep classes, drop children
     grow(bodyClone);
@@ -285,13 +341,18 @@ function paginateTwo(resumeEl, cfg, widthPx, heightPx, scale) {
     const pageContentPx = Math.max(1, heightPx - vPadding(col));
     const firstPageContentPx = Math.max(1, pageContentPx - headerH - leadH);
     const assign = assignBlocksToPages(heights, { firstPageContentPx, pageContentPx });
-    return { col, units, assign };
+    return { col, units, assign, heights, firstPageContentPx, pageContentPx };
   });
   const numPages = Math.max(1, ...cols.map(({ assign }) => (assign[assign.length - 1] ?? 0) + 1));
+  // A sheet overflows if EITHER column's content exceeds its budget on that page.
+  const overflow = new Set();
+  cols.forEach(({ heights, assign, firstPageContentPx, pageContentPx }) =>
+    overflowingPages(heights, assign, { firstPageContentPx, pageContentPx }).forEach((p) => overflow.add(p)));
 
   const pages = makePagesContainer();
   for (let p = 0; p < numPages; p++) {
     const page = makeSheet(widthPx, heightPx);
+    if (overflow.has(p)) page.classList.add('is-overflowing');
     if (p === 0 && header) page.appendChild(header);
 
     // Rebuild the body-wrapper chain (compact/executive) so its CSS + lead apply.

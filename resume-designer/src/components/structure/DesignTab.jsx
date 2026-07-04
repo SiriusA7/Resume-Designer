@@ -770,10 +770,14 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
     applyAccentSettings(next);
     saveAccentSettings(next);
     setAccent(next);
+    // Some accent options change layout height (e.g. filled/outlined skill-tag
+    // styles add padding), so a fixed page size needs fresh page breaks.
+    scheduleRepaginate();
   }
 
   function handleResetAccent() {
     setAccent(resetAccentSettings());
+    scheduleRepaginate();
   }
 
   // ===== Photo handlers ====================================================
