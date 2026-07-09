@@ -5,7 +5,7 @@
 **An AI-assisted résumé builder that turns one master profile into polished, job-tailored résumés — privately, on your own machine.**
 
 [![Website](https://img.shields.io/badge/website-ashproto.github.io-c45c3e.svg)](https://ashproto.github.io/Resume-Designer/)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-lightgrey.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/ashproto/Resume-Designer?label=download)](https://github.com/ashproto/Resume-Designer/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Browser-lightgrey.svg)](#download)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg)](https://v2.tauri.app/)
@@ -123,10 +123,15 @@ Full build, signing, notarization, and release details are in [`resume-designer/
 
 ## Contributing
 
-Issues and pull requests are welcome. For anything substantial, please open an issue first to discuss the approach. By contributing, you agree your contributions are licensed under the project's AGPL-3.0 license.
+Issues and pull requests are welcome. For anything substantial, please open an issue first to discuss the approach. By contributing, you agree your contributions are licensed under the project's CC BY-NC-SA 4.0 license.
 
 ## License
 
-Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see [`LICENSE`](LICENSE).
+**Free · source-available · noncommercial** — Resume Designer is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0). See [`LICENSE`](LICENSE) for the full terms.
 
-In short: you're free to use, study, modify, and share this software, but any distributed or **network-hosted** modified version must also be released as open source under the AGPL. See [the license](LICENSE) for the exact terms.
+- **Use it for anything, including at work.** Creating resumes, profiles, exports, and other application materials — personal or commercial — is fine. The noncommercial term is about the app itself, not the work you produce with it.
+- **Your documents are yours.** Resumes, PDFs, backups, profile data, and other outputs you create with Resume Designer are not licensed by this project license.
+- **Don't commercialize the app.** No reselling, repackaging-and-selling, or offering it as a paid hosted service.
+- **ShareAlike.** Distribute modified versions under these same terms.
+
+Want a commercial arrangement this license doesn't cover? Open an issue. This is a source-available, noncommercial license — **not** an OSI-approved open-source license.
