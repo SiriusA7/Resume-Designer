@@ -5,7 +5,7 @@
 **An AI-assisted résumé builder that turns one master profile into polished, job-tailored résumés — privately, on your own machine.**
 
 [![Website](https://img.shields.io/badge/website-ashproto.github.io-c45c3e.svg)](https://ashproto.github.io/Resume-Designer/)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-lightgrey.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/ashproto/Resume-Designer?label=download)](https://github.com/ashproto/Resume-Designer/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Browser-lightgrey.svg)](#download)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg)](https://v2.tauri.app/)
@@ -27,17 +27,18 @@ Your résumé data never leaves your machine except for the AI calls you explici
 - **11 layouts** — Sidebar, Stacked, Stacked Vertical, Right Sidebar, Compact, Executive, Classic, Classic Featured, Modern, Timeline, and Creative.
 - Click-to-edit **inline editing**, drag-to-reorder sections, add/remove/restructure from a structure panel.
 - **Version history** so you can step back through changes, plus zoom and live text-formatting tools.
+- **Page setup** — choose page size (Letter / A4) and margins; content **paginates across multiple pages**, both on screen and in the exported PDF.
 
 **AI assistant (bring your own key)**
 - One [OpenRouter](https://openrouter.ai) key → many models (Claude, GPT, Gemini, and more), with a model picker and per-model reasoning-effort control.
 - **Generate a résumé for a job**: paste a posting and the assistant builds a brand-new tailored variant from your master profile.
 - **Tailor an existing résumé**: the assistant rewrites it for a posting — applied as **inline diffs you review** before they land.
 - Responses **stream live, including the model's reasoning**, with a stop control, web-search **citations**, and per-run token/cost stats.
-- A chat panel for free-form drafting/feedback, with **token-usage and cost tracking** across every feature.
+- A chat panel for free-form drafting/feedback with **per-résumé conversation threads**, plus **token-usage and cost tracking** across every feature.
 
 **Import & export**
 - **Import an existing résumé** from PDF or Word (`.docx`) to bootstrap your profile.
-- **Export to PDF** (native, high-fidelity capture on the desktop app).
+- **Export to PDF** — true vector, multi-page PDF with per-page sizing (native print-to-PDF on the desktop app; image-based fallback in the browser).
 - **Back up and restore** all your data as a JSON file.
 
 **Make it yours**
@@ -46,7 +47,8 @@ Your résumé data never leaves your machine except for the AI calls you explici
 - Light / dark themes, plus a translucent **"liquid glass"** treatment on the desktop app.
 
 **Desktop**
-- Native macOS and Windows builds with **automatic updates**.
+- Native macOS and Windows builds with **automatic updates** — the **release changelog** is shown before and after updating, with a browsable **"What's new" history** in Settings.
+- macOS **app menu** with Settings and Check for Updates.
 
 ## Download
 
@@ -121,10 +123,15 @@ Full build, signing, notarization, and release details are in [`resume-designer/
 
 ## Contributing
 
-Issues and pull requests are welcome. For anything substantial, please open an issue first to discuss the approach. By contributing, you agree your contributions are licensed under the project's AGPL-3.0 license.
+Issues and pull requests are welcome. For anything substantial, please open an issue first to discuss the approach. By contributing, you agree your contributions are licensed under the project's CC BY-NC-SA 4.0 license.
 
 ## License
 
-Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see [`LICENSE`](LICENSE).
+**Free · source-available · noncommercial** — Resume Designer is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0). See [`LICENSE`](LICENSE) for the full terms.
 
-In short: you're free to use, study, modify, and share this software, but any distributed or **network-hosted** modified version must also be released as open source under the AGPL. See [the license](LICENSE) for the exact terms.
+- **Use it for anything, including at work.** Creating resumes, profiles, exports, and other application materials — personal or commercial — is fine. The noncommercial term is about the app itself, not the work you produce with it.
+- **Your documents are yours.** Resumes, PDFs, backups, profile data, and other outputs you create with Resume Designer are not licensed by this project license.
+- **Don't commercialize the app.** No reselling, repackaging-and-selling, or offering it as a paid hosted service.
+- **ShareAlike.** Distribute modified versions under these same terms.
+
+Want a commercial arrangement this license doesn't cover? Open an issue. This is a source-available, noncommercial license — **not** an OSI-approved open-source license.
