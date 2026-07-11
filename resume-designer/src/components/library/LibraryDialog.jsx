@@ -133,7 +133,10 @@ export default function LibraryDialog() {
             </TabsList>
           </div>
 
-          <TabsContent value="resumes" className="mt-0 flex min-h-0 flex-1">
+          {/* `flex` only while active: an unconditional display class would
+              override the inactive panel's `hidden` attribute, and the empty
+              flex-1 div would silently eat half the dialog's height. */}
+          <TabsContent value="resumes" className="mt-0 min-h-0 flex-1 data-[state=active]:flex">
             {/* LEFT: search + list */}
             <div className="flex w-[340px] shrink-0 flex-col border-r">
               <div className="space-y-2.5 border-b p-3">
@@ -238,7 +241,7 @@ export default function LibraryDialog() {
             </div>
           </TabsContent>
 
-          <TabsContent value="timeline" className="mt-0 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-[22px]">
+          <TabsContent value="timeline" className="mt-0 min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-[22px] data-[state=active]:flex">
             <StatsStrip applications={applications} />
             <TimelineView
               applications={applications}
