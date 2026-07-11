@@ -143,7 +143,9 @@ export function addApplication({
 
 /**
  * Transition an application's status. Appends to statusHistory; any move past
- * 'prepared' stamps appliedAt once (terminal states imply it was sent too).
+ * 'prepared' stamps appliedAt once (terminal states imply it was sent too),
+ * and reverting to 'prepared' clears it — a draft is by definition unsent, and
+ * a lingering appliedAt would keep counting the record as sent in the stats.
  */
 export function setApplicationStatus(id, status) {
   const app = applications.find((a) => a.id === id);
@@ -155,6 +157,7 @@ export function setApplicationStatus(id, status) {
   app.statusHistory = [...(app.statusHistory || []), { status, at: now }];
   app.updatedAt = now;
   if (!app.appliedAt && status !== 'prepared') app.appliedAt = now;
+  if (status === 'prepared') app.appliedAt = null;
 
   save();
   notify();

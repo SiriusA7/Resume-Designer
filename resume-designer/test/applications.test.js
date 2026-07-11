@@ -95,6 +95,13 @@ describe('setApplicationStatus', () => {
     expect(setApplicationStatus(app.id, 'offer').appliedAt).toBe(first);
   });
 
+  it('reverting to prepared clears appliedAt so it no longer counts as sent', () => {
+    const app = addApplication({ variantId: 'v1', status: 'applied' });
+    const reverted = setApplicationStatus(app.id, 'prepared');
+    expect(reverted.appliedAt).toBeNull();
+    expect(reverted.statusHistory.map((h) => h.status)).toEqual(['applied', 'prepared']);
+  });
+
   it('ignores unknown statuses and no-op repeats', () => {
     const app = addApplication({ variantId: 'v1' });
     setApplicationStatus(app.id, 'bogus');
