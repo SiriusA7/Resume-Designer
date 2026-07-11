@@ -26,6 +26,7 @@ import {
 } from '../../persistence.js';
 import { loadThreads, countThreadsForVariant } from '../../chatThreads.js';
 import { STATUS_BADGE_CLASSES } from './statusStyles.js';
+import PreviewPane from './PreviewPane.jsx';
 
 function shortDate(iso) {
   return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
@@ -255,6 +256,8 @@ export default function DetailPane({ variant, applications, onAfterDelete, onClo
           </Button>
         </div>
       </div>
+
+      <PreviewPane variant={variant} />
 
       <Separator />
 
