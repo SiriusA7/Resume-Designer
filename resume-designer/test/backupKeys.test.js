@@ -6,6 +6,9 @@ describe('isOwnedKey', () => {
     expect(isOwnedKey('resume-designer-data')).toBe(true);
     expect(isOwnedKey('resume-zoom')).toBe(true);
   });
+  it('accepts the applications store key', () => {
+    expect(isOwnedKey('resume-designer-applications')).toBe(true);
+  });
   it('accepts history-prefixed keys', () => {
     expect(isOwnedKey('resume-designer-history-variant-1')).toBe(true);
   });
