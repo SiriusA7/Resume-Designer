@@ -242,7 +242,11 @@ export default function LibraryDialog() {
             <StatsStrip applications={applications} />
             <TimelineView
               applications={applications}
-              onSelect={(variantId) => { setSelectedId(variantId); setTab('resumes'); }}
+              onSelect={(variantId) => {
+                if (!list.some((v) => v.id === variantId)) return;
+                setSelectedId(variantId);
+                setTab('resumes');
+              }}
             />
           </TabsContent>
         </Tabs>

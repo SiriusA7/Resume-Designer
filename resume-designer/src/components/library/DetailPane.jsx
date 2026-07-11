@@ -133,19 +133,19 @@ function AddApplicationForm({ variant }) {
   const submit = () => {
     const jd = jds.find((j) => j.id === jobId);
     if (!jd && !title.trim() && !company.trim()) return;
-    const created = addApplication({
+    const todayLocal = new Date();
+    todayLocal.setMinutes(todayLocal.getMinutes() - todayLocal.getTimezoneOffset());
+    const backdated = appliedOn && appliedOn !== todayLocal.toISOString().slice(0, 10)
+      ? new Date(`${appliedOn}T12:00:00`).toISOString()
+      : undefined;
+    addApplication({
       variantId: variant.id,
       variantName: variant.name,
       jobId: jd ? jd.id : null,
       jobSnapshot: jd ? { title: jd.title, company: jd.company } : { title: title.trim(), company: company.trim() },
       status: 'applied', // manual adds exist because you actually applied
+      appliedAt: backdated,
     });
-    const todayLocal = new Date();
-    todayLocal.setMinutes(todayLocal.getMinutes() - todayLocal.getTimezoneOffset());
-    if (created && appliedOn && appliedOn !== todayLocal.toISOString().slice(0, 10)) {
-      const backdated = new Date(`${appliedOn}T12:00:00`).toISOString();
-      updateApplication(created.id, { appliedAt: backdated });
-    }
     setAdding(false);
     setJobId(''); setTitle(''); setCompany('');
     setAppliedOn(todayLocal.toISOString().slice(0, 10));

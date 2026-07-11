@@ -58,6 +58,21 @@ describe('addApplication', () => {
     const app = addApplication({ variantId: 'v1', status: 'ghosted-lol' });
     expect(app.status).toBe('prepared');
   });
+
+  it('backdates appliedAt and the initial statusHistory entry, but not createdAt', () => {
+    const backdated = new Date('2026-01-01T12:00:00.000Z').toISOString();
+    const app = addApplication({ variantId: 'v1', status: 'applied', appliedAt: backdated });
+    expect(app.appliedAt).toBe(backdated);
+    expect(app.statusHistory).toEqual([{ status: 'applied', at: backdated }]);
+    expect(app.createdAt).not.toBe(backdated);
+  });
+
+  it('ignores a passed appliedAt when the resolved status is prepared', () => {
+    const backdated = new Date('2026-01-01T12:00:00.000Z').toISOString();
+    const app = addApplication({ variantId: 'v1', appliedAt: backdated });
+    expect(app.appliedAt).toBeNull();
+    expect(app.statusHistory[0].at).not.toBe(backdated);
+  });
 });
 
 describe('setApplicationStatus', () => {

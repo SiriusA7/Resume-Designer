@@ -104,7 +104,11 @@ export function getApplication(id) {
 
 /**
  * Add an application. Defaults to a 'prepared' draft; creating directly at a
- * later status (the manual "Add application" flow) stamps appliedAt too.
+ * later status (the manual "Add application" flow) stamps appliedAt too. An
+ * optional `appliedAt` backdates that stamp — and the initial statusHistory
+ * entry's `at`, so history stays honest — but is ignored for 'prepared'
+ * drafts, which have no appliedAt at all. createdAt/updatedAt always reflect
+ * when the record itself was created, never the backdated date.
  */
 export function addApplication({
   variantId,
@@ -113,9 +117,11 @@ export function addApplication({
   jobSnapshot = {},
   status = 'prepared',
   notes = '',
+  appliedAt,
 } = {}) {
   const now = new Date().toISOString();
   const safeStatus = APPLICATION_STATUSES.includes(status) ? status : 'prepared';
+  const appliedStamp = safeStatus === 'prepared' ? null : (appliedAt || now);
   const app = {
     id: generateId('app'),
     variantId,
@@ -123,10 +129,10 @@ export function addApplication({
     jobId,
     jobSnapshot: { title: jobSnapshot.title || '', company: jobSnapshot.company || '' },
     status: safeStatus,
-    statusHistory: [{ status: safeStatus, at: now }],
+    statusHistory: [{ status: safeStatus, at: appliedStamp || now }],
     createdAt: now,
     updatedAt: now,
-    appliedAt: safeStatus === 'prepared' ? null : now,
+    appliedAt: appliedStamp,
     notes,
   };
   applications.unshift(app);
