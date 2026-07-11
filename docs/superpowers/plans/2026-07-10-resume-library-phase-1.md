@@ -994,7 +994,7 @@ export default function LibraryDialog() {
       variants: list,
       applications,
       jobDescriptions: getAllJobDescriptions(),
-      threads: loadThreads(),
+      threads: loadThreads().threads,
       deep,
     });
   }, [open, query, deep, list, applications]);
@@ -1480,7 +1480,7 @@ export default function DetailPane({ variant, applications, onAfterDelete, onClo
           <p className="text-[11.5px] text-muted-foreground">
             Created {shortDate(variant.createdAt)} · Updated {shortDate(variant.updatedAt)}
             {(() => {
-              const n = countThreadsForVariant(loadThreads(), variant.id);
+              const n = countThreadsForVariant(loadThreads().threads, variant.id);
               return n > 0 ? ` · ${n} chat thread${n === 1 ? '' : 's'}` : '';
             })()}
           </p>
