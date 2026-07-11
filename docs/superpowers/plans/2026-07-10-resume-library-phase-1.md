@@ -1699,3 +1699,732 @@ Run: `npm run tauri:dev` (Rust compile on first run). The shipped engine is WKWe
 - [ ] **Step 3: Report**
 
 Summarize verification results to the user. **Do not push or open a PR** — ask the user how they want to proceed (per repo rules, pushing/PRing requires an explicit request).
+
+---
+
+# Phase 2: Timeline, stats, and triaged polish
+
+Same branch (`feat/resume-library`), same global constraints as Phase 1.
+Direction approved in the spec: a Timeline tab in the Library dialog plus a
+stats strip, computed on the fly from `statusHistory` — zero new persisted
+data. Also lands the Phase-2 items triaged out of the Phase 1 final review.
+
+**Metric definitions (binding):**
+- *Sent* = application has `appliedAt` (advanced beyond `prepared` at least once).
+- *Responded* = `statusHistory` contains any of `heard_back`, `interview`, `offer`, `rejected` (a rejection IS a response; `no_response` is not).
+- *Interviewed* = `statusHistory` contains `interview` or `offer`.
+- *Rates* are over Sent; `null` when Sent is 0 (rendered as an em dash).
+- *Median days to first response* = median over responded apps of `(first response entry at − appliedAt)` in days; `null` when none.
+
+### Task 9: applicationStats module
+
+**Files:**
+- Create: `resume-designer/src/applicationStats.js`
+- Test: `resume-designer/test/applicationStats.test.js`
+
+**Interfaces:**
+- Consumes: nothing (pure; callers pass application arrays in — same posture as librarySearch.js).
+- Produces: `computeStats(applications)` → `{ sent, responded, responseRate, interviewRate, medianDaysToResponse, perVariant: [{ variantId, variantName, sent, responded, interviewed }] }`; `timelinePoints(applications)` → sorted `[{ id, variantId, variantName, at, status, title, company, history }]`; `timelineRange(points, nowIso)` → `{ start, end }` (ms) or null; `monthTicks(range)` → `[{ at, label }]`; `positionPct(range, atIso)` → 0–100; `timelineLanes(points)` → `[{ variantId, variantName, points }]` most-recent-activity first.
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// @vitest-environment node
+import { describe, it, expect } from 'vitest';
+
+import {
+  computeStats, timelinePoints, timelineRange, monthTicks, positionPct, timelineLanes,
+} from '../src/applicationStats.js';
+
+const DAY = 86_400_000;
+const iso = (ms) => new Date(ms).toISOString();
+const T0 = Date.UTC(2026, 5, 1); // 2026-06-01
+
+function app(over = {}) {
+  return {
+    id: over.id || 'app-1',
+    variantId: 'v1',
+    variantName: 'Resume A',
+    jobSnapshot: { title: 'PM', company: 'Acme' },
+    status: 'applied',
+    statusHistory: [{ status: 'applied', at: iso(T0) }],
+    createdAt: iso(T0),
+    appliedAt: iso(T0),
+    ...over,
+  };
+}
+
+describe('computeStats', () => {
+  it('returns zeros/nulls for empty input', () => {
+    expect(computeStats([])).toEqual({
+      sent: 0, responded: 0, responseRate: null, interviewRate: null,
+      medianDaysToResponse: null, perVariant: [],
+    });
+  });
+
+  it('excludes prepared-only drafts from sent', () => {
+    const s = computeStats([
+      app(),
+      app({ id: 'app-2', status: 'prepared', appliedAt: null, statusHistory: [{ status: 'prepared', at: iso(T0) }] }),
+    ]);
+    expect(s.sent).toBe(1);
+  });
+
+  it('counts rejected as a response but not an interview', () => {
+    const s = computeStats([
+      app({ statusHistory: [{ status: 'applied', at: iso(T0) }, { status: 'rejected', at: iso(T0 + 2 * DAY) }] }),
+    ]);
+    expect(s.responded).toBe(1);
+    expect(s.responseRate).toBe(1);
+    expect(s.interviewRate).toBe(0);
+  });
+
+  it('counts offer as interviewed and takes median over first responses', () => {
+    const s = computeStats([
+      app({ statusHistory: [{ status: 'applied', at: iso(T0) }, { status: 'heard_back', at: iso(T0 + 1 * DAY) }] }),
+      app({ id: 'app-2', statusHistory: [{ status: 'applied', at: iso(T0) }, { status: 'offer', at: iso(T0 + 5 * DAY) }] }),
+    ]);
+    expect(s.interviewRate).toBe(0.5);
+    expect(s.medianDaysToResponse).toBe(3); // median of [1, 5]
+  });
+
+  it('groups per variant with snapshot names', () => {
+    const s = computeStats([
+      app(),
+      app({ id: 'app-2', variantId: 'v2', variantName: 'Resume B',
+        statusHistory: [{ status: 'applied', at: iso(T0) }, { status: 'interview', at: iso(T0 + DAY) }] }),
+    ]);
+    expect(s.perVariant).toHaveLength(2);
+    const b = s.perVariant.find((r) => r.variantId === 'v2');
+    expect(b).toEqual({ variantId: 'v2', variantName: 'Resume B', sent: 1, responded: 1, interviewed: 1 });
+  });
+});
+
+describe('timeline helpers', () => {
+  it('timelinePoints falls back to createdAt and sorts ascending', () => {
+    const pts = timelinePoints([
+      app({ id: 'late', appliedAt: iso(T0 + 9 * DAY) }),
+      app({ id: 'draft', status: 'prepared', appliedAt: null, createdAt: iso(T0 + DAY) }),
+    ]);
+    expect(pts.map((p) => p.id)).toEqual(['draft', 'late']);
+    expect(pts[0].at).toBe(iso(T0 + DAY));
+  });
+
+  it('timelineRange pads both sides and reaches now', () => {
+    const pts = timelinePoints([app()]);
+    const r = timelineRange(pts, iso(T0 + 10 * DAY));
+    expect(r.start).toBe(T0 - 3 * DAY);
+    expect(r.end).toBe(T0 + 13 * DAY);
+    expect(timelineRange([], iso(T0))).toBeNull();
+  });
+
+  it('monthTicks yields the month boundaries inside the range', () => {
+    const ticks = monthTicks({ start: Date.UTC(2026, 4, 20), end: Date.UTC(2026, 7, 10) });
+    expect(ticks.length).toBe(3); // Jun 1, Jul 1, Aug 1 (local-time boundaries)
+  });
+
+  it('positionPct clamps to [0, 100]', () => {
+    const r = { start: T0, end: T0 + 10 * DAY };
+    expect(positionPct(r, iso(T0 + 5 * DAY))).toBe(50);
+    expect(positionPct(r, iso(T0 - DAY))).toBe(0);
+    expect(positionPct(r, iso(T0 + 11 * DAY))).toBe(100);
+  });
+
+  it('timelineLanes groups by variant, most recent activity first', () => {
+    const pts = timelinePoints([
+      app({ id: 'a', variantId: 'v1', appliedAt: iso(T0) }),
+      app({ id: 'b', variantId: 'v2', variantName: 'Resume B', appliedAt: iso(T0 + 2 * DAY) }),
+      app({ id: 'c', variantId: 'v1', appliedAt: iso(T0 + DAY) }),
+    ]);
+    const lanes = timelineLanes(pts);
+    expect(lanes.map((l) => l.variantId)).toEqual(['v2', 'v1']);
+    expect(lanes[1].points.map((p) => p.id)).toEqual(['a', 'c']);
+  });
+});
+```
+
+- [ ] **Step 2: Run it — expect module-resolution failure**
+
+Run: `npx vitest run test/applicationStats.test.js` (from `resume-designer/`)
+Expected: FAIL — cannot resolve `../src/applicationStats.js`
+
+- [ ] **Step 3: Implement**
+
+```js
+/**
+ * Application Stats Module
+ * Pure helpers that turn application records into outcome metrics and
+ * timeline geometry. No storage access — callers pass applications in
+ * (same posture as librarySearch.js). All metric definitions live here so
+ * the stats strip and timeline can't drift from each other.
+ */
+
+const DAY_MS = 86_400_000;
+const RESPONSE_STATUSES = ['heard_back', 'interview', 'offer', 'rejected'];
+const INTERVIEW_STATUSES = ['interview', 'offer'];
+
+/** Earliest statusHistory timestamp matching one of `statuses`, or null. */
+function firstAt(app, statuses) {
+  for (const entry of app.statusHistory || []) {
+    if (statuses.includes(entry.status)) return entry.at;
+  }
+  return null;
+}
+
+export function computeStats(applications) {
+  const sentApps = applications.filter((a) => a.appliedAt);
+  const respondedApps = sentApps.filter((a) => firstAt(a, RESPONSE_STATUSES));
+  const interviewedApps = sentApps.filter((a) => firstAt(a, INTERVIEW_STATUSES));
+
+  const days = respondedApps
+    .map((a) => (new Date(firstAt(a, RESPONSE_STATUSES)) - new Date(a.appliedAt)) / DAY_MS)
+    .filter((d) => Number.isFinite(d) && d >= 0)
+    .sort((x, y) => x - y);
+  let medianDaysToResponse = null;
+  if (days.length > 0) {
+    const mid = Math.floor(days.length / 2);
+    medianDaysToResponse = days.length % 2 ? days[mid] : (days[mid - 1] + days[mid]) / 2;
+  }
+
+  const byVariant = new Map();
+  for (const a of sentApps) {
+    const row = byVariant.get(a.variantId)
+      || { variantId: a.variantId, variantName: a.variantName, sent: 0, responded: 0, interviewed: 0 };
+    row.sent += 1;
+    if (firstAt(a, RESPONSE_STATUSES)) row.responded += 1;
+    if (firstAt(a, INTERVIEW_STATUSES)) row.interviewed += 1;
+    byVariant.set(a.variantId, row);
+  }
+
+  return {
+    sent: sentApps.length,
+    responded: respondedApps.length,
+    responseRate: sentApps.length ? respondedApps.length / sentApps.length : null,
+    interviewRate: sentApps.length ? interviewedApps.length / sentApps.length : null,
+    medianDaysToResponse,
+    perVariant: [...byVariant.values()].sort((a, b) => b.sent - a.sent),
+  };
+}
+
+/** One point per application at appliedAt (prepared drafts: createdAt). */
+export function timelinePoints(applications) {
+  return applications
+    .map((a) => ({
+      id: a.id,
+      variantId: a.variantId,
+      variantName: a.variantName,
+      at: a.appliedAt || a.createdAt,
+      status: a.status,
+      title: a.jobSnapshot?.title || '',
+      company: a.jobSnapshot?.company || '',
+      history: a.statusHistory || [],
+    }))
+    .filter((p) => p.at)
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** Padded [start, end] in ms; right edge reaches at least `nowIso`. */
+export function timelineRange(points, nowIso) {
+  if (points.length === 0) return null;
+  const PAD = 3 * DAY_MS;
+  const start = new Date(points[0].at).getTime() - PAD;
+  const end = Math.max(
+    new Date(points[points.length - 1].at).getTime(),
+    new Date(nowIso).getTime(),
+  ) + PAD;
+  return { start, end };
+}
+
+/** First-of-month boundaries strictly inside the range (local time). */
+export function monthTicks(range) {
+  if (!range || range.end <= range.start) return [];
+  const ticks = [];
+  const d = new Date(range.start);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  d.setMonth(d.getMonth() + 1);
+  while (d.getTime() < range.end) {
+    ticks.push({
+      at: d.getTime(),
+      label: d.toLocaleDateString(undefined, {
+        month: 'short',
+        ...(d.getMonth() === 0 ? { year: 'numeric' } : null),
+      }),
+    });
+    d.setMonth(d.getMonth() + 1);
+  }
+  return ticks;
+}
+
+export function positionPct(range, atIso) {
+  const t = new Date(atIso).getTime();
+  return Math.min(100, Math.max(0, ((t - range.start) / (range.end - range.start)) * 100));
+}
+
+/** Group points into per-variant lanes, most recent activity first. */
+export function timelineLanes(points) {
+  const lanes = new Map();
+  for (const p of points) {
+    const lane = lanes.get(p.variantId)
+      || { variantId: p.variantId, variantName: p.variantName, points: [] };
+    lane.points.push(p);
+    lanes.set(p.variantId, lane);
+  }
+  return [...lanes.values()].sort((a, b) => {
+    const lastA = a.points[a.points.length - 1].at;
+    const lastB = b.points[b.points.length - 1].at;
+    return lastB.localeCompare(lastA);
+  });
+}
+```
+
+- [ ] **Step 4: Run tests — all pass; full suite + lint clean**
+
+Run: `npx vitest run test/applicationStats.test.js`, then `npm run test && npm run lint`
+Expected: new suite passes; 0 lint errors (2 pre-existing warnings in unrelated files are fine)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add resume-designer/src/applicationStats.js resume-designer/test/applicationStats.test.js
+git commit -m "feat(library): application stats and timeline helpers"
+```
+
+### Task 10: Tabs restructure + stats strip
+
+**Files:**
+- Modify: `resume-designer/src/components/library/LibraryDialog.jsx`
+- Modify: `resume-designer/src/components/library/statusStyles.js`
+- Create: `resume-designer/src/components/library/StatsStrip.jsx`
+- Create: `resume-designer/src/components/library/TimelineView.jsx` (placeholder — Task 11 replaces it)
+
+**Interfaces:**
+- Consumes: `computeStats` from Task 9; shadcn `Tabs/TabsList/TabsTrigger/TabsContent` from `../ui/tabs.jsx`.
+- Produces: props contract for Task 11 — `<TimelineView applications onSelect />` where `onSelect(variantId)` selects that variant and switches to the Resumes tab.
+
+- [ ] **Step 1: Append dot classes to statusStyles.js**
+
+```js
+
+/**
+ * Status → timeline dot classes. Same palette story as the badges: muted =
+ * draft/closed, warm = in motion, green = win.
+ */
+export const STATUS_DOT_CLASSES = {
+  prepared: 'bg-muted-foreground/40',
+  applied: 'bg-foreground/60',
+  heard_back: 'bg-amber-500',
+  interview: 'bg-orange-500',
+  offer: 'bg-green-500',
+  rejected: 'bg-muted-foreground/60',
+  no_response: 'bg-muted-foreground/30',
+};
+```
+
+- [ ] **Step 2: Create StatsStrip.jsx**
+
+```jsx
+import { useMemo } from 'react';
+import { computeStats } from '../../applicationStats.js';
+
+function pct(x) {
+  return x == null ? '—' : `${Math.round(x * 100)}%`;
+}
+
+function days(x) {
+  if (x == null) return '—';
+  if (x < 1) return '<1 day';
+  const n = Math.round(x);
+  return `${n} day${n === 1 ? '' : 's'}`;
+}
+
+/** Four outcome tiles + a per-resume comparison. A strip, not a dashboard. */
+export default function StatsStrip({ applications }) {
+  const stats = useMemo(() => computeStats(applications), [applications]);
+  const tiles = [
+    { label: 'Applications sent', value: String(stats.sent) },
+    { label: 'Response rate', value: pct(stats.responseRate) },
+    { label: 'Interview rate', value: pct(stats.interviewRate) },
+    { label: 'Median time to response', value: days(stats.medianDaysToResponse) },
+  ];
+
+  return (
+    <div className="shrink-0 space-y-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {tiles.map((t) => (
+          <div key={t.label} className="rounded-lg border bg-card/50 px-3.5 py-2.5">
+            <div className="text-[20px] font-semibold tabular-nums">{t.value}</div>
+            <div className="text-[11px] text-muted-foreground">{t.label}</div>
+          </div>
+        ))}
+      </div>
+      {stats.perVariant.length > 0 && (
+        <div className="rounded-lg border bg-card/50 px-3.5 py-1.5">
+          {stats.perVariant.map((r) => (
+            <div key={r.variantId} className="flex items-baseline justify-between gap-3 py-1 text-[12.5px]">
+              <span className="min-w-0 truncate">{r.variantName || 'Untitled resume'}</span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {r.responded}/{r.sent} responses · {r.interviewed} interview{r.interviewed === 1 ? '' : 's'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 3: Create the TimelineView placeholder** (Task 11 replaces it)
+
+```jsx
+/** Placeholder — replaced by Task 11. */
+export default function TimelineView() {
+  return null;
+}
+```
+
+- [ ] **Step 4: Restructure LibraryDialog with tabs**
+
+Add imports:
+
+```jsx
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs.jsx';
+import StatsStrip from './StatsStrip.jsx';
+import TimelineView from './TimelineView.jsx';
+```
+
+Add tab state next to the other state hooks, and reset it when the dialog
+opens (predictable entry point):
+
+```jsx
+const [tab, setTab] = useState('resumes');
+```
+
+and in the existing open effect:
+
+```jsx
+useEffect(() => {
+  if (open) {
+    setSelectedId(currentId);
+    setTab('resumes');
+  }
+}, [open, currentId]);
+```
+
+Wrap the body: replace the outer `<div className="flex min-h-0 flex-1">`
+(the two-pane container) with a Tabs structure; the two-pane div's children
+move inside the "resumes" TabsContent unchanged:
+
+```jsx
+<Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
+  <div className="shrink-0 border-b px-[22px] py-2">
+    <TabsList className="h-8">
+      <TabsTrigger value="resumes" className="text-xs">Resumes</TabsTrigger>
+      <TabsTrigger value="timeline" className="text-xs">Timeline</TabsTrigger>
+    </TabsList>
+  </div>
+
+  <TabsContent value="resumes" className="mt-0 flex min-h-0 flex-1">
+    {/* …the existing LEFT + RIGHT pane divs, unchanged… */}
+  </TabsContent>
+
+  <TabsContent value="timeline" className="mt-0 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-[22px]">
+    <StatsStrip applications={applications} />
+    <TimelineView
+      applications={applications}
+      onSelect={(variantId) => { setSelectedId(variantId); setTab('resumes'); }}
+    />
+  </TabsContent>
+</Tabs>
+```
+
+Radix only renders the active TabsContent, so the timeline math never runs
+while you're browsing resumes. Check `ui/tabs.jsx`'s default TabsContent
+classes — if they include a top margin, the `mt-0` above must win.
+
+- [ ] **Step 5: Verify + commit**
+
+Run: `npm run test && npm run lint` and `npx vite build`
+Expected: 0 lint errors, suite green, build succeeds
+
+```bash
+git add resume-designer/src/components/library/LibraryDialog.jsx resume-designer/src/components/library/statusStyles.js resume-designer/src/components/library/StatsStrip.jsx resume-designer/src/components/library/TimelineView.jsx
+git commit -m "feat(library): timeline tab with outcome stats strip"
+```
+
+### Task 11: TimelineView
+
+**Files:**
+- Modify: `resume-designer/src/components/library/TimelineView.jsx` (replace placeholder entirely)
+
+**Interfaces:**
+- Consumes: `timelinePoints/timelineRange/monthTicks/positionPct/timelineLanes` (Task 9), `STATUS_LABELS` from applications.js, `STATUS_DOT_CLASSES` (Task 10), shadcn Tooltip from `../ui/tooltip.jsx`.
+- Produces: `<TimelineView applications onSelect />` per Task 10's contract.
+
+- [ ] **Step 1: Replace the placeholder**
+
+```jsx
+import { useMemo } from 'react';
+import {
+  Tooltip, TooltipTrigger, TooltipContent, TooltipProvider,
+} from '../ui/tooltip.jsx';
+import { cn } from '@/lib/utils';
+import {
+  timelinePoints, timelineRange, monthTicks, positionPct, timelineLanes,
+} from '../../applicationStats.js';
+import { STATUS_LABELS } from '../../applications.js';
+import { STATUS_DOT_CLASSES } from './statusStyles.js';
+
+const LABEL_W = 148; // px — lane label column; axis + gridlines offset by this
+
+const fmtDay = (isoOrMs) =>
+  new Date(isoOrMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+/**
+ * One lane per resume, one dot per application, positioned on a shared time
+ * axis (appliedAt; prepared drafts at createdAt, muted). Hover shows the
+ * status progression from statusHistory; click jumps to the resume.
+ */
+export default function TimelineView({ applications, onSelect }) {
+  const { lanes, range, ticks } = useMemo(() => {
+    const points = timelinePoints(applications);
+    const r = timelineRange(points, new Date().toISOString());
+    return { lanes: timelineLanes(points), range: r, ticks: r ? monthTicks(r) : [] };
+  }, [applications]);
+
+  if (!range) {
+    return (
+      <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed p-10 text-center text-[13px] text-muted-foreground">
+        No applications yet. Tailor a resume against a job — or add one from a
+        resume&apos;s detail view — and it shows up here.
+      </div>
+    );
+  }
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <div className="relative min-h-0 overflow-y-auto rounded-lg border bg-card/50">
+        {/* month gridlines, offset past the label column */}
+        {ticks.map((t) => (
+          <div
+            key={t.at}
+            className="pointer-events-none absolute bottom-6 top-0 w-px bg-border/60"
+            style={{ left: `calc(${LABEL_W}px + (100% - ${LABEL_W}px) * ${positionPct(range, new Date(t.at).toISOString()) / 100})` }}
+          />
+        ))}
+
+        {lanes.map((lane) => (
+          <div key={lane.variantId} className="flex items-center border-b">
+            <div
+              className="shrink-0 truncate px-3 py-3 text-[12px] text-muted-foreground"
+              style={{ width: LABEL_W }}
+              title={lane.variantName}
+            >
+              {lane.variantName || 'Untitled resume'}
+            </div>
+            <div className="relative h-9 min-w-0 flex-1">
+              {lane.points.map((p) => (
+                <Tooltip key={p.id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={`${p.title || 'Application'}${p.company ? ` at ${p.company}` : ''} — ${STATUS_LABELS[p.status]}`}
+                      onClick={() => onSelect(p.variantId)}
+                      className={cn(
+                        'absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full ring-offset-background transition-transform hover:scale-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+                        STATUS_DOT_CLASSES[p.status],
+                      )}
+                      style={{ left: `${positionPct(range, p.at)}%` }}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[280px]">
+                    <p className="font-medium">
+                      {p.title || 'Application'}{p.company ? ` @ ${p.company}` : ''}
+                    </p>
+                    <p className="text-xs opacity-80">
+                      {p.history.map((h) => `${STATUS_LABELS[h.status]} ${fmtDay(h.at)}`).join(' → ')}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {/* time axis */}
+        <div className="relative h-6" style={{ marginLeft: LABEL_W }}>
+          {ticks.map((t) => (
+            <span
+              key={t.at}
+              className="absolute top-1 -translate-x-1/2 text-[10px] text-muted-foreground"
+              style={{ left: `${positionPct(range, new Date(t.at).toISOString())}%` }}
+            >
+              {t.label}
+            </span>
+          ))}
+          {ticks.length === 0 && (
+            <>
+              <span className="absolute left-1 top-1 text-[10px] text-muted-foreground">{fmtDay(range.start)}</span>
+              <span className="absolute right-1 top-1 text-[10px] text-muted-foreground">{fmtDay(range.end)}</span>
+            </>
+          )}
+        </div>
+      </div>
+    </TooltipProvider>
+  );
+}
+```
+
+- [ ] **Step 2: Verify + commit**
+
+Run: `npm run test && npm run lint` and `npx vite build`
+Expected: 0 lint errors, suite green, build succeeds
+
+```bash
+git add resume-designer/src/components/library/TimelineView.jsx
+git commit -m "feat(library): timeline view with per-resume lanes"
+```
+
+### Task 12: Triaged polish batch
+
+**Files:**
+- Modify: `resume-designer/src/components/library/PreviewPane.jsx` (resize handling)
+- Modify: `resume-designer/src/components/library/DetailPane.jsx` (backdatable manual add)
+- Modify: `resume-designer/src/components/library/LibraryDialog.jsx` (hoist JD/thread reads; filter-empty message)
+- Modify: `resume-designer/test/rendererLayouts.test.js` (all-11-keys loop)
+
+**Interfaces:**
+- Consumes: `updateApplication` from applications.js (already imported in DetailPane).
+- Produces: no new interfaces.
+
+- [ ] **Step 1: PreviewPane — track container resizes**
+
+Replace the `useLayoutEffect` block with:
+
+```jsx
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return undefined;
+    const measure = () => setScale(el.clientWidth / pageW);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pageW, variant.id]);
+```
+
+- [ ] **Step 2: DetailPane — backdatable manual add**
+
+In `AddApplicationForm`, add date state seeded to today (local):
+
+```jsx
+  const [appliedOn, setAppliedOn] = useState(() => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 10);
+  });
+```
+
+In `submit`, capture `addApplication`'s return value and backdate when the
+picked day isn't today:
+
+```jsx
+    const created = addApplication({ /* …existing fields unchanged… */ });
+    const todayLocal = new Date();
+    todayLocal.setMinutes(todayLocal.getMinutes() - todayLocal.getTimezoneOffset());
+    if (created && appliedOn && appliedOn !== todayLocal.toISOString().slice(0, 10)) {
+      const backdated = new Date(`${appliedOn}T12:00:00`).toISOString();
+      updateApplication(created.id, { appliedAt: backdated });
+    }
+```
+
+(`updateApplication` treats `appliedAt` as freeform — managed fields are
+stripped, this one isn't. Reset `appliedOn` to today alongside the other
+field resets when the form closes.)
+
+Add the date input to the form markup, after the title/company row and
+before the buttons (shown for both the saved-JD and freeform paths):
+
+```jsx
+      <div className="space-y-1">
+        <Label htmlFor="app-applied-on" className="text-xs">Applied on</Label>
+        <Input
+          id="app-applied-on"
+          type="date"
+          value={appliedOn}
+          onChange={(e) => setAppliedOn(e.target.value)}
+          className="h-8 w-[150px] text-xs"
+        />
+      </div>
+```
+
+- [ ] **Step 3: LibraryDialog — hoist JD/thread reads, fix filter-empty copy**
+
+Add state and load-on-open (extend the open effect from Task 10):
+
+```jsx
+const [deepStores, setDeepStores] = useState({ jobDescriptions: [], threads: [] });
+```
+
+```jsx
+useEffect(() => {
+  if (open) {
+    setSelectedId(currentId);
+    setTab('resumes');
+    setDeepStores({ jobDescriptions: getAllJobDescriptions(), threads: loadThreads().threads });
+  }
+}, [open, currentId]);
+```
+
+In the `results` memo, use `deepStores.jobDescriptions` / `deepStores.threads`
+instead of calling the stores, keep the `if (!open)` guard, and add
+`deepStores` to the dependency array.
+
+Empty-state copy — replace the ternary with:
+
+```jsx
+{query
+  ? (deep ? 'No matches.' : 'No name or job matches. Try “Search everything”.')
+  : (statusFilter !== 'all' && list.length > 0
+      ? 'No resumes match this filter.'
+      : 'No resumes yet.')}
+```
+
+- [ ] **Step 4: rendererLayouts test — cover all 11 keys**
+
+Append to the existing suite (reuse its existing sample-data constant; do
+not define a second sample):
+
+```js
+const ALL_LAYOUTS = [
+  'sidebar', 'stacked', 'stacked-vertical', 'right-sidebar', 'compact',
+  'executive', 'classic', 'classic-featured', 'modern', 'timeline', 'creative',
+];
+
+it('renders every layout key to non-empty HTML', () => {
+  for (const layout of ALL_LAYOUTS) {
+    const html = renderResumeForLayout(SAMPLE, layout);
+    expect(html, layout).toBeTruthy();
+    expect(html, layout).toContain('<');
+  }
+});
+```
+
+- [ ] **Step 5: Verify + commit**
+
+Run: `npm run test && npm run lint` and `npx vite build`
+Expected: suite green (incl. new layout loop), 0 lint errors, build succeeds
+
+```bash
+git add resume-designer/src/components/library/PreviewPane.jsx resume-designer/src/components/library/DetailPane.jsx resume-designer/src/components/library/LibraryDialog.jsx resume-designer/test/rendererLayouts.test.js
+git commit -m "feat(library): phase 2 polish - resize-aware preview, backdated adds, scoped empty states"
+```
+
+### Task 13: Phase 2 final review + verification
+
+- [ ] Whole-phase code review (base = the Phase 1 verification HEAD, commit `15f0ab8`)
+- [ ] Fix wave for any Critical/Important findings, re-review
+- [ ] Full suite + lint + vite build
+- [ ] Browser walkthrough: tabs switch; stats tiles correct against seeded data (incl. em dashes at zero sent); per-resume comparison rows; timeline lanes/dots/colors; tooltip stage progression; dot click jumps to Resumes tab with the variant selected; empty timeline state; backdated manual add reflected in appliedAt; preview rescales on window resize
+- [ ] Hand WKWebKit pass to the user (Tooltip + `<input type="date">` in WebKit are the new hazard zones)
