@@ -236,11 +236,12 @@ export default function DetailPane({ variant, applications, onAfterDelete, onClo
                 if (e.key === 'Enter') commitRename();
                 // Reset the draft before unmounting so a blur fired during the
                 // unmount no-ops on commitRename's `trimmed !== variant.name` guard.
-                // stopPropagation keeps Radix Dialog's own Escape handler from
-                // closing the whole Library when the user only cancels the rename.
-                if (e.key === 'Escape') { e.stopPropagation(); setNewName(variant.name); setRenaming(false); }
+                // (The Library dialog's onEscapeKeyDown keeps Radix from also
+                // closing the dialog — it matches on data-rename-input.)
+                if (e.key === 'Escape') { setNewName(variant.name); setRenaming(false); }
               }}
               autoFocus
+              data-rename-input=""
               className="h-8 max-w-[320px] text-[15px] font-semibold"
             />
           ) : (

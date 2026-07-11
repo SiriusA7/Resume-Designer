@@ -86,6 +86,14 @@ export default function LibraryDialog() {
       <DialogContent
         showCloseButton={false}
         className="flex h-[82vh] w-[94vw] max-w-[980px] flex-col gap-0 overflow-hidden p-0 glass-card"
+        onEscapeKeyDown={(e) => {
+          // Radix listens for Escape on document (capture), so the rename
+          // input can't swallow it — cancel the close here instead, and let
+          // the input's own handler reset the rename state.
+          if (e.target instanceof Element && e.target.closest('[data-rename-input]')) {
+            e.preventDefault();
+          }
+        }}
       >
         <DialogDescription className="sr-only">
           Search and browse your resumes and job applications
