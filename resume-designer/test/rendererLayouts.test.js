@@ -14,4 +14,17 @@ describe('renderResumeForLayout', () => {
   it('dispatches named layouts to their renderer', () => {
     expect(renderResumeForLayout(EMPTY_RESUME, 'timeline')).toBe(renderResumeTimeline(EMPTY_RESUME));
   });
+
+  const ALL_LAYOUTS = [
+    'sidebar', 'stacked', 'stacked-vertical', 'right-sidebar', 'compact',
+    'executive', 'classic', 'classic-featured', 'modern', 'timeline', 'creative',
+  ];
+
+  it('renders every layout key to non-empty HTML', () => {
+    for (const layout of ALL_LAYOUTS) {
+      const html = renderResumeForLayout(EMPTY_RESUME, layout);
+      expect(html, layout).toBeTruthy();
+      expect(html, layout).toContain('<');
+    }
+  });
 });

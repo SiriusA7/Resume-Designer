@@ -22,7 +22,13 @@ export default function PreviewPane({ variant }) {
   const boxRef = useRef(null);
   const [scale, setScale] = useState(0);
   useLayoutEffect(() => {
-    if (boxRef.current) setScale(boxRef.current.clientWidth / pageW);
+    const el = boxRef.current;
+    if (!el) return undefined;
+    const measure = () => setScale(el.clientWidth / pageW);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [pageW, variant.id]);
 
   return (

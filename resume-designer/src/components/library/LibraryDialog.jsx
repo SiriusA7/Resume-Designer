@@ -43,6 +43,7 @@ export default function LibraryDialog() {
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'untracked' | a status string
   const [selectedId, setSelectedId] = useState(null);
   const [tab, setTab] = useState('resumes');
+  const [deepStores, setDeepStores] = useState({ jobDescriptions: [], threads: [] });
 
   const { currentId, list } = useVariants();
   const applications = useApplications();
@@ -58,6 +59,7 @@ export default function LibraryDialog() {
     if (open) {
       setSelectedId(currentId);
       setTab('resumes');
+      setDeepStores({ jobDescriptions: getAllJobDescriptions(), threads: loadThreads().threads });
     }
   }, [open, currentId]);
 
@@ -66,11 +68,11 @@ export default function LibraryDialog() {
     return searchLibrary(query, {
       variants: list,
       applications,
-      jobDescriptions: getAllJobDescriptions(),
-      threads: loadThreads().threads,
+      jobDescriptions: deepStores.jobDescriptions,
+      threads: deepStores.threads,
       deep,
     });
-  }, [open, query, deep, list, applications]);
+  }, [open, query, deep, list, applications, deepStores]);
 
   const rows = useMemo(() => {
     const byId = new Map(list.map((v) => [v.id, v]));
@@ -172,7 +174,9 @@ export default function LibraryDialog() {
                   <div className="px-3 py-8 text-center text-[13px] text-muted-foreground">
                     {query
                       ? (deep ? 'No matches.' : 'No name or job matches. Try “Search everything”.')
-                      : 'No resumes yet.'}
+                      : (statusFilter !== 'all' && list.length > 0
+                          ? 'No resumes match this filter.'
+                          : 'No resumes yet.')}
                   </div>
                 )}
                 {rows.map(({ variant, quickHit, deepHits }) => {

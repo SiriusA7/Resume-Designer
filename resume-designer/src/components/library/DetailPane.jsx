@@ -123,20 +123,32 @@ function AddApplicationForm({ variant }) {
   const [jobId, setJobId] = useState('');
   const [title, setTitle] = useState('');
   const [company, setCompany] = useState('');
+  const [appliedOn, setAppliedOn] = useState(() => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 10);
+  });
   const jds = getAllJobDescriptions();
 
   const submit = () => {
     const jd = jds.find((j) => j.id === jobId);
     if (!jd && !title.trim() && !company.trim()) return;
-    addApplication({
+    const created = addApplication({
       variantId: variant.id,
       variantName: variant.name,
       jobId: jd ? jd.id : null,
       jobSnapshot: jd ? { title: jd.title, company: jd.company } : { title: title.trim(), company: company.trim() },
       status: 'applied', // manual adds exist because you actually applied
     });
+    const todayLocal = new Date();
+    todayLocal.setMinutes(todayLocal.getMinutes() - todayLocal.getTimezoneOffset());
+    if (created && appliedOn && appliedOn !== todayLocal.toISOString().slice(0, 10)) {
+      const backdated = new Date(`${appliedOn}T12:00:00`).toISOString();
+      updateApplication(created.id, { appliedAt: backdated });
+    }
     setAdding(false);
     setJobId(''); setTitle(''); setCompany('');
+    setAppliedOn(todayLocal.toISOString().slice(0, 10));
   };
 
   if (!adding) {
@@ -170,6 +182,16 @@ function AddApplicationForm({ variant }) {
           <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company" className="h-8 text-xs" />
         </div>
       )}
+      <div className="space-y-1">
+        <Label htmlFor="app-applied-on" className="text-xs">Applied on</Label>
+        <Input
+          id="app-applied-on"
+          type="date"
+          value={appliedOn}
+          onChange={(e) => setAppliedOn(e.target.value)}
+          className="h-8 w-[150px] text-xs"
+        />
+      </div>
       <div className="flex gap-2">
         <Button size="sm" onClick={submit}>Add</Button>
         <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
