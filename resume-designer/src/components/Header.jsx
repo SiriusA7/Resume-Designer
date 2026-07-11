@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Plus, Copy, Pencil, Trash2, MoreHorizontal, Upload, Download,
-  ChevronDown, Settings, FileDown, User, Briefcase, History, Menu, Check, Loader2,
+  ChevronDown, Settings, FileDown, User, Briefcase, History, Menu, Check, Loader2, LibraryBig,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -183,6 +183,7 @@ export default function Header() {
   const toolItems = [
     { key: 'profile', label: 'User Profile', short: 'Profile', Icon: User, run: () => window.openUserProfilePanel?.() },
     { key: 'jobs', label: 'Job Descriptions', short: 'Jobs', Icon: Briefcase, run: () => window.openJobDescriptionPanel?.() },
+    { key: 'library', label: 'Resume Library', short: 'Library', Icon: LibraryBig, run: () => window.dispatchEvent(new CustomEvent('rd:open-library')) },
     { key: 'history', label: 'Version History', short: 'History', Icon: History, run: () => window.openHistoryPanel?.() },
   ];
 
@@ -246,6 +247,11 @@ export default function Header() {
                   </span>
                 </DropdownMenuItem>
               ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent('rd:open-library'))}>
+                <LibraryBig className="size-3.5 shrink-0" />
+                <span>View all resumes…</span>
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 

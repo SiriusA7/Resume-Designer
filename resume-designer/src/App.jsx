@@ -13,6 +13,7 @@ import StructurePanel from './components/structure/StructurePanel.jsx';
 import ChatPanel from './components/chat/ChatPanel.jsx';
 import ProfileDialog from './components/profile/ProfileDialog.jsx';
 import JobsDialog from './components/jobs/JobsDialog.jsx';
+import LibraryDialog from './components/library/LibraryDialog.jsx';
 import OnboardingWizard from './components/onboarding/OnboardingWizard.jsx';
 import { init } from './main.js';
 import { whenStorageReady } from './appStorage.js';
@@ -94,6 +95,7 @@ export default function App() {
       {storageReady && <HistoryDialog />}
       {storageReady && <ProfileDialog />}
       {storageReady && <JobsDialog />}
+      {storageReady && <LibraryDialog />}
       {storageReady && <OnboardingWizard />}
       {storageReady && <DiffDialog />}
       {storageReady && <PdfDialog />}
