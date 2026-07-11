@@ -216,23 +216,29 @@ export default function Header() {
                 <ChevronDown className="size-[13px] shrink-0 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-[60vh] min-w-56 overflow-y-auto">
-              {list.map((v) => (
-                <DropdownMenuItem key={v.id} onSelect={() => loadVariant(v.id)}>
-                  <Check className={cn('size-3.5 shrink-0', v.id !== currentId && 'opacity-0')} />
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{v.name}</span>
-                    {v.updatedAt && (
-                      <span className="text-xs text-muted-foreground">{formatDate(v.updatedAt)}</span>
-                    )}
-                  </span>
+            {/* The variant list scrolls in an inner wrapper so the "View all"
+                footer stays anchored — visible however long the list gets. */}
+            <DropdownMenuContent align="start" className="flex min-w-56 flex-col p-0">
+              <div className="max-h-[52vh] overflow-y-auto p-1">
+                {list.map((v) => (
+                  <DropdownMenuItem key={v.id} onSelect={() => loadVariant(v.id)}>
+                    <Check className={cn('size-3.5 shrink-0', v.id !== currentId && 'opacity-0')} />
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">{v.name}</span>
+                      {v.updatedAt && (
+                        <span className="text-xs text-muted-foreground">{formatDate(v.updatedAt)}</span>
+                      )}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </div>
+              <DropdownMenuSeparator className="my-0" />
+              <div className="p-1">
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent('rd:open-library'))}>
+                  <LibraryBig className="size-3.5 shrink-0" />
+                  <span>View all resumes…</span>
                 </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent('rd:open-library'))}>
-                <LibraryBig className="size-3.5 shrink-0" />
-                <span>View all resumes…</span>
-              </DropdownMenuItem>
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
 
