@@ -25,6 +25,7 @@ import {
   deleteVariant, renameVariant, getVariants, generateUniqueVariantName,
 } from '../../persistence.js';
 import { loadThreads, countThreadsForVariant } from '../../chatThreads.js';
+import { handleVariantThreadsForDelete } from '../chat/deleteVariantThreadsFlow.js';
 import { STATUS_BADGE_CLASSES } from './statusStyles.js';
 import PreviewPane from './PreviewPane.jsx';
 
@@ -204,8 +205,15 @@ export default function DetailPane({ variant, applications, onAfterDelete, onClo
     setRenaming(false);
   };
 
-  const doDelete = () => {
+  const doDelete = async () => {
     setConfirmDelete(false);
+    // Route through the shared thread-handling contract (keep→General vs delete,
+    // persist reassignment, abort orphaned streams) before removing the variant.
+    const { cancelled } = await handleVariantThreadsForDelete({
+      variantId: variant.id,
+      variantName: variant.name,
+    });
+    if (cancelled) return;
     if (isCurrent) {
       if (deleteCurrentVariant().ok) onAfterDelete();
     } else {
