@@ -12,3 +12,17 @@ export const STATUS_BADGE_CLASSES = {
   rejected: 'border-transparent bg-muted text-muted-foreground',
   no_response: 'border-transparent bg-muted text-muted-foreground',
 };
+
+/**
+ * Status → timeline dot classes. Same palette story as the badges: muted =
+ * draft/closed, warm = in motion, green = win.
+ */
+export const STATUS_DOT_CLASSES = {
+  prepared: 'bg-muted-foreground/40',
+  applied: 'bg-foreground/60',
+  heard_back: 'bg-amber-500',
+  interview: 'bg-orange-500',
+  offer: 'bg-green-500',
+  rejected: 'bg-muted-foreground/60',
+  no_response: 'bg-muted-foreground/30',
+};

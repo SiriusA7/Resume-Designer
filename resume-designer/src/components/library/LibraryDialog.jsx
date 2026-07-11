@@ -10,6 +10,7 @@ import { Label } from '../ui/label.jsx';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '../ui/select.jsx';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs.jsx';
 import { cn } from '@/lib/utils';
 import { useVariants } from '../../hooks/useVariants.js';
 import { useApplications } from '../../hooks/useApplications.js';
@@ -19,6 +20,8 @@ import { loadThreads } from '../../chatThreads.js';
 import { APPLICATION_STATUSES, STATUS_LABELS } from '../../applications.js';
 import { STATUS_BADGE_CLASSES } from './statusStyles.js';
 import DetailPane from './DetailPane.jsx';
+import StatsStrip from './StatsStrip.jsx';
+import TimelineView from './TimelineView.jsx';
 
 // Relative-then-absolute date, same behavior as the header selector.
 function formatDate(isoString) {
@@ -39,6 +42,7 @@ export default function LibraryDialog() {
   const [deep, setDeep] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'untracked' | a status string
   const [selectedId, setSelectedId] = useState(null);
+  const [tab, setTab] = useState('resumes');
 
   const { currentId, list } = useVariants();
   const applications = useApplications();
@@ -51,7 +55,10 @@ export default function LibraryDialog() {
 
   // Default the selection to the current variant each time the dialog opens.
   useEffect(() => {
-    if (open) setSelectedId(currentId);
+    if (open) {
+      setSelectedId(currentId);
+      setTab('resumes');
+    }
   }, [open, currentId]);
 
   const results = useMemo(() => {
@@ -116,108 +123,125 @@ export default function LibraryDialog() {
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1">
-          {/* LEFT: search + list */}
-          <div className="flex w-[340px] shrink-0 flex-col border-r">
-            <div className="space-y-2.5 border-b p-3">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search resumes…"
-                  className="pl-8"
-                  autoFocus
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <Checkbox id="lib-deep" checked={deep} onCheckedChange={(v) => setDeep(v === true)} />
-                  <Label htmlFor="lib-deep" className="text-xs text-muted-foreground">
-                    Search everything
-                  </Label>
+        <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 border-b px-[22px] py-2">
+            <TabsList className="h-8">
+              <TabsTrigger value="resumes" className="text-xs">Resumes</TabsTrigger>
+              <TabsTrigger value="timeline" className="text-xs">Timeline</TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent value="resumes" className="mt-0 flex min-h-0 flex-1">
+            {/* LEFT: search + list */}
+            <div className="flex w-[340px] shrink-0 flex-col border-r">
+              <div className="space-y-2.5 border-b p-3">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search resumes…"
+                    className="pl-8"
+                    autoFocus
+                  />
                 </div>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="h-7 w-[130px] text-xs" aria-label="Filter by status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All statuses</SelectItem>
-                    <SelectItem value="untracked">Untracked</SelectItem>
-                    {APPLICATION_STATUSES.map((s) => (
-                      <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Checkbox id="lib-deep" checked={deep} onCheckedChange={(v) => setDeep(v === true)} />
+                    <Label htmlFor="lib-deep" className="text-xs text-muted-foreground">
+                      Search everything
+                    </Label>
+                  </div>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="h-7 w-[130px] text-xs" aria-label="Filter by status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All statuses</SelectItem>
+                      <SelectItem value="untracked">Untracked</SelectItem>
+                      {APPLICATION_STATUSES.map((s) => (
+                        <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                {rows.length === 0 && (
+                  <div className="px-3 py-8 text-center text-[13px] text-muted-foreground">
+                    {query
+                      ? (deep ? 'No matches.' : 'No name or job matches. Try “Search everything”.')
+                      : 'No resumes yet.'}
+                  </div>
+                )}
+                {rows.map(({ variant, quickHit, deepHits }) => {
+                  const apps = applications.filter((a) => a.variantId === variant.id);
+                  const firstDeep = !quickHit && deepHits[0];
+                  return (
+                    <button
+                      key={variant.id}
+                      type="button"
+                      onClick={() => setSelectedId(variant.id)}
+                      className={cn(
+                        'w-full rounded-md px-3 py-2 text-left transition-colors hover:bg-accent',
+                        variant.id === selectedId && 'bg-accent',
+                      )}
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="min-w-0 truncate text-[13.5px] font-medium">{variant.name}</span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {formatDate(variant.updatedAt)}
+                        </span>
+                      </div>
+                      {apps.length > 0 && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          {apps.slice(0, 2).map((a) => (
+                            <Badge key={a.id} variant="outline" className={cn('text-[10px]', STATUS_BADGE_CLASSES[a.status])}>
+                              {a.jobSnapshot?.company || a.jobSnapshot?.title || 'Job'} · {STATUS_LABELS[a.status]}
+                            </Badge>
+                          ))}
+                          {apps.length > 2 && (
+                            <span className="text-[10px] text-muted-foreground">+{apps.length - 2}</span>
+                          )}
+                        </div>
+                      )}
+                      {firstDeep && (
+                        <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                          <span className="font-medium">{DEEP_SOURCE_LABELS[firstDeep.source]}:</span> {firstDeep.snippet}
+                        </p>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              {rows.length === 0 && (
-                <div className="px-3 py-8 text-center text-[13px] text-muted-foreground">
-                  {query
-                    ? (deep ? 'No matches.' : 'No name or job matches. Try “Search everything”.')
-                    : 'No resumes yet.'}
+            {/* RIGHT: detail */}
+            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+              {selected ? (
+                <DetailPane
+                  variant={selected}
+                  applications={selectedApps}
+                  onAfterDelete={() => setSelectedId(null)}
+                  onClose={() => setOpen(false)}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
+                  Select a resume to see its details
                 </div>
               )}
-              {rows.map(({ variant, quickHit, deepHits }) => {
-                const apps = applications.filter((a) => a.variantId === variant.id);
-                const firstDeep = !quickHit && deepHits[0];
-                return (
-                  <button
-                    key={variant.id}
-                    type="button"
-                    onClick={() => setSelectedId(variant.id)}
-                    className={cn(
-                      'w-full rounded-md px-3 py-2 text-left transition-colors hover:bg-accent',
-                      variant.id === selectedId && 'bg-accent',
-                    )}
-                  >
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="min-w-0 truncate text-[13.5px] font-medium">{variant.name}</span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {formatDate(variant.updatedAt)}
-                      </span>
-                    </div>
-                    {apps.length > 0 && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {apps.slice(0, 2).map((a) => (
-                          <Badge key={a.id} variant="outline" className={cn('text-[10px]', STATUS_BADGE_CLASSES[a.status])}>
-                            {a.jobSnapshot?.company || a.jobSnapshot?.title || 'Job'} · {STATUS_LABELS[a.status]}
-                          </Badge>
-                        ))}
-                        {apps.length > 2 && (
-                          <span className="text-[10px] text-muted-foreground">+{apps.length - 2}</span>
-                        )}
-                      </div>
-                    )}
-                    {firstDeep && (
-                      <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                        <span className="font-medium">{DEEP_SOURCE_LABELS[firstDeep.source]}:</span> {firstDeep.snippet}
-                      </p>
-                    )}
-                  </button>
-                );
-              })}
             </div>
-          </div>
+          </TabsContent>
 
-          {/* RIGHT: detail */}
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-            {selected ? (
-              <DetailPane
-                variant={selected}
-                applications={selectedApps}
-                onAfterDelete={() => setSelectedId(null)}
-                onClose={() => setOpen(false)}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
-                Select a resume to see its details
-              </div>
-            )}
-          </div>
-        </div>
+          <TabsContent value="timeline" className="mt-0 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-[22px]">
+            <StatsStrip applications={applications} />
+            <TimelineView
+              applications={applications}
+              onSelect={(variantId) => { setSelectedId(variantId); setTab('resumes'); }}
+            />
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
