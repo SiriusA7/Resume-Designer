@@ -272,6 +272,10 @@ export default function JobsDialog() {
     setGenReasoning('');
     setLastRun(null);
     setIsAnalyzing(true);
+    // Pin the tailor target BEFORE the await: a variant switch mid-generation
+    // must not attach the resulting drafts to the newly-selected variant.
+    const variantId = getCurrentId();
+    const variantName = variantId ? getVariants()[variantId]?.name || '' : '';
     try {
       const result = await generateResumeChanges(
         model,
@@ -284,9 +288,7 @@ export default function JobsDialog() {
           hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
         },
       );
-      const variantId = getCurrentId();
       if (variantId) {
-        const variantName = getVariants()[variantId]?.name || '';
         recordTailorDrafts(variantId, variantName, activeJDs);
       }
       if (result.changes && Object.keys(result.changes).length > 0) {

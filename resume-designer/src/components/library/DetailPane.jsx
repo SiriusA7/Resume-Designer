@@ -232,7 +232,12 @@ export default function DetailPane({ variant, applications, onAfterDelete, onClo
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onBlur={commitRename}
-              onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename();
+                // Reset the draft before unmounting so a blur fired during the
+                // unmount no-ops on commitRename's `trimmed !== variant.name` guard.
+                if (e.key === 'Escape') { setNewName(variant.name); setRenaming(false); }
+              }}
               autoFocus
               className="h-8 max-w-[320px] text-[15px] font-semibold"
             />
