@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import {
   timelinePoints, timelineRange, monthTicks, positionPct, timelineLanes,
 } from '../../applicationStats.js';
-import { STATUS_LABELS } from '../../applications.js';
+import { APPLICATION_STATUSES, STATUS_LABELS } from '../../applications.js';
 import { STATUS_DOT_CLASSES } from './statusStyles.js';
 
 const LABEL_W = 148; // px — lane label column; axis + gridlines offset by this
@@ -37,6 +37,14 @@ export default function TimelineView({ applications, onSelect }) {
 
   return (
     <TooltipProvider delayDuration={150}>
+      <div className="flex min-h-0 flex-col gap-2">
+      <div>
+        <h4 className="text-[13px] font-medium">Application timeline</h4>
+        <p className="text-[11.5px] text-muted-foreground">
+          Each dot is one application, placed on the day you applied (drafts sit
+          on their creation day). Hover for its history; click to open that resume.
+        </p>
+      </div>
       <div className="relative min-h-0 overflow-y-auto rounded-lg border bg-card/50">
         {/* month gridlines, offset past the label column */}
         {ticks.map((t) => (
@@ -103,6 +111,17 @@ export default function TimelineView({ applications, onSelect }) {
             </>
           )}
         </div>
+      </div>
+
+      {/* legend — decodes the dot colors */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {APPLICATION_STATUSES.map((s) => (
+          <span key={s} className="inline-flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
+            <span className={cn('size-2 rounded-full', STATUS_DOT_CLASSES[s])} />
+            {STATUS_LABELS[s]}
+          </span>
+        ))}
+      </div>
       </div>
     </TooltipProvider>
   );
