@@ -62,7 +62,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   initApplications, getAllApplications, getApplicationsForVariant,
   addApplication, setApplicationStatus, updateApplication, deleteApplication,
-  recordTailorDrafts, APPLICATION_STATUSES,
+  recordTailorDrafts,
 } from '../src/applications.js';
 
 const KEY = 'resume-designer-applications';
