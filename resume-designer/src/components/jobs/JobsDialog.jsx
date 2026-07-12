@@ -32,7 +32,7 @@ import { recordTailorDrafts } from '../../applications.js';
 import { createChangeSet } from '../../diffEngine.js';
 import { showDiffView } from '../../diffView.js';
 import { store } from '../../store.js';
-import { getCurrentId } from '../../variantManager.js';
+import { getCurrentId, loadVariant } from '../../variantManager.js';
 import { applyRecommendationToStore } from '../../jobRecommendations.js';
 import { JobCard } from './JobCard.jsx';
 import { AnalysisResults } from './AnalysisResults.jsx';
@@ -292,6 +292,18 @@ export default function JobsDialog() {
         recordTailorDrafts(variantId, variantName, activeJDs);
       }
       if (result.changes && Object.keys(result.changes).length > 0) {
+        // The changes were generated for the pinned variant. If the user
+        // switched resumes mid-generation (the dialog can be dismissed while
+        // the request runs), switch back before diffing — otherwise the diff
+        // is computed and applied against the wrong resume. Same cross-résumé
+        // guard as the chat apply flow.
+        if (variantId && getCurrentId() !== variantId) {
+          if (!loadVariant(variantId)) {
+            toast.error('The resume this tailoring was generated for no longer exists.');
+            return;
+          }
+          toast.info(`Switched back to "${variantName}" to review its tailored changes.`);
+        }
         const changeSet = createChangeSet(store.getData(), result.changes);
         setOpen(false);
         showDiffView(changeSet);
