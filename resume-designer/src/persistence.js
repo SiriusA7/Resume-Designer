@@ -324,6 +324,7 @@ const BACKUP_FIXED_KEYS = [
   // Core data
   'resume-designer-data',
   'resume-designer-job-descriptions',
+  'resume-designer-applications',
   'resume-designer-chat-threads',
   'resume-designer-chat-history',          // legacy, harmless to round-trip
   'resume-designer-token-usage',

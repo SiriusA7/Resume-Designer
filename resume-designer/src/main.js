@@ -5,19 +5,7 @@
 
 import { store } from './store.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
-import {
-  renderResume, 
-  renderResumeStacked,
-  renderResumeStackedVertical,
-  renderResumeRightSidebar,
-  renderResumeCompact,
-  renderResumeExecutive,
-  renderResumeClassic,
-  renderResumeClassicFeatured,
-  renderResumeModern,
-  renderResumeTimeline,
-  renderResumeCreative
-} from './renderer.js';
+import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
 import { paginate, resetPaginatedState } from './pagination.js';
 import { normalizePageSize, DEFAULT_PAGE_WIDTH_IN } from './pageSetup.js';
@@ -50,6 +38,7 @@ import {
 import { initTheme } from './theme.js';
 import { openJobDescriptionPanel, onJobPanelVariantChange } from './jobDescriptionPanel.js';
 import { initJobDescriptions } from './jobDescriptions.js';
+import { initApplications } from './applications.js';
 import { openUserProfilePanel } from './userProfilePanel.js';
 import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
 import { initFontService } from './fontService.js';
@@ -300,6 +289,7 @@ export async function init() {
   // regardless of when JobsDialog mounts. The dialog's own mount effect calls
   // this again — that second call is a harmless re-read of the same store.
   initJobDescriptions();
+  initApplications();
 
   // Tag the html element so CSS can apply desktop-only chrome (traffic light
   // padding on macOS, etc.). Keep the legacy `electron` / `electron-mac`
@@ -1321,45 +1311,7 @@ function renderCurrentResume() {
   }
   
   // Render based on current layout
-  switch (currentLayout) {
-    case 'stacked':
-      container.innerHTML = renderResumeStacked(data);
-      break;
-    case 'stacked-vertical':
-      // Stacked Vertical - skills below highlights (not side-by-side)
-      container.innerHTML = renderResumeStackedVertical(data);
-      break;
-    case 'right-sidebar':
-      container.innerHTML = renderResumeRightSidebar(data);
-      break;
-    case 'compact':
-      container.innerHTML = renderResumeCompact(data);
-      break;
-    case 'executive':
-      container.innerHTML = renderResumeExecutive(data);
-      break;
-    case 'classic':
-      container.innerHTML = renderResumeClassic(data);
-      break;
-    case 'classic-featured':
-      // Classic Featured - highlights after summary, skills at bottom
-      container.innerHTML = renderResumeClassicFeatured(data);
-      break;
-    case 'modern':
-      // Modern layout - small left sidebar with header on top
-      container.innerHTML = renderResumeModern(data);
-      break;
-    case 'timeline':
-      // Timeline layout - experience with visual timeline
-      container.innerHTML = renderResumeTimeline(data);
-      break;
-    case 'creative':
-      // Creative layout - multi-section grid
-      container.innerHTML = renderResumeCreative(data);
-      break;
-    default:
-      container.innerHTML = renderResume(data);
-  }
+  container.innerHTML = renderResumeForLayout(data, currentLayout);
   
   // Add layout class to resume for CSS targeting
   const resume = container.querySelector('.resume');
