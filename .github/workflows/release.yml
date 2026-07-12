@@ -547,3 +547,23 @@ jobs:
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The rolling `next` release reuses one tag forever: action-gh-release
+      # only creates a tag when it doesn't exist, so the ref stays frozen on
+      # the first beta commit while the assets move on. Re-point it after a
+      # successful publish so the release page, source archives, and
+      # `git describe` reflect the commit the beta was actually built from.
+      # Runs after publish on purpose — if publishing fails, the tag keeps
+      # matching whatever assets last shipped.
+      - name: Move the next tag to the built commit (next channel only)
+        if: ${{ needs.decide.outputs.channel == 'next' }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.git.updateRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'tags/next',
+              sha: context.sha,
+              force: true
+            });
