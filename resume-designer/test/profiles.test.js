@@ -328,4 +328,12 @@ describe('shared api key overlay', () => {
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }));
     expect(getSettings().openrouterKey).toBe('sk-blob');
   });
+
+  it('an intentionally cleared shared key masks a stale blob key', () => {
+    // Presence beats truthiness: '' in the shared key means the user cleared
+    // it — a leftover blob credential must never resurface through getSettings.
+    appStorage.setItem(OPENROUTER_KEY_KEY, '');
+    appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-stale' } }));
+    expect(getSettings().openrouterKey).toBe('');
+  });
 });

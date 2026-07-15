@@ -243,15 +243,21 @@ export function saveSettings(settings) {
   }
 }
 
-// Get settings. The shared machine-level key overlays the blob; a blob value
-// still wins as fallback for pre-extraction installs (adoption strips it on
-// the next boot).
+// Get settings. The shared machine-level key is authoritative when PRESENT
+// (null-check, not truthiness: an existing empty value means the user cleared
+// the key and must mask any stale blob value); the blob is only a fallback
+// for pre-extraction installs (adoption strips it on the next boot).
 export function getSettings() {
   const storage = loadFromStorage();
   const s = storage.settings || DEFAULT_STORAGE.settings;
   const shared = appStorage.getItem(OPENROUTER_KEY_KEY);
   // Legacy OpenRouter-era guarantees preserved (see original comment).
-  return { autoFallback: false, customModels: [], ...s, openrouterKey: shared || s.openrouterKey || '' };
+  return {
+    autoFallback: false,
+    customModels: [],
+    ...s,
+    openrouterKey: shared !== null ? shared : (s.openrouterKey || ''),
+  };
 }
 
 // Get user profile
