@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { appStorage, __resetAppStorageForTests, setProfileMapping } from '../src/appStorage.js';
+import {
+  appStorage, initAppStorage, __resetAppStorageForTests, setProfileMapping,
+} from '../src/appStorage.js';
 import {
   loadRegistry, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile,
@@ -11,6 +13,17 @@ beforeEach(() => {
   __resetAppStorageForTests();
   localStorage.clear();
 });
+
+function makeBackend(initial = {}) {
+  const files = new Map(Object.entries(initial));
+  return {
+    files,
+    loadAll: vi.fn(async () => Object.fromEntries(files)),
+    write: vi.fn(async (key, value) => { files.set(key, value); }),
+    delete: vi.fn(async (key) => { files.delete(key); }),
+    clear: vi.fn(async () => { files.clear(); }),
+  };
+}
 
 function seedRegistry() {
   const a = createProfile({ name: 'Ash', emoji: '🦊' });
@@ -96,6 +109,63 @@ describe('registry CRUD', () => {
 });
 
 describe('adoption migration', () => {
+  it('makes the marker durable and copies every source before deleting any source', async () => {
+    const operations = [];
+    const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
+    backend.write.mockImplementation(async (key, value) => {
+      operations.push(`write:${key}`);
+      backend.files.set(key, value);
+    });
+    backend.delete.mockImplementation(async (key) => {
+      operations.push(`delete:${key}`);
+      backend.files.delete(key);
+    });
+    await initAppStorage({ backend });
+
+    const id = await ensureProfilesInitialized();
+
+    const markerWrite = operations.indexOf('write:__profile_adoption_pending__');
+    const registryWrite = operations.indexOf(`write:${PROFILES_KEY}`);
+    const copyWrites = operations
+      .map((operation, index) => ({ operation, index }))
+      .filter(({ operation }) => operation.startsWith('write:resume-p:'));
+    const sourceDeletes = operations
+      .map((operation, index) => ({ operation, index }))
+      .filter(({ operation }) => operation === 'delete:resume-designer-data');
+
+    expect(markerWrite).toBeGreaterThanOrEqual(0);
+    expect(markerWrite).toBeLessThan(registryWrite);
+    expect(copyWrites).not.toHaveLength(0);
+    expect(sourceDeletes).not.toHaveLength(0);
+    expect(Math.max(...copyWrites.map(({ index }) => index)))
+      .toBeLessThan(Math.min(...sourceDeletes.map(({ index }) => index)));
+    expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
+    expect(backend.files.get(`resume-p:${id}:resume-designer-data`)).toBe('{"variants":{}}');
+    expect(backend.files.has('resume-designer-data')).toBe(false);
+    expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+  });
+
+  it('keeps sources and the marker durable when adoption copies fail', async () => {
+    const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
+    backend.write.mockImplementation(async (key, value) => {
+      if (key.startsWith('resume-p:')) throw new Error('disk full');
+      backend.files.set(key, value);
+    });
+    await initAppStorage({ backend });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const id = await ensureProfilesInitialized();
+
+      expect(id).not.toBeNull();
+      expect(backend.files.get('resume-designer-data')).toBe('{"variants":{}}');
+      expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
+      expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{}}');
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it('adopts existing unprefixed data into a first profile named from the user profile', async () => {
     localStorage.setItem('resume-designer-data', JSON.stringify({
       variants: {}, currentVariantId: null,
@@ -166,6 +236,25 @@ describe('adoption migration', () => {
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-old' } }));
     extractSharedApiKey();
     expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-keep');
+    expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
+  });
+
+  it('extractSharedApiKey strips an empty blob key without creating a shared key', () => {
+    appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: '' } }));
+
+    extractSharedApiKey();
+
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
+    expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
+  });
+
+  it('extractSharedApiKey does not resurrect a stale key over an existing empty shared value', () => {
+    appStorage.setItem(OPENROUTER_KEY_KEY, '');
+    appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-stale' } }));
+
+    extractSharedApiKey();
+
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('');
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
   });
 });

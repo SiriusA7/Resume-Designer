@@ -42,13 +42,24 @@ function saveRegistry(registry) {
 // namespace. Idempotent: re-running overwrites the copy and skips
 // already-moved (now missing) sources. Mapping must be INACTIVE here —
 // physical targets pass through mapKey untouched either way.
-function migrateUnprefixedKeys(profileId) {
+async function migrateUnprefixedKeys(profileId) {
+  const moved = [];
   for (const k of appStorage.keys()) {
     if (!k || isSharedKey(k) || isPhysicalKey(k) || !isOwnedKey(k)) continue;
     const v = appStorage.getItem(k);
-    if (v !== null) appStorage.setItem(physicalKey(profileId, k), v);
-    appStorage.removeItem(k);
+    if (v !== null) {
+      appStorage.setItem(physicalKey(profileId, k), v);
+      moved.push(k);
+    }
   }
+  if (!moved.length) return true;
+  if (!(await appStorage.flush())) {
+    console.error('[profiles] adoption copies did not reach disk — keeping sources; will resume next boot');
+    return false;
+  }
+  for (const k of moved) appStorage.removeItem(k);
+  await appStorage.flush();
+  return true;
 }
 
 // Best-effort profile name for adoption: the user's own name if they filled
@@ -74,9 +85,11 @@ export function extractSharedApiKey() {
     const raw = appStorage.getItem('resume-designer-data');
     if (!raw) return;
     const data = JSON.parse(raw);
+    if (!data?.settings || !('openrouterKey' in data.settings)) return;
     const inBlob = data?.settings?.openrouterKey;
-    if (!inBlob) return;
-    if (!appStorage.getItem(OPENROUTER_KEY_KEY)) appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
+    if (inBlob && appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
+      appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
+    }
     delete data.settings.openrouterKey;
     appStorage.setItem('resume-designer-data', JSON.stringify(data));
   } catch {
@@ -117,17 +130,26 @@ export async function ensureProfilesInitialized() {
   let registry = loadRegistry() || rebuildRegistryFromKeys();
 
   if (!registry) {
-    // True first boot with profile support (or an adoption killed before the
-    // registry write — no keys moved yet in that case). Marker FIRST, then
-    // registry + pointer, THEN the key moves: a crash mid-move resumes
-    // under the same id via the marker branch below.
+    // Marker reaches disk FIRST; registry + pointer cross their own durability
+    // barrier while it holds; copies reach disk before source deletes; and the
+    // marker is deleted only after migration succeeds. A crash at any barrier
+    // therefore either leaves sources intact or resumes under the same id.
     const id = generateProfileId();
     appStorage.setItem(PROFILE_ADOPTION_MARKER, '1');
+    if (!(await appStorage.flush())) {
+      appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+      console.error('[profiles] adoption aborted: marker write did not reach disk');
+      return null;
+    }
     const profile = { id, name: adoptionProfileName(), emoji: '🙂', createdAt: new Date().toISOString() };
     saveRegistry([profile]);
     appStorage.setItem(ACTIVE_PROFILE_KEY, id);
-    migrateUnprefixedKeys(id);
-    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+    await appStorage.flush();
+    const moved = await migrateUnprefixedKeys(id);
+    if (moved) {
+      appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+      await appStorage.flush();
+    }
     setProfileMapping(id);
     extractSharedApiKey();
     return id;
@@ -139,8 +161,11 @@ export async function ensureProfilesInitialized() {
     appStorage.setItem(ACTIVE_PROFILE_KEY, active);
   }
   if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) {
-    migrateUnprefixedKeys(active); // resume interrupted adoption, same id
-    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+    const moved = await migrateUnprefixedKeys(active); // resume interrupted adoption, same id
+    if (moved) {
+      appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+      await appStorage.flush();
+    }
   }
   setProfileMapping(active);
   extractSharedApiKey();
