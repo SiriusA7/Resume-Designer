@@ -8,6 +8,7 @@ import {
   ensureProfilesInitialized, extractSharedApiKey,
 } from '../src/profiles.js';
 import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
+import { getSettings, saveSettings } from '../src/persistence.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
@@ -310,5 +311,21 @@ describe('adoption migration', () => {
 
     expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('');
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
+  });
+});
+
+describe('shared api key overlay', () => {
+  it('saveSettings routes openrouterKey to the shared key and strips it from the blob', () => {
+    saveSettings({ openrouterKey: 'sk-new', defaultModel: 'm' });
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-new');
+    const blob = JSON.parse(appStorage.getItem('resume-designer-data'));
+    expect(blob.settings.openrouterKey).toBeUndefined();
+    expect(blob.settings.defaultModel).toBe('m');
+    expect(getSettings().openrouterKey).toBe('sk-new');
+  });
+
+  it('getSettings falls back to a blob-resident key before extraction ran', () => {
+    appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }));
+    expect(getSettings().openrouterKey).toBe('sk-blob');
   });
 });

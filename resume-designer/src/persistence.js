@@ -23,7 +23,6 @@ const DEFAULT_STORAGE = {
     orientation: 'portrait',
     pageWidthIn: 8.5,
     customColor: '#c45c3e',
-    openrouterKey: '',
     autoFallback: false,
     defaultModel: 'anthropic/claude-sonnet-4.6',
     customModels: [],
@@ -225,28 +224,34 @@ export function clearVariantAnalysis(variantId) {
   }
 }
 
-// Save settings
+// Save settings. openrouterKey is machine-level (shared across profiles) and
+// routes to its own key; everything else merges into the per-profile blob.
 export function saveSettings(settings) {
+  const { openrouterKey, ...rest } = settings;
+  if (openrouterKey !== undefined) {
+    appStorage.setItem(OPENROUTER_KEY_KEY, openrouterKey);
+  }
   const storage = loadFromStorage();
-  storage.settings = { ...storage.settings, ...settings };
+  storage.settings = { ...storage.settings, ...rest };
+  delete storage.settings.openrouterKey; // never persists in the blob anymore
   saveToStorage(storage);
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
-      detail: { settings: storage.settings }
+      detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
     }));
   }
 }
 
-// Get settings
+// Get settings. The shared machine-level key overlays the blob; a blob value
+// still wins as fallback for pre-extraction installs (adoption strips it on
+// the next boot).
 export function getSettings() {
   const storage = loadFromStorage();
   const s = storage.settings || DEFAULT_STORAGE.settings;
-  // Guarantee OpenRouter-era keys exist for installs created before the
-  // migration. Legacy anthropicKey/openaiKey/geminiKey are simply ignored; a
-  // legacy colon-form `defaultModel` is migrated to a slug on read by
-  // validateModelId() in aiService.js, so it needs no rewrite here.
-  return { openrouterKey: '', autoFallback: false, customModels: [], ...s };
+  const shared = appStorage.getItem(OPENROUTER_KEY_KEY);
+  // Legacy OpenRouter-era guarantees preserved (see original comment).
+  return { autoFallback: false, customModels: [], ...s, openrouterKey: shared || s.openrouterKey || '' };
 }
 
 // Get user profile
@@ -317,7 +322,7 @@ export function exportAsMarkdown(data, filename) {
 // Round-tripping atomically as a single file keeps those refs
 // consistent — partial restores would risk dangling references.
 
-import { BACKUP_HISTORY_PREFIX, isOwnedKey } from './profileKeys.js';
+import { BACKUP_HISTORY_PREFIX, isOwnedKey, OPENROUTER_KEY_KEY } from './profileKeys.js';
 
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
