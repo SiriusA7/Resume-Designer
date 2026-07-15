@@ -39,6 +39,7 @@ import { initTheme } from './theme.js';
 import { openJobDescriptionPanel, onJobPanelVariantChange } from './jobDescriptionPanel.js';
 import { initJobDescriptions } from './jobDescriptions.js';
 import { initApplications } from './applications.js';
+import { initLearnedAnswers } from './learnedAnswers.js';
 import { openUserProfilePanel } from './userProfilePanel.js';
 import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
 import { initFontService } from './fontService.js';
@@ -290,6 +291,7 @@ export async function init() {
   // this again — that second call is a harmless re-read of the same store.
   initJobDescriptions();
   initApplications();
+  initLearnedAnswers();
 
   // Tag the html element so CSS can apply desktop-only chrome (traffic light
   // padding on macOS, etc.). Keep the legacy `electron` / `electron-mac`
