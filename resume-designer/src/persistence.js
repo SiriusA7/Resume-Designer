@@ -317,9 +317,7 @@ export function exportAsMarkdown(data, filename) {
 // Round-tripping atomically as a single file keeps those refs
 // consistent — partial restores would risk dangling references.
 
-import {
-  BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX, isOwnedKey,
-} from './profileKeys.js';
+import { BACKUP_HISTORY_PREFIX, isOwnedKey } from './profileKeys.js';
 
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
