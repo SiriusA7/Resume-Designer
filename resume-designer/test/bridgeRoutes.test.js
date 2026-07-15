@@ -147,6 +147,32 @@ describe('POST /applications', () => {
   });
 });
 
+describe('prototype-key ids', () => {
+  const PROTO_IDS = ['__proto__', 'constructor', 'hasOwnProperty'];
+  it('404s GET /resumes/:id for inherited object keys', async () => {
+    for (const id of PROTO_IDS) {
+      const res = await route(makeDeps(), { method: 'GET', path: `/resumes/${id}`, authorization: AUTH, body: '' });
+      expect(res.status).toBe(404);
+    }
+  });
+  it('404s GET /resumes/:id/pdf for inherited object keys without exporting', async () => {
+    for (const id of PROTO_IDS) {
+      const deps = makeDeps();
+      const res = await route(deps, { method: 'GET', path: `/resumes/${id}/pdf`, authorization: AUTH, body: '' });
+      expect(res.status).toBe(404);
+      expect(deps.exportVariantPdf).not.toHaveBeenCalled();
+    }
+  });
+  it('404s POST /applications for inherited object keys', async () => {
+    for (const id of PROTO_IDS) {
+      const deps = makeDeps();
+      const res = await route(deps, { method: 'POST', path: '/applications', authorization: AUTH, body: JSON.stringify({ variantId: id }) });
+      expect(res.status).toBe(404);
+      expect(deps.addApplication).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe('POST /profile/answers', () => {
   it('saves a q&a pair', async () => {
     const deps = makeDeps();

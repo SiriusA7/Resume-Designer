@@ -11,6 +11,9 @@
 
 const json = (status, body) => ({ status, body });
 
+/** Own-key variant lookup — inherited keys (__proto__, constructor) must 404, not resolve. */
+const findVariant = (variants, id) => (Object.hasOwn(variants, id) ? variants[id] : undefined);
+
 /** "Backend Resume" -> "Backend-Resume.pdf" (safe cross-platform filename). */
 function pdfFilename(name) {
   const base = String(name || 'Resume').trim().replace(/[^\p{L}\p{N} _.-]+/gu, '').replace(/\s+/g, '-');
@@ -47,7 +50,7 @@ export function createBridgeRouter(deps) {
 
       const detail = method === 'GET' && path.match(/^\/resumes\/([^/]+)$/);
       if (detail) {
-        const variant = deps.getVariants()[detail[1]];
+        const variant = findVariant(deps.getVariants(), detail[1]);
         if (!variant) return json(404, { error: `no resume with id ${detail[1]}` });
         return json(200, {
           id: variant.id,
@@ -61,7 +64,7 @@ export function createBridgeRouter(deps) {
 
       const pdf = method === 'GET' && path.match(/^\/resumes\/([^/]+)\/pdf$/);
       if (pdf) {
-        const variant = deps.getVariants()[pdf[1]];
+        const variant = findVariant(deps.getVariants(), pdf[1]);
         if (!variant) return json(404, { error: `no resume with id ${pdf[1]}` });
         const pdfBase64 = await deps.exportVariantPdf(variant.id);
         return json(200, { filename: pdfFilename(variant.name), pdfBase64 });
@@ -86,7 +89,7 @@ export function createBridgeRouter(deps) {
       if (method === 'POST' && path === '/applications') {
         const variantId = typeof parsed.variantId === 'string' ? parsed.variantId.trim() : '';
         if (!variantId) return json(400, { error: 'variantId is required' });
-        const variant = deps.getVariants()[variantId];
+        const variant = findVariant(deps.getVariants(), variantId);
         if (!variant) return json(404, { error: `no resume with id ${variantId}` });
         const application = deps.addApplication({
           variantId,
