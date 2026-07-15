@@ -126,6 +126,7 @@ describe('adoption migration', () => {
 
     const markerWrite = operations.indexOf('write:__profile_adoption_pending__');
     const registryWrite = operations.indexOf(`write:${PROFILES_KEY}`);
+    const pointerWrite = operations.indexOf(`write:${ACTIVE_PROFILE_KEY}`);
     const copyWrites = operations
       .map((operation, index) => ({ operation, index }))
       .filter(({ operation }) => operation.startsWith('write:resume-p:'));
@@ -135,6 +136,7 @@ describe('adoption migration', () => {
 
     expect(markerWrite).toBeGreaterThanOrEqual(0);
     expect(markerWrite).toBeLessThan(registryWrite);
+    expect(markerWrite).toBeLessThan(pointerWrite);
     expect(copyWrites).not.toHaveLength(0);
     expect(sourceDeletes).not.toHaveLength(0);
     expect(Math.max(...copyWrites.map(({ index }) => index)))
@@ -161,6 +163,58 @@ describe('adoption migration', () => {
       expect(backend.files.get('resume-designer-data')).toBe('{"variants":{}}');
       expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
       expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{}}');
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('resumes a cached-mode adoption with copies durable before source deletes', async () => {
+    const operations = [];
+    const backend = makeBackend({
+      '__profile_adoption_pending__': '1',
+      [PROFILES_KEY]: JSON.stringify([{ id: 'pfixed', name: 'Ash', emoji: '🙂', createdAt: 'x' }]),
+      [ACTIVE_PROFILE_KEY]: 'pfixed',
+      'resume-designer-data': '{"variants":{}}',
+    });
+    backend.write.mockImplementation(async (key, value) => {
+      operations.push(`write:${key}`);
+      backend.files.set(key, value);
+    });
+    backend.delete.mockImplementation(async (key) => {
+      operations.push(`delete:${key}`);
+      backend.files.delete(key);
+    });
+    await initAppStorage({ backend });
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('pfixed');
+    const copyWrite = operations.indexOf('write:resume-p:pfixed:resume-designer-data');
+    const sourceDelete = operations.indexOf('delete:resume-designer-data');
+    expect(copyWrite).toBeGreaterThanOrEqual(0);
+    expect(copyWrite).toBeLessThan(sourceDelete);
+    expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
+    expect(backend.files.get('resume-p:pfixed:resume-designer-data')).toBe('{"variants":{}}');
+    expect(backend.files.has('resume-designer-data')).toBe(false);
+    expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+  });
+
+  it('keeps the marker when source deletes fail to reach disk', async () => {
+    const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
+    backend.delete.mockImplementation(async (key) => {
+      if (key === 'resume-designer-data') throw new Error('disk full');
+      backend.files.delete(key);
+    });
+    await initAppStorage({ backend });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const id = await ensureProfilesInitialized();
+
+      // Copies are durable, but the un-finalized migration must keep the
+      // marker so the next boot resumes and retries the source cleanup.
+      expect(backend.files.get(`resume-p:${id}:resume-designer-data`)).toBe('{"variants":{}}');
+      expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
     } finally {
       errSpy.mockRestore();
     }

@@ -58,8 +58,10 @@ async function migrateUnprefixedKeys(profileId) {
     return false;
   }
   for (const k of moved) appStorage.removeItem(k);
-  await appStorage.flush();
-  return true;
+  // Copies are durable at this point, so a failed delete-flush only delays
+  // source cleanup: the caller keeps the marker and the next boot's resume
+  // re-runs this (idempotent) migration to finish the deletes.
+  return await appStorage.flush();
 }
 
 // Best-effort profile name for adoption: the user's own name if they filled
@@ -144,7 +146,14 @@ export async function ensureProfilesInitialized() {
     const profile = { id, name: adoptionProfileName(), emoji: '🙂', createdAt: new Date().toISOString() };
     saveRegistry([profile]);
     appStorage.setItem(ACTIVE_PROFILE_KEY, id);
-    await appStorage.flush();
+    if (!(await appStorage.flush())) {
+      // No migration has run yet, so aborting leaves sources untouched. The
+      // queued registry/marker writes either land later (next boot resumes
+      // under this id) or never land (next boot redoes a fresh adoption).
+      // Identity mapping this session matches whatever is on disk.
+      console.error('[profiles] adoption aborted: registry write did not reach disk');
+      return null;
+    }
     const moved = await migrateUnprefixedKeys(id);
     if (moved) {
       appStorage.removeItem(PROFILE_ADOPTION_MARKER);
