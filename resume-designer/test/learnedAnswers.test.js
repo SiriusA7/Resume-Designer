@@ -17,6 +17,9 @@ describe('normalizeQuestion', () => {
   it('lowercases, strips punctuation, collapses whitespace', () => {
     expect(normalizeQuestion('  What is your  Notice Period?! ')).toBe('what is your notice period');
   });
+  it('keeps non-ASCII letters (\\p{L}, not [a-z])', () => {
+    expect(normalizeQuestion('Préavis (délai)?')).toBe('préavis délai');
+  });
   it('handles empty and non-string input', () => {
     expect(normalizeQuestion('')).toBe('');
     expect(normalizeQuestion(null)).toBe('');

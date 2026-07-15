@@ -405,7 +405,7 @@ export async function init() {
 
   // Companion-extension bridge (desktop only; no-op in browser dev).
   const { initBridge } = await import('./bridge.js');
-  initBridge();
+  initBridge().catch((e) => console.error('[Bridge] init failed:', e));
 
   // Initialize inline editor
   initInlineEditor();

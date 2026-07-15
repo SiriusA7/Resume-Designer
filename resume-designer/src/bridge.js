@@ -46,7 +46,8 @@ export async function initBridge() {
   ]);
   const version = await getVersion();
 
-  // PDF export lands in Task 8 (pdf.js). Until then the route 500s cleanly.
+  // Defensive lookup of pdf.js's export: if the module fails to load or the
+  // export is missing, the PDF route 500s cleanly instead of breaking init.
   let exportVariantPdf = async () => {
     throw new Error('PDF export over the bridge is not available yet');
   };

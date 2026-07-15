@@ -482,7 +482,7 @@ export default function SettingsDialog() {
                       description="The browser extension pairs with the app at this address using this token. Treat the token like a password."
                     />
                     <div className="flex items-center gap-2">
-                      <Input readOnly value="http://127.0.0.1:17872" className="w-52 shrink-0 font-mono text-xs" />
+                      <Input readOnly value="http://127.0.0.1:17872" aria-label="Bridge address" className="w-52 shrink-0 font-mono text-xs" />
                       <Input
                         readOnly
                         type={showBridgeToken ? 'text' : 'password'}
@@ -504,7 +504,12 @@ export default function SettingsDialog() {
                         type="button"
                         variant="outline"
                         onClick={async () => {
-                          await navigator.clipboard.writeText(getBridgeToken());
+                          try {
+                            await navigator.clipboard.writeText(getBridgeToken());
+                          } catch (e) {
+                            console.warn('[Bridge] copy failed:', e);
+                            return;
+                          }
                           setCopiedBridgeToken(true);
                           setTimeout(() => setCopiedBridgeToken(false), 1500);
                         }}
