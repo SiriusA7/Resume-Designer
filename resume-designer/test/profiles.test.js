@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { appStorage, __resetAppStorageForTests } from '../src/appStorage.js';
+import { appStorage, __resetAppStorageForTests, setProfileMapping } from '../src/appStorage.js';
 import {
   loadRegistry, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile,
+  ensureProfilesInitialized, extractSharedApiKey,
 } from '../src/profiles.js';
-import { PROFILES_KEY, ACTIVE_PROFILE_KEY } from '../src/profileKeys.js';
+import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
@@ -91,5 +92,80 @@ describe('registry CRUD', () => {
     expect(appStorage.keys().some((k) => k.includes(b.id))).toBe(false);
     expect(loadRegistry()).toHaveLength(1);
     expect(() => deleteProfile(a.id)).toThrow(); // last remaining
+  });
+});
+
+describe('adoption migration', () => {
+  it('adopts existing unprefixed data into a first profile named from the user profile', async () => {
+    localStorage.setItem('resume-designer-data', JSON.stringify({
+      variants: {}, currentVariantId: null,
+      settings: { openrouterKey: 'sk-or-abc' },
+      userProfile: { contactInfo: { fullName: 'Ash Shah' } },
+    }));
+    localStorage.setItem('resume-designer-history-v1', '[]');
+    localStorage.setItem('resume-designer-theme', 'dark');
+
+    const id = await ensureProfilesInitialized();
+
+    const reg = loadRegistry();
+    expect(reg).toHaveLength(1);
+    expect(reg[0]).toMatchObject({ id, name: 'Ash Shah' });
+    expect(getActiveProfileId()).toBe(id);
+    // per-profile keys moved under the namespace…
+    expect(localStorage.getItem(`resume-p:${id}:resume-designer-history-v1`)).toBe('[]');
+    expect(localStorage.getItem('resume-designer-history-v1')).toBeNull();
+    // …shared keys did not move…
+    expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
+    // …the API key was extracted to the shared key and stripped from the blob…
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-or-abc');
+    const blob = JSON.parse(localStorage.getItem(`resume-p:${id}:resume-designer-data`));
+    expect(blob.settings.openrouterKey).toBeUndefined();
+    // …and mapped reads now resolve through the namespace.
+    expect(appStorage.getItem('resume-designer-history-v1')).toBe('[]');
+  });
+
+  it('is a fast no-op on later boots and heals a dangling active pointer', async () => {
+    const first = await ensureProfilesInitialized();
+    appStorage.setItem(ACTIVE_PROFILE_KEY, 'ghost');
+    setProfileMapping(null); // simulate fresh boot
+    const healed = await ensureProfilesInitialized();
+    expect(healed).toBe(first);
+    expect(getActiveProfileId()).toBe(first);
+  });
+
+  it('rebuilds a lost registry from existing namespaced data (no data loss)', async () => {
+    // Corrupt/missing registry while workspaces exist on disk: recovery must
+    // re-list the observed namespaces, never adopt-as-new (which would orphan
+    // every namespaced key behind an empty fresh profile).
+    localStorage.setItem('resume-p:pold:resume-designer-data',
+      '{"variants":{},"userProfile":{"contactInfo":{"fullName":"Ash Shah"}}}');
+    localStorage.setItem('resume-p:pold:resume-zoom', '1.25');
+    localStorage.setItem(PROFILES_KEY, '{corrupt');
+
+    const id = await ensureProfilesInitialized();
+    expect(id).toBe('pold');
+    expect(loadRegistry()).toHaveLength(1);
+    expect(loadRegistry()[0]).toMatchObject({ id: 'pold', name: 'Ash Shah' });
+    expect(appStorage.getItem('resume-zoom')).toBe('1.25'); // mapped read works again
+  });
+
+  it('resumes an interrupted adoption under the same profile id', async () => {
+    localStorage.setItem('resume-designer-data', '{"variants":{}}');
+    localStorage.setItem('__profile_adoption_pending__', '1');
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'pfixed', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'pfixed');
+
+    const id = await ensureProfilesInitialized();
+    expect(id).toBe('pfixed');
+    expect(localStorage.getItem('resume-p:pfixed:resume-designer-data')).toBe('{"variants":{}}');
+    expect(localStorage.getItem('__profile_adoption_pending__')).toBeNull();
+  });
+
+  it('extractSharedApiKey never clobbers an existing shared key', () => {
+    appStorage.setItem(OPENROUTER_KEY_KEY, 'sk-keep');
+    appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-old' } }));
+    extractSharedApiKey();
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-keep');
+    expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
   });
 });
