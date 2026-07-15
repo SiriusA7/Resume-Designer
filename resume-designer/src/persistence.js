@@ -317,36 +317,11 @@ export function exportAsMarkdown(data, filename) {
 // Round-tripping atomically as a single file keeps those refs
 // consistent — partial restores would risk dangling references.
 
-// The exhaustive list of "owned" keys. Listed explicitly rather than
-// via a wildcard so future contributors notice if they add a new key
-// and forget to include it in the backup.
-const BACKUP_FIXED_KEYS = [
-  // Core data
-  'resume-designer-data',
-  'resume-designer-job-descriptions',
-  'resume-designer-applications',
-  'resume-designer-chat-threads',
-  'resume-designer-chat-history',          // legacy, harmless to round-trip
-  'resume-designer-token-usage',
-  // UI / personalization
-  'resume-designer-theme',
-  'resume-designer-onboarding-complete',
-  'resume-edit-hint-dismissed',
-  'resume-header-style',
-  'resume-accent-settings',
-  'resume-font-settings',
-  'resume-spacing-settings',
-  'resume-photo-settings',
-  'resume-zoom',
-  'resume-designer-update-channel',
-  'resume-designer-auto-update-check',
-];
-// Undo/redo history lives at this prefix, one key per variant.
-const BACKUP_HISTORY_PREFIX = 'resume-designer-history-';
+import {
+  BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX, isOwnedKey,
+} from './profileKeys.js';
 
-export function isOwnedKey(key) {
-  return BACKUP_FIXED_KEYS.includes(key) || key.startsWith(BACKUP_HISTORY_PREFIX);
-}
+export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
 /**
  * Recognize a localStorage QuotaExceededError across browser engines.
