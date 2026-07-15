@@ -137,15 +137,27 @@ async function handleDownloadPdf(customFilename) {
  * measures its own copy. Kept in the signature for symmetry with html2pdf.
  */
 // One native export at a time: the PreviewPdfPath temp slot in Rust is a
-// single slot, so a bridge export racing a user export would clobber it.
+// single slot, so a bridge export racing a user export would clobber it. The
+// guard is OWNED by the two public entry points (exportVariantPdfBase64 and
+// runNativeExportWithPreview), NOT by generatePdfNative: the interactive flow
+// keeps using the temp slot AFTER generatePdfNative returns — the preview dialog
+// stays open until the user Saves or Cancels — so the guard must span that whole
+// lifecycle, not just the generation step. Acquire/release is exactly-once per
+// entry-point invocation; see each caller's path trace.
 let nativeExportInFlight = false;
 
-async function generatePdfNative(_resumeEl, _filename, variantId = null) {
+function acquireExportGuard() {
   if (nativeExportInFlight) {
     throw new Error('another PDF export is in progress — try again in a moment');
   }
   nativeExportInFlight = true;
-  try {
+}
+
+function releaseExportGuard() {
+  nativeExportInFlight = false;
+}
+
+async function generatePdfNative(_resumeEl, _filename, variantId = null) {
   // 0. Flush any pending in-memory edits to storage BEFORE the print
   //    window opens. The store's auto-save is debounced (~SAVE_DEBOUNCE_MS),
   //    so a user who types and immediately clicks "Download PDF" can have
@@ -331,12 +343,6 @@ async function generatePdfNative(_resumeEl, _filename, variantId = null) {
       }
     }
   }
-  } finally {
-    // Release the single-export guard on EVERY exit path — including the early
-    // flush/durability and listener-setup throws above, which the inner
-    // listener-cleanup finally does not cover.
-    nativeExportInFlight = false;
-  }
 }
 
 // ===== Native (Tauri) export with preview =====
@@ -360,6 +366,23 @@ async function runNativeExportWithPreview(defaultFilename) {
     alert('Failed to generate PDF: Resume content not found.');
     return;
   }
+  // Hold the export guard for the WHOLE preview lifecycle — from before
+  // generation until the preview dialog reaches a terminal state (saved,
+  // picker backed out, or cancelled). The dialog can stay open for minutes,
+  // and the temp slot must stay ours that entire time: a bridge export
+  // passing the guard mid-preview would overwrite the slot and its cleanup
+  // would delete it, breaking (or mis-targeting) the user's Save.
+  //
+  // Acquire OUTSIDE the try/catch below: if another export already holds the
+  // guard we must bail without touching the temp slot (the catch's discard
+  // would delete the other export's in-flight PDF) and without releasing a
+  // guard we don't own.
+  try {
+    acquireExportGuard();
+  } catch (error) {
+    alert(`Failed to generate PDF: ${error.message}.`);
+    return;
+  }
   setExportBusy(true);
   let previewBase64 = null;
   try {
@@ -369,7 +392,10 @@ async function runNativeExportWithPreview(defaultFilename) {
   } catch (error) {
     console.error('PDF generation failed:', error);
     alert(`Failed to generate PDF: ${error.message || 'Unknown error'}.`);
+    // Terminal: clean the slot first, then release (discardPdfPreview never
+    // throws — see native.js — so the release below always runs).
     await discardPdfPreview();
+    releaseExportGuard();
     setExportBusy(false);
     return;
   }
@@ -387,6 +413,16 @@ async function runNativeExportWithPreview(defaultFilename) {
 
 // Save the previewed temp PDF: pick the destination (native dialog), copy temp →
 // path. Backing out of the native dialog discards the temp.
+//
+// Guard ownership: the export guard has been held since
+// runNativeExportWithPreview acquired it. The two TERMINAL outcomes here —
+// save succeeded, or the user backed out of the native picker (temp
+// discarded) — release it. A FAILED save is NOT terminal: PdfDialog keeps the
+// preview open for a retry against the retained temp PDF, so the guard stays
+// held — releasing it mid-retry would let a bridge export overwrite the temp
+// slot the retry is about to save. The retry loop can only exit through save
+// success, picker back-out, or the dialog's Cancel/Esc/X (→ cancelPreviewedPdf),
+// each of which releases exactly once.
 async function savePreviewedPdf(customFilename) {
   const filename = customFilename
     ? (customFilename.endsWith('.pdf') ? customFilename : `${customFilename}.pdf`)
@@ -394,6 +430,7 @@ async function savePreviewedPdf(customFilename) {
   const path = await pickPdfSavePath(filename);
   if (!path) {
     await discardPdfPreview();
+    releaseExportGuard();
     return;
   }
   setExportBusy(true);
@@ -404,16 +441,22 @@ async function savePreviewedPdf(customFilename) {
   } catch (error) {
     console.error('PDF save failed:', error);
     // Propagate so the preview dialog can stay open and offer a retry — the temp
-    // PDF is still on disk, so re-picking a path and saving again works.
+    // PDF is still on disk, so re-picking a path and saving again works. The
+    // guard stays HELD across the retry window (see above).
     throw error;
   } finally {
     setExportBusy(false);
   }
+  // Save completed — terminal.
+  releaseExportGuard();
 }
 
-// Cancel the preview: drop the temp file.
+// Cancel the preview: drop the temp file, then release the export guard held
+// since runNativeExportWithPreview acquired it. PdfDialog routes every
+// non-confirm dismissal (Cancel button, X, Esc, backdrop) here exactly once.
 async function cancelPreviewedPdf() {
   await discardPdfPreview();
+  releaseExportGuard();
 }
 
 /**
@@ -543,16 +586,23 @@ async function generatePdfWithHtml2Pdf(resumeEl, filename) {
 /**
  * Headless variant export for the companion-extension bridge: render the
  * given variant in the hidden print window, capture, and return the PDF as
- * base64. Uses the same temp-slot flow as the interactive export (guarded by
- * nativeExportInFlight) and always cleans the slot up.
+ * base64. Uses the same temp-slot flow as the interactive export — the export
+ * guard is held from before generation until the slot is cleaned up, so a
+ * concurrent user export (or another bridge call) fails fast instead of
+ * clobbering the slot.
  */
 export async function exportVariantPdfBase64(variantId) {
-  await generatePdfNative(null, null, variantId);
+  acquireExportGuard();
   try {
+    await generatePdfNative(null, null, variantId);
     const base64 = await readPdfPreview();
     if (!base64) throw new Error('could not read the generated PDF');
     return base64;
   } finally {
+    // Clean the slot, THEN release — never the other way around, or a waiting
+    // export could capture into the slot just before our discard deletes it.
+    // (discardPdfPreview never throws, so the release always runs.)
     await discardPdfPreview();
+    releaseExportGuard();
   }
 }
