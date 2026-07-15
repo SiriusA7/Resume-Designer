@@ -30,7 +30,12 @@ function save() {
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(answers));
   } catch (e) {
-    storageErrorToast(e);
+    console.error('Failed to save learned answers:', e);
+    storageErrorToast(
+      'Could not save your learned answers — storage is full. Free up '
+      + 'space (delete resumes you no longer need) and try again.',
+      { once: true },
+    );
   }
 }
 
@@ -40,7 +45,8 @@ export function initLearnedAnswers() {
     const raw = appStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     answers = Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (e) {
+    console.error('Failed to load learned answers:', e);
     answers = [];
   }
   return answers;
