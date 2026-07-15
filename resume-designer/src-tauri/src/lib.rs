@@ -16,12 +16,17 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .manage(commands::PendingPdfPath::default())
         .manage(commands::PreviewPdfPath::default())
+        .manage(commands::bridge::BridgePending::default())
         .setup(|app| {
             #[cfg(desktop)]
             {
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.manage(commands::updater::PendingUpdate::default());
+
+                // Companion-extension bridge: loopback HTTP listener that
+                // forwards requests to the webview (see commands/bridge.rs).
+                commands::bridge::start(app.handle().clone());
             }
 
             // Add "Settings…" and "Check for Updates…" to the application
@@ -85,6 +90,7 @@ pub fn run() {
             commands::storage::storage_write,
             commands::storage::storage_delete,
             commands::storage::storage_clear,
+            commands::bridge::bridge_respond,
             #[cfg(desktop)]
             commands::updater::check_update_on_channel,
             #[cfg(desktop)]
