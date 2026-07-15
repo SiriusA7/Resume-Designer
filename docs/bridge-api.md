@@ -35,6 +35,14 @@ Data → Companion extension** (the address and token are shown there; the token
 is masked behind a show/hide toggle and has a copy button). Treat it like a
 password — anyone with the token and local machine access can drive the app.
 
+The token is part of the backup-owned keyspace, so **full backups include it**:
+restoring a backup on the same machine keeps existing pairings working without
+re-pairing. That is safe to leave in the backup file — the server is
+loopback-only, so the token is useless off the machine. The flip side: after
+**replace-importing** a backup taken on a different install, the app's token is
+different from the one your extension paired with, so the extension must be
+re-paired (copy the new token from Settings).
+
 A missing or wrong token on any authenticated route returns:
 
 ```
@@ -48,6 +56,9 @@ HTTP 401
   `Content-Type: application/json`.
 - `POST` bodies must be valid JSON. A malformed body returns
   `400 {"error":"invalid JSON body"}`.
+- Request bodies must be valid UTF-8. A body that can't be read as UTF-8 text
+  returns `400 {"error":"unreadable request body"}` (enforced in Rust before
+  the request reaches the router).
 - Request bodies are capped at **1 MiB**. A larger body returns
   `413 {"error":"request body too large"}` (enforced in Rust before the request
   reaches the router).
@@ -59,6 +70,9 @@ HTTP 401
   render), **30 s** for everything else.
 - If the app window is unavailable to receive the request at all, the server
   returns `502 {"error":"app window unavailable"}`.
+- If the server's internal request-tracking state is unusable (a poisoned lock
+  after a panic — should not happen in practice), it returns
+  `500 {"error":"bridge state lock poisoned"}`.
 
 ### Status codes at a glance
 
@@ -66,11 +80,11 @@ HTTP 401
 | ------ | ------- |
 | `200`  | OK (GET routes, `POST /ai/complete`) |
 | `201`  | Created (`POST /applications`, `POST /profile/answers`) |
-| `400`  | Invalid JSON body, or request-body validation failed |
+| `400`  | Invalid JSON body, non-UTF-8 request body, or request-body validation failed |
 | `401`  | Missing/invalid bearer token |
 | `404`  | Unknown resume id, or unknown route |
 | `413`  | Request body exceeds 1 MiB |
-| `500`  | Unhandled error inside the router (e.g. PDF export failed) |
+| `500`  | Unhandled error inside the router (e.g. PDF export failed), or the Rust-side bridge state lock is poisoned |
 | `502`  | AI upstream failed (`/ai/complete`), or app window unavailable |
 | `504`  | The app did not answer within the timeout |
 
