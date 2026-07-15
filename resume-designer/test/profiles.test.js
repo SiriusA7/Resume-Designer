@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appStorage, __resetAppStorageForTests } from '../src/appStorage.js';
 import {
   loadRegistry, getActiveProfileId, setActiveProfile,
@@ -32,6 +32,40 @@ describe('registry CRUD', () => {
     expect(loadRegistry()).toBeNull();
     appStorage.setItem(PROFILES_KEY, '[]');
     expect(loadRegistry()).toBeNull();
+  });
+
+  it('treats a registry with ANY invalid entry as corrupt (null)', () => {
+    // Partial salvage would silently orphan the invalid entry's workspace;
+    // null routes boot through the rebuild-from-keys recovery instead.
+    appStorage.setItem(PROFILES_KEY, JSON.stringify([
+      { id: 'pgood', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+      { id: 42, name: 'Broken' },
+    ]));
+    expect(loadRegistry()).toBeNull();
+  });
+
+  it('rejects colon-bearing ids as corrupt (physical-key separator)', () => {
+    appStorage.setItem(PROFILES_KEY, JSON.stringify([
+      { id: 'p:evil', name: 'X', emoji: '🙂', createdAt: 'x' },
+    ]));
+    expect(loadRegistry()).toBeNull();
+  });
+
+  it('createProfile re-rolls a colliding generated id', () => {
+    // Deterministic generateProfileId: freeze time and step Math.random so
+    // the first roll collides with a seeded id, the second roll differs.
+    vi.spyOn(Date, 'now').mockReturnValue(1000000);
+    const rand = vi.spyOn(Math, 'random');
+    rand.mockReturnValueOnce(0.123456789).mockReturnValueOnce(0.123456789).mockReturnValueOnce(0.987654321);
+    try {
+      const seeded = createProfile({ name: 'Seed' }); // uses roll #1
+      const next = createProfile({ name: 'Next' });   // roll #2 collides, roll #3 wins
+      expect(next.id).not.toBe(seeded.id);
+      const ids = loadRegistry().map((p) => p.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('renames and re-emojis a profile', () => {
