@@ -136,7 +136,16 @@ async function handleDownloadPdf(customFilename) {
  * `resumeEl` is still passed in but is no longer measured — the print window
  * measures its own copy. Kept in the signature for symmetry with html2pdf.
  */
-async function generatePdfNative(_resumeEl, _filename) {
+// One native export at a time: the PreviewPdfPath temp slot in Rust is a
+// single slot, so a bridge export racing a user export would clobber it.
+let nativeExportInFlight = false;
+
+async function generatePdfNative(_resumeEl, _filename, variantId = null) {
+  if (nativeExportInFlight) {
+    throw new Error('another PDF export is in progress — try again in a moment');
+  }
+  nativeExportInFlight = true;
+  try {
   // 0. Flush any pending in-memory edits to storage BEFORE the print
   //    window opens. The store's auto-save is debounced (~SAVE_DEBOUNCE_MS),
   //    so a user who types and immediately clicks "Download PDF" can have
@@ -241,7 +250,7 @@ async function generatePdfNative(_resumeEl, _filename) {
     // stealing keyboard focus; `skipTaskbar: true` keeps it out of the
     // macOS Dock / Windows taskbar.
     printWindow = new WebviewWindow(PRINT_LABEL, {
-      url: '/print.html',
+      url: variantId ? `/print.html?variant=${encodeURIComponent(variantId)}` : '/print.html',
       visible: true,
       x: -10000,
       y: -10000,
@@ -321,6 +330,12 @@ async function generatePdfNative(_resumeEl, _filename) {
         console.warn('PDF Export: failed to close print window:', err);
       }
     }
+  }
+  } finally {
+    // Release the single-export guard on EVERY exit path — including the early
+    // flush/durability and listener-setup throws above, which the inner
+    // listener-cleanup finally does not cover.
+    nativeExportInFlight = false;
   }
 }
 
@@ -522,5 +537,22 @@ async function generatePdfWithHtml2Pdf(resumeEl, filename) {
     throw new Error(`PDF rendering failed: ${renderError.message}`);
   } finally {
     exportRoot.classList.remove('pdf-export-mode');
+  }
+}
+
+/**
+ * Headless variant export for the companion-extension bridge: render the
+ * given variant in the hidden print window, capture, and return the PDF as
+ * base64. Uses the same temp-slot flow as the interactive export (guarded by
+ * nativeExportInFlight) and always cleans the slot up.
+ */
+export async function exportVariantPdfBase64(variantId) {
+  await generatePdfNative(null, null, variantId);
+  try {
+    const base64 = await readPdfPreview();
+    if (!base64) throw new Error('could not read the generated PDF');
+    return base64;
+  } finally {
+    await discardPdfPreview();
   }
 }

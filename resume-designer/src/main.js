@@ -626,9 +626,17 @@ export async function initPrintMode() {
     // Load the currently active variant's data into the store so the
     // renderer can read it. skipSave=true because this is a read-only
     // render — we don't want to mutate stored data from the print window.
-    const variantId = getCurrentVariantId();
+    // Bridge exports pass ?variant=<id> to render a specific variant; the
+    // user-facing export flow omits it and captures the current one.
+    const overrideId = new URLSearchParams(window.location.search).get('variant');
+    const variantId = overrideId || getCurrentVariantId();
     const variants = getVariants();
     const variant = variantId ? variants[variantId] : null;
+    if (overrideId && !variant?.data) {
+      // Fail loudly through the existing print-error path rather than
+      // silently capturing the current variant.
+      throw new Error(`Print window: no variant with id ${overrideId}`);
+    }
     if (variant?.data) {
       store.setData(variant.data, true, variantId);
     }
