@@ -403,6 +403,10 @@ export async function init() {
   const { initUpdateFlow } = await import('./updateFlow.js');
   initUpdateFlow();
 
+  // Companion-extension bridge (desktop only; no-op in browser dev).
+  const { initBridge } = await import('./bridge.js');
+  initBridge();
+
   // Initialize inline editor
   initInlineEditor();
   
