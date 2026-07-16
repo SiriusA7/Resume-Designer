@@ -409,6 +409,20 @@ function writeOwnedKeyOrSkip(key, value) {
   }
 }
 
+// Undo a failed wipe-then-write import: drop whatever the import managed to
+// write, then restore the snapshot taken before the wipe. The snapshot fit in
+// storage before the wipe, so it fits again once the partial writes are gone;
+// the per-key try/catch is defensive — a rollback must never mask the import
+// error it is cleaning up after.
+function rollbackWipedImport(writtenKeys, priorValues) {
+  for (const k of writtenKeys) {
+    try { appStorage.removeItem(k); } catch { /* keep going */ }
+  }
+  for (const [k, v] of priorValues) {
+    try { appStorage.setItem(k, v); } catch { /* keep going */ }
+  }
+}
+
 // Physical keys belonging to the ACTIVE profile, plus any unprefixed owned
 // keys (pre-adoption states), plus shared owned keys. This is the "what a
 // format-1 restore may remove/replace" set — other profiles are untouchable.
@@ -572,45 +586,66 @@ function importFullBackupV2(parsed) {
     }
   }
 
-  // Clean slate across ALL namespaces (full restore replaces everything).
-  let removedExistingKeys = 0;
+  // Clean slate across ALL namespaces (full restore replaces everything) —
+  // snapshotting every removed value first. The critical writes below can
+  // throw QuotaExceededError in passthrough mode (a desktop multi-profile
+  // backup can exceed a browser origin's quota), and without the snapshot
+  // that throw would leave the store wiped or half-restored — losing the
+  // user's CURRENT profiles on a failed import.
+  const priorValues = new Map();
   for (const k of appStorage.keys()) {
     const split = splitPhysicalKey(k);
     const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
     if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY || k === OPENROUTER_KEY_KEY) {
+      priorValues.set(k, appStorage.getItem(k));
       appStorage.removeItem(k);
-      removedExistingKeys++;
     }
   }
+  const removedExistingKeys = priorValues.size;
 
-  appStorage.setItem(PROFILES_KEY, JSON.stringify(registry));
-  const active = registry.some((p) => p.id === parsed.activeProfile)
-    ? parsed.activeProfile : registry[0].id;
-  appStorage.setItem(ACTIVE_PROFILE_KEY, active);
+  const written = [];
+  const writeTracked = (k, v) => {
+    appStorage.setItem(k, v);
+    written.push(k);
+  };
 
-  for (const [k, v] of Object.entries(parsed.shared || {})) {
-    if (BACKUP_SHARED_KEYS.includes(k) && typeof v === 'string') appStorage.setItem(k, v);
-  }
-
-  // Same quota strategy as format 1, globally across every profile: critical
-  // keys first, then bulky history best-effort. Per-profile passes could let
-  // an early profile's history consume quota needed by a later profile's
-  // critical data.
   let keysImported = 0;
   let historySkipped = 0;
-  const nonHistory = profileEntries.filter(
-    ({ logicalKey }) => !logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
-  );
-  const history = profileEntries.filter(
-    ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
-  );
-  for (const { physicalKey: key, logicalKey, value } of nonHistory) {
-    appStorage.setItem(key, normalizeImportedValue(logicalKey, value));
-    keysImported++;
-  }
-  for (const { physicalKey: key, value } of history) {
-    if (writeOwnedKeyOrSkip(key, value)) keysImported++;
-    else historySkipped++;
+  try {
+    writeTracked(PROFILES_KEY, JSON.stringify(registry));
+    const active = registry.some((p) => p.id === parsed.activeProfile)
+      ? parsed.activeProfile : registry[0].id;
+    writeTracked(ACTIVE_PROFILE_KEY, active);
+
+    for (const [k, v] of Object.entries(parsed.shared || {})) {
+      if (BACKUP_SHARED_KEYS.includes(k) && typeof v === 'string') writeTracked(k, v);
+    }
+
+    // Same quota strategy as format 1, globally across every profile: critical
+    // keys first, then bulky history best-effort. Per-profile passes could let
+    // an early profile's history consume quota needed by a later profile's
+    // critical data.
+    const nonHistory = profileEntries.filter(
+      ({ logicalKey }) => !logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
+    );
+    const history = profileEntries.filter(
+      ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
+    );
+    for (const { physicalKey: key, logicalKey, value } of nonHistory) {
+      writeTracked(key, normalizeImportedValue(logicalKey, value));
+      keysImported++;
+    }
+    for (const { physicalKey: key, value } of history) {
+      if (writeOwnedKeyOrSkip(key, value)) {
+        written.push(key);
+        keysImported++;
+      } else {
+        historySkipped++;
+      }
+    }
+  } catch (err) {
+    rollbackWipedImport(written, priorValues);
+    throw err;
   }
   return { keysImported, removedExistingKeys, historySkipped };
 }
@@ -636,8 +671,14 @@ export function importFullBackupFromEnvelope(parsed) {
 
   // Clean slate for the active profile only: remove its existing owned keys
   // so the imported state is canonical without touching other profiles.
-  const removed = collectActiveOwnedKeys();
-  for (const k of removed) appStorage.removeItem(k);
+  // Snapshot each removed value first — pass 1 below can throw
+  // QuotaExceededError in passthrough mode, and the rollback restores this
+  // snapshot so a failed import can't leave the workspace wiped.
+  const priorValues = new Map();
+  for (const k of collectActiveOwnedKeys()) {
+    priorValues.set(k, appStorage.getItem(k));
+    appStorage.removeItem(k);
+  }
 
   // Two-pass write to handle the localStorage quota safely:
   //
@@ -646,7 +687,8 @@ export function importFullBackupFromEnvelope(parsed) {
   //   (~250 KB for the typical user), well under any WebView's
   //   per-origin localStorage cap. We write them first so they
   //   ALWAYS land — even if pass 2 runs out of room. A
-  //   QuotaExceededError here would be unrecoverable and bubbles up.
+  //   QuotaExceededError here bubbles up — after the rollback restores
+  //   the pre-import workspace.
   //
   //   Pass 2: every history key (`resume-designer-history-*`). These
   //   are best-effort because they can be 100s of KB to MB per
@@ -673,17 +715,25 @@ export function importFullBackupFromEnvelope(parsed) {
   const nonHistory = entries.filter(([k]) => !k.startsWith(BACKUP_HISTORY_PREFIX));
   const history = entries.filter(([k]) => k.startsWith(BACKUP_HISTORY_PREFIX));
 
-  for (const [k, v] of nonHistory) {
-    appStorage.setItem(k, normalizeImportedValue(k, v));
-  }
+  const written = [];
   let historySkipped = 0;
-  for (const [k, v] of history) {
-    if (!writeOwnedKeyOrSkip(k, v)) historySkipped++;
+  try {
+    for (const [k, v] of nonHistory) {
+      appStorage.setItem(k, normalizeImportedValue(k, v));
+      written.push(k);
+    }
+    for (const [k, v] of history) {
+      if (writeOwnedKeyOrSkip(k, v)) written.push(k);
+      else historySkipped++;
+    }
+  } catch (err) {
+    rollbackWipedImport(written, priorValues);
+    throw err;
   }
 
   return {
     keysImported: entries.length - historySkipped,
-    removedExistingKeys: removed.length,
+    removedExistingKeys: priorValues.size,
     historySkipped,
   };
 }
