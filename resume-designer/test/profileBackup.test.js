@@ -507,3 +507,33 @@ describe('deleteProfileDurably', () => {
     expect(JSON.parse(backend.files.get(PROFILES_KEY)).map((p) => p.id)).toEqual(['a']);
   });
 });
+
+// Regression (PR #89 finding 34): exportFullBackup exported orphan namespaces
+// (physical keys whose id is absent from the registry — e.g. after a partial
+// cached-mode deletion) without a registry entry, producing a backup that
+// importFullBackupV2's own orphan rejection refuses to restore.
+describe('exportFullBackup orphan reconciliation', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('synthesizes a registry entry so the backup round-trips', async () => {
+    await seedTwoProfiles();
+    appStorage.setItem('resume-p--orphan1--resume-designer-data', '{"variants":{"vo":{}}}');
+
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    const orphanEntry = envelope.registry.find((p) => p.id === 'orphan1');
+    expect(orphanEntry).toBeTruthy();
+    expect(orphanEntry.name).toMatch(/recovered/i);
+
+    localStorage.clear();
+    __resetAppStorageForTests();
+    const result = importFullBackupFromEnvelope(envelope); // must not throw on the orphan
+    expect(result.keysImported).toBeGreaterThan(0);
+    expect(localStorage.getItem('resume-p--orphan1--resume-designer-data')).toBe('{"variants":{"vo":{}}}');
+  });
+});

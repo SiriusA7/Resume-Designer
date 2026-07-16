@@ -472,12 +472,28 @@ export function exportFullBackup(filename) {
       if (v !== null) ((profiles[activeId] ||= { keys: {} }).keys)[k] = v;
     }
   }
+  // Reconcile orphan namespaces with the exported registry: a partial
+  // cached-mode deletion (registry update durable, some workspace deletes
+  // not) can leave physical keys whose id is missing from loadRegistry(),
+  // and importFullBackupV2 rejects orphan `profiles` entries outright — the
+  // app must never generate a backup its own importer refuses. Synthesizing
+  // a registry entry (in the EXPORTED copy only, never live storage) keeps
+  // the data and makes the backup self-consistent; the orphan becomes a
+  // visible, normal profile on restore.
+  const exportedRegistry = (loadRegistry() || []).slice();
+  const knownIds = new Set(exportedRegistry.map((p) => p.id));
+  for (const pid of Object.keys(profiles)) {
+    if (!knownIds.has(pid)) {
+      exportedRegistry.push({ id: pid, name: `Recovered profile (${pid.slice(0, 6)})` });
+    }
+  }
+
   const backup = {
     backupFormat: 2,
     kind: 'full',
     createdAt: new Date().toISOString(),
     source: 'in-app',
-    registry: loadRegistry() || [],
+    registry: exportedRegistry,
     activeProfile: getActiveProfileId(),
     shared,
     profiles,
