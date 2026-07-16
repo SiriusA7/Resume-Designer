@@ -87,6 +87,14 @@ function reloadWithOverlay(message = 'Reloading…') {
  * Reuses the existing .modal-overlay / .modal classes for theming + dark mode.
  */
 function showImportSuccessAndReload(message) {
+  // The destructive restore has already rewritten appStorage, so the in-memory
+  // store now holds the STALE pre-import résumé. Latch saving off BEFORE this
+  // modal (which waits on the user) goes up: otherwise a visibilitychange /
+  // window-close in that window would fire store.saveNow() and write the stale
+  // résumé back into the just-restored profile. This function is only ever
+  // called after a successful import, so suspending here is unconditional.
+  store.suspendSaves();
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'import-success-modal-overlay';

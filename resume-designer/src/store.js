@@ -119,6 +119,13 @@ function createStore() {
   const listeners = new Set();
   let saveCallback = null;
   let saveTimeout = null;
+  // Latched off before a destructive restore reloads the window. Between the
+  // restore writing appStorage and the reload booting from it, the in-memory
+  // `data` is the STALE pre-import résumé; a save in that window (the
+  // visibilitychange/close handlers call saveNow) would write it back into the
+  // freshly-restored profile — corrupting the backup. Once suspended it stays
+  // suspended: the only path forward from a restore is the reload.
+  let savesSuspended = false;
   const SAVE_DEBOUNCE_MS = 500;
   
   // Undo/redo history with metadata
@@ -469,8 +476,19 @@ function createStore() {
       saveCallback = callback;
     },
 
+    // Latch saving off ahead of a post-restore reload (see savesSuspended).
+    // Cancels any pending debounce so it can't fire during the reload window.
+    suspendSaves() {
+      savesSuspended = true;
+      if (saveTimeout) {
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+      }
+    },
+
     // Schedule a debounced save
     scheduleSave() {
+      if (savesSuspended) return;
       if (saveTimeout) {
         clearTimeout(saveTimeout);
       }
@@ -490,6 +508,10 @@ function createStore() {
       if (saveTimeout) {
         clearTimeout(saveTimeout);
       }
+      // Suspended after a restore: the in-memory data is stale, so writing it
+      // would clobber the just-restored workspace. Report success so shutdown
+      // callers (close/visibilitychange) don't treat the no-op as a failure.
+      if (savesSuspended) return true;
       if (saveCallback && data) {
         const ok = saveCallback(data) !== false;
         if (ok) this.markSaved();
