@@ -530,11 +530,17 @@ function importFullBackupV2(parsed) {
     }
   }
 
-  // Validate shared values BEFORE the wipe. appStorage only stores strings, so
-  // a non-string here is corruption. This must run pre-wipe: otherwise the
-  // clean slate below removes the current shared value (API key, theme…) and
-  // the write loop, guarded on `typeof v === 'string'`, silently skips the bad
-  // replacement — a "successful" restore that erased machine-level settings.
+  // Validate the shared section BEFORE the wipe. This must run pre-wipe:
+  // otherwise the clean slate below removes the current shared value (API key,
+  // theme…) and the write loop, guarded on membership + `typeof v === 'string'`,
+  // silently skips the bad replacement — a "successful" restore that erased
+  // machine-level settings. Check the CONTAINER first: a string or array
+  // `shared` would survive Object.entries (its entries are strings) and slip
+  // past the value check.
+  if (parsed.shared !== undefined
+      && (parsed.shared === null || typeof parsed.shared !== 'object' || Array.isArray(parsed.shared))) {
+    throw new Error('Invalid format-2 backup: "shared" must be an object.');
+  }
   for (const [k, v] of Object.entries(parsed.shared || {})) {
     if (typeof v !== 'string') {
       throw new Error(`Invalid backup: shared key "${k}" must be a string value.`);

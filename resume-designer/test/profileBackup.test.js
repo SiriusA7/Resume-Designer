@@ -109,6 +109,28 @@ describe('format-2 export/restore', () => {
     expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-keep');
   });
 
+  it('rejects a non-object shared container before touching existing storage', () => {
+    // A string or array `shared` survives Object.entries (its entries are
+    // strings), slipping past the per-value string check — so the container
+    // shape must be validated pre-wipe too, or settings get erased.
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+    localStorage.setItem(OPENROUTER_KEY_KEY, 'sk-keep');
+
+    for (const badShared of ['corrupt', ['resume-designer-theme'], 42]) {
+      expect(() => importFullBackupFromEnvelope({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: 'p', name: 'Profile' }],
+        activeProfile: 'p',
+        shared: badShared,
+        profiles: {},
+      })).toThrow(/"shared" must be an object/i);
+    }
+
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-keep');
+  });
+
   it('rejects a non-string registry name before touching existing storage', () => {
     localStorage.setItem('resume-designer-theme', 'keep-me');
 
