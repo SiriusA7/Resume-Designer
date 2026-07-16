@@ -107,3 +107,18 @@ describe('splitReleaseBody', () => {
     expect(rel.full).toContain('Add tiered library search module');
   });
 });
+
+describe('splitReleaseBody malformed bodies', () => {
+  it('degrades BOTH fields when the marker has no content before it', () => {
+    const r = splitReleaseBody('<!-- full-log -->\n<details><summary>Full changelog</summary>\n- x\n</details>');
+    expect(r.summary).toBe(r.full);
+    expect(r.full).toContain('- x');
+  });
+
+  it('degrades BOTH fields when the tail is empty after unwrapping', () => {
+    const body = '## Resume Designer 1.16.0\n\n- New thing.\n\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n</details>';
+    const r = splitReleaseBody(body);
+    expect(r.summary).toBe(body);
+    expect(r.full).toBe(body);
+  });
+});

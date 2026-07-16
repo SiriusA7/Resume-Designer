@@ -53,9 +53,11 @@ export function splitReleaseBody(body) {
     .replace(/<details>\s*<summary>[^<]*<\/summary>/i, '')
     .replace(/<\/details>\s*$/i, '')
     .trim();
-  // A malformed tail (empty full) degrades to the whole body rather than
-  // rendering an empty expander.
-  return { summary: summary || text, full: full || text };
+  // A malformed marked body (either side empty after processing) degrades
+  // BOTH fields to the whole body — atomically, so a half-parsed state can
+  // never show a nonsense expander (full !== summary implies both parsed).
+  if (!summary || !full) return { summary: text, full: text };
+  return { summary, full };
 }
 
 // A GitHub release payload → our shape.
