@@ -1314,6 +1314,47 @@ function getPageSetup() {
   };
 }
 
+// Class recipes copied from ui/button.jsx buttonVariants (base + size "sm",
+// then variant "default" / "outline" inline below) — #resume is a vanilla-DOM
+// region where the React primitives can't mount, and hand-rolling a lookalike
+// from memory is banned. Keep in sync with ui/button.jsx if it changes.
+const EMPTY_STATE_BTN =
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-xs font-medium transition-colors ' +
+  'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring h-8 px-3';
+
+// Empty canvas state: no variant loaded (fresh profile, or every résumé
+// deleted). Tailwind's content glob covers src/**/*.js, so these utilities
+// all resolve even though the markup is an innerHTML string. The template is
+// fully static — nothing user-provided is interpolated (EMPTY_STATE_BTN is a
+// build-time constant) — so the innerHTML assignment has no XSS surface.
+function renderEmptyState(container) {
+  container.innerHTML = `
+    <div class="flex min-h-[60vh] flex-col items-center justify-center px-6 py-16 text-center">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="mb-4 size-11 text-muted-foreground/40" aria-hidden="true">
+        <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>
+        <path d="M14 2v4a2 2 0 0 0 2 2h4"/>
+        <path d="M10 9H8"/>
+        <path d="M16 13H8"/>
+        <path d="M16 17H8"/>
+      </svg>
+      <p class="text-[15px] font-semibold text-foreground">No r&eacute;sum&eacute; loaded</p>
+      <p class="mt-1 max-w-[36ch] text-[13px] leading-relaxed text-muted-foreground">Create a new r&eacute;sum&eacute; from scratch, or open one from your library.</p>
+      <div class="mt-5 flex items-center gap-2">
+        <button type="button" id="empty-state-create" class="${EMPTY_STATE_BTN} bg-primary text-primary-foreground shadow hover:bg-primary/90">Create r&eacute;sum&eacute;</button>
+        <button type="button" id="empty-state-library" class="${EMPTY_STATE_BTN} border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground">Open library</button>
+      </div>
+    </div>
+  `;
+  // Same entry points as the header: "+" (new-resume wizard, no API-key step)
+  // and the Resume Library dialog.
+  container.querySelector('#empty-state-create')?.addEventListener('click', () => {
+    showOnboardingWizard({ skipApiKeyStep: true });
+  });
+  container.querySelector('#empty-state-library')?.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('rd:open-library'));
+  });
+}
+
 // Render the current resume
 function renderCurrentResume() {
   const container = document.getElementById('resume');
@@ -1333,12 +1374,7 @@ function renderCurrentResume() {
   const data = store.getData();
   if (!data) {
     resetPaginatedState(container);
-    container.innerHTML = `
-      <div class="empty-state">
-        <p>No resume loaded</p>
-        <p>Select or create a variant to get started</p>
-      </div>
-    `;
+    renderEmptyState(container);
     return;
   }
   
