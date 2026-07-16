@@ -63,3 +63,29 @@ export function showOnboardingWizard(options = {}) {
 export function closeOnboardingWizard() {
   window.dispatchEvent(new CustomEvent('rd:close-onboarding'));
 }
+
+// `.onboarding-overlay.show` is the wizard's "on screen" contract token (same
+// one styles/onboarding.css keys off); `show` drops the instant a close
+// starts, so a fading-out wizard already counts as closed.
+const ONBOARDING_OPEN_SELECTOR = '.onboarding-overlay.show';
+const ONBOARDING_CLOSE_POLL_MS = 400;
+
+/**
+ * Resolve once the onboarding wizard is not on screen (immediately if it
+ * isn't). Used by the update / what's-new dialog: opening a modal Radix
+ * Dialog while the wizard is up pointer-locks <body>, leaving the wizard
+ * painted on top (z-[3000]) but completely inert until the hidden dialog
+ * underneath is dismissed by an overlay click. Deferring the dialog until
+ * the wizard closes sequences the two instead of stacking them.
+ */
+export function whenOnboardingClosed() {
+  if (!document.querySelector(ONBOARDING_OPEN_SELECTOR)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (!document.querySelector(ONBOARDING_OPEN_SELECTOR)) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, ONBOARDING_CLOSE_POLL_MS);
+  });
+}

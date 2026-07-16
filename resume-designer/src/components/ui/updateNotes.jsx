@@ -6,13 +6,19 @@ import {
 import { Button } from '@/components/ui/button';
 import { SafeMarkdown } from '@/components/ui/SafeMarkdown';
 import { CHANGELOG_LINK_BASE } from '../../changelogService.js';
+import { whenOnboardingClosed } from '../../onboarding.js';
 
 // Imperative, promise-returning update-notes dialog — same pattern as
 // confirm.jsx. `mode: 'update'` resolves 'download' | 'later'; `mode: 'whatsnew'`
 // (post-update) resolves 'ok'. UpdateNotesHost is mounted once in App.
 let resolver = null;
 
-export function showUpdateNotes({ version, currentVersion = null, notes = '', full = '', mode = 'update' }) {
+export async function showUpdateNotes({ version, currentVersion = null, notes = '', full = '', mode = 'update' }) {
+  // Never open under the onboarding wizard — a modal Dialog pointer-locks
+  // <body> and turns the (higher-z, non-Radix) wizard inert while this dialog
+  // hides behind it. Wait the wizard out; both the update-available and the
+  // post-update what's-new callers already await this promise.
+  await whenOnboardingClosed();
   return new Promise((resolve) => {
     resolver?.(mode === 'update' ? 'later' : 'ok'); // a newer call supersedes any pending dialog
     resolver = resolve;
