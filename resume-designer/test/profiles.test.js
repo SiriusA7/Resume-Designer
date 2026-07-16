@@ -179,6 +179,14 @@ describe('adoption migration', () => {
       expect(id).not.toBeNull();
       expect(localStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
       expect(localStorage.getItem('__profile_adoption_pending__')).toBe('1');
+
+      // Mapping must stay INACTIVE after a failed adoption — otherwise reads
+      // hit the empty namespace and the user's data appears lost. Prove it:
+      // reads resolve to the unprefixed source, and a new write stays unprefixed.
+      expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
+      appStorage.setItem('resume-designer-data', '{"variants":{"NEW":{}}}');
+      expect(localStorage.getItem('resume-designer-data')).toBe('{"variants":{"NEW":{}}}');
+      expect(localStorage.getItem(`resume-p--${id}--resume-designer-data`)).toBeNull();
     } finally {
       setItemSpy.mockRestore();
       errSpy.mockRestore();

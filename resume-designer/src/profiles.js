@@ -178,10 +178,18 @@ export async function ensureProfilesInitialized() {
       return null;
     }
     const moved = await migrateUnprefixedKeys(id);
-    if (moved) {
-      appStorage.removeItem(PROFILE_ADOPTION_MARKER);
-      await appStorage.flush();
+    if (!moved) {
+      // Adoption didn't finish (browser quota, or a Tauri disk write/flush
+      // failure). Leave mapping INACTIVE so this session reads and writes the
+      // still-unprefixed source data (pre-profile behavior) — activating it
+      // would point every read at an empty namespace, hiding the user's
+      // résumés and letting new edits diverge into it. The marker persists, so
+      // a later boot resumes and completes adoption once space/disk allows.
+      console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
+      return id;
     }
+    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+    await appStorage.flush();
     setProfileMapping(id);
     extractSharedApiKey();
     return id;
@@ -194,10 +202,16 @@ export async function ensureProfilesInitialized() {
   }
   if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) {
     const moved = await migrateUnprefixedKeys(active); // resume interrupted adoption, same id
-    if (moved) {
-      appStorage.removeItem(PROFILE_ADOPTION_MARKER);
-      await appStorage.flush();
+    if (!moved) {
+      // Still incomplete — keep mapping off and run on the unprefixed source
+      // data this session (see the fresh-adoption branch); the marker persists
+      // for a later resume. Without this, a mapped read hits an empty namespace
+      // and the user's data appears lost.
+      console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
+      return active;
     }
+    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+    await appStorage.flush();
   }
   setProfileMapping(active);
   extractSharedApiKey();
