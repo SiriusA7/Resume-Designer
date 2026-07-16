@@ -676,3 +676,41 @@ describe('format-2 unknown shared keys', () => {
     expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
   });
 });
+
+// Regression (PR #89 finding 42): registry ids that differ only by case passed
+// the case-sensitive uniqueness check, but their physical keys collide as
+// filenames on case-insensitive filesystems (Windows, default macOS) — one
+// restored workspace silently overwrites the other. Now rejected pre-wipe.
+describe('format-2 case-colliding ids', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('rejects case-only-distinct registry ids before wiping', () => {
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pABC', name: 'Upper' }, { id: 'pabc', name: 'Lower' }],
+      activeProfile: 'pABC',
+      shared: {},
+      profiles: {
+        pABC: { keys: { 'resume-designer-data': '{"a":1}' } },
+        pabc: { keys: { 'resume-designer-data': '{"b":2}' } },
+      },
+    })).toThrow(/case-insensitively/i);
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+
+  it('still accepts genuinely distinct ids that share no case-fold', async () => {
+    const { ashId, partnerId } = await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+    localStorage.clear();
+    __resetAppStorageForTests();
+    expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
+    expect(loadRegistry().map((p) => p.id).sort()).toEqual([ashId, partnerId].sort());
+  });
+});

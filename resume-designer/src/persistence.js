@@ -565,6 +565,16 @@ function importFullBackupV2(parsed) {
   if (!validRegistry || !uniqueIds) {
     throw new Error('Invalid format-2 backup: registry entries must have unique valid ids, string names, and (if present) string emoji.');
   }
+  // Case-insensitive filesystems (Windows, and macOS by default) map the
+  // physical keys — which become on-disk FILENAMES in the Tauri store —
+  // case-insensitively, so ids differing only by case (e.g. "pABC"/"pabc")
+  // collide to the same files: one restored workspace silently overwrites the
+  // other. Generated ids are always lowercase (base-36), so this only rejects
+  // hand-edited or foreign backups, before the destructive wipe.
+  const caseFoldedUnique = new Set(registry.map((p) => p.id.toLowerCase())).size === registry.length;
+  if (!caseFoldedUnique) {
+    throw new Error('Invalid format-2 backup: registry ids must be unique case-insensitively (they map to filenames).');
+  }
   // Reject a non-plain-object `profiles` (incl. arrays) pre-wipe: an array
   // passes typeof 'object', then every registry id reads as a missing entry
   // (treated as an empty workspace) and the wipe proceeds restoring nothing.
