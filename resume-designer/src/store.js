@@ -480,12 +480,20 @@ function createStore() {
     // Called BEFORE the import runs, so the store can't write its stale résumé
     // over the imported data during the import's own async flush. Cancels any
     // pending debounce so it can't fire either.
+    //
+    // Returns TRUE only when this call actually acquired the latch (flipped it
+    // off→on). A caller may only resumeSaves() if it acquired here — otherwise
+    // it would release a suspension a prior import still relies on (e.g. a
+    // Replace whose success-modal flush failed keeps saves suspended, and a
+    // later retry that re-latches then rolls back must NOT resume it).
     suspendSaves() {
+      const acquired = !savesSuspended;
       savesSuspended = true;
       if (saveTimeout) {
         clearTimeout(saveTimeout);
         saveTimeout = null;
       }
+      return acquired;
     },
 
     // Re-enable saving after an import FAILED and rolled back: the store still

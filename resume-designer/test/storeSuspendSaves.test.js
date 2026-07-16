@@ -47,4 +47,16 @@ describe('store.suspendSaves', () => {
       vi.useRealTimers();
     }
   });
+
+  it('reports acquisition only when it flips the latch off→on', () => {
+    // tryAcquire semantics: exactly one caller per suspend/resume cycle owns the
+    // suspension, so only that caller may resume it. backupFlow relies on this —
+    // a valid import retry that re-latches an existing suspension (left by a
+    // prior Replace whose success-modal flush failed) must NOT resume it on
+    // rollback, or the stale store overwrites the restored data on next close.
+    expect(store.suspendSaves()).toBe(true); // acquired: off → on
+    expect(store.suspendSaves()).toBe(false); // already suspended — not ours
+    store.resumeSaves();
+    expect(store.suspendSaves()).toBe(true); // released, so acquirable again
+  });
 });

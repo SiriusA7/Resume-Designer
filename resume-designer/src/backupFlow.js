@@ -198,11 +198,13 @@ export function exportFullBackupWithFeedback() {
  */
 export async function importBackupFromFile(file) {
   if (!file) return;
-  // Whether THIS invocation suspended saves. An early throw (malformed JSON,
-  // wrong format) reaches the catch BEFORE store.suspendSaves() runs; if a prior
-  // Replace import left saves suspended (stale store awaiting a reload), an
-  // unconditional resume there would unlock that stale store and let the next
-  // close/background save overwrite the restored data. So resume only our own.
+  // Whether THIS invocation ACQUIRED the save suspension (flipped it off→on).
+  // Two ways it stays false: (1) an early throw — malformed JSON, wrong format —
+  // reaches the catch before suspendSaves() runs; (2) saves were ALREADY
+  // suspended by a prior import (e.g. a Replace whose success-modal flush failed
+  // stays suspended, awaiting a reload). In both cases the catch must NOT resume
+  // — that stale store would overwrite restored data on the next close/background
+  // save. Resume only a suspension this call owns.
   let suspendedHere = false;
   try {
     // Parse FIRST so we can show the key count BEFORE confirming (avoids the
@@ -258,8 +260,9 @@ export async function importBackupFromFile(file) {
     // write the stale in-memory résumé over the just-imported data. Resumed in
     // the catch below if the import throws (it rolls appStorage back, so the
     // store is consistent again and the app keeps running without a reload).
-    store.suspendSaves();
-    suspendedHere = true;
+    // suspendSaves() returns TRUE only if it flipped the latch on — false if a
+    // prior import already had saves suspended (see the suspendedHere note).
+    suspendedHere = store.suspendSaves();
 
     // SYNCHRONOUS call (not importFullBackup(file), which would do a second
     // file.text() — that await would yield AFTER our flush but BEFORE the
@@ -284,8 +287,8 @@ export async function importBackupFromFile(file) {
         backupNote
     );
   } catch (err) {
-    // Resume only a suspension THIS call created — an early throw (before
-    // store.suspendSaves) must not unlock a prior import's suspension.
+    // Resume only a suspension THIS call acquired — an early throw (before
+    // suspendSaves) or a re-latched prior suspension must not be unlocked here.
     if (suspendedHere) store.resumeSaves(); // import rolled back — app keeps running
     console.error('[backup] Import failed:', err);
     alert(`Import failed: ${err.message ?? String(err)}`);
@@ -302,8 +305,8 @@ export async function importBackupFromFile(file) {
  */
 export async function importLegacyElectronWithFeedback(mode = 'replace') {
   const merging = mode === 'merge';
-  // See importBackupFromFile: only the catch for a suspension THIS call created
-  // may resume it, so an early throw can't unlock a prior import's suspension.
+  // See importBackupFromFile: TRUE only if this call ACQUIRED the suspension, so
+  // the catch never resumes one a prior import (or an early throw) left in place.
   let suspendedHere = false;
   try {
     const probe = await probeLegacyElectronData();
@@ -333,8 +336,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
 
     // Suspend saves before the import writes appStorage (see the format-2 path
     // above for the flush-await race); resumed in the catch if it throws.
-    store.suspendSaves();
-    suspendedHere = true;
+    suspendedHere = store.suspendSaves();
 
     const result = merging
       ? importFullBackupMerge(envelope)
