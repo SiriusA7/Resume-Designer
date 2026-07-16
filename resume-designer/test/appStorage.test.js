@@ -92,6 +92,25 @@ describe('cached mode (disk backend)', () => {
     }
   });
 
+  it('disarms the pending coalescing timer when a flush forces the drain', async () => {
+    // flush() drains immediately, bypassing the coalescing timer. That timer
+    // must be cancelled, or it fires later, drains a fresh keystroke early, and
+    // clears drainScheduled while a newer timer is pending — cascading
+    // overlapping timers back toward one backend write per keystroke.
+    vi.useFakeTimers();
+    try {
+      const backend = makeBackend();
+      await initAppStorage({ backend });
+      appStorage.setItem('resume-app-notes', 'a'); // arms the coalescing timer
+      expect(vi.getTimerCount()).toBe(1);
+      await appStorage.flush(); // forces a drain...
+      expect(vi.getTimerCount()).toBe(0); // ...and must leave no stale timer armed
+      expect(backend.files.get('resume-app-notes')).toBe('a');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('clear() empties cache and backend', async () => {
     const backend = makeBackend({ a: '1', b: '2' });
     await initAppStorage({ backend });
