@@ -12,6 +12,7 @@ import PdfDialog from './components/PdfDialog.jsx';
 import StructurePanel from './components/structure/StructurePanel.jsx';
 import ChatPanel from './components/chat/ChatPanel.jsx';
 import ProfileDialog from './components/profile/ProfileDialog.jsx';
+import { ProfileManagerDialog } from './components/profile/ProfileManagerDialog.jsx';
 import JobsDialog from './components/jobs/JobsDialog.jsx';
 import LibraryDialog from './components/library/LibraryDialog.jsx';
 import OnboardingWizard from './components/onboarding/OnboardingWizard.jsx';
@@ -94,6 +95,7 @@ export default function App() {
       {storageReady && <SettingsDialog />}
       {storageReady && <HistoryDialog />}
       {storageReady && <ProfileDialog />}
+      {storageReady && <ProfileManagerDialog />}
       {storageReady && <JobsDialog />}
       {storageReady && <LibraryDialog />}
       {storageReady && <OnboardingWizard />}
