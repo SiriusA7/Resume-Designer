@@ -14,6 +14,7 @@ import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
   loadRegistry, getActiveProfileId, setActiveProfile, createProfile,
   renameProfile, deleteProfile, exportProfileBackup, importProfileBackup,
+  isAdoptionPending,
 } from '../../profiles.js';
 import { getVariants, getUserProfile } from '../../persistence.js';
 import { getAllJobDescriptions } from '../../jobDescriptions.js';
@@ -72,6 +73,13 @@ export function AccountSection() {
   const [newName, setNewName] = useState('');
   const fileRef = useRef(null);
   const activeId = getActiveProfileId();
+  // While a first-profile adoption is mid-recovery the live workspace still sits
+  // under unprefixed keys and belongs to the adoption profile. Switching or
+  // creating a profile then changes ACTIVE_PROFILE_KEY, so the next boot would
+  // resume adoption under the wrong id and move the live data into it. Block
+  // those actions until adoption completes (the Account tab is reachable via the
+  // settings gear even though the header avatar is hidden in this state).
+  const adopting = isAdoptionPending();
 
   const refresh = () => setRegistry(loadRegistry() || []);
 
@@ -83,7 +91,7 @@ export function AccountSection() {
   const completeness = profileCompleteness(getUserProfile());
 
   const switchTo = async (id) => {
-    if (id === activeId) return;
+    if (id === activeId || adopting) return;
     if (!(await flushActiveEdits())) {
       toast.error('Could not save your latest changes — profile switch cancelled.');
       return;
@@ -95,7 +103,7 @@ export function AccountSection() {
 
   const submitNew = async () => {
     const name = newName.trim();
-    if (!name) return;
+    if (!name || adopting) return;
     if (!(await flushActiveEdits())) {
       toast.error('Could not save your latest changes — new profile cancelled.');
       return;
@@ -144,7 +152,7 @@ export function AccountSection() {
   const onImport = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
+    if (!file || adopting) return;
     try {
       const parsed = JSON.parse(await file.text());
       const profile = importProfileBackup(parsed);
@@ -184,10 +192,10 @@ export function AccountSection() {
                 <>
                   <button
                     type="button"
-                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:opacity-100"
                     onClick={() => switchTo(p.id)}
-                    disabled={p.id === activeId}
-                    title={p.id === activeId ? 'Current profile' : `Switch to ${p.name}`}
+                    disabled={p.id === activeId || adopting}
+                    title={p.id === activeId ? 'Current profile' : (adopting ? 'Finish setup before switching' : `Switch to ${p.name}`)}
                   >
                     <Avatar name={p.name} />
                     <span className="min-w-0 truncate text-[13.5px] font-medium">{p.name}</span>
@@ -242,16 +250,22 @@ export function AccountSection() {
             </>
           ) : (
             <>
-              <Button variant="outline" size="sm" className="h-8" onClick={() => { setAdding(true); setNewName(''); }}>
+              <Button variant="outline" size="sm" className="h-8" disabled={adopting} onClick={() => { setAdding(true); setNewName(''); }}>
                 <Plus className="size-3.5" /> New profile
               </Button>
               <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={onImport} />
-              <Button variant="outline" size="sm" className="h-8" onClick={() => fileRef.current?.click()}>
+              <Button variant="outline" size="sm" className="h-8" disabled={adopting} onClick={() => fileRef.current?.click()}>
                 <Upload className="size-3.5" /> Import profile
               </Button>
             </>
           )}
         </div>
+
+        {adopting && (
+          <p className="mt-2.5 text-[12px] text-muted-foreground">
+            Finishing setup on this device — switching, creating, and importing profiles is paused until it completes (this happens after a storage hiccup and clears on the next launch).
+          </p>
+        )}
       </section>
 
       <Separator />
