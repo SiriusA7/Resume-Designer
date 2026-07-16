@@ -714,3 +714,48 @@ describe('format-2 case-colliding ids', () => {
     expect(loadRegistry().map((p) => p.id).sort()).toEqual([ashId, partnerId].sort());
   });
 });
+
+// Regression (PR #89 finding 43): profile ids are alphanumeric, which admits
+// prototype names like "constructor"/"toString". Keyed on a plain {} the
+// export map dropped such a profile (inherited value blocked the ||= assign)
+// and the import misread a keyless one as present-but-invalid.
+describe('format-2 prototype-name ids', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('exports and round-trips a profile whose id is "constructor"', async () => {
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'constructor', name: 'Ctor', emoji: '🙂', createdAt: 'x' }]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'constructor');
+    localStorage.setItem('resume-p--constructor--resume-designer-data', '{"c":1}');
+
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    // The workspace survived the export (would be dropped with a plain-{} map).
+    expect(Object.keys(envelope.profiles)).toContain('constructor');
+    expect(envelope.profiles.constructor.keys['resume-designer-data']).toBe('{"c":1}');
+
+    localStorage.clear();
+    __resetAppStorageForTests();
+    expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
+    expect(localStorage.getItem('resume-p--constructor--resume-designer-data')).toBe('{"c":1}');
+  });
+
+  it('treats a keyless "toString" profile as a valid empty workspace on import', () => {
+    // toString is in the registry but has no profiles entry — a valid empty
+    // workspace, not a present-but-invalid one via Object.prototype.toString.
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'toString', name: 'T' }, { id: 'real1', name: 'R' }],
+      activeProfile: 'real1',
+      shared: {},
+      profiles: { real1: { keys: { 'resume-designer-data': '{"r":1}' } } },
+    })).not.toThrow();
+    expect(loadRegistry().map((p) => p.id).sort()).toEqual(['real1', 'toString']);
+    expect(localStorage.getItem('resume-p--real1--resume-designer-data')).toBe('{"r":1}');
+  });
+});

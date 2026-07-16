@@ -453,7 +453,14 @@ function collectActiveOwnedKeys() {
  * Returns { keysExported, filename } for the caller to surface in UI.
  */
 export function exportFullBackup(filename) {
-  const profiles = {};
+  // Null-prototype map: profile ids are alphanumeric (isValidProfileId), which
+  // includes prototype names like "constructor" / "toString". Keyed on a plain
+  // {}, `profiles[id] ||= …` would see the inherited value as truthy and never
+  // assign, then `.keys` would read a builtin instead of the fresh bucket and
+  // the profile's data would be lost from the export (and absent on JSON
+  // stringify, since it's inherited not own). Object.create(null) has no such
+  // inherited keys; JSON.stringify still serializes its own enumerable keys.
+  const profiles = Object.create(null);
   const shared = {};
   const activeId = getActiveProfileId();
   for (const k of appStorage.keys()) {
@@ -601,7 +608,10 @@ function importFullBackupV2(parsed) {
 
   const profileEntries = [];
   for (const { id: pid } of registry) {
-    const entry = parsed.profiles[pid];
+    // Own-property read only: a registry id like "toString" with no entry is a
+    // valid empty workspace, but a plain `parsed.profiles[pid]` would inherit
+    // Object.prototype.toString and mis-read it as a present-but-invalid entry.
+    const entry = Object.hasOwn(parsed.profiles, pid) ? parsed.profiles[pid] : undefined;
     // A registry profile with no stored keys yet exports with NO profiles
     // entry at all (exportFullBackup only creates one per observed physical
     // key) — a missing entry is a valid empty workspace, not corruption.
