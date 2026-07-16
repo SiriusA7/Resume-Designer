@@ -125,7 +125,16 @@ export function AccountSection() {
       toast.error('Could not save your latest changes — new profile cancelled.');
       return;
     }
-    const profile = createProfile({ name });
+    // createProfile can throw synchronously in passthrough mode — the new
+    // registry entry ENLARGES localStorage, so it can hit quota even after a
+    // successful flushActiveEdits (which only replaced existing values).
+    let profile;
+    try {
+      profile = createProfile({ name });
+    } catch (e) {
+      toast.error(String(e.message || e));
+      return;
+    }
     // New profiles start empty; land in them — but only once the pointer is
     // durable. On failure, unwind the half-created profile too so a later
     // successful flush doesn't resurrect an empty registry entry.
