@@ -25,7 +25,9 @@ export function validateDigest(text, version) {
   if (content[content.length - 1] !== SENTINEL) {
     return { ok: false, reason: 'missing end sentinel — response likely truncated' };
   }
-  if (content.slice(0, -1).includes(SENTINEL)) {
+  // Substring check, not line equality: an inline sentinel inside a bullet
+  // would otherwise pass and leak into the published notes.
+  if (content.slice(0, -1).some((l) => l.includes(SENTINEL))) {
     return { ok: false, reason: 'sentinel appears before the end' };
   }
   const body = content.slice(0, -1);
@@ -34,7 +36,7 @@ export function validateDigest(text, version) {
   if (!headingRe.test(body[0] || '')) {
     return { ok: false, reason: `first line must be "## Resume Designer ${version}"` };
   }
-  if (body.some((l) => l.startsWith('### '))) {
+  if (body.some((l) => l.startsWith('###'))) {
     return { ok: false, reason: 'digest must be flat — no "###" section headers' };
   }
   const bullets = body.filter((l) => /^[-*]\s+\S/.test(l));

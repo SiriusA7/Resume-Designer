@@ -51,3 +51,20 @@ describe('validateDigest', () => {
     expect(validateDigest(sectioned, V).ok).toBe(false);
   });
 });
+
+describe('validateDigest hardening', () => {
+  it('rejects an inline sentinel embedded in a bullet', () => {
+    const sneaky = [`## Resume Designer ${V}`, '',
+      `- Something something ${SENTINEL} mid-line.`, '', SENTINEL, ''].join('\n');
+    const r = validateDigest(sneaky, V);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/sentinel/i);
+  });
+
+  it('rejects bare and tab-delimited ### headers', () => {
+    const bare = `## Resume Designer ${V}\n\n###\n- x\n\n${SENTINEL}\n`;
+    expect(validateDigest(bare, V).ok).toBe(false);
+    const tabbed = `## Resume Designer ${V}\n\n###\tTitle\n- x\n\n${SENTINEL}\n`;
+    expect(validateDigest(tabbed, V).ok).toBe(false);
+  });
+});
