@@ -37,14 +37,17 @@ async function switchTo(id) {
 }
 
 /**
- * Header profile switcher: a ghost-button dropdown listing every profile in the
- * registry, with the active one's emoji + name on the trigger. Switching flushes
- * and reloads (see switchTo). Hidden entirely pre-adoption (no registry / no
- * active match) so it never shows during the one-time boot migration.
+ * Header profile switcher: a compact emoji-avatar chip beside the brand
+ * (workspace identity, deliberately far from the right cluster's "Profile"
+ * EDITOR button — two adjacent "profile" controls proved confusing). The
+ * active profile's name lives in the tooltip and the dropdown header, not
+ * the bar. Switching flushes and reloads (see switchTo). Hidden entirely
+ * pre-adoption (no registry / no active match) so it never shows during the
+ * one-time boot migration.
  *
  * "New profile…" opens a small shadcn name Dialog (the in-house pattern Header
  * uses for variant rename) rather than window.prompt, then creates + switches.
- * "Manage profiles…" dispatches rd:open-profile-manager for the Task 9 dialog.
+ * "Manage profiles…" dispatches rd:open-profile-manager for the manager dialog.
  */
 export function ProfileSwitcher() {
   const [registry, setRegistry] = useState(() => loadRegistry() || []);
@@ -76,17 +79,19 @@ export function ProfileSwitcher() {
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
-            className="h-[34px] max-w-[180px] gap-1.5 text-[13.5px]"
-            title="Switch profile"
-            aria-label="Switch profile"
+            size="icon"
+            className="size-7 shrink-0 rounded-full text-[15px]"
+            title={`${active.name} — switch profile`}
+            aria-label={`${active.name} — switch profile`}
           >
             <span aria-hidden>{active.emoji}</span>
-            <span className="min-w-0 truncate">{active.name}</span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel>Profiles</DropdownMenuLabel>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuLabel className="flex min-w-0 items-center gap-1.5">
+            <span aria-hidden>{active.emoji}</span>
+            <span className="truncate">{active.name}</span>
+          </DropdownMenuLabel>
           {registry.map((p) => (
             <DropdownMenuItem key={p.id} onSelect={() => p.id !== activeId && switchTo(p.id)}>
               <span aria-hidden>{p.emoji}</span>
