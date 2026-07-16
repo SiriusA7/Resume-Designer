@@ -7,6 +7,7 @@ import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 
 import { completeOnboarding, shouldShowOnboarding } from '../../onboarding.js';
+import { loadRegistry } from '../../profiles.js';
 import {
   INTERVIEW_QUESTIONS,
   validateOpenRouterKey,
@@ -96,11 +97,14 @@ export default function OnboardingWizard() {
     const skipApiKeyStep = !!options.skipApiKeyStep;
 
     // The close X shows whenever this is NOT a genuine first run: new-resume mode,
-    // or any reopen once the app already has user data (Settings → Replay welcome
-    // guide). Without it, a keyless user replaying the guide is trapped on the
-    // API-key step — no skip, no cancel, only a reload. Snapshot at open so the
-    // affordance doesn't pop in mid-wizard (completeOnboarding fires at the end).
-    setCanDismiss(skipApiKeyStep || !shouldShowOnboarding());
+    // a reopen once the app already has user data (Settings → Replay welcome
+    // guide), OR when OTHER profiles exist — a new empty profile must not trap
+    // the user, who needs to be able to dismiss and switch back. Without it, a
+    // keyless user replaying the guide (or landing in a fresh profile) is stuck
+    // on the API-key step — no skip, no cancel, only a reload. Snapshot at open
+    // so the affordance doesn't pop in mid-wizard (completeOnboarding fires at
+    // the end).
+    setCanDismiss(skipApiKeyStep || !shouldShowOnboarding() || (loadRegistry()?.length ?? 0) > 1);
 
     setIsNewResumeMode(skipApiKeyStep);
     setStep(skipApiKeyStep ? 1 : 0);
