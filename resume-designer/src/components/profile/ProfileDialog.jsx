@@ -75,14 +75,16 @@ export default function ProfileDialog() {
     }, SAVE_DELAY);
   }, []);
 
-  // Cancel the pending debounce and write immediately. No-op when nothing is
-  // pending — safe to call unconditionally (the backupFlow flush contract).
+  // Cancel the pending debounce and write immediately. Returns the persist
+  // result (true when nothing was pending) so a caller aborting on an unsaved
+  // edit can see a passthrough quota failure. Safe to call unconditionally.
   const flush = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
-      saveUserProfile(profileRef.current);
+      return saveUserProfile(profileRef.current) !== false;
     }
+    return true;
   }, []);
 
   // Save + remount the tab so a structural change (add/delete) shows.
@@ -90,7 +92,9 @@ export default function ProfileDialog() {
 
   useEffect(() => {
     const onOpen = () => { profileRef.current = buildWorkingCopy(); bump(); setOpen(true); };
-    const onFlush = () => flush();
+    // Report the flush result back through the event detail so the synchronous
+    // flushPendingProfileSave() caller can abort a switch/export on failure.
+    const onFlush = (e) => { const ok = flush(); if (e?.detail) e.detail.ok = ok; };
     window.addEventListener('rd:open-profile', onOpen);
     window.addEventListener('rd:profile-flush', onFlush);
     return () => {

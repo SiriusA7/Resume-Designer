@@ -270,12 +270,12 @@ export function getUserProfile() {
 
 // Save user profile
 export function saveUserProfile(profile) {
-  console.log('[Persistence] saveUserProfile called with:', profile);
   const storage = loadFromStorage();
   storage.userProfile = { ...DEFAULT_STORAGE.userProfile, ...profile };
-  console.log('[Persistence] Saving userProfile:', storage.userProfile);
-  const success = saveToStorage(storage);
-  console.log('[Persistence] Save success:', success);
+  // Return durability so callers that must not proceed on an unsaved edit
+  // (the profile-switch / export abort) can see a passthrough quota failure,
+  // which saveToStorage otherwise only logs.
+  return saveToStorage(storage);
 }
 
 // Initialize persistence - connect store to auto-save
