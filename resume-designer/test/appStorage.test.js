@@ -353,25 +353,25 @@ describe('profile mapping', () => {
   it('namespaces per-profile keys once a profile is active', () => {
     setProfileMapping('p1');
     appStorage.setItem('resume-designer-data', '{"a":1}');
-    expect(localStorage.getItem('resume-p:p1:resume-designer-data')).toBe('{"a":1}');
+    expect(localStorage.getItem('resume-p--p1--resume-designer-data')).toBe('{"a":1}');
     expect(localStorage.getItem('resume-designer-data')).toBeNull();
     expect(appStorage.getItem('resume-designer-data')).toBe('{"a":1}');
     appStorage.removeItem('resume-designer-data');
-    expect(localStorage.getItem('resume-p:p1:resume-designer-data')).toBeNull();
+    expect(localStorage.getItem('resume-p--p1--resume-designer-data')).toBeNull();
   });
 
   it('leaves shared keys and physical keys unmapped', () => {
     setProfileMapping('p1');
     appStorage.setItem('resume-designer-theme', 'dark');
     expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
-    appStorage.setItem('resume-p:p2:resume-zoom', '1.5');
-    expect(localStorage.getItem('resume-p:p2:resume-zoom')).toBe('1.5');
+    appStorage.setItem('resume-p--p2--resume-zoom', '1.5');
+    expect(localStorage.getItem('resume-p--p2--resume-zoom')).toBe('1.5');
   });
 
   it('keys() returns physical names', () => {
     setProfileMapping('p1');
     appStorage.setItem('resume-designer-data', 'x');
-    expect(appStorage.keys()).toContain('resume-p:p1:resume-designer-data');
+    expect(appStorage.keys()).toContain('resume-p--p1--resume-designer-data');
   });
 
   it('is identity before any profile is set (boot/migration reads)', () => {

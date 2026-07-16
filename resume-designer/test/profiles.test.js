@@ -59,11 +59,13 @@ describe('registry CRUD', () => {
     expect(loadRegistry()).toBeNull();
   });
 
-  it('rejects colon-bearing ids as corrupt (physical-key separator)', () => {
-    appStorage.setItem(PROFILES_KEY, JSON.stringify([
-      { id: 'p:evil', name: 'X', emoji: '🙂', createdAt: 'x' },
-    ]));
-    expect(loadRegistry()).toBeNull();
+  it('rejects non-alphanumeric ids as corrupt (physical-key separator safety)', () => {
+    for (const id of ['p:evil', 'p-evil', 'p--evil', 'p evil', '']) {
+      appStorage.setItem(PROFILES_KEY, JSON.stringify([
+        { id, name: 'X', emoji: '🙂', createdAt: 'x' },
+      ]));
+      expect(loadRegistry(), `id "${id}" must be rejected`).toBeNull();
+    }
   });
 
   it('createProfile re-rolls a colliding generated id', () => {
@@ -99,8 +101,8 @@ describe('registry CRUD', () => {
 
   it('deleteProfile removes the workspace keys and guards active/last', () => {
     const { a, b } = seedRegistry();
-    appStorage.setItem(`resume-p:${b.id}:resume-designer-data`, '{}');
-    appStorage.setItem(`resume-p:${b.id}:resume-designer-history-v1`, '[]');
+    appStorage.setItem(`resume-p--${b.id}--resume-designer-data`, '{}');
+    appStorage.setItem(`resume-p--${b.id}--resume-designer-history-v1`, '[]');
     expect(() => deleteProfile(a.id)).toThrow(/active/i);
     deleteProfile(b.id);
     expect(appStorage.keys().some((k) => k.includes(b.id))).toBe(false);
@@ -130,7 +132,7 @@ describe('adoption migration', () => {
     const pointerWrite = operations.indexOf(`write:${ACTIVE_PROFILE_KEY}`);
     const copyWrites = operations
       .map((operation, index) => ({ operation, index }))
-      .filter(({ operation }) => operation.startsWith('write:resume-p:'));
+      .filter(({ operation }) => operation.startsWith('write:resume-p--'));
     const sourceDeletes = operations
       .map((operation, index) => ({ operation, index }))
       .filter(({ operation }) => operation === 'delete:resume-designer-data');
@@ -143,7 +145,7 @@ describe('adoption migration', () => {
     expect(Math.max(...copyWrites.map(({ index }) => index)))
       .toBeLessThan(Math.min(...sourceDeletes.map(({ index }) => index)));
     expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
-    expect(backend.files.get(`resume-p:${id}:resume-designer-data`)).toBe('{"variants":{}}');
+    expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{}}');
     expect(backend.files.has('resume-designer-data')).toBe(false);
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
   });
@@ -151,7 +153,7 @@ describe('adoption migration', () => {
   it('keeps sources and the marker durable when adoption copies fail', async () => {
     const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
     backend.write.mockImplementation(async (key, value) => {
-      if (key.startsWith('resume-p:')) throw new Error('disk full');
+      if (key.startsWith('resume-p--')) throw new Error('disk full');
       backend.files.set(key, value);
     });
     await initAppStorage({ backend });
@@ -190,12 +192,12 @@ describe('adoption migration', () => {
     const id = await ensureProfilesInitialized();
 
     expect(id).toBe('pfixed');
-    const copyWrite = operations.indexOf('write:resume-p:pfixed:resume-designer-data');
+    const copyWrite = operations.indexOf('write:resume-p--pfixed--resume-designer-data');
     const sourceDelete = operations.indexOf('delete:resume-designer-data');
     expect(copyWrite).toBeGreaterThanOrEqual(0);
     expect(copyWrite).toBeLessThan(sourceDelete);
     expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
-    expect(backend.files.get('resume-p:pfixed:resume-designer-data')).toBe('{"variants":{}}');
+    expect(backend.files.get('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{}}');
     expect(backend.files.has('resume-designer-data')).toBe(false);
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
   });
@@ -214,7 +216,7 @@ describe('adoption migration', () => {
 
       // Copies are durable, but the un-finalized migration must keep the
       // marker so the next boot resumes and retries the source cleanup.
-      expect(backend.files.get(`resume-p:${id}:resume-designer-data`)).toBe('{"variants":{}}');
+      expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{}}');
       expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
     } finally {
       errSpy.mockRestore();
@@ -237,13 +239,13 @@ describe('adoption migration', () => {
     expect(reg[0]).toMatchObject({ id, name: 'Ash Shah' });
     expect(getActiveProfileId()).toBe(id);
     // per-profile keys moved under the namespace…
-    expect(localStorage.getItem(`resume-p:${id}:resume-designer-history-v1`)).toBe('[]');
+    expect(localStorage.getItem(`resume-p--${id}--resume-designer-history-v1`)).toBe('[]');
     expect(localStorage.getItem('resume-designer-history-v1')).toBeNull();
     // …shared keys did not move…
     expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
     // …the API key was extracted to the shared key and stripped from the blob…
     expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-or-abc');
-    const blob = JSON.parse(localStorage.getItem(`resume-p:${id}:resume-designer-data`));
+    const blob = JSON.parse(localStorage.getItem(`resume-p--${id}--resume-designer-data`));
     expect(blob.settings.openrouterKey).toBeUndefined();
     // …and mapped reads now resolve through the namespace.
     expect(appStorage.getItem('resume-designer-history-v1')).toBe('[]');
@@ -262,9 +264,9 @@ describe('adoption migration', () => {
     // Corrupt/missing registry while workspaces exist on disk: recovery must
     // re-list the observed namespaces, never adopt-as-new (which would orphan
     // every namespaced key behind an empty fresh profile).
-    localStorage.setItem('resume-p:pold:resume-designer-data',
+    localStorage.setItem('resume-p--pold--resume-designer-data',
       '{"variants":{},"userProfile":{"contactInfo":{"fullName":"Ash Shah"}}}');
-    localStorage.setItem('resume-p:pold:resume-zoom', '1.25');
+    localStorage.setItem('resume-p--pold--resume-zoom', '1.25');
     localStorage.setItem(PROFILES_KEY, '{corrupt');
 
     const id = await ensureProfilesInitialized();
@@ -282,7 +284,7 @@ describe('adoption migration', () => {
 
     const id = await ensureProfilesInitialized();
     expect(id).toBe('pfixed');
-    expect(localStorage.getItem('resume-p:pfixed:resume-designer-data')).toBe('{"variants":{}}');
+    expect(localStorage.getItem('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{}}');
     expect(localStorage.getItem('__profile_adoption_pending__')).toBeNull();
   });
 

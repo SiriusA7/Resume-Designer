@@ -27,7 +27,7 @@ async function seedTwoProfiles() {
   localStorage.setItem('resume-designer-data', '{"variants":{"v1":{}},"settings":{},"userProfile":{"contactInfo":{"fullName":"Ash"}}}');
   const ashId = await ensureProfilesInitialized();
   const partner = createProfile({ name: 'Partner', emoji: '🐙' });
-  appStorage.setItem(`resume-p:${partner.id}:resume-designer-data`, '{"variants":{"v2":{}}}');
+  appStorage.setItem(`resume-p--${partner.id}--resume-designer-data`, '{"variants":{"v2":{}}}');
   appStorage.setItem('resume-designer-theme', 'dark');
   appStorage.setItem(OPENROUTER_KEY_KEY, 'sk-shared');
   return { ashId, partnerId: partner.id };
@@ -50,7 +50,7 @@ describe('format-2 export/restore', () => {
     const result = importFullBackupFromEnvelope(envelope);
     expect(result.keysImported).toBeGreaterThan(0);
     expect(loadRegistry()).toHaveLength(2);
-    expect(localStorage.getItem(`resume-p:${partnerId}:resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+    expect(localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
     expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
     expect(localStorage.getItem(ACTIVE_PROFILE_KEY)).toBe(ashId);
   });
@@ -140,7 +140,7 @@ describe('format-2 export/restore', () => {
         historyAttempted = true;
         throw new DOMException('quota exceeded', 'QuotaExceededError');
       }
-      if (key === 'resume-p:b:resume-designer-data' && historyAttempted) {
+      if (key === 'resume-p--b--resume-designer-data' && historyAttempted) {
         throw new DOMException('quota exceeded', 'QuotaExceededError');
       }
       return originalSetItem.call(this, key, value);
@@ -158,7 +158,7 @@ describe('format-2 export/restore', () => {
       },
     });
 
-    expect(localStorage.getItem('resume-p:b:resume-designer-data')).toBe('{"variants":{}}');
+    expect(localStorage.getItem('resume-p--b--resume-designer-data')).toBe('{"variants":{}}');
     expect(result.historySkipped).toBe(1);
   });
 });
@@ -174,9 +174,9 @@ describe('format-1 import scoping', () => {
       },
     });
     // active profile replaced…
-    expect(localStorage.getItem(`resume-p:${ashId}:resume-designer-data`)).toBe('{"variants":{"legacy":{}}}');
+    expect(localStorage.getItem(`resume-p--${ashId}--resume-designer-data`)).toBe('{"variants":{"legacy":{}}}');
     // …partner untouched, registry intact…
-    expect(localStorage.getItem(`resume-p:${partnerId}:resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+    expect(localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
     expect(loadRegistry()).toHaveLength(2);
     // …shared owned keys in the envelope still land (theme is shared)…
     expect(localStorage.getItem('resume-designer-theme')).toBe('light');
@@ -197,7 +197,7 @@ describe('per-profile export/import', () => {
     const imported = importProfileBackup(envelope);
     expect(imported.id).not.toBe(partnerId);
     expect(loadRegistry()).toHaveLength(3);
-    expect(localStorage.getItem(`resume-p:${imported.id}:resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+    expect(localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
   });
 
   it('rejects non-profile envelopes and unowned keys', async () => {

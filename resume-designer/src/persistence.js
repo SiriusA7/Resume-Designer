@@ -334,6 +334,7 @@ import {
   OPENROUTER_KEY_KEY,
   PROFILES_KEY,
   ACTIVE_PROFILE_KEY,
+  isValidProfileId,
   splitPhysicalKey,
   physicalKey,
 } from './profileKeys.js';
@@ -485,8 +486,7 @@ function normalizeImportedValue(key, value) {
 function importFullBackupV2(parsed) {
   const registry = parsed.registry;
   const validRegistry = Array.isArray(registry) && registry.length > 0
-    && registry.every((p) => p && typeof p.id === 'string' && p.id !== ''
-      && !p.id.includes(':') && typeof p.name === 'string');
+    && registry.every((p) => p && isValidProfileId(p.id) && typeof p.name === 'string');
   const uniqueIds = validRegistry && new Set(registry.map((p) => p.id)).size === registry.length;
   if (!validRegistry || !uniqueIds) {
     throw new Error('Invalid format-2 backup: registry entries must have unique valid ids and string names.');

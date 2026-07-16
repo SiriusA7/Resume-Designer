@@ -3,15 +3,23 @@
  * profiles.js depend on this, so it must sit below both in the import graph).
  *
  * Physical layout: per-profile logical keys live at
- * `resume-p:<profileId>:<logicalKey>`. The prefix starts with `resume-`
+ * `resume-p--<profileId>--<logicalKey>`. The prefix starts with `resume-`
  * deliberately so appStorage's one-time localStorage→disk adoption
  * (OWNED_PREFIX = 'resume-') still matches namespaced keys.
+ *
+ * `--` is the separator because physical keys become FILENAMES in the Rust
+ * disk store, whose validate_key allows only [A-Za-z0-9._-] (':' broke every
+ * namespaced write on device). Parsing stays unambiguous because profile ids
+ * are strictly alphanumeric (no '-'): the first `--` after the prefix always
+ * ends the id. `resume-p--` cannot collide with logical keys ('resume-photo-*'
+ * shares only 'resume-p').
  */
 
 export const PROFILES_KEY = 'resume-designer-profiles';
 export const ACTIVE_PROFILE_KEY = 'resume-designer-active-profile';
 export const OPENROUTER_KEY_KEY = 'resume-designer-openrouter-key';
-export const PHYSICAL_PREFIX = 'resume-p:';
+export const PHYSICAL_PREFIX = 'resume-p--';
+const PHYSICAL_SEPARATOR = '--';
 
 // Machine-level keys: one value per install, never namespaced by profile.
 const SHARED_KEYS = new Set([
@@ -65,16 +73,24 @@ export function isPhysicalKey(key) {
   return typeof key === 'string' && key.startsWith(PHYSICAL_PREFIX);
 }
 
+// Profile ids must match this exactly — the alphanumeric guarantee is what
+// keeps splitPhysicalKey unambiguous (an id can never contain the `--`
+// separator). Enforced at creation (generateProfileId), registry load, and
+// backup import.
+export function isValidProfileId(id) {
+  return typeof id === 'string' && /^[A-Za-z0-9]+$/.test(id);
+}
+
 export function physicalKey(profileId, logicalKey) {
-  return `${PHYSICAL_PREFIX}${profileId}:${logicalKey}`;
+  return `${PHYSICAL_PREFIX}${profileId}${PHYSICAL_SEPARATOR}${logicalKey}`;
 }
 
 export function splitPhysicalKey(key) {
   if (!isPhysicalKey(key)) return null;
   const rest = key.slice(PHYSICAL_PREFIX.length);
-  const i = rest.indexOf(':');
+  const i = rest.indexOf(PHYSICAL_SEPARATOR);
   if (i < 1) return null;
-  return { profileId: rest.slice(0, i), logicalKey: rest.slice(i + 1) };
+  return { profileId: rest.slice(0, i), logicalKey: rest.slice(i + PHYSICAL_SEPARATOR.length) };
 }
 
 /**

@@ -5,19 +5,19 @@
  */
 import { appStorage, setProfileMapping } from './appStorage.js';
 import {
-  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, PHYSICAL_PREFIX,
-  isOwnedKey, isSharedKey, isPhysicalKey, physicalKey, splitPhysicalKey,
+  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
+  isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
 } from './profileKeys.js';
 
 // Deliberately OUTSIDE the `resume-` owned keyspace (like appStorage's
 // __adoption_pending__) so backups never carry it.
 const PROFILE_ADOPTION_MARKER = '__profile_adoption_pending__';
 
-// A registry entry is valid iff id is a non-empty colon-free string (":" is
-// the physical-key separator) and name is a string.
+// A registry entry is valid iff id is strictly alphanumeric (anything else —
+// including '-' — could break the physical-key `--` separator parsing) and
+// name is a string.
 function isValidEntry(p) {
-  return !!p && typeof p.id === 'string' && p.id !== '' && !p.id.includes(':')
-    && typeof p.name === 'string';
+  return !!p && isValidProfileId(p.id) && typeof p.name === 'string';
 }
 
 export function loadRegistry() {
@@ -229,7 +229,7 @@ export function deleteProfile(id) {
   const registry = loadRegistry() || [];
   if (registry.length <= 1) throw new Error('Cannot delete the last profile.');
   if (id === getActiveProfileId()) throw new Error('Cannot delete the active profile — switch away first.');
-  const prefix = `${PHYSICAL_PREFIX}${id}:`;
+  const prefix = physicalKey(id, '');
   for (const k of appStorage.keys()) {
     if (k && k.startsWith(prefix)) appStorage.removeItem(k);
   }
@@ -242,7 +242,7 @@ export function exportProfileBackup(profileId, filename) {
   const registry = loadRegistry() || [];
   const profile = registry.find((p) => p.id === profileId);
   if (!profile) throw new Error(`Unknown profile id: ${profileId}`);
-  const prefix = `${PHYSICAL_PREFIX}${profileId}:`;
+  const prefix = physicalKey(profileId, '');
   const keys = {};
   for (const k of appStorage.keys()) {
     if (!k || !k.startsWith(prefix)) continue;

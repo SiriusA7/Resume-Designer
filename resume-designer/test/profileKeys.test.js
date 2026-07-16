@@ -37,18 +37,39 @@ describe('key classification', () => {
 describe('physical key mapping', () => {
   it('round-trips physicalKey/splitPhysicalKey', () => {
     const p = physicalKey('p1a2b3', 'resume-designer-data');
-    expect(p).toBe(`${PHYSICAL_PREFIX}p1a2b3:resume-designer-data`);
+    expect(p).toBe(`${PHYSICAL_PREFIX}p1a2b3--resume-designer-data`);
     expect(splitPhysicalKey(p)).toEqual({ profileId: 'p1a2b3', logicalKey: 'resume-designer-data' });
     expect(splitPhysicalKey('resume-designer-data')).toBeNull();
     expect(splitPhysicalKey(`${PHYSICAL_PREFIX}noseparator`)).toBeNull();
   });
 
   it('mapKey namespaces per-profile keys and nothing else', () => {
-    expect(mapKey('p1', 'resume-designer-data')).toBe(`${PHYSICAL_PREFIX}p1:resume-designer-data`);
+    expect(mapKey('p1', 'resume-designer-data')).toBe(`${PHYSICAL_PREFIX}p1--resume-designer-data`);
     expect(mapKey('p1', 'resume-designer-theme')).toBe('resume-designer-theme');       // shared
-    expect(mapKey('p1', `${PHYSICAL_PREFIX}p2:resume-zoom`)).toBe(`${PHYSICAL_PREFIX}p2:resume-zoom`); // already physical
+    expect(mapKey('p1', `${PHYSICAL_PREFIX}p2--resume-zoom`)).toBe(`${PHYSICAL_PREFIX}p2--resume-zoom`); // already physical
     expect(mapKey(null, 'resume-designer-data')).toBe('resume-designer-data');         // mapping inactive
     // keys we don't own (e.g. __adoption_pending__) are never namespaced
     expect(mapKey('p1', '__adoption_pending__')).toBe('__adoption_pending__');
+  });
+});
+
+describe('disk-store filename contract', () => {
+  it('physical keys use only characters the Rust validate_key accepts', () => {
+    // storage.rs validate_key allows [A-Za-z0-9._-] only — every physical key
+    // becomes a filename in the disk store, so this charset is load-bearing
+    // (':' broke every namespaced write on device).
+    const key = physicalKey('p1a2b3', 'resume-designer-history-variant-123');
+    expect(key).toMatch(/^[A-Za-z0-9._-]+$/);
+    expect(splitPhysicalKey(key)).toEqual({
+      profileId: 'p1a2b3',
+      logicalKey: 'resume-designer-history-variant-123',
+    });
+  });
+
+  it('splitPhysicalKey survives logical keys containing dashes', () => {
+    // The FIRST "--" after the prefix ends the id; ids are alphanumeric-only
+    // so dashes inside the logical key are unambiguous.
+    const split = splitPhysicalKey('resume-p--abc123--resume-accent-settings');
+    expect(split).toEqual({ profileId: 'abc123', logicalKey: 'resume-accent-settings' });
   });
 });
