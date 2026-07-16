@@ -141,7 +141,7 @@ describe('adoption migration', () => {
     const id = await ensureProfilesInitialized();
 
     // Marker is durable before the registry/pointer writes (crash-safe start).
-    const markerWrite = operations.indexOf('write:__profile_adoption_pending__');
+    const markerWrite = operations.indexOf('write:resume-profile-adoption-pending');
     expect(markerWrite).toBeGreaterThanOrEqual(0);
     expect(markerWrite).toBeLessThan(operations.indexOf(`write:${PROFILES_KEY}`));
     expect(markerWrite).toBeLessThan(operations.indexOf(`write:${ACTIVE_PROFILE_KEY}`));
@@ -158,12 +158,12 @@ describe('adoption migration', () => {
     expect(Math.max(...copyIdx)).toBeLessThan(Math.min(...delIdx));
 
     // Marker cleared last; sources gone; copies present.
-    expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
+    expect(operations.at(-1)).toBe('delete:resume-profile-adoption-pending');
     expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{}}');
     expect(backend.files.get(`resume-p--${id}--resume-designer-job-descriptions`)).toBe('[]');
     expect(backend.files.has('resume-designer-data')).toBe(false);
     expect(backend.files.has('resume-designer-job-descriptions')).toBe(false);
-    expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+    expect(backend.files.has('resume-profile-adoption-pending')).toBe(false);
   });
 
   it('leaves print mapping OFF while an adoption is pending (reads unprefixed live data)', () => {
@@ -171,7 +171,7 @@ describe('adoption migration', () => {
     // print window must too — else a PDF captures the stale physical copy.
     localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'prec', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
     localStorage.setItem(ACTIVE_PROFILE_KEY, 'prec');
-    localStorage.setItem('__profile_adoption_pending__', '1');
+    localStorage.setItem('resume-profile-adoption-pending', '1');
     localStorage.setItem('resume-designer-data', '{"variants":{"LIVE":{}}}');
     localStorage.setItem('resume-p--prec--resume-designer-data', '{"variants":{"STALE":{}}}');
 
@@ -224,7 +224,7 @@ describe('adoption migration', () => {
       const id = await ensureProfilesInitialized(); // must resolve, not throw
       expect(id).not.toBeNull();
       expect(localStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
-      expect(localStorage.getItem('__profile_adoption_pending__')).toBe('1');
+      expect(localStorage.getItem('resume-profile-adoption-pending')).toBe('1');
 
       // Mapping must stay INACTIVE after a failed adoption — otherwise reads
       // hit the empty namespace and the user's data appears lost. Prove it:
@@ -253,7 +253,7 @@ describe('adoption migration', () => {
 
       expect(id).not.toBeNull();
       expect(backend.files.get('resume-designer-data')).toBe('{"variants":{}}');
-      expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
+      expect(backend.files.get('resume-profile-adoption-pending')).toBe('1');
       expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{}}');
     } finally {
       errSpy.mockRestore();
@@ -263,7 +263,7 @@ describe('adoption migration', () => {
   it('resumes a cached-mode adoption with copies durable before source deletes', async () => {
     const operations = [];
     const backend = makeBackend({
-      '__profile_adoption_pending__': '1',
+      'resume-profile-adoption-pending': '1',
       [PROFILES_KEY]: JSON.stringify([{ id: 'pfixed', name: 'Ash', emoji: '🙂', createdAt: 'x' }]),
       [ACTIVE_PROFILE_KEY]: 'pfixed',
       'resume-designer-data': '{"variants":{}}',
@@ -285,10 +285,10 @@ describe('adoption migration', () => {
     const sourceDelete = operations.indexOf('delete:resume-designer-data');
     expect(copyWrite).toBeGreaterThanOrEqual(0);
     expect(copyWrite).toBeLessThan(sourceDelete);
-    expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
+    expect(operations.at(-1)).toBe('delete:resume-profile-adoption-pending');
     expect(backend.files.get('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{}}');
     expect(backend.files.has('resume-designer-data')).toBe(false);
-    expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+    expect(backend.files.has('resume-profile-adoption-pending')).toBe(false);
   });
 
   it('resume copies the authoritative unprefixed edit over a stale physical', async () => {
@@ -298,7 +298,7 @@ describe('adoption migration', () => {
     // authoritative unprefixed edit, not skip it (copy-if-absent would keep the
     // stale value and then delete the newer source — the finding-14 clobber).
     const backend = makeBackend({
-      '__profile_adoption_pending__': '1',
+      'resume-profile-adoption-pending': '1',
       [PROFILES_KEY]: JSON.stringify([{ id: 'pfixed', name: 'Ash', emoji: '🙂', createdAt: 'x' }]),
       [ACTIVE_PROFILE_KEY]: 'pfixed',
       'resume-designer-data': '{"variants":{"EDITED":{}}}',                      // recovery edit (authoritative)
@@ -311,7 +311,7 @@ describe('adoption migration', () => {
     expect(id).toBe('pfixed');
     expect(backend.files.get('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{"EDITED":{}}}');
     expect(backend.files.has('resume-designer-data')).toBe(false);
-    expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+    expect(backend.files.has('resume-profile-adoption-pending')).toBe(false);
   });
 
   it('keeps all data readable unprefixed when adoption partially copies then fails (no split)', async () => {
@@ -339,7 +339,7 @@ describe('adoption migration', () => {
       // Neither source was deleted (no split); marker persists for a retry.
       expect(backend.files.get('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
       expect(backend.files.get('resume-designer-history-v1')).toBe('big-history');
-      expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
+      expect(backend.files.get('resume-profile-adoption-pending')).toBe('1');
     } finally {
       errSpy.mockRestore();
       warnSpy.mockRestore();
@@ -364,7 +364,7 @@ describe('adoption migration', () => {
       // copy-always clobber them from the lingering source. Instead the source
       // is restored and the marker kept for a retry.
       expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{"KEEP":{}}}');
-      expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
+      expect(backend.files.get('resume-profile-adoption-pending')).toBe('1');
       // Mapping OFF → a read resolves to the restored unprefixed source, and a
       // fresh write stays unprefixed (would hit the physical key if mapping were on).
       expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
@@ -376,6 +376,23 @@ describe('adoption migration', () => {
     }
   });
 
+  it('carries the adoption marker across the localStorage→disk adoption', async () => {
+    // A recovery state in localStorage: registry + unprefixed data + the marker.
+    // appStorage's one-time localStorage→disk adoption copies only resume-* keys,
+    // so the marker MUST start with resume- to survive — otherwise the next disk
+    // boot loses it and wrongly treats the adoption as complete.
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'prec', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'prec');
+    localStorage.setItem('resume-designer-data', '{"variants":{"LIVE":{}}}');
+    localStorage.setItem('resume-profile-adoption-pending', '1');
+
+    const backend = makeBackend(); // empty disk → triggers the adoption copy
+    await initAppStorage({ backend });
+
+    expect(backend.files.has('resume-profile-adoption-pending')).toBe(true);
+    expect(isAdoptionPending()).toBe(true);
+  });
+
   it('degrades to mapping-off instead of aborting when the marker write throws (passthrough quota)', async () => {
     // Browser passthrough: localStorage is already full, so the very first
     // adoption metadata write throws synchronously. ensureProfilesInitialized
@@ -383,7 +400,7 @@ describe('adoption migration', () => {
     localStorage.setItem('resume-designer-data', '{"variants":{"KEEP":{}}}');
     const realSetItem = Storage.prototype.setItem;
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(key, value) {
-      if (key === '__profile_adoption_pending__') throw new DOMException('quota', 'QuotaExceededError');
+      if (key === 'resume-profile-adoption-pending') throw new DOMException('quota', 'QuotaExceededError');
       return realSetItem.call(this, key, value);
     });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -453,14 +470,14 @@ describe('adoption migration', () => {
 
   it('resumes an interrupted adoption under the same profile id', async () => {
     localStorage.setItem('resume-designer-data', '{"variants":{}}');
-    localStorage.setItem('__profile_adoption_pending__', '1');
+    localStorage.setItem('resume-profile-adoption-pending', '1');
     localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'pfixed', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
     localStorage.setItem(ACTIVE_PROFILE_KEY, 'pfixed');
 
     const id = await ensureProfilesInitialized();
     expect(id).toBe('pfixed');
     expect(localStorage.getItem('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{}}');
-    expect(localStorage.getItem('__profile_adoption_pending__')).toBeNull();
+    expect(localStorage.getItem('resume-profile-adoption-pending')).toBeNull();
   });
 
   it('extractSharedApiKey never clobbers an existing shared key', () => {

@@ -9,9 +9,14 @@ import {
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
 } from './profileKeys.js';
 
-// Deliberately OUTSIDE the `resume-` owned keyspace (like appStorage's
-// __adoption_pending__) so backups never carry it.
-const PROFILE_ADOPTION_MARKER = '__profile_adoption_pending__';
+// Starts with `resume-` ON PURPOSE so appStorage's one-time localStorage→disk
+// adoption (OWNED_PREFIX = 'resume-') copies it too — otherwise an incomplete
+// profile adoption that spans a passthrough→disk transition would lose the
+// marker, and the next boot would treat adoption as complete and map onto a
+// stale/absent physical copy. It is NOT an owned key (not in BACKUP_FIXED_KEYS,
+// not a history key), so isOwnedKey is false → backups never carry it and the
+// key mapping never namespaces it.
+const PROFILE_ADOPTION_MARKER = 'resume-profile-adoption-pending';
 
 // True while a first-profile adoption is incomplete (marker persisted, mapping
 // left inactive — see ensureProfilesInitialized). The UI hides the profile
