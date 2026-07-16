@@ -28,6 +28,7 @@ const SHARED_KEYS = new Set([
   'resume-designer-auto-update-check',
   'resume-designer-model-catalog',
   'resume-designer-electron-migration-attempted',
+  'resume-designer-bridge-token', // one loopback server per install, not per profile
   PROFILES_KEY,
   ACTIVE_PROFILE_KEY,
   OPENROUTER_KEY_KEY,
@@ -45,6 +46,7 @@ export const BACKUP_FIXED_KEYS = [
   'resume-designer-chat-threads',
   'resume-designer-chat-history',          // legacy, harmless to round-trip
   'resume-designer-token-usage',
+  'resume-designer-learned-answers',       // per-person Q&A the extension learns
   // UI / personalization
   'resume-designer-theme',
   'resume-designer-onboarding-complete',
@@ -57,6 +59,10 @@ export const BACKUP_FIXED_KEYS = [
   'resume-zoom',
   'resume-designer-update-channel',
   'resume-designer-auto-update-check',
+  // Shared machine-level key, but listed here too (like theme/update-channel
+  // above) so isOwnedKey() accepts it; isSharedKey short-circuits namespacing
+  // and BACKUP_SHARED_KEYS routes it to the shared backup section.
+  'resume-designer-bridge-token',
 ];
 // Undo/redo history lives at this prefix, one key per variant.
 export const BACKUP_HISTORY_PREFIX = 'resume-designer-history-';

@@ -1044,6 +1044,22 @@ async function callOpenRouter(modelId, messages, options = {}) {
 }
 
 /**
+ * Minimal completion for the local companion-extension bridge. Unlike chat(),
+ * no resume/job context is injected — the bridge request carries its own
+ * messages. Uses the settings' default model; tracked as feature 'bridge'.
+ */
+export async function completeForBridge(messages, options = {}) {
+  if (!getApiKey()) throw new Error('No OpenRouter API key configured. Add your key in Settings.');
+  const settings = getSettings();
+  const modelId = validateModelId(settings.defaultModel);
+  return callOpenRouter(modelId, messages, {
+    feature: 'bridge',
+    systemPrompt: options.systemPrompt,
+    reasoningEffort: options.reasoningEffort,
+  });
+}
+
+/**
  * Main chat function
  * @param {string} modelId - OpenRouter model slug (e.g., 'anthropic/claude-sonnet-4.5')
  * @param {Array} messages - Array of message objects with role and content

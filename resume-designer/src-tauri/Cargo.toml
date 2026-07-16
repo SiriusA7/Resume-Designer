@@ -41,6 +41,9 @@ base64 = "0.22"
 # $XDG_CONFIG_HOME for Electron userData path lookup.
 rusty-leveldb = "3"
 dirs = "5"
+# Loopback HTTP listener for the companion-extension bridge (commands/bridge.rs).
+# Requests are forwarded to the webview as events; JS answers via bridge_respond.
+tiny_http = "0.12"
 
 [dev-dependencies]
 # Isolated temp dirs for the storage-command filesystem tests. Already in the

@@ -343,12 +343,15 @@ import { loadRegistry, getActiveProfileId } from './profiles.js';
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
 // Shared machine-level keys that belong in a backup (parity with the old
-// BACKUP_FIXED_KEYS entries for theme/updates, plus the shared api key —
-// model-catalog and migration flags stay cache/flag-only, never backed up).
+// BACKUP_FIXED_KEYS entries for theme/updates, plus the shared api key and the
+// companion-bridge pairing token — one loopback server per install, so the
+// token is not per-profile. model-catalog and migration flags stay
+// cache/flag-only, never backed up).
 const BACKUP_SHARED_KEYS = [
   'resume-designer-theme',
   'resume-designer-update-channel',
   'resume-designer-auto-update-check',
+  'resume-designer-bridge-token',
   OPENROUTER_KEY_KEY,
 ];
 
