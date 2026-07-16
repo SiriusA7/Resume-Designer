@@ -464,12 +464,25 @@ export function exportFullBackup(filename) {
   // Recovery state: unprefixed owned keys (non-shared) are the active profile's
   // authoritative live data — edits since the failed adoption went here, so
   // they OVERRIDE any stale physical partial copy. A no-op in the normal case
-  // (mapping on → no unprefixed owned keys exist).
-  if (activeId) {
-    for (const k of appStorage.keys()) {
-      if (!k || splitPhysicalKey(k) || BACKUP_SHARED_KEYS.includes(k) || !isOwnedKey(k)) continue;
+  // (mapping on → no unprefixed owned keys exist). In the MARKERLESS degraded
+  // state (the very first marker write failed: no registry, no pointer,
+  // activeId null) they are captured under a synthesized recovery id instead —
+  // otherwise the escape-hatch backup the storage-failure guidance tells the
+  // user to take would contain an empty registry and NO résumés, and the
+  // importer would reject the file outright. The orphan reconciliation below
+  // then synthesizes the matching registry entry.
+  const unprefixedOwned = appStorage.keys().filter(
+    (k) => k && !splitPhysicalKey(k) && !BACKUP_SHARED_KEYS.includes(k) && isOwnedKey(k)
+  );
+  let recoveryId = activeId;
+  if (!recoveryId && unprefixedOwned.length) {
+    recoveryId = 'recovered0';
+    while (profiles[recoveryId]) recoveryId += '0'; // never merge into a real namespace
+  }
+  if (recoveryId) {
+    for (const k of unprefixedOwned) {
       const v = appStorage.getItem(k);
-      if (v !== null) ((profiles[activeId] ||= { keys: {} }).keys)[k] = v;
+      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = v;
     }
   }
   // Reconcile orphan namespaces with the exported registry: a partial

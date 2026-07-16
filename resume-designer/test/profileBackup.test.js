@@ -620,3 +620,35 @@ describe('renameProfileDurably', () => {
     expect(JSON.parse(backend.files.get(PROFILES_KEY)).find((p) => p.id === 'a').name).toBe('New');
   });
 });
+
+// Regression (PR #89 finding 38): in the MARKERLESS degraded state (the very
+// first adoption-marker write failed: no registry, no active pointer) the
+// export's recovery capture was gated on activeId and skipped every workspace
+// key — Settings → Data "successfully" produced an empty-registry backup the
+// importer rejects, exactly when the storage-failure guidance says to export.
+describe('exportFullBackup markerless recovery', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('captures unprefixed live data under a synthesized profile and round-trips', async () => {
+    // No registry, no pointer — adoption never started.
+    localStorage.setItem('resume-designer-data', '{"variants":{"LIVE":{}}}');
+    localStorage.setItem('resume-designer-theme', 'dark');
+
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    const recovered = envelope.registry.find((p) => /recovered/i.test(p.name));
+    expect(recovered).toBeTruthy();
+    expect(envelope.profiles[recovered.id].keys['resume-designer-data']).toBe('{"variants":{"LIVE":{}}}');
+    expect(envelope.shared['resume-designer-theme']).toBe('dark');
+
+    localStorage.clear();
+    __resetAppStorageForTests();
+    expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
+    expect(localStorage.getItem(`resume-p--${recovered.id}--resume-designer-data`)).toBe('{"variants":{"LIVE":{}}}');
+  });
+});
