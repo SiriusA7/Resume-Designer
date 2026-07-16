@@ -5,7 +5,7 @@ import {
   exportProfileBackup, importProfileBackup,
 } from '../src/profiles.js';
 import { importFullBackupFromEnvelope, exportFullBackup } from '../src/persistence.js';
-import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY } from '../src/profileKeys.js';
+import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY, PROFILES_KEY } from '../src/profileKeys.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
@@ -72,6 +72,39 @@ describe('format-2 export/restore', () => {
     expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
     expect(loadRegistry()).toHaveLength(3);
     expect(localStorage.getItem(ACTIVE_PROFILE_KEY)).toBe(ashId);
+  });
+
+  it('captures unprefixed live data (incomplete-adoption recovery) under the active profile', () => {
+    // Recovery state: adoption left mapping OFF, so the live workspace is still
+    // at unprefixed keys. A backup taken here (per the storage-failure guidance)
+    // must still contain the résumé data, not just registry + shared settings.
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'prec', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'prec');
+    localStorage.setItem('resume-designer-data', '{"variants":{"LIVE":{}}}');
+    localStorage.setItem('resume-designer-theme', 'dark'); // shared → shared section
+    // mapping is off (never activated) — the recovery state.
+
+    const readDownload = captureDownload();
+    exportFullBackup();
+    return readDownload().then((envelope) => {
+      expect(envelope.profiles.prec.keys['resume-designer-data']).toBe('{"variants":{"LIVE":{}}}');
+      expect(envelope.shared['resume-designer-theme']).toBe('dark');
+    });
+  });
+
+  it('rejects an array profiles container before touching existing storage', () => {
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'p', name: 'Profile' }],
+      activeProfile: 'p',
+      shared: {},
+      profiles: [],
+    })).toThrow(/"profiles" must be an object/i);
+
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
   });
 
   it('rejects a malformed profile before touching existing storage', () => {

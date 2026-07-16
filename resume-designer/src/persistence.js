@@ -422,14 +422,18 @@ function collectActiveOwnedKeys() {
 
 /**
  * Write a JSON file containing the registry, shared keys, and every
- * profile's owned keys (format 2). Pre-adoption unprefixed keys are
- * impossible here (adoption runs before any UI), but shared owned keys
- * (theme, update settings) route to the shared section.
+ * profile's owned keys (format 2). Shared owned keys (theme, update settings)
+ * route to the shared section. In the incomplete-adoption RECOVERY state
+ * (mapping left off after a quota/disk failure) the live workspace still lives
+ * under UNPREFIXED owned keys — those are captured under the active profile
+ * below, so a backup taken on the storage-failure guidance still contains the
+ * user's résumés, not just registry/settings.
  * Returns { keysExported, filename } for the caller to surface in UI.
  */
 export function exportFullBackup(filename) {
   const profiles = {};
   const shared = {};
+  const activeId = getActiveProfileId();
   for (const k of appStorage.keys()) {
     if (!k) continue;
     const split = splitPhysicalKey(k);
@@ -439,6 +443,17 @@ export function exportFullBackup(filename) {
     } else if (BACKUP_SHARED_KEYS.includes(k)) {
       const v = appStorage.getItem(k);
       if (v !== null) shared[k] = v;
+    }
+  }
+  // Recovery state: unprefixed owned keys (non-shared) are the active profile's
+  // authoritative live data — edits since the failed adoption went here, so
+  // they OVERRIDE any stale physical partial copy. A no-op in the normal case
+  // (mapping on → no unprefixed owned keys exist).
+  if (activeId) {
+    for (const k of appStorage.keys()) {
+      if (!k || splitPhysicalKey(k) || BACKUP_SHARED_KEYS.includes(k) || !isOwnedKey(k)) continue;
+      const v = appStorage.getItem(k);
+      if (v !== null) ((profiles[activeId] ||= { keys: {} }).keys)[k] = v;
     }
   }
   const backup = {
@@ -494,8 +509,11 @@ function importFullBackupV2(parsed) {
   if (!validRegistry || !uniqueIds) {
     throw new Error('Invalid format-2 backup: registry entries must have unique valid ids and string names.');
   }
-  if (!parsed.profiles || typeof parsed.profiles !== 'object') {
-    throw new Error('Invalid format-2 backup: missing registry or profiles.');
+  // Reject a non-plain-object `profiles` (incl. arrays) pre-wipe: an array
+  // passes typeof 'object', then every registry id reads as a missing entry
+  // (treated as an empty workspace) and the wipe proceeds restoring nothing.
+  if (!parsed.profiles || typeof parsed.profiles !== 'object' || Array.isArray(parsed.profiles)) {
+    throw new Error('Invalid format-2 backup: "profiles" must be an object.');
   }
 
   // Validate and collect every referenced profile before removing anything.
