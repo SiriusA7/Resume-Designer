@@ -112,9 +112,12 @@ describe('registry CRUD', () => {
 });
 
 describe('adoption migration', () => {
-  it('makes the marker durable and copies every source before deleting any source', async () => {
+  it('moves keys one at a time — each copy durable before its source delete, and sources freed as it goes', async () => {
     const operations = [];
-    const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
+    const backend = makeBackend({
+      'resume-designer-data': '{"variants":{}}',
+      'resume-designer-job-descriptions': '[]',
+    });
     backend.write.mockImplementation(async (key, value) => {
       operations.push(`write:${key}`);
       backend.files.set(key, value);
@@ -127,27 +130,59 @@ describe('adoption migration', () => {
 
     const id = await ensureProfilesInitialized();
 
+    // Marker is durable before the registry/pointer writes (crash-safe start).
     const markerWrite = operations.indexOf('write:__profile_adoption_pending__');
-    const registryWrite = operations.indexOf(`write:${PROFILES_KEY}`);
-    const pointerWrite = operations.indexOf(`write:${ACTIVE_PROFILE_KEY}`);
-    const copyWrites = operations
-      .map((operation, index) => ({ operation, index }))
-      .filter(({ operation }) => operation.startsWith('write:resume-p--'));
-    const sourceDeletes = operations
-      .map((operation, index) => ({ operation, index }))
-      .filter(({ operation }) => operation === 'delete:resume-designer-data');
-
     expect(markerWrite).toBeGreaterThanOrEqual(0);
-    expect(markerWrite).toBeLessThan(registryWrite);
-    expect(markerWrite).toBeLessThan(pointerWrite);
-    expect(copyWrites).not.toHaveLength(0);
-    expect(sourceDeletes).not.toHaveLength(0);
-    expect(Math.max(...copyWrites.map(({ index }) => index)))
-      .toBeLessThan(Math.min(...sourceDeletes.map(({ index }) => index)));
+    expect(markerWrite).toBeLessThan(operations.indexOf(`write:${PROFILES_KEY}`));
+    expect(markerWrite).toBeLessThan(operations.indexOf(`write:${ACTIVE_PROFILE_KEY}`));
+
+    // Each source's copy reaches disk before that source is deleted.
+    for (const src of ['resume-designer-data', 'resume-designer-job-descriptions']) {
+      const copy = operations.indexOf(`write:resume-p--${id}--${src}`);
+      const del = operations.indexOf(`delete:${src}`);
+      expect(copy).toBeGreaterThanOrEqual(0);
+      expect(del).toBeGreaterThan(copy);
+    }
+    // A source is deleted BEFORE the last copy is written — proving keys move
+    // one at a time (source freed as we go) rather than all-copied-then-all-
+    // deleted, which would double peak storage. This is the property the
+    // passthrough-quota fix depends on.
+    const copyIdx = operations
+      .map((o, i) => ({ o, i })).filter(({ o }) => o.startsWith(`write:resume-p--${id}--`)).map(({ i }) => i);
+    const delIdx = operations
+      .map((o, i) => ({ o, i })).filter(({ o }) => /^delete:resume-designer-(data|job-descriptions)$/.test(o)).map(({ i }) => i);
+    expect(Math.min(...delIdx)).toBeLessThan(Math.max(...copyIdx));
+
+    // Marker cleared last; sources gone; copies present.
     expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
     expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{}}');
+    expect(backend.files.get(`resume-p--${id}--resume-designer-job-descriptions`)).toBe('[]');
     expect(backend.files.has('resume-designer-data')).toBe(false);
+    expect(backend.files.has('resume-designer-job-descriptions')).toBe(false);
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+  });
+
+  it('survives a passthrough localStorage quota error during adoption', async () => {
+    // Browser/passthrough mode writes straight to localStorage (~5MB cap). A
+    // per-profile copy hitting quota must NOT crash init(): the source data and
+    // the marker are kept so a later boot (after the user frees space) resumes.
+    localStorage.setItem('resume-designer-data', '{"variants":{"KEEP":{}}}');
+    const realSetItem = Storage.prototype.setItem;
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(key, value) {
+      if (String(key).startsWith('resume-p--')) throw new DOMException('quota', 'QuotaExceededError');
+      return realSetItem.call(this, key, value);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const id = await ensureProfilesInitialized(); // must resolve, not throw
+      expect(id).not.toBeNull();
+      expect(localStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
+      expect(localStorage.getItem('__profile_adoption_pending__')).toBe('1');
+    } finally {
+      setItemSpy.mockRestore();
+      errSpy.mockRestore();
+    }
   });
 
   it('keeps sources and the marker durable when adoption copies fail', async () => {

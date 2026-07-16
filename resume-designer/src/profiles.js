@@ -39,38 +39,52 @@ function saveRegistry(registry) {
 }
 
 // Move every unprefixed per-profile owned key under the given profile's
-// namespace. Mapping must be INACTIVE here — physical targets pass through
-// mapKey untouched either way.
+// namespace, ONE KEY AT A TIME: copy → make it durable → delete the source,
+// then move to the next. Mapping must be INACTIVE here — physical targets
+// pass through mapKey untouched either way.
 //
-// Copy-if-ABSENT, not copy-always: once a physical key exists it is
-// authoritative. A resume (marker survived a failed source-delete) reaches
-// here with mapping having been activated last session, so the user may have
-// SAVED edits to the physical key since — recopying the stale unprefixed
-// source over it would silently clobber those edits. A missing physical key
-// means the first copy never landed, so this run legitimately performs it.
-// Sources are always queued for deletion regardless, so the cleanup still
-// completes on the retry.
+// Per-key (not copy-all-then-delete-all) because copying every source before
+// deleting any would hold ~2× the data at peak. In browser passthrough mode
+// appStorage writes straight to localStorage (a hard ~5MB cap), so doubling
+// throws QuotaExceededError for anyone past ~half quota; moving one key at a
+// time keeps the peak at ~1× (only the in-flight key is duplicated). Cached
+// (Tauri) mode never hits that cap, but the per-key order costs nothing there.
+//
+// Crash-safety survives: the copy is flushed durable BEFORE its source is
+// deleted, so a crash between the two leaves the source intact (the resume
+// re-copies). Copy-if-ABSENT so a resume (marker survived a failed source
+// delete, mapping already active last session) never overwrites edits the
+// user has since saved to the physical key with the stale source.
 async function migrateUnprefixedKeys(profileId) {
-  const sources = [];
+  let anyMoved = false;
   for (const k of appStorage.keys()) {
     if (!k || isSharedKey(k) || isPhysicalKey(k) || !isOwnedKey(k)) continue;
     const target = physicalKey(profileId, k);
-    if (appStorage.getItem(target) === null) {
-      const v = appStorage.getItem(k);
-      if (v !== null) appStorage.setItem(target, v);
+    try {
+      if (appStorage.getItem(target) === null) {
+        const v = appStorage.getItem(k);
+        if (v !== null) appStorage.setItem(target, v);
+      }
+    } catch (err) {
+      // Passthrough localStorage quota (or any synchronous write failure). The
+      // source is untouched; keep the marker and resume next boot — sources
+      // already moved this pass have freed their space, so the retry proceeds.
+      console.error('[profiles] adoption copy failed; will resume next boot:', err);
+      await appStorage.flush();
+      return false;
     }
-    sources.push(k);
+    // Copy durable before the source delete (a crash between them in cached
+    // mode would otherwise lose data), then free the source immediately.
+    if (!(await appStorage.flush())) {
+      console.error('[profiles] adoption copy did not reach disk — keeping sources; will resume next boot');
+      return false;
+    }
+    appStorage.removeItem(k);
+    anyMoved = true;
   }
-  if (!sources.length) return true;
-  if (!(await appStorage.flush())) {
-    console.error('[profiles] adoption copies did not reach disk — keeping sources; will resume next boot');
-    return false;
-  }
-  for (const k of sources) appStorage.removeItem(k);
-  // Copies are durable at this point, so a failed delete-flush only delays
-  // source cleanup: the caller keeps the marker and the next boot's resume
-  // re-runs this (idempotent) migration to finish the deletes.
-  return await appStorage.flush();
+  // Persist the final source delete; a failed flush keeps the marker so the
+  // next boot resumes (copies are durable, so it just retries the deletes).
+  return anyMoved ? appStorage.flush() : true;
 }
 
 // Best-effort profile name for adoption: the user's own name if they filled
