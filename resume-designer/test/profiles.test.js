@@ -6,6 +6,7 @@ import {
   loadRegistry, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending,
+  activateProfileMappingForPrint,
 } from '../src/profiles.js';
 import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 import { getSettings, saveSettings } from '../src/persistence.js';
@@ -160,6 +161,30 @@ describe('adoption migration', () => {
     expect(backend.files.has('resume-designer-data')).toBe(false);
     expect(backend.files.has('resume-designer-job-descriptions')).toBe(false);
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+  });
+
+  it('leaves print mapping OFF while an adoption is pending (reads unprefixed live data)', () => {
+    // Recovery state: main window runs mapping-off on unprefixed data, so the
+    // print window must too — else a PDF captures the stale physical copy.
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'prec', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'prec');
+    localStorage.setItem('__profile_adoption_pending__', '1');
+    localStorage.setItem('resume-designer-data', '{"variants":{"LIVE":{}}}');
+    localStorage.setItem('resume-p--prec--resume-designer-data', '{"variants":{"STALE":{}}}');
+
+    activateProfileMappingForPrint();
+
+    expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"LIVE":{}}}');
+  });
+
+  it('activates print mapping once adoption is complete (reads the namespaced data)', () => {
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'pdone', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'pdone');
+    localStorage.setItem('resume-p--pdone--resume-designer-data', '{"variants":{"REAL":{}}}');
+
+    activateProfileMappingForPrint();
+
+    expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"REAL":{}}}');
   });
 
   it('reports adoption pending while the marker is present (drives switcher hiding)', async () => {

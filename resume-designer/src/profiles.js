@@ -229,14 +229,18 @@ export async function ensureProfilesInitialized() {
 
 /**
  * Print window: activate mapping WITHOUT writes or adoption (readOnly store).
- * The main window has always completed adoption before a print window can
- * exist. A missing registry/pointer leaves mapping off — identical to the
- * pre-profile behavior.
+ * A missing registry/pointer leaves mapping off — identical to the pre-profile
+ * behavior. Also leave it off while an adoption is mid-recovery: the main
+ * window is running mapping-off on the unprefixed live workspace, so the print
+ * window must read the same unprefixed data — mapping to the (stale or absent)
+ * physical copy would capture a blank or stale PDF.
  */
 export function activateProfileMappingForPrint() {
   const registry = loadRegistry();
   const active = getActiveProfileId();
-  if (registry && registry.some((p) => p.id === active)) setProfileMapping(active);
+  if (registry && registry.some((p) => p.id === active) && !isAdoptionPending()) {
+    setProfileMapping(active);
+  }
 }
 
 // Colon-free (":" separates the physical-key segments). createProfile
@@ -341,8 +345,21 @@ export function importProfileBackup(parsed) {
     name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : 'Imported profile',
     emoji: typeof parsed.emoji === 'string' ? parsed.emoji : '🙂',
   });
-  for (const [k, v] of Object.entries(parsed.keys)) {
-    appStorage.setItem(physicalKey(profile.id, k), v);
+  try {
+    for (const [k, v] of Object.entries(parsed.keys)) {
+      appStorage.setItem(physicalKey(profile.id, k), v);
+    }
+  } catch (err) {
+    // A key write failed (browser localStorage quota — bulky history keys are
+    // the usual trigger) after createProfile already persisted the registry
+    // entry. Roll back both the entry and any partial keys so the user can't
+    // later switch into a half-written workspace.
+    const prefix = physicalKey(profile.id, '');
+    for (const k of appStorage.keys()) {
+      if (k && k.startsWith(prefix)) appStorage.removeItem(k);
+    }
+    saveRegistry((loadRegistry() || []).filter((p) => p.id !== profile.id));
+    throw err;
   }
   return profile;
 }
