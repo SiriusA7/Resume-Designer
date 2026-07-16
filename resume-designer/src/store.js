@@ -476,14 +476,24 @@ function createStore() {
       saveCallback = callback;
     },
 
-    // Latch saving off ahead of a post-restore reload (see savesSuspended).
-    // Cancels any pending debounce so it can't fire during the reload window.
+    // Latch saving off ahead of a destructive import (see savesSuspended).
+    // Called BEFORE the import runs, so the store can't write its stale résumé
+    // over the imported data during the import's own async flush. Cancels any
+    // pending debounce so it can't fire either.
     suspendSaves() {
       savesSuspended = true;
       if (saveTimeout) {
         clearTimeout(saveTimeout);
         saveTimeout = null;
       }
+    },
+
+    // Re-enable saving after an import FAILED and rolled back: the store still
+    // matches the (rolled-back) appStorage, and the app keeps running without a
+    // reload, so it must be able to save again. On a SUCCESSFUL import this is
+    // never called — the window reloads with saves still suspended.
+    resumeSaves() {
+      savesSuspended = false;
     },
 
     // Schedule a debounced save

@@ -87,14 +87,9 @@ function reloadWithOverlay(message = 'Reloading…') {
  * Reuses the existing .modal-overlay / .modal classes for theming + dark mode.
  */
 function showImportSuccessAndReload(message) {
-  // The destructive restore has already rewritten appStorage, so the in-memory
-  // store now holds the STALE pre-import résumé. Latch saving off BEFORE this
-  // modal (which waits on the user) goes up: otherwise a visibilitychange /
-  // window-close in that window would fire store.saveNow() and write the stale
-  // résumé back into the just-restored profile. This function is only ever
-  // called after a successful import, so suspending here is unconditional.
-  store.suspendSaves();
-
+  // Saving is already suspended by the caller (before the durable import ran),
+  // so the stale in-memory résumé can't be written back while this modal waits
+  // on the user or during the reload.
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'import-success-modal-overlay';
@@ -240,6 +235,14 @@ export async function importBackupFromFile(file) {
       console.warn('[backup] pre-import flush failed:', err);
     }
 
+    // Suspend saves BEFORE the import — importFullBackupDurably writes
+    // appStorage synchronously and then AWAITS the disk flush; without this, a
+    // visibilitychange/close during that await would fire store.saveNow() and
+    // write the stale in-memory résumé over the just-imported data. Resumed in
+    // the catch below if the import throws (it rolls appStorage back, so the
+    // store is consistent again and the app keeps running without a reload).
+    store.suspendSaves();
+
     // SYNCHRONOUS call (not importFullBackup(file), which would do a second
     // file.text() — that await would yield AFTER our flush but BEFORE the
     // writes, reopening the race). importFullBackupDurably takes the
@@ -263,6 +266,7 @@ export async function importBackupFromFile(file) {
         backupNote
     );
   } catch (err) {
+    store.resumeSaves(); // import failed/rolled back — the app keeps running
     console.error('[backup] Import failed:', err);
     alert(`Import failed: ${err.message ?? String(err)}`);
   }
@@ -304,6 +308,10 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       console.warn('[backup] pre-import flush failed:', err);
     }
 
+    // Suspend saves before the import writes appStorage (see the format-2 path
+    // above for the flush-await race); resumed in the catch if it throws.
+    store.suspendSaves();
+
     const result = merging
       ? importFullBackupMerge(envelope)
       : await importFullBackupDurably(envelope);
@@ -319,6 +327,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
         + `(removed ${result.removedExistingKeys} existing keys).`;
     showImportSuccessAndReload(summary + skipped);
   } catch (err) {
+    store.resumeSaves(); // import failed — the app keeps running
     console.error('[backup] Legacy import failed:', err);
     alert(`Couldn't import data from the previous app: ${err.message ?? String(err)}`);
   }

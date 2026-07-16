@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { store } from '../src/store.js';
+
+// suspendSaves latches the per-file singleton one-way, so reset it before each
+// case — otherwise a prior test's latch leaves scheduleSave() a no-op here and
+// the debounce-cancellation assertion would pass even with the logic removed.
+beforeEach(() => { store.resumeSaves(); });
 
 // Regression (PR #92 Codex P1 — "Prevent stale saves after a full restore"):
 // a format-2 restore rewrites appStorage, but the in-memory store still holds
