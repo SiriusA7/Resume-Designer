@@ -676,7 +676,13 @@ function importFullBackupV2(parsed) {
     rollbackWipedImport(written, priorValues);
     throw err;
   }
-  return { keysImported, removedExistingKeys, historySkipped };
+  // `rollback` is for importFullBackupDurably: in cached mode nothing above
+  // throws (failures surface at flush), so the snapshot must outlive this
+  // function for the durability check to restore from.
+  return {
+    keysImported, removedExistingKeys, historySkipped,
+    rollback: () => rollbackWipedImport(written, priorValues),
+  };
 }
 
 export function importFullBackupFromEnvelope(parsed) {
@@ -760,11 +766,37 @@ export function importFullBackupFromEnvelope(parsed) {
     throw err;
   }
 
+  // Same contract as the format-2 path: the snapshot must outlive this
+  // function so importFullBackupDurably can restore on a failed flush.
   return {
     keysImported: entries.length - historySkipped,
     removedExistingKeys: priorValues.size,
     historySkipped,
+    rollback: () => rollbackWipedImport(written, priorValues),
   };
+}
+
+/**
+ * Durability wrapper for the real import paths (Settings → Data, legacy
+ * migration). In cached/Tauri mode setItem/removeItem never throw — disk
+ * failures surface only at flush() — so the sync import "succeeds" and drops
+ * its snapshot while the scheduled drain can partially replace the user's
+ * files: a disk-full restore could leave the durable store half-wiped after
+ * restart with nothing to restore from. This keeps the snapshot alive
+ * through a checked flush and rolls the store back (re-flushing the restore)
+ * when durability fails. The sync core stays exported for validation and
+ * for the merge path.
+ */
+export async function importFullBackupDurably(parsed) {
+  const { rollback, ...result } = importFullBackupFromEnvelope(parsed);
+  if (!(await appStorage.flush())) {
+    rollback();
+    await appStorage.flush();
+    throw new Error(
+      'The backup could not be written to disk (is the disk full?). Your previous data was restored.'
+    );
+  }
+  return result;
 }
 
 /**

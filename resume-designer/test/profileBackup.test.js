@@ -5,7 +5,7 @@ import {
   exportProfileBackup, importProfileBackup, activateProfileDurably,
   extractSharedApiKey, deleteProfileDurably,
 } from '../src/profiles.js';
-import { importFullBackupFromEnvelope, exportFullBackup } from '../src/persistence.js';
+import { importFullBackupFromEnvelope, importFullBackupDurably, exportFullBackup } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY, PROFILES_KEY } from '../src/profileKeys.js';
 
 beforeEach(() => {
@@ -535,5 +535,63 @@ describe('exportFullBackup orphan reconciliation', () => {
     const result = importFullBackupFromEnvelope(envelope); // must not throw on the orphan
     expect(result.keysImported).toBeGreaterThan(0);
     expect(localStorage.getItem('resume-p--orphan1--resume-designer-data')).toBe('{"variants":{"vo":{}}}');
+  });
+});
+
+// Regression (PR #89 finding 35): in cached mode the import's setItem/
+// removeItem never throw — the sync import "succeeded", dropped its snapshot,
+// and a failed durability flush later had nothing to restore from, so a
+// disk-full restore could leave the durable store half-wiped after restart.
+describe('importFullBackupDurably', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  const envelope = () => ({
+    backupFormat: 2,
+    kind: 'full',
+    registry: [{ id: 'pA', name: 'A' }],
+    activeProfile: 'pA',
+    shared: {},
+    profiles: { pA: { keys: { 'resume-designer-data': '{"a":1}' } } },
+  });
+
+  it('rolls the store back when the durability flush fails', async () => {
+    const orig = JSON.stringify([{ id: 'orig', name: 'Orig' }]);
+    const backend = makeBackend({
+      [PROFILES_KEY]: orig,
+      [ACTIVE_PROFILE_KEY]: 'orig',
+      'resume-p--orig--resume-designer-data': '{"mine":true}',
+    });
+    await initAppStorage({ backend });
+
+    backend.write.mockImplementation(async () => { throw new Error('disk full'); });
+    backend.delete.mockImplementation(async () => { throw new Error('disk full'); });
+
+    await expect(importFullBackupDurably(envelope())).rejects.toThrow(/could not be written/i);
+
+    // The cache is back to the pre-import store…
+    expect(appStorage.getItem(PROFILES_KEY)).toBe(orig);
+    expect(appStorage.getItem('resume-p--orig--resume-designer-data')).toBe('{"mine":true}');
+    expect(appStorage.getItem('resume-p--pA--resume-designer-data')).toBeNull();
+
+    // …and once the disk recovers, the RESTORED state is what drains to disk.
+    backend.write.mockImplementation(async (key, value) => { backend.files.set(key, value); });
+    backend.delete.mockImplementation(async (key) => { backend.files.delete(key); });
+    await appStorage.flush();
+    expect(backend.files.get(PROFILES_KEY)).toBe(orig);
+    expect(backend.files.get('resume-p--orig--resume-designer-data')).toBe('{"mine":true}');
+    expect(backend.files.has('resume-p--pA--resume-designer-data')).toBe(false);
+  });
+
+  it('returns the plain result (no rollback handle) when the flush is durable', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+
+    const result = await importFullBackupDurably(envelope());
+    expect(result.keysImported).toBeGreaterThan(0);
+    expect(result.rollback).toBeUndefined();
+    expect(backend.files.get('resume-p--pA--resume-designer-data')).toBe('{"a":1}');
   });
 });

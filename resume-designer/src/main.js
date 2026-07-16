@@ -25,7 +25,7 @@ import {
   SETTINGS_UPDATED_EVENT,
   getCurrentVariantId,
   getVariants,
-  importFullBackupFromEnvelope,
+  importFullBackupDurably,
 } from './persistence.js';
 import {
   isTauri,
@@ -210,7 +210,9 @@ async function maybeAutoMigrateLegacyData() {
     console.log('[migration] Legacy Electron data found:', probe);
 
     const envelope = await importLegacyElectronData();
-    const result = importFullBackupFromEnvelope(envelope);
+    // Durable variant: a disk-full flush failure rolls the (empty-ish) store
+    // back and throws into the catch below — flag 'failed', boot continues.
+    const result = await importFullBackupDurably(envelope);
     appStorage.setItem(ELECTRON_MIGRATION_FLAG, 'imported');
     console.log(
       `[migration] Imported ${result.keysImported} keys from legacy Electron data` +

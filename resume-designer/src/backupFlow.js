@@ -8,7 +8,7 @@
  * inline comments for why every step is ordered the way it is.
  */
 
-import { exportFullBackup, importFullBackupFromEnvelope, importFullBackupMerge } from './persistence.js';
+import { exportFullBackup, importFullBackupDurably, importFullBackupMerge } from './persistence.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
@@ -234,10 +234,11 @@ export async function importBackupFromFile(file) {
 
     // SYNCHRONOUS call (not importFullBackup(file), which would do a second
     // file.text() — that await would yield AFTER our flush but BEFORE the
-    // writes, reopening the race). importFullBackupFromEnvelope takes the
-    // already-parsed preview and runs the writes synchronously, so
-    // flush -> writes -> modal -> reload is one uninterrupted chain.
-    const result = importFullBackupFromEnvelope(preview);
+    // writes, reopening the race). importFullBackupDurably takes the
+    // already-parsed preview and runs the WRITES synchronously (its only
+    // await is the durability flush AFTER them, which also rolls the store
+    // back on failure), so flush -> writes stays one uninterrupted chain.
+    const result = await importFullBackupDurably(preview);
 
     let backupNote = '';
     if (result.historySkipped > 0) {
@@ -297,7 +298,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
 
     const result = merging
       ? importFullBackupMerge(envelope)
-      : importFullBackupFromEnvelope(envelope);
+      : await importFullBackupDurably(envelope);
 
     const skipped = result.historySkipped > 0
       ? `\n\nNote: ${result.historySkipped} oversize undo/redo `
