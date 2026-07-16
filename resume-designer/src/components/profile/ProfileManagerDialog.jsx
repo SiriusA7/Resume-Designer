@@ -9,6 +9,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { confirmDestructive } from '@/components/ui/confirm';
 
+import { appStorage } from '../../appStorage.js';
+import { store } from '../../store.js';
+import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
   loadRegistry, getActiveProfileId, renameProfile, deleteProfile,
   exportProfileBackup, importProfileBackup,
@@ -60,9 +63,17 @@ export function ProfileManagerDialog() {
     }
   };
 
-  const onExport = (p) => {
+  const onExport = async (p) => {
+    // The active profile has live in-memory edits behind the 500ms debounce.
+    // Flush them (same sources the switch path flushes) so the export captures
+    // the user's latest changes rather than the last-saved snapshot.
+    if (p.id === activeId) {
+      store.saveNow();
+      flushPendingProfileSave();
+      await appStorage.flush();
+    }
     try {
-      exportProfileBackup(p.id).catch((e) => toast.error(String(e.message || e)));
+      await exportProfileBackup(p.id);
     } catch (e) {
       // Unknown-id throws synchronously (before the download promise exists).
       toast.error(String(e.message || e));
