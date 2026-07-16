@@ -541,6 +541,19 @@ function importFullBackupV2(parsed) {
   // A malformed or missing entry must never turn a restore into a destructive
   // partial wipe, and collecting up front lets critical keys across ALL
   // profiles be written before any best-effort history data.
+  // Reject orphan `profiles` entries BEFORE the wipe: an entry whose id is
+  // not in the (validated) registry would pass the per-profile validation
+  // below — which iterates registry ids — but never be written by the restore
+  // loops, so the clean slate would silently drop that workspace.
+  // App-generated backups keep registry and profiles in sync; an orphan means
+  // the file is corrupt or hand-edited.
+  const registryIds = new Set(registry.map((p) => p.id));
+  for (const pid of Object.keys(parsed.profiles)) {
+    if (!registryIds.has(pid)) {
+      throw new Error(`Invalid format-2 backup: profiles entry "${pid}" is not in the registry.`);
+    }
+  }
+
   const profileEntries = [];
   for (const { id: pid } of registry) {
     const entry = parsed.profiles[pid];

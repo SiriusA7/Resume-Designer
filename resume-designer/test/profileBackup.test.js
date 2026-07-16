@@ -381,3 +381,30 @@ describe('per-profile export/import', () => {
     }
   });
 });
+
+// Regression (PR #89 finding 28): a corrupt format-2 backup with `profiles`
+// entries not listed in the registry passed validation (which iterates
+// registry ids only) — the clean-slate restore then silently dropped those
+// workspaces. Orphans are now rejected before anything is removed.
+describe('format-2 orphan profiles entries', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('rejects a profiles entry missing from the registry before wiping', () => {
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'p', name: 'Profile' }],
+      activeProfile: 'p',
+      shared: {},
+      profiles: {
+        p: { keys: {} },
+        ghost: { keys: { 'resume-designer-data': '{"lost":true}' } },
+      },
+    })).toThrow(/not in the registry/i);
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+});
