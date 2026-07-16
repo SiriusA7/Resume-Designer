@@ -63,12 +63,18 @@ export default function ProfileDialog() {
   if (profileRef.current === null) profileRef.current = buildWorkingCopy();
   const saveTimeoutRef = useRef(null);
   const savedTimeoutRef = useRef(null);
+  // True when the last debounced save FAILED to persist (passthrough quota).
+  // Without it, a fired-and-failed save leaves no pending timer, so flush()
+  // would report success and a switch/export would reload away the edits.
+  const failedSaveRef = useRef(false);
 
   const scheduleSave = useCallback(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
-      saveUserProfile(profileRef.current);
+      const ok = saveUserProfile(profileRef.current) !== false;
+      failedSaveRef.current = !ok;
       saveTimeoutRef.current = null;
+      if (!ok) return; // don't flash "Saved ✓" over a failed persist
       setSaved(true);
       if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
       savedTimeoutRef.current = setTimeout(() => setSaved(false), 1500);
@@ -76,13 +82,25 @@ export default function ProfileDialog() {
   }, []);
 
   // Cancel the pending debounce and write immediately. Returns the persist
-  // result (true when nothing was pending) so a caller aborting on an unsaved
-  // edit can see a passthrough quota failure. Safe to call unconditionally.
+  // result (true when nothing was pending AND no fired save failed) so a
+  // caller aborting on an unsaved edit can see a passthrough quota failure.
+  // Safe to call unconditionally: it only writes when edits are pending or a
+  // previous write failed — never for an untouched working copy.
   const flush = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
-      return saveUserProfile(profileRef.current) !== false;
+      const ok = saveUserProfile(profileRef.current) !== false;
+      failedSaveRef.current = !ok;
+      return ok;
+    }
+    // No timer pending — but the debounce may have already fired and FAILED,
+    // discarding its result. Retry that write here so the caller either gets
+    // a durable profile or a false to abort on.
+    if (failedSaveRef.current) {
+      const ok = saveUserProfile(profileRef.current) !== false;
+      failedSaveRef.current = !ok;
+      return ok;
     }
     return true;
   }, []);
