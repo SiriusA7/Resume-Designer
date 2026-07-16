@@ -1,6 +1,10 @@
+import { useEffect, useState } from 'react';
+
 import { Button } from '@/components/ui/button';
 
-import { loadRegistry, getActiveProfileId, isAdoptionPending } from '../../profiles.js';
+import {
+  loadRegistry, getActiveProfileId, isAdoptionPending, PROFILES_CHANGED_EVENT,
+} from '../../profiles.js';
 import { openSettings } from '../../settingsModal.js';
 import { profileInitials } from '../../accountStats.js';
 
@@ -13,6 +17,17 @@ import { profileInitials } from '../../accountStats.js';
  * unsafe — see isAdoptionPending), matching the old switcher's guards.
  */
 export function AccountAvatar() {
+  // Re-read on registry mutations from the (sibling) Account tab. Renaming the
+  // active profile changes these initials + the accessible label, but nothing
+  // else re-renders this header component, so without the subscription it would
+  // show the old name until an unrelated header render or a reload.
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const onChange = () => bump((n) => n + 1);
+    window.addEventListener(PROFILES_CHANGED_EVENT, onChange);
+    return () => window.removeEventListener(PROFILES_CHANGED_EVENT, onChange);
+  }, []);
+
   const registry = loadRegistry() || [];
   const active = registry.find((p) => p.id === getActiveProfileId());
   if (!active || registry.length === 0 || isAdoptionPending()) return null;

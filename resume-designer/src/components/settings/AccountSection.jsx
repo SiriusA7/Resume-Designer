@@ -18,7 +18,7 @@ import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
   loadRegistry, getActiveProfileId, activateProfileDurably, createProfile,
   renameProfileDurably, deleteProfile, deleteProfileDurably, exportProfileBackup,
-  importProfileBackup, isAdoptionPending,
+  importProfileBackup, isAdoptionPending, PROFILES_CHANGED_EVENT,
 } from '../../profiles.js';
 import { getVariants, getUserProfile } from '../../persistence.js';
 import { getAllJobDescriptions } from '../../jobDescriptions.js';
@@ -88,7 +88,12 @@ export function AccountSection() {
   // settings gear even though the header avatar is hidden in this state).
   const adopting = isAdoptionPending();
 
-  const refresh = () => setRegistry(loadRegistry() || []);
+  const refresh = () => {
+    setRegistry(loadRegistry() || []);
+    // Notify header chrome that reads the registry independently (AccountAvatar)
+    // so a renamed active profile updates its initials/label without a reload.
+    window.dispatchEvent(new CustomEvent(PROFILES_CHANGED_EVENT));
+  };
 
   // The active profile renders as one distinct card; everyone else as compact
   // rows in a capped scroll list — "which profile am I in?" is answerable at a

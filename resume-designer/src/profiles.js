@@ -18,6 +18,12 @@ import {
 // key mapping never namespaces it.
 const PROFILE_ADOPTION_MARKER = 'resume-profile-adoption-pending';
 
+// Fired on the window after a registry mutation that stays on the current page
+// (rename; the switch/create paths reload instead). Header chrome that reads
+// the registry independently — the AccountAvatar — listens to re-render, so a
+// renamed active profile updates its initials/label without a reload.
+export const PROFILES_CHANGED_EVENT = 'rd:profiles-changed';
+
 // A degraded init can run mapping-off WITHOUT a persisted marker (the marker
 // write itself failed, or the resolver threw unexpectedly). The marker check
 // alone would then report "not pending" and unlock profile creation — which
