@@ -5,7 +5,7 @@
 
 import { store } from './store.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
-import { ensureProfilesInitialized } from './profiles.js';
+import { ensureProfilesInitialized, loadRegistry, isAdoptionPending } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
 import { paginate, resetPaginatedState } from './pagination.js';
@@ -164,7 +164,14 @@ const ELECTRON_MIGRATION_FLAG = 'resume-designer-electron-migration-attempted';
  *   1. Only runs in Tauri (web has no backend command to probe).
  *   2. Only runs ONCE — sets `ELECTRON_MIGRATION_FLAG` regardless of
  *      outcome (found / not-found / error).
- *   3. Only runs when the current store (appStorage) has no
+ *   3. Only runs when the store has no profile registry and no adoption
+ *      in flight. Profiles resolve AFTER this probe (see init()), so on a
+ *      profiled store the guard below would read past the mapping: the
+ *      unprefixed `resume-designer-data` looks empty while the real
+ *      workspace sits under `resume-p--…` keys, and the import would
+ *      clobber it. A registry proves the store was populated by THIS app,
+ *      so it can never be a fresh-from-Electron store.
+ *   4. Only runs when the current store (appStorage) has no
  *      `resume-designer-data` — so a user who's already created
  *      content in the new build won't have it overwritten.
  *
@@ -179,6 +186,14 @@ const ELECTRON_MIGRATION_FLAG = 'resume-designer-electron-migration-attempted';
 async function maybeAutoMigrateLegacyData() {
   if (!isTauri) return;
   if (appStorage.getItem(ELECTRON_MIGRATION_FLAG)) return;
+  // Guard 3 (see doc comment): a profiled store is never a legacy-migration
+  // target. Checked before the data probe because that probe reads the
+  // UNPREFIXED key (mapping is still off here) and would misread a profiled
+  // store as empty. loadRegistry() returns null on corrupt JSON, never throws.
+  if (isAdoptionPending() || (loadRegistry()?.length ?? 0) > 0) {
+    appStorage.setItem(ELECTRON_MIGRATION_FLAG, 'skipped-profiled-store');
+    return;
+  }
   if (appStorage.getItem('resume-designer-data')) {
     // User already has Tauri-side data; don't touch it. Set the flag
     // so we stop probing on every launch from here on out.
