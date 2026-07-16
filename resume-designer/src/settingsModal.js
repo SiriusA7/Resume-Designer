@@ -11,7 +11,7 @@
  * SETTINGS_UPDATED flows are unchanged.
  */
 
-/** Open the Settings dialog, optionally to a tab (general|api-keys|updates|data|usage). */
+/** Open the Settings dialog, optionally to a tab (account|general|api-keys|updates|data|usage). */
 export function openSettings(tab) {
   window.dispatchEvent(new CustomEvent('rd:open-settings', { detail: { tab: tab || 'general' } }));
 }

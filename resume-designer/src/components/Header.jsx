@@ -26,6 +26,7 @@ import {
 } from '../variantManager.js';
 import { handleVariantThreadsForDelete } from './chat/deleteVariantThreadsFlow.js';
 import { openSettings } from '../settingsModal.js';
+import { AccountAvatar } from './profile/AccountAvatar.jsx';
 
 // Format a variant's updatedAt for the selector menu (relative, then absolute).
 function formatDate(isoString) {
@@ -170,11 +171,11 @@ export default function Header() {
 
   return createPortal(
     <>
-      {/* LEFT ZONE — brand only. `flex-1` (matched by the right zone's flex-1)
-          makes the CENTER zone sit at the header's center. Draggable (no
-          interactive children) so the window keeps drag area now that the variant
-          group occupies the middle. */}
-      <div className="flex min-w-0 flex-1 items-center">
+      {/* LEFT ZONE — brand + profile identity. `flex-1` (matched by the right
+          zone's flex-1) makes the CENTER zone sit at the header's center. The
+          wrapper stays draggable; the switcher button self-exempts like every
+          other header control (see drag-safety note above). */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {/* Brand: terracotta rounded-square mark + Geist 600 wordmark.
             Geometry pinned to mockup: 24px mark, rounded-[7px], 14.5px wordmark. */}
         <div className="flex shrink-0 items-center gap-2.5">
@@ -185,6 +186,11 @@ export default function Header() {
             Resume Designer
           </span>
         </div>
+        {/* Workspace identity: compact initials avatar opening Settings →
+            Account (switch/manage profiles + account stats). No emoji — the app
+            uses none — and kept away from the right cluster's unrelated Profile
+            EDITOR button. */}
+        <AccountAvatar />
       </div>
 
       {/* CENTER ZONE — New + variant selector + actions kebab, centered between

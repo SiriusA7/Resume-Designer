@@ -8,7 +8,7 @@
  * inline comments for why every step is ordered the way it is.
  */
 
-import { exportFullBackup, importFullBackupFromEnvelope, importFullBackupMerge } from './persistence.js';
+import { exportFullBackup, importFullBackupDurably, importFullBackupMerge } from './persistence.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
@@ -197,13 +197,23 @@ export async function importBackupFromFile(file) {
     } catch (_) {
       throw new Error('Selected file is not valid JSON.');
     }
-    if (!preview || preview.backupFormat !== 1 || !preview.keys) {
+    const isFormat1 = preview?.backupFormat === 1 && preview.keys;
+    const isFormat2Full = preview?.backupFormat === 2 && preview.kind === 'full';
+    if (!isFormat1 && !isFormat2Full) {
       throw new Error('Not a Resume Designer backup file.');
     }
-    const incoming = Object.keys(preview.keys).length;
+    const incoming = isFormat1
+      ? Object.keys(preview.keys).length
+      : Object.values(preview.profiles || {}).reduce(
+          (count, entry) => count + Object.keys(entry?.keys || {}).length,
+          Object.keys(preview.shared || {}).length
+        );
+    const profileNote = isFormat2Full && Array.isArray(preview.registry)
+      ? ` across ${preview.registry.length} ${preview.registry.length === 1 ? 'profile' : 'profiles'}`
+      : '';
     const ok = confirm(
       `Restore from backup?\n\n` +
-        `This backup contains ${incoming} keys ` +
+        `This backup contains ${incoming} keys${profileNote} ` +
         `(created ${preview.createdAt || 'unknown date'}).\n\n` +
         `Your current resumes, job descriptions, history, and ` +
         `settings will be REPLACED.\n\n` +
@@ -224,10 +234,11 @@ export async function importBackupFromFile(file) {
 
     // SYNCHRONOUS call (not importFullBackup(file), which would do a second
     // file.text() — that await would yield AFTER our flush but BEFORE the
-    // writes, reopening the race). importFullBackupFromEnvelope takes the
-    // already-parsed preview and runs the writes synchronously, so
-    // flush -> writes -> modal -> reload is one uninterrupted chain.
-    const result = importFullBackupFromEnvelope(preview);
+    // writes, reopening the race). importFullBackupDurably takes the
+    // already-parsed preview and runs the WRITES synchronously (its only
+    // await is the durability flush AFTER them, which also rolls the store
+    // back on failure), so flush -> writes stays one uninterrupted chain.
+    const result = await importFullBackupDurably(preview);
 
     let backupNote = '';
     if (result.historySkipped > 0) {
@@ -287,7 +298,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
 
     const result = merging
       ? importFullBackupMerge(envelope)
-      : importFullBackupFromEnvelope(envelope);
+      : await importFullBackupDurably(envelope);
 
     const skipped = result.historySkipped > 0
       ? `\n\nNote: ${result.historySkipped} oversize undo/redo `

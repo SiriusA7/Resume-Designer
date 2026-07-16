@@ -23,7 +23,6 @@ const DEFAULT_STORAGE = {
     orientation: 'portrait',
     pageWidthIn: 8.5,
     customColor: '#c45c3e',
-    openrouterKey: '',
     autoFallback: false,
     defaultModel: 'anthropic/claude-sonnet-4.6',
     customModels: [],
@@ -225,28 +224,46 @@ export function clearVariantAnalysis(variantId) {
   }
 }
 
-// Save settings
+// Save settings. openrouterKey is machine-level (shared across profiles) and
+// routes to its own key; everything else merges into the per-profile blob.
 export function saveSettings(settings) {
+  const { openrouterKey, ...rest } = settings;
+  if (openrouterKey !== undefined) {
+    appStorage.setItem(OPENROUTER_KEY_KEY, openrouterKey);
+  }
   const storage = loadFromStorage();
-  storage.settings = { ...storage.settings, ...settings };
+  storage.settings = { ...storage.settings, ...rest };
+  // The blob never GAINS a credential here (`rest` excludes openrouterKey) —
+  // but an existing blob value is the pre-extraction fallback and must NOT be
+  // stripped by this path: in cached mode the shared-key and blob files flush
+  // independently, so the shared write can fail while this blob rewrite
+  // lands, leaving no durable credential after restart. The flush-gated boot
+  // extraction (extractSharedApiKey) owns the strip; until it succeeds the
+  // stale blob value stays masked by the shared-key overlay in getSettings.
   saveToStorage(storage);
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
-      detail: { settings: storage.settings }
+      detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
     }));
   }
 }
 
-// Get settings
+// Get settings. The shared machine-level key is authoritative when PRESENT
+// (null-check, not truthiness: an existing empty value means the user cleared
+// the key and must mask any stale blob value); the blob is only a fallback
+// for pre-extraction installs (adoption strips it on the next boot).
 export function getSettings() {
   const storage = loadFromStorage();
   const s = storage.settings || DEFAULT_STORAGE.settings;
-  // Guarantee OpenRouter-era keys exist for installs created before the
-  // migration. Legacy anthropicKey/openaiKey/geminiKey are simply ignored; a
-  // legacy colon-form `defaultModel` is migrated to a slug on read by
-  // validateModelId() in aiService.js, so it needs no rewrite here.
-  return { openrouterKey: '', autoFallback: false, customModels: [], ...s };
+  const shared = appStorage.getItem(OPENROUTER_KEY_KEY);
+  // Legacy OpenRouter-era guarantees preserved (see original comment).
+  return {
+    autoFallback: false,
+    customModels: [],
+    ...s,
+    openrouterKey: shared !== null ? shared : (s.openrouterKey || ''),
+  };
 }
 
 // Get user profile
@@ -259,12 +276,12 @@ export function getUserProfile() {
 
 // Save user profile
 export function saveUserProfile(profile) {
-  console.log('[Persistence] saveUserProfile called with:', profile);
   const storage = loadFromStorage();
   storage.userProfile = { ...DEFAULT_STORAGE.userProfile, ...profile };
-  console.log('[Persistence] Saving userProfile:', storage.userProfile);
-  const success = saveToStorage(storage);
-  console.log('[Persistence] Save success:', success);
+  // Return durability so callers that must not proceed on an unsaved edit
+  // (the profile-switch / export abort) can see a passthrough quota failure,
+  // which saveToStorage otherwise only logs.
+  return saveToStorage(storage);
 }
 
 // Initialize persistence - connect store to auto-save
@@ -287,8 +304,10 @@ export function initPersistence(variantId) {
             { once: true },
           );
         }
+        return ok; // let store.saveNow() report durability (profile-switch abort)
       }
     }
+    return true; // nothing to persist
   });
 }
 
@@ -317,38 +336,32 @@ export function exportAsMarkdown(data, filename) {
 // Round-tripping atomically as a single file keeps those refs
 // consistent — partial restores would risk dangling references.
 
-// The exhaustive list of "owned" keys. Listed explicitly rather than
-// via a wildcard so future contributors notice if they add a new key
-// and forget to include it in the backup.
-const BACKUP_FIXED_KEYS = [
-  // Core data
-  'resume-designer-data',
-  'resume-designer-job-descriptions',
-  'resume-designer-applications',
-  'resume-designer-chat-threads',
-  'resume-designer-chat-history',          // legacy, harmless to round-trip
-  'resume-designer-token-usage',
-  'resume-designer-learned-answers',
-  'resume-designer-bridge-token',
-  // UI / personalization
+import {
+  BACKUP_HISTORY_PREFIX,
+  isOwnedKey,
+  OPENROUTER_KEY_KEY,
+  PROFILES_KEY,
+  ACTIVE_PROFILE_KEY,
+  isValidProfileId,
+  splitPhysicalKey,
+  physicalKey,
+} from './profileKeys.js';
+import { loadRegistry, getActiveProfileId } from './profiles.js';
+
+export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
+
+// Shared machine-level keys that belong in a backup (parity with the old
+// BACKUP_FIXED_KEYS entries for theme/updates, plus the shared api key and the
+// companion-bridge pairing token — one loopback server per install, so the
+// token is not per-profile. model-catalog and migration flags stay
+// cache/flag-only, never backed up).
+const BACKUP_SHARED_KEYS = [
   'resume-designer-theme',
-  'resume-designer-onboarding-complete',
-  'resume-edit-hint-dismissed',
-  'resume-header-style',
-  'resume-accent-settings',
-  'resume-font-settings',
-  'resume-spacing-settings',
-  'resume-photo-settings',
-  'resume-zoom',
   'resume-designer-update-channel',
   'resume-designer-auto-update-check',
+  'resume-designer-bridge-token',
+  OPENROUTER_KEY_KEY,
 ];
-// Undo/redo history lives at this prefix, one key per variant.
-const BACKUP_HISTORY_PREFIX = 'resume-designer-history-';
-
-export function isOwnedKey(key) {
-  return BACKUP_FIXED_KEYS.includes(key) || key.startsWith(BACKUP_HISTORY_PREFIX);
-}
 
 /**
  * Recognize a localStorage QuotaExceededError across browser engines.
@@ -392,7 +405,7 @@ function writeOwnedKeyOrSkip(key, value) {
     appStorage.setItem(key, value);
     return true;
   } catch (e) {
-    if (isQuotaExceededError(e) && key.startsWith(BACKUP_HISTORY_PREFIX)) {
+    if (isQuotaExceededError(e) && key.includes(BACKUP_HISTORY_PREFIX)) {
       console.warn(
         `[backup] Skipping history key "${key}" — storage quota exceeded.`
       );
@@ -402,32 +415,121 @@ function writeOwnedKeyOrSkip(key, value) {
   }
 }
 
-// Return all owned keys. appStorage.keys() already hands back a
-// snapshot array, so mutating storage while looping over it is safe.
-function collectOwnedKeys() {
-  return appStorage.keys().filter((k) => k && isOwnedKey(k));
+// Undo a failed wipe-then-write import: drop whatever the import managed to
+// write, then restore the snapshot taken before the wipe. The snapshot fit in
+// storage before the wipe, so it fits again once the partial writes are gone;
+// the per-key try/catch is defensive — a rollback must never mask the import
+// error it is cleaning up after.
+function rollbackWipedImport(writtenKeys, priorValues) {
+  for (const k of writtenKeys) {
+    try { appStorage.removeItem(k); } catch { /* keep going */ }
+  }
+  for (const [k, v] of priorValues) {
+    try { appStorage.setItem(k, v); } catch { /* keep going */ }
+  }
+}
+
+// Physical keys belonging to the ACTIVE profile, plus any unprefixed owned
+// keys (pre-adoption states), plus shared owned keys. This is the "what a
+// format-1 restore may remove/replace" set — other profiles are untouchable.
+function collectActiveOwnedKeys() {
+  const active = getActiveProfileId();
+  return appStorage.keys().filter((k) => {
+    if (!k) return false;
+    const split = splitPhysicalKey(k);
+    if (split) return split.profileId === active && isOwnedKey(split.logicalKey);
+    return isOwnedKey(k); // unprefixed per-profile keys AND shared owned keys (theme etc.)
+  });
 }
 
 /**
- * Write a JSON file containing every owned storage key/value.
+ * Write a JSON file containing the registry, shared keys, and every
+ * profile's owned keys (format 2). Shared owned keys (theme, update settings)
+ * route to the shared section. In the incomplete-adoption RECOVERY state
+ * (mapping left off after a quota/disk failure) the live workspace still lives
+ * under UNPREFIXED owned keys — those are captured under the active profile
+ * below, so a backup taken on the storage-failure guidance still contains the
+ * user's résumés, not just registry/settings.
  * Returns { keysExported, filename } for the caller to surface in UI.
  */
 export function exportFullBackup(filename) {
-  const keys = {};
-  for (const k of collectOwnedKeys()) {
-    const v = appStorage.getItem(k);
-    if (v !== null) keys[k] = v;
+  // Null-prototype map: profile ids are alphanumeric (isValidProfileId), which
+  // includes prototype names like "constructor" / "toString". Keyed on a plain
+  // {}, `profiles[id] ||= …` would see the inherited value as truthy and never
+  // assign, then `.keys` would read a builtin instead of the fresh bucket and
+  // the profile's data would be lost from the export (and absent on JSON
+  // stringify, since it's inherited not own). Object.create(null) has no such
+  // inherited keys; JSON.stringify still serializes its own enumerable keys.
+  const profiles = Object.create(null);
+  const shared = {};
+  const activeId = getActiveProfileId();
+  for (const k of appStorage.keys()) {
+    if (!k) continue;
+    const split = splitPhysicalKey(k);
+    if (split && isOwnedKey(split.logicalKey)) {
+      const v = appStorage.getItem(k);
+      if (v !== null) ((profiles[split.profileId] ||= { keys: {} }).keys)[split.logicalKey] = v;
+    } else if (BACKUP_SHARED_KEYS.includes(k)) {
+      const v = appStorage.getItem(k);
+      if (v !== null) shared[k] = v;
+    }
   }
+  // Recovery state: unprefixed owned keys (non-shared) are the active profile's
+  // authoritative live data — edits since the failed adoption went here, so
+  // they OVERRIDE any stale physical partial copy. A no-op in the normal case
+  // (mapping on → no unprefixed owned keys exist). In the MARKERLESS degraded
+  // state (the very first marker write failed: no registry, no pointer,
+  // activeId null) they are captured under a synthesized recovery id instead —
+  // otherwise the escape-hatch backup the storage-failure guidance tells the
+  // user to take would contain an empty registry and NO résumés, and the
+  // importer would reject the file outright. The orphan reconciliation below
+  // then synthesizes the matching registry entry.
+  const unprefixedOwned = appStorage.keys().filter(
+    (k) => k && !splitPhysicalKey(k) && !BACKUP_SHARED_KEYS.includes(k) && isOwnedKey(k)
+  );
+  let recoveryId = activeId;
+  if (!recoveryId && unprefixedOwned.length) {
+    recoveryId = 'recovered0';
+    while (profiles[recoveryId]) recoveryId += '0'; // never merge into a real namespace
+  }
+  if (recoveryId) {
+    for (const k of unprefixedOwned) {
+      const v = appStorage.getItem(k);
+      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = v;
+    }
+  }
+  // Reconcile orphan namespaces with the exported registry: a partial
+  // cached-mode deletion (registry update durable, some workspace deletes
+  // not) can leave physical keys whose id is missing from loadRegistry(),
+  // and importFullBackupV2 rejects orphan `profiles` entries outright — the
+  // app must never generate a backup its own importer refuses. Synthesizing
+  // a registry entry (in the EXPORTED copy only, never live storage) keeps
+  // the data and makes the backup self-consistent; the orphan becomes a
+  // visible, normal profile on restore.
+  const exportedRegistry = (loadRegistry() || []).slice();
+  const knownIds = new Set(exportedRegistry.map((p) => p.id));
+  for (const pid of Object.keys(profiles)) {
+    if (!knownIds.has(pid)) {
+      exportedRegistry.push({ id: pid, name: `Recovered profile (${pid.slice(0, 6)})` });
+    }
+  }
+
   const backup = {
-    backupFormat: 1,
+    backupFormat: 2,
+    kind: 'full',
     createdAt: new Date().toISOString(),
     source: 'in-app',
-    keys,
+    registry: exportedRegistry,
+    activeProfile: getActiveProfileId(),
+    shared,
+    profiles,
   };
   const stamp = new Date().toISOString().slice(0, 10);
   const name = filename || `resume-designer-backup-${stamp}.json`;
   downloadFile(JSON.stringify(backup, null, 2), name, 'application/json');
-  return { keysExported: Object.keys(keys).length, filename: name };
+  const keysExported = Object.values(profiles)
+    .reduce((n, p) => n + Object.keys(p.keys).length, Object.keys(shared).length);
+  return { keysExported, filename: name };
 }
 
 /**
@@ -457,11 +559,187 @@ function normalizeImportedValue(key, value) {
   return value;
 }
 
+function importFullBackupV2(parsed) {
+  const registry = parsed.registry;
+  // A PRESENT emoji must be a string: the switcher renders it directly as a
+  // React child, so a non-string (e.g. {}) would throw and blank the app after
+  // a restore that already wiped the prior storage. A missing emoji is fine —
+  // loadRegistry coerces it to the default.
+  const validRegistry = Array.isArray(registry) && registry.length > 0
+    && registry.every((p) => p && isValidProfileId(p.id) && typeof p.name === 'string'
+      && (p.emoji === undefined || typeof p.emoji === 'string'));
+  const uniqueIds = validRegistry && new Set(registry.map((p) => p.id)).size === registry.length;
+  if (!validRegistry || !uniqueIds) {
+    throw new Error('Invalid format-2 backup: registry entries must have unique valid ids, string names, and (if present) string emoji.');
+  }
+  // Case-insensitive filesystems (Windows, and macOS by default) map the
+  // physical keys — which become on-disk FILENAMES in the Tauri store —
+  // case-insensitively, so ids differing only by case (e.g. "pABC"/"pabc")
+  // collide to the same files: one restored workspace silently overwrites the
+  // other. Generated ids are always lowercase (base-36), so this only rejects
+  // hand-edited or foreign backups, before the destructive wipe.
+  const caseFoldedUnique = new Set(registry.map((p) => p.id.toLowerCase())).size === registry.length;
+  if (!caseFoldedUnique) {
+    throw new Error('Invalid format-2 backup: registry ids must be unique case-insensitively (they map to filenames).');
+  }
+  // Reject a non-plain-object `profiles` (incl. arrays) pre-wipe: an array
+  // passes typeof 'object', then every registry id reads as a missing entry
+  // (treated as an empty workspace) and the wipe proceeds restoring nothing.
+  if (!parsed.profiles || typeof parsed.profiles !== 'object' || Array.isArray(parsed.profiles)) {
+    throw new Error('Invalid format-2 backup: "profiles" must be an object.');
+  }
+
+  // Validate and collect every referenced profile before removing anything.
+  // A malformed or missing entry must never turn a restore into a destructive
+  // partial wipe, and collecting up front lets critical keys across ALL
+  // profiles be written before any best-effort history data.
+  // Reject orphan `profiles` entries BEFORE the wipe: an entry whose id is
+  // not in the (validated) registry would pass the per-profile validation
+  // below — which iterates registry ids — but never be written by the restore
+  // loops, so the clean slate would silently drop that workspace.
+  // App-generated backups keep registry and profiles in sync; an orphan means
+  // the file is corrupt or hand-edited.
+  const registryIds = new Set(registry.map((p) => p.id));
+  for (const pid of Object.keys(parsed.profiles)) {
+    if (!registryIds.has(pid)) {
+      throw new Error(`Invalid format-2 backup: profiles entry "${pid}" is not in the registry.`);
+    }
+  }
+
+  const profileEntries = [];
+  for (const { id: pid } of registry) {
+    // Own-property read only: a registry id like "toString" with no entry is a
+    // valid empty workspace, but a plain `parsed.profiles[pid]` would inherit
+    // Object.prototype.toString and mis-read it as a present-but-invalid entry.
+    const entry = Object.hasOwn(parsed.profiles, pid) ? parsed.profiles[pid] : undefined;
+    // A registry profile with no stored keys yet exports with NO profiles
+    // entry at all (exportFullBackup only creates one per observed physical
+    // key) — a missing entry is a valid empty workspace, not corruption.
+    if (entry === undefined) continue;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`Invalid format-2 backup: profile "${pid}" must be an object.`);
+    }
+    if (!entry.keys || typeof entry.keys !== 'object' || Array.isArray(entry.keys)) {
+      throw new Error(`Invalid format-2 backup: profile "${pid}" keys must be an object.`);
+    }
+    for (const [logicalKey, value] of Object.entries(entry.keys)) {
+      if (typeof value !== 'string') {
+        throw new Error(`Invalid backup: ${pid}/"${logicalKey}" must be a string value.`);
+      }
+      if (!isOwnedKey(logicalKey)) {
+        throw new Error(`Invalid backup: unrecognized key "${logicalKey}".`);
+      }
+      profileEntries.push({
+        physicalKey: physicalKey(pid, logicalKey),
+        logicalKey,
+        value,
+      });
+    }
+  }
+
+  // Validate the shared section BEFORE the wipe. This must run pre-wipe:
+  // otherwise the clean slate below removes the current shared value (API key,
+  // theme…) and the write loop, guarded on membership + `typeof v === 'string'`,
+  // silently skips the bad replacement — a "successful" restore that erased
+  // machine-level settings. Check the CONTAINER first: a string or array
+  // `shared` would survive Object.entries (its entries are strings) and slip
+  // past the value check.
+  if (parsed.shared !== undefined
+      && (parsed.shared === null || typeof parsed.shared !== 'object' || Array.isArray(parsed.shared))) {
+    throw new Error('Invalid format-2 backup: "shared" must be an object.');
+  }
+  for (const [k, v] of Object.entries(parsed.shared || {})) {
+    // Unknown keys reject too: app-generated backups only ever emit
+    // BACKUP_SHARED_KEYS members, so an unrecognized key means the file is
+    // corrupt, hand-edited, or from a newer format — and the restore loop
+    // below would silently DROP it after the wipe, reporting success while
+    // not restoring a setting the file plainly represents.
+    if (!BACKUP_SHARED_KEYS.includes(k)) {
+      throw new Error(`Invalid format-2 backup: unrecognized shared key "${k}".`);
+    }
+    if (typeof v !== 'string') {
+      throw new Error(`Invalid backup: shared key "${k}" must be a string value.`);
+    }
+  }
+
+  // Clean slate across ALL namespaces (full restore replaces everything) —
+  // snapshotting every removed value first. The critical writes below can
+  // throw QuotaExceededError in passthrough mode (a desktop multi-profile
+  // backup can exceed a browser origin's quota), and without the snapshot
+  // that throw would leave the store wiped or half-restored — losing the
+  // user's CURRENT profiles on a failed import.
+  const priorValues = new Map();
+  for (const k of appStorage.keys()) {
+    const split = splitPhysicalKey(k);
+    const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
+    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY || k === OPENROUTER_KEY_KEY) {
+      priorValues.set(k, appStorage.getItem(k));
+      appStorage.removeItem(k);
+    }
+  }
+  const removedExistingKeys = priorValues.size;
+
+  const written = [];
+  const writeTracked = (k, v) => {
+    appStorage.setItem(k, v);
+    written.push(k);
+  };
+
+  let keysImported = 0;
+  let historySkipped = 0;
+  try {
+    writeTracked(PROFILES_KEY, JSON.stringify(registry));
+    const active = registry.some((p) => p.id === parsed.activeProfile)
+      ? parsed.activeProfile : registry[0].id;
+    writeTracked(ACTIVE_PROFILE_KEY, active);
+
+    for (const [k, v] of Object.entries(parsed.shared || {})) {
+      if (BACKUP_SHARED_KEYS.includes(k) && typeof v === 'string') writeTracked(k, v);
+    }
+
+    // Same quota strategy as format 1, globally across every profile: critical
+    // keys first, then bulky history best-effort. Per-profile passes could let
+    // an early profile's history consume quota needed by a later profile's
+    // critical data.
+    const nonHistory = profileEntries.filter(
+      ({ logicalKey }) => !logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
+    );
+    const history = profileEntries.filter(
+      ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
+    );
+    for (const { physicalKey: key, logicalKey, value } of nonHistory) {
+      writeTracked(key, normalizeImportedValue(logicalKey, value));
+      keysImported++;
+    }
+    for (const { physicalKey: key, value } of history) {
+      if (writeOwnedKeyOrSkip(key, value)) {
+        written.push(key);
+        keysImported++;
+      } else {
+        historySkipped++;
+      }
+    }
+  } catch (err) {
+    rollbackWipedImport(written, priorValues);
+    throw err;
+  }
+  // `rollback` is for importFullBackupDurably: in cached mode nothing above
+  // throws (failures surface at flush), so the snapshot must outlive this
+  // function for the durability check to restore from.
+  return {
+    keysImported, removedExistingKeys, historySkipped,
+    rollback: () => rollbackWipedImport(written, priorValues),
+  };
+}
+
 export function importFullBackupFromEnvelope(parsed) {
+  if (parsed && parsed.backupFormat === 2 && parsed.kind === 'full') {
+    return importFullBackupV2(parsed);
+  }
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1").'
+      'Not a Resume Designer backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
     );
   }
   // Every value must be a string — that's what `appStorage.setItem`
@@ -473,10 +751,16 @@ export function importFullBackupFromEnvelope(parsed) {
     }
   }
 
-  // Clean slate: remove every existing owned key so the imported state
-  // is the canonical post-import state (no orphan keys from prior use).
-  const removed = collectOwnedKeys();
-  for (const k of removed) appStorage.removeItem(k);
+  // Clean slate for the active profile only: remove its existing owned keys
+  // so the imported state is canonical without touching other profiles.
+  // Snapshot each removed value first — pass 1 below can throw
+  // QuotaExceededError in passthrough mode, and the rollback restores this
+  // snapshot so a failed import can't leave the workspace wiped.
+  const priorValues = new Map();
+  for (const k of collectActiveOwnedKeys()) {
+    priorValues.set(k, appStorage.getItem(k));
+    appStorage.removeItem(k);
+  }
 
   // Two-pass write to handle the localStorage quota safely:
   //
@@ -485,7 +769,8 @@ export function importFullBackupFromEnvelope(parsed) {
   //   (~250 KB for the typical user), well under any WebView's
   //   per-origin localStorage cap. We write them first so they
   //   ALWAYS land — even if pass 2 runs out of room. A
-  //   QuotaExceededError here would be unrecoverable and bubbles up.
+  //   QuotaExceededError here bubbles up — after the rollback restores
+  //   the pre-import workspace.
   //
   //   Pass 2: every history key (`resume-designer-history-*`). These
   //   are best-effort because they can be 100s of KB to MB per
@@ -512,19 +797,53 @@ export function importFullBackupFromEnvelope(parsed) {
   const nonHistory = entries.filter(([k]) => !k.startsWith(BACKUP_HISTORY_PREFIX));
   const history = entries.filter(([k]) => k.startsWith(BACKUP_HISTORY_PREFIX));
 
-  for (const [k, v] of nonHistory) {
-    appStorage.setItem(k, normalizeImportedValue(k, v));
-  }
+  const written = [];
   let historySkipped = 0;
-  for (const [k, v] of history) {
-    if (!writeOwnedKeyOrSkip(k, v)) historySkipped++;
+  try {
+    for (const [k, v] of nonHistory) {
+      appStorage.setItem(k, normalizeImportedValue(k, v));
+      written.push(k);
+    }
+    for (const [k, v] of history) {
+      if (writeOwnedKeyOrSkip(k, v)) written.push(k);
+      else historySkipped++;
+    }
+  } catch (err) {
+    rollbackWipedImport(written, priorValues);
+    throw err;
   }
 
+  // Same contract as the format-2 path: the snapshot must outlive this
+  // function so importFullBackupDurably can restore on a failed flush.
   return {
     keysImported: entries.length - historySkipped,
-    removedExistingKeys: removed.length,
+    removedExistingKeys: priorValues.size,
     historySkipped,
+    rollback: () => rollbackWipedImport(written, priorValues),
   };
+}
+
+/**
+ * Durability wrapper for the real import paths (Settings → Data, legacy
+ * migration). In cached/Tauri mode setItem/removeItem never throw — disk
+ * failures surface only at flush() — so the sync import "succeeds" and drops
+ * its snapshot while the scheduled drain can partially replace the user's
+ * files: a disk-full restore could leave the durable store half-wiped after
+ * restart with nothing to restore from. This keeps the snapshot alive
+ * through a checked flush and rolls the store back (re-flushing the restore)
+ * when durability fails. The sync core stays exported for validation and
+ * for the merge path.
+ */
+export async function importFullBackupDurably(parsed) {
+  const { rollback, ...result } = importFullBackupFromEnvelope(parsed);
+  if (!(await appStorage.flush())) {
+    rollback();
+    await appStorage.flush();
+    throw new Error(
+      'The backup could not be written to disk (is the disk full?). Your previous data was restored.'
+    );
+  }
+  return result;
 }
 
 /**
@@ -779,7 +1098,7 @@ function generateMarkdown(data) {
 }
 
 // Download file utility
-function downloadFile(content, filename, mimeType) {
+export function downloadFile(content, filename, mimeType) {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

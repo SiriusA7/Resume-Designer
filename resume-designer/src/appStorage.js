@@ -1,3 +1,16 @@
+import { mapKey } from './profileKeys.js';
+
+// Active profile for key namespacing. Null until profiles.js resolves the
+// active profile at boot (ensureProfilesInitialized / the print window's
+// activateProfileMappingForPrint) — identity mapping until then, which is
+// exactly what the pre-profile boot steps (Electron migration, adoption)
+// rely on to see unprefixed keys.
+let activeProfileId = null;
+
+export function setProfileMapping(profileId) {
+  activeProfileId = profileId || null;
+}
+
 /**
  * appStorage — the single persistence facade for every owned key.
  *
@@ -173,11 +186,13 @@ function drain() {
 
 export const appStorage = {
   getItem(key) {
+    key = mapKey(activeProfileId, key);
     if (mode === 'passthrough') return localStorage.getItem(key);
     return cache.has(key) ? cache.get(key) : null;
   },
 
   setItem(key, value) {
+    key = mapKey(activeProfileId, key);
     const v = String(value);
     if (mode === 'passthrough') {
       // readOnly passthrough (print window whose disk load failed): there is
@@ -193,6 +208,7 @@ export const appStorage = {
   },
 
   removeItem(key) {
+    key = mapKey(activeProfileId, key);
     if (mode === 'passthrough') {
       if (readOnly) return; // see setItem: readOnly passthrough never writes
       localStorage.removeItem(key);
@@ -366,6 +382,7 @@ export async function initAppStorage({ backend = null, readOnly: ro = false } = 
 
 /** Test-only: reset module state between tests. */
 export function __resetAppStorageForTests() {
+  activeProfileId = null;
   mode = 'passthrough';
   readOnly = false;
   backendImpl = null;

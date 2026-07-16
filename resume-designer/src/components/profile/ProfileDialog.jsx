@@ -63,26 +63,46 @@ export default function ProfileDialog() {
   if (profileRef.current === null) profileRef.current = buildWorkingCopy();
   const saveTimeoutRef = useRef(null);
   const savedTimeoutRef = useRef(null);
+  // True when the last debounced save FAILED to persist (passthrough quota).
+  // Without it, a fired-and-failed save leaves no pending timer, so flush()
+  // would report success and a switch/export would reload away the edits.
+  const failedSaveRef = useRef(false);
 
   const scheduleSave = useCallback(() => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
-      saveUserProfile(profileRef.current);
+      const ok = saveUserProfile(profileRef.current) !== false;
+      failedSaveRef.current = !ok;
       saveTimeoutRef.current = null;
+      if (!ok) return; // don't flash "Saved ✓" over a failed persist
       setSaved(true);
       if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
       savedTimeoutRef.current = setTimeout(() => setSaved(false), 1500);
     }, SAVE_DELAY);
   }, []);
 
-  // Cancel the pending debounce and write immediately. No-op when nothing is
-  // pending — safe to call unconditionally (the backupFlow flush contract).
+  // Cancel the pending debounce and write immediately. Returns the persist
+  // result (true when nothing was pending AND no fired save failed) so a
+  // caller aborting on an unsaved edit can see a passthrough quota failure.
+  // Safe to call unconditionally: it only writes when edits are pending or a
+  // previous write failed — never for an untouched working copy.
   const flush = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
-      saveUserProfile(profileRef.current);
+      const ok = saveUserProfile(profileRef.current) !== false;
+      failedSaveRef.current = !ok;
+      return ok;
     }
+    // No timer pending — but the debounce may have already fired and FAILED,
+    // discarding its result. Retry that write here so the caller either gets
+    // a durable profile or a false to abort on.
+    if (failedSaveRef.current) {
+      const ok = saveUserProfile(profileRef.current) !== false;
+      failedSaveRef.current = !ok;
+      return ok;
+    }
+    return true;
   }, []);
 
   // Save + remount the tab so a structural change (add/delete) shows.
@@ -90,7 +110,9 @@ export default function ProfileDialog() {
 
   useEffect(() => {
     const onOpen = () => { profileRef.current = buildWorkingCopy(); bump(); setOpen(true); };
-    const onFlush = () => flush();
+    // Report the flush result back through the event detail so the synchronous
+    // flushPendingProfileSave() caller can abort a switch/export on failure.
+    const onFlush = (e) => { const ok = flush(); if (e?.detail) e.detail.ok = ok; };
     window.addEventListener('rd:open-profile', onOpen);
     window.addEventListener('rd:profile-flush', onFlush);
     return () => {
@@ -123,7 +145,16 @@ export default function ProfileDialog() {
         ...imported,
         contactInfo: { ...DEFAULT_PROFILE.contactInfo, ...(imported.contactInfo || {}) },
       };
-      saveUserProfile(profileRef.current);
+      // Record the write result on the SAME tracked-save flag the debounce
+      // uses. A direct save that fails (passthrough quota) must not look
+      // durable: without this, closing the dialog leaves no pending timer and
+      // no recorded failure, so flush() reports success and a later profile
+      // switch reloads away the just-imported data. flush() retries on this
+      // flag and reports false, letting the switch guard abort.
+      failedSaveRef.current = saveUserProfile(profileRef.current) === false;
+      if (failedSaveRef.current) {
+        toast.error('Imported, but your storage is full — free space before switching profiles.');
+      }
       bump();
     }).catch((err) => {
       console.error('Failed to import profile:', err);
