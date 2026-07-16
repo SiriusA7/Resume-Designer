@@ -141,6 +141,13 @@ function showImportSuccessAndReload(message) {
     // tell the user (the generic storage-failure toast has already fired too).
     const durable = await appStorage.flush();
     if (!durable) {
+      // Import couldn't reach disk and we're staying put (no reload). Re-enable
+      // saving (it was suspended before the import) so the app stays functional
+      // once the user frees space — otherwise every later save would silently
+      // no-op. Safe here: the merge path keeps the current résumé (store not
+      // stale), and the replace path was already made durable by
+      // importFullBackupDurably, so this second flush only fails transiently.
+      store.resumeSaves();
       alert(
         'Your backup was imported, but it could NOT be saved to disk — your '
         + 'disk may be full. Don\'t close the app yet: free up space, then use '
