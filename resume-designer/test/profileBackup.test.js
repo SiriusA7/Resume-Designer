@@ -89,6 +89,26 @@ describe('format-2 export/restore', () => {
     expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
   });
 
+  it('rejects a non-string shared value before touching existing storage', () => {
+    // A corrupt shared value must reject PRE-wipe — otherwise the clean slate
+    // erases the real API key and the guarded write loop skips the bad one,
+    // reporting success after destroying a machine-level setting.
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+    localStorage.setItem(OPENROUTER_KEY_KEY, 'sk-keep');
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'p', name: 'Profile' }],
+      activeProfile: 'p',
+      shared: { [OPENROUTER_KEY_KEY]: 12345 },
+      profiles: {},
+    })).toThrow(/shared key .* must be a string/i);
+
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-keep');
+  });
+
   it('rejects a non-string registry name before touching existing storage', () => {
     localStorage.setItem('resume-designer-theme', 'keep-me');
 
