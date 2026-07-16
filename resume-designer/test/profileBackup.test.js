@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appStorage, __resetAppStorageForTests } from '../src/appStorage.js';
-import { createProfile, ensureProfilesInitialized, loadRegistry } from '../src/profiles.js';
+import {
+  createProfile, ensureProfilesInitialized, loadRegistry,
+  exportProfileBackup, importProfileBackup,
+} from '../src/profiles.js';
 import { importFullBackupFromEnvelope, exportFullBackup } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY } from '../src/profileKeys.js';
 
@@ -148,5 +151,29 @@ describe('format-1 import scoping', () => {
     expect(localStorage.getItem('resume-designer-theme')).toBe('light');
     // …and the shared api key survives (not part of format-1 envelopes).
     expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared');
+  });
+});
+
+describe('per-profile export/import', () => {
+  it('exports one profile and imports it as a NEW profile', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    const readDownload = captureDownload();
+    await exportProfileBackup(partnerId);
+    const envelope = await readDownload();
+    expect(envelope).toMatchObject({ backupFormat: 2, kind: 'profile', name: 'Partner' });
+    expect(envelope.keys['resume-designer-data']).toBe('{"variants":{"v2":{}}}');
+
+    const imported = importProfileBackup(envelope);
+    expect(imported.id).not.toBe(partnerId);
+    expect(loadRegistry()).toHaveLength(3);
+    expect(localStorage.getItem(`resume-p:${imported.id}:resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+  });
+
+  it('rejects non-profile envelopes and unowned keys', async () => {
+    await seedTwoProfiles();
+    expect(() => importProfileBackup({ backupFormat: 1, keys: {} })).toThrow();
+    expect(() => importProfileBackup({
+      backupFormat: 2, kind: 'profile', name: 'X', keys: { evil: 'x' },
+    })).toThrow(/unrecognized/i);
   });
 });

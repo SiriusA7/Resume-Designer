@@ -235,3 +235,52 @@ export function deleteProfile(id) {
   }
   saveRegistry(registry.filter((p) => p.id !== id));
 }
+
+export async function exportProfileBackup(profileId, filename) {
+  const registry = loadRegistry() || [];
+  const profile = registry.find((p) => p.id === profileId);
+  if (!profile) throw new Error(`Unknown profile id: ${profileId}`);
+  const prefix = `${PHYSICAL_PREFIX}${profileId}:`;
+  const keys = {};
+  for (const k of appStorage.keys()) {
+    if (!k || !k.startsWith(prefix)) continue;
+    const logical = k.slice(prefix.length);
+    if (!isOwnedKey(logical)) continue;
+    const v = appStorage.getItem(k);
+    if (v !== null) keys[logical] = v;
+  }
+  const envelope = {
+    backupFormat: 2,
+    kind: 'profile',
+    createdAt: new Date().toISOString(),
+    name: profile.name,
+    emoji: profile.emoji,
+    keys,
+  };
+  const slug = profile.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'profile';
+  const name = filename || `resume-designer-profile-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+  // persistence.js imports this module, so pull downloadFile late to keep the
+  // static module graph acyclic.
+  const { downloadFile } = await import('./persistence.js');
+  downloadFile(JSON.stringify(envelope, null, 2), name, 'application/json');
+  return { keysExported: Object.keys(keys).length, filename: name };
+}
+
+export function importProfileBackup(parsed) {
+  if (!parsed || parsed.backupFormat !== 2 || parsed.kind !== 'profile'
+      || !parsed.keys || typeof parsed.keys !== 'object') {
+    throw new Error('Not a Resume Designer profile export (expected backupFormat 2, kind "profile").');
+  }
+  for (const [k, v] of Object.entries(parsed.keys)) {
+    if (typeof v !== 'string') throw new Error(`Invalid profile export: key "${k}" must be a string value.`);
+    if (!isOwnedKey(k)) throw new Error(`Invalid profile export: unrecognized key "${k}".`);
+  }
+  const profile = createProfile({
+    name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : 'Imported profile',
+    emoji: typeof parsed.emoji === 'string' ? parsed.emoji : '🙂',
+  });
+  for (const [k, v] of Object.entries(parsed.keys)) {
+    appStorage.setItem(physicalKey(profile.id, k), v);
+  }
+  return profile;
+}
