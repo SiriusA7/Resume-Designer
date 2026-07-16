@@ -202,6 +202,29 @@ describe('adoption migration', () => {
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
   });
 
+  it('does not clobber post-adoption edits when resuming with a stale source', async () => {
+    // Prior session: copies landed but the source delete failed, so the marker
+    // survived AND the user kept working — their edits are on the PHYSICAL key
+    // while the STALE unprefixed source still lingers. The resume must not
+    // recopy the stale source over the newer physical value.
+    const backend = makeBackend({
+      '__profile_adoption_pending__': '1',
+      [PROFILES_KEY]: JSON.stringify([{ id: 'pfixed', name: 'Ash', emoji: '🙂', createdAt: 'x' }]),
+      [ACTIVE_PROFILE_KEY]: 'pfixed',
+      'resume-designer-data': '{"variants":{"OLD":{}}}',                       // stale source
+      'resume-p--pfixed--resume-designer-data': '{"variants":{"EDITED":{}}}',  // user's newer edit
+    });
+    await initAppStorage({ backend });
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('pfixed');
+    // The user's edit survives; the stale source is cleaned up; marker cleared.
+    expect(backend.files.get('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{"EDITED":{}}}');
+    expect(backend.files.has('resume-designer-data')).toBe(false);
+    expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+  });
+
   it('keeps the marker when source deletes fail to reach disk', async () => {
     const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
     backend.delete.mockImplementation(async (key) => {

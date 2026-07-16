@@ -39,25 +39,34 @@ function saveRegistry(registry) {
 }
 
 // Move every unprefixed per-profile owned key under the given profile's
-// namespace. Idempotent: re-running overwrites the copy and skips
-// already-moved (now missing) sources. Mapping must be INACTIVE here —
-// physical targets pass through mapKey untouched either way.
+// namespace. Mapping must be INACTIVE here — physical targets pass through
+// mapKey untouched either way.
+//
+// Copy-if-ABSENT, not copy-always: once a physical key exists it is
+// authoritative. A resume (marker survived a failed source-delete) reaches
+// here with mapping having been activated last session, so the user may have
+// SAVED edits to the physical key since — recopying the stale unprefixed
+// source over it would silently clobber those edits. A missing physical key
+// means the first copy never landed, so this run legitimately performs it.
+// Sources are always queued for deletion regardless, so the cleanup still
+// completes on the retry.
 async function migrateUnprefixedKeys(profileId) {
-  const moved = [];
+  const sources = [];
   for (const k of appStorage.keys()) {
     if (!k || isSharedKey(k) || isPhysicalKey(k) || !isOwnedKey(k)) continue;
-    const v = appStorage.getItem(k);
-    if (v !== null) {
-      appStorage.setItem(physicalKey(profileId, k), v);
-      moved.push(k);
+    const target = physicalKey(profileId, k);
+    if (appStorage.getItem(target) === null) {
+      const v = appStorage.getItem(k);
+      if (v !== null) appStorage.setItem(target, v);
     }
+    sources.push(k);
   }
-  if (!moved.length) return true;
+  if (!sources.length) return true;
   if (!(await appStorage.flush())) {
     console.error('[profiles] adoption copies did not reach disk — keeping sources; will resume next boot');
     return false;
   }
-  for (const k of moved) appStorage.removeItem(k);
+  for (const k of sources) appStorage.removeItem(k);
   // Copies are durable at this point, so a failed delete-flush only delays
   // source cleanup: the caller keeps the marker and the next boot's resume
   // re-runs this (idempotent) migration to finish the deletes.
