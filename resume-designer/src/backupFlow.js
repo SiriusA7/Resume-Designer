@@ -86,7 +86,12 @@ function reloadWithOverlay(message = 'Reloading…') {
  * createElement (no innerHTML) so the message can never be interpreted as HTML.
  * Reuses the existing .modal-overlay / .modal classes for theming + dark mode.
  */
-function showImportSuccessAndReload(message) {
+// `resumeSavesOnFlushFailure` is true ONLY for the merge path: if the final
+// flush fails there and we stay put, resuming is safe because the store still
+// matches the merged data. It is FALSE for a replace, whose store is stale — a
+// resume would let the next close/background save overwrite the imported
+// profile — so a replace stays suspended (the user reloads/retries).
+function showImportSuccessAndReload(message, resumeSavesOnFlushFailure = false) {
   // Saving is already suspended by the caller (before the durable import ran),
   // so the stale in-memory résumé can't be written back while this modal waits
   // on the user or during the reload.
@@ -142,12 +147,11 @@ function showImportSuccessAndReload(message) {
     const durable = await appStorage.flush();
     if (!durable) {
       // Import couldn't reach disk and we're staying put (no reload). Re-enable
-      // saving (it was suspended before the import) so the app stays functional
-      // once the user frees space — otherwise every later save would silently
-      // no-op. Safe here: the merge path keeps the current résumé (store not
-      // stale), and the replace path was already made durable by
-      // importFullBackupDurably, so this second flush only fails transiently.
-      store.resumeSaves();
+      // saving ONLY when safe (merge path) so the app stays functional once the
+      // user frees space; a replace keeps saves suspended because its store is
+      // stale and a resume would clobber the imported profile on the next
+      // close/background save.
+      if (resumeSavesOnFlushFailure) store.resumeSaves();
       alert(
         'Your backup was imported, but it could NOT be saved to disk — your '
         + 'disk may be full. Don\'t close the app yet: free up space, then use '
@@ -332,7 +336,9 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       ? `Merged your previous app's résumés and settings into this one.`
       : `Imported ${result.keysImported} keys from your previous app `
         + `(removed ${result.removedExistingKeys} existing keys).`;
-    showImportSuccessAndReload(summary + skipped);
+    // Only the merge path may resume saves if the final flush fails (its store
+    // isn't stale); a legacy replace stays suspended like the format-2 one.
+    showImportSuccessAndReload(summary + skipped, merging);
   } catch (err) {
     store.resumeSaves(); // import failed — the app keeps running
     console.error('[backup] Legacy import failed:', err);
