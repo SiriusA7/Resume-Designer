@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button.jsx';
 import { Input } from '../ui/input.jsx';
@@ -25,7 +25,6 @@ import {
   deleteVariant, renameVariant, getVariants, generateUniqueVariantName,
 } from '../../persistence.js';
 import { loadThreads, countThreadsForVariant } from '../../chatThreads.js';
-import { appStorage } from '../../appStorage.js';
 import { handleVariantThreadsForDelete } from '../chat/deleteVariantThreadsFlow.js';
 import { STATUS_BADGE_CLASSES } from './statusStyles.js';
 import PreviewPane from './PreviewPane.jsx';
@@ -40,54 +39,8 @@ function ApplicationCard({ app, onRequestDelete }) {
   const [showJd, setShowJd] = useState(false);
   const jd = app.jobId ? getJobDescription(app.jobId) : null;
 
-  // Latest note + app for the teardown handler below (its effect runs once, so
-  // a direct closure would capture stale values).
-  const notesRef = useRef(notes);
-  notesRef.current = notes;
-  const appRef = useRef(app);
-  appRef.current = app;
-
   // Re-seed local notes when switching between applications.
   useEffect(() => { setNotes(app.notes || ''); }, [app.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Persist edits AS THEY HAPPEN (debounced), not only onBlur. Until blur the
-  // note lives solely in this component's local state, so quitting or reloading
-  // while the textarea still has focus loses the last edit — the native
-  // close-flush writes appStorage to disk but can't save what was never written
-  // to appStorage. The `notes === app.notes` guard makes the re-seed above (and
-  // the post-save prop update) a no-op; the cleanup cancels a stale timer when
-  // switching apps before it can save into the wrong one.
-  useEffect(() => {
-    if (notes === (app.notes || '')) return undefined;
-    const t = setTimeout(() => updateApplication(app.id, { notes }), 400);
-    return () => clearTimeout(t);
-  }, [notes, app.id, app.notes]);
-
-  // Synchronous teardown flush — the 400ms debounce still leaves a window where
-  // an edit lives only in local state. Persist the pending note when the card
-  // unmounts (Library dismissed) or the window is hidden/closed. On hide we
-  // also force appStorage to disk: main.js's own hidden-handler is registered
-  // first and runs before this one, so it would flush WITHOUT this just-written
-  // note otherwise.
-  useEffect(() => {
-    const flushPending = () => {
-      const a = appRef.current;
-      if (notesRef.current !== (a.notes || '')) {
-        updateApplication(a.id, { notes: notesRef.current });
-      }
-    };
-    const onHide = () => {
-      if (document.visibilityState === 'hidden') {
-        flushPending();
-        appStorage.flush();
-      }
-    };
-    document.addEventListener('visibilitychange', onHide);
-    return () => {
-      document.removeEventListener('visibilitychange', onHide);
-      flushPending();
-    };
-  }, []);
 
   return (
     <div className="space-y-2 rounded-md border p-3">
@@ -126,8 +79,12 @@ function ApplicationCard({ app, onRequestDelete }) {
 
       <Textarea
         value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        onBlur={() => { if (notes !== (app.notes || '')) updateApplication(app.id, { notes }); }}
+        // Persist on every edit so the note ALWAYS lives in appStorage — the
+        // only way to survive a native window close, where React never unmounts
+        // and no reliable pre-destroy visibilitychange fires, so the app's own
+        // close-flush (appStorage.flush) is what saves it. updateApplication is
+        // a cheap in-memory update + debounced disk write.
+        onChange={(e) => { const v = e.target.value; setNotes(v); updateApplication(app.id, { notes: v }); }}
         placeholder="Notes (e.g. recruiter said reapply in 6 months)"
         className="min-h-[52px] text-[12.5px]"
       />
