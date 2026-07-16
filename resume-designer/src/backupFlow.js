@@ -198,6 +198,12 @@ export function exportFullBackupWithFeedback() {
  */
 export async function importBackupFromFile(file) {
   if (!file) return;
+  // Whether THIS invocation suspended saves. An early throw (malformed JSON,
+  // wrong format) reaches the catch BEFORE store.suspendSaves() runs; if a prior
+  // Replace import left saves suspended (stale store awaiting a reload), an
+  // unconditional resume there would unlock that stale store and let the next
+  // close/background save overwrite the restored data. So resume only our own.
+  let suspendedHere = false;
   try {
     // Parse FIRST so we can show the key count BEFORE confirming (avoids the
     // "destructive confirm with unknown payload" anti-pattern). This is also
@@ -253,6 +259,7 @@ export async function importBackupFromFile(file) {
     // the catch below if the import throws (it rolls appStorage back, so the
     // store is consistent again and the app keeps running without a reload).
     store.suspendSaves();
+    suspendedHere = true;
 
     // SYNCHRONOUS call (not importFullBackup(file), which would do a second
     // file.text() — that await would yield AFTER our flush but BEFORE the
@@ -277,7 +284,9 @@ export async function importBackupFromFile(file) {
         backupNote
     );
   } catch (err) {
-    store.resumeSaves(); // import failed/rolled back — the app keeps running
+    // Resume only a suspension THIS call created — an early throw (before
+    // store.suspendSaves) must not unlock a prior import's suspension.
+    if (suspendedHere) store.resumeSaves(); // import rolled back — app keeps running
     console.error('[backup] Import failed:', err);
     alert(`Import failed: ${err.message ?? String(err)}`);
   }
@@ -293,6 +302,9 @@ export async function importBackupFromFile(file) {
  */
 export async function importLegacyElectronWithFeedback(mode = 'replace') {
   const merging = mode === 'merge';
+  // See importBackupFromFile: only the catch for a suspension THIS call created
+  // may resume it, so an early throw can't unlock a prior import's suspension.
+  let suspendedHere = false;
   try {
     const probe = await probeLegacyElectronData();
     if (!probe?.found) {
@@ -322,6 +334,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     // Suspend saves before the import writes appStorage (see the format-2 path
     // above for the flush-await race); resumed in the catch if it throws.
     store.suspendSaves();
+    suspendedHere = true;
 
     const result = merging
       ? importFullBackupMerge(envelope)
@@ -340,7 +353,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     // isn't stale); a legacy replace stays suspended like the format-2 one.
     showImportSuccessAndReload(summary + skipped, merging);
   } catch (err) {
-    store.resumeSaves(); // import failed — the app keeps running
+    if (suspendedHere) store.resumeSaves(); // resume only a suspension THIS call created
     console.error('[backup] Legacy import failed:', err);
     alert(`Couldn't import data from the previous app: ${err.message ?? String(err)}`);
   }
