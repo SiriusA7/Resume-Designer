@@ -5,7 +5,9 @@
 
 import { store } from './store.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
-import { ensureProfilesInitialized, loadRegistry, isAdoptionPending } from './profiles.js';
+import {
+  ensureProfilesInitialized, loadRegistry, isAdoptionPending, hasProfileNamespaces,
+} from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
 import { paginate, resetPaginatedState } from './pagination.js';
@@ -189,8 +191,12 @@ async function maybeAutoMigrateLegacyData() {
   // Guard 3 (see doc comment): a profiled store is never a legacy-migration
   // target. Checked before the data probe because that probe reads the
   // UNPREFIXED key (mapping is still off here) and would misread a profiled
-  // store as empty. loadRegistry() returns null on corrupt JSON, never throws.
-  if (isAdoptionPending() || (loadRegistry()?.length ?? 0) > 0) {
+  // store as empty. loadRegistry() returns null on corrupt JSON, never throws
+  // — and it ALSO returns null when the registry file is lost/corrupt while
+  // `resume-p--` workspaces survive, so physical namespaces are checked too:
+  // rebuildRegistryFromKeys() recovers them later in ensureProfilesInitialized,
+  // and the format-1 legacy replacement would wipe them before it runs.
+  if (isAdoptionPending() || (loadRegistry()?.length ?? 0) > 0 || hasProfileNamespaces()) {
     appStorage.setItem(ELECTRON_MIGRATION_FLAG, 'skipped-profiled-store');
     return;
   }

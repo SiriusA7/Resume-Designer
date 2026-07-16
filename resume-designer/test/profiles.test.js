@@ -5,7 +5,7 @@ import {
 import {
   loadRegistry, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile,
-  ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending,
+  ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
   activateProfileMappingForPrint,
 } from '../src/profiles.js';
 import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
@@ -551,5 +551,22 @@ describe('shared api key overlay', () => {
     appStorage.setItem(OPENROUTER_KEY_KEY, '');
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-stale' } }));
     expect(getSettings().openrouterKey).toBe('');
+  });
+});
+
+// Regression (PR #89 finding 39): loadRegistry() returns null for a lost or
+// corrupt registry even when resume-p-- workspaces survive — the legacy
+// migration guard needs a namespace check so the format-1 replacement can't
+// wipe workspaces that rebuildRegistryFromKeys() would recover at boot.
+describe('hasProfileNamespaces', () => {
+  it('detects surviving physical workspaces', () => {
+    expect(hasProfileNamespaces()).toBe(false);
+    localStorage.setItem('resume-p--abc123--resume-designer-data', '{}');
+    expect(hasProfileNamespaces()).toBe(true);
+  });
+
+  it('ignores physical keys whose logical part is not an owned key', () => {
+    localStorage.setItem('resume-p--abc123--evil-key', 'x');
+    expect(hasProfileNamespaces()).toBe(false);
   });
 });

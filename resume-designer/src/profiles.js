@@ -37,6 +37,18 @@ export function isAdoptionPending() {
   return initDegraded || appStorage.getItem(PROFILE_ADOPTION_MARKER) !== null;
 }
 
+// True when any physical per-profile workspace exists in storage. Used by the
+// legacy-migration guard: physical namespaces prove this store was profiled
+// even when the registry file is lost or corrupt (loadRegistry() → null) —
+// rebuildRegistryFromKeys() recovers them at profile-resolve time, so nothing
+// may wipe them before that runs.
+export function hasProfileNamespaces() {
+  return appStorage.keys().some((k) => {
+    const split = splitPhysicalKey(k);
+    return !!split && isOwnedKey(split.logicalKey);
+  });
+}
+
 // A registry entry is valid iff id is strictly alphanumeric (anything else —
 // including '-' — could break the physical-key `--` separator parsing) and
 // name is a string.
