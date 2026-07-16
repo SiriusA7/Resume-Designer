@@ -570,3 +570,24 @@ describe('hasProfileNamespaces', () => {
     expect(hasProfileNamespaces()).toBe(false);
   });
 });
+
+// Regression (PR #89 finding 40): saveSettings stripped the blob's legacy
+// credential while the shared-key write could still be non-durable (cached
+// mode flushes the two files independently) — the same loss window the
+// extraction path fixed, reopened through every ordinary settings save.
+describe('saveSettings blob-credential fallback', () => {
+  it('never strips a pre-extraction blob credential', () => {
+    localStorage.setItem('resume-designer-data', JSON.stringify({
+      variants: {}, settings: { openrouterKey: 'sk-legacy', theme: 'light' },
+    }));
+
+    saveSettings({ openrouterKey: 'sk-new', autoUpdateCheck: true });
+
+    // Shared key holds the new value; the blob FALLBACK survives untouched.
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-new');
+    const blob = JSON.parse(localStorage.getItem('resume-designer-data'));
+    expect(blob.settings.openrouterKey).toBe('sk-legacy');
+    // And the overlay masks it — reads still see the shared value.
+    expect(getSettings().openrouterKey).toBe('sk-new');
+  });
+});

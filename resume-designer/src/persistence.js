@@ -233,7 +233,13 @@ export function saveSettings(settings) {
   }
   const storage = loadFromStorage();
   storage.settings = { ...storage.settings, ...rest };
-  delete storage.settings.openrouterKey; // never persists in the blob anymore
+  // The blob never GAINS a credential here (`rest` excludes openrouterKey) —
+  // but an existing blob value is the pre-extraction fallback and must NOT be
+  // stripped by this path: in cached mode the shared-key and blob files flush
+  // independently, so the shared write can fail while this blob rewrite
+  // lands, leaving no durable credential after restart. The flush-gated boot
+  // extraction (extractSharedApiKey) owns the strip; until it succeeds the
+  // stale blob value stays masked by the shared-key overlay in getSettings.
   saveToStorage(storage);
 
   if (typeof window !== 'undefined') {
