@@ -328,6 +328,8 @@ const BACKUP_FIXED_KEYS = [
   'resume-designer-chat-threads',
   'resume-designer-chat-history',          // legacy, harmless to round-trip
   'resume-designer-token-usage',
+  'resume-designer-learned-answers',
+  'resume-designer-bridge-token',
   // UI / personalization
   'resume-designer-theme',
   'resume-designer-onboarding-complete',

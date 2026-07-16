@@ -39,6 +39,7 @@ import { initTheme } from './theme.js';
 import { openJobDescriptionPanel, onJobPanelVariantChange } from './jobDescriptionPanel.js';
 import { initJobDescriptions } from './jobDescriptions.js';
 import { initApplications } from './applications.js';
+import { initLearnedAnswers } from './learnedAnswers.js';
 import { openUserProfilePanel } from './userProfilePanel.js';
 import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
 import { initFontService } from './fontService.js';
@@ -290,6 +291,7 @@ export async function init() {
   // this again — that second call is a harmless re-read of the same store.
   initJobDescriptions();
   initApplications();
+  initLearnedAnswers();
 
   // Tag the html element so CSS can apply desktop-only chrome (traffic light
   // padding on macOS, etc.). Keep the legacy `electron` / `electron-mac`
@@ -400,6 +402,10 @@ export async function init() {
   initVariants(handleVariantChange);
   const { initUpdateFlow } = await import('./updateFlow.js');
   initUpdateFlow();
+
+  // Companion-extension bridge (desktop only; no-op in browser dev).
+  const { initBridge } = await import('./bridge.js');
+  initBridge().catch((e) => console.error('[Bridge] init failed:', e));
 
   // Initialize inline editor
   initInlineEditor();
@@ -620,9 +626,17 @@ export async function initPrintMode() {
     // Load the currently active variant's data into the store so the
     // renderer can read it. skipSave=true because this is a read-only
     // render — we don't want to mutate stored data from the print window.
-    const variantId = getCurrentVariantId();
+    // Bridge exports pass ?variant=<id> to render a specific variant; the
+    // user-facing export flow omits it and captures the current one.
+    const overrideId = new URLSearchParams(window.location.search).get('variant');
+    const variantId = overrideId || getCurrentVariantId();
     const variants = getVariants();
     const variant = variantId ? variants[variantId] : null;
+    if (overrideId && !variant?.data) {
+      // Fail loudly through the existing print-error path rather than
+      // silently capturing the current variant.
+      throw new Error(`Print window: no variant with id ${overrideId}`);
+    }
     if (variant?.data) {
       store.setData(variant.data, true, variantId);
     }
