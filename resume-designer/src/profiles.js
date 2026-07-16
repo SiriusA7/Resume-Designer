@@ -110,7 +110,21 @@ async function copyUnprefixedToPhysical(profileId) {
     try {
       appStorage.setItem(physicalKey(profileId, k), v);
     } catch (err) {
-      console.error('[profiles] adoption copy failed; keeping unprefixed sources:', err);
+      // Roll back EVERY physical copy for this profile before bailing — the
+      // ones written in this pass AND any left by an earlier failed pass. In
+      // passthrough mode the copy DOUBLES storage, so a partial set of leaked
+      // duplicates pins localStorage at quota (flush() reclaims nothing there),
+      // and every restart's retry then throws against the same full store and
+      // fails again — the authoritative unprefixed workspace can no longer save
+      // either. Removing the duplicates frees the space for the next boot; the
+      // unprefixed sources are authoritative and untouched.
+      console.error('[profiles] adoption copy failed; rolling back partial copies:', err);
+      const prefix = physicalKey(profileId, '');
+      for (const pk of appStorage.keys()) {
+        if (pk && pk.startsWith(prefix)) {
+          try { appStorage.removeItem(pk); } catch { /* keep going */ }
+        }
+      }
       await appStorage.flush();
       return false;
     }
