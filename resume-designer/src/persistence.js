@@ -629,6 +629,14 @@ function importFullBackupV2(parsed) {
     throw new Error('Invalid format-2 backup: "shared" must be an object.');
   }
   for (const [k, v] of Object.entries(parsed.shared || {})) {
+    // Unknown keys reject too: app-generated backups only ever emit
+    // BACKUP_SHARED_KEYS members, so an unrecognized key means the file is
+    // corrupt, hand-edited, or from a newer format — and the restore loop
+    // below would silently DROP it after the wipe, reporting success while
+    // not restoring a setting the file plainly represents.
+    if (!BACKUP_SHARED_KEYS.includes(k)) {
+      throw new Error(`Invalid format-2 backup: unrecognized shared key "${k}".`);
+    }
     if (typeof v !== 'string') {
       throw new Error(`Invalid backup: shared key "${k}" must be a string value.`);
     }

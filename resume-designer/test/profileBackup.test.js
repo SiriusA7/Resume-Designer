@@ -652,3 +652,27 @@ describe('exportFullBackup markerless recovery', () => {
     expect(localStorage.getItem(`resume-p--${recovered.id}--resume-designer-data`)).toBe('{"variants":{"LIVE":{}}}');
   });
 });
+
+// Regression (PR #89 finding 41): an unrecognized string-valued shared key
+// passed validation, then the restore loop silently skipped it AFTER the
+// clean slate had removed the user's current shared settings — a "successful"
+// restore that dropped a setting the file plainly represents.
+describe('format-2 unknown shared keys', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('rejects an unrecognized shared key before wiping', () => {
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'p', name: 'Profile' }],
+      activeProfile: 'p',
+      shared: { 'resume-designer-future-setting': 'x' },
+      profiles: { p: { keys: {} } },
+    })).toThrow(/unrecognized shared key/i);
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+});
