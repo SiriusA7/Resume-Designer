@@ -236,7 +236,9 @@ export function deleteProfile(id) {
   saveRegistry(registry.filter((p) => p.id !== id));
 }
 
-export async function exportProfileBackup(profileId, filename) {
+// Deliberately NOT async: an unknown id throws synchronously (programmer
+// error), while the returned promise covers only the download itself.
+export function exportProfileBackup(profileId, filename) {
   const registry = loadRegistry() || [];
   const profile = registry.find((p) => p.id === profileId);
   if (!profile) throw new Error(`Unknown profile id: ${profileId}`);
@@ -261,9 +263,10 @@ export async function exportProfileBackup(profileId, filename) {
   const name = filename || `resume-designer-profile-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
   // persistence.js imports this module, so pull downloadFile late to keep the
   // static module graph acyclic.
-  const { downloadFile } = await import('./persistence.js');
-  downloadFile(JSON.stringify(envelope, null, 2), name, 'application/json');
-  return { keysExported: Object.keys(keys).length, filename: name };
+  return import('./persistence.js').then(({ downloadFile }) => {
+    downloadFile(JSON.stringify(envelope, null, 2), name, 'application/json');
+    return { keysExported: Object.keys(keys).length, filename: name };
+  });
 }
 
 export function importProfileBackup(parsed) {
