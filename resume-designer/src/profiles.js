@@ -358,6 +358,32 @@ export function deleteProfile(id) {
   saveRegistry(registry.filter((p) => p.id !== id));
 }
 
+/**
+ * Delete `id` and make it DURABLE. deleteProfile() only mutates the
+ * write-behind cache in Tauri mode — disk failures surface at flush() — so a
+ * fire-and-forget delete could report success and then resurrect the profile
+ * (or leave orphaned workspace files) after a restart. On a failed flush the
+ * pre-delete snapshot (registry entry + the profile's physical keys) is
+ * restored and false returned, so callers keep the profile listed instead of
+ * announcing a deletion that never reached disk.
+ */
+export async function deleteProfileDurably(id) {
+  const registryBefore = loadRegistry() || [];
+  const prefix = physicalKey(id, '');
+  const snapshot = new Map();
+  for (const k of appStorage.keys()) {
+    if (k && k.startsWith(prefix)) snapshot.set(k, appStorage.getItem(k));
+  }
+  deleteProfile(id);
+  if (await appStorage.flush()) return true;
+  for (const [k, v] of snapshot) {
+    try { appStorage.setItem(k, v); } catch { /* keep going */ }
+  }
+  try { saveRegistry(registryBefore); } catch { /* keep going */ }
+  await appStorage.flush();
+  return false;
+}
+
 // Deliberately NOT async: an unknown id throws synchronously (programmer
 // error), while the returned promise covers only the download itself.
 export function exportProfileBackup(profileId, filename) {

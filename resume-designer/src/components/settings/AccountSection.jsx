@@ -17,8 +17,8 @@ import { store } from '../../store.js';
 import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
   loadRegistry, getActiveProfileId, activateProfileDurably, createProfile,
-  renameProfile, deleteProfile, exportProfileBackup, importProfileBackup,
-  isAdoptionPending,
+  renameProfile, deleteProfile, deleteProfileDurably, exportProfileBackup,
+  importProfileBackup, isAdoptionPending,
 } from '../../profiles.js';
 import { getVariants, getUserProfile } from '../../persistence.js';
 import { getAllJobDescriptions } from '../../jobDescriptions.js';
@@ -162,7 +162,10 @@ export function AccountSection() {
     });
     if (!ok) return;
     try {
-      deleteProfile(p.id);
+      if (!(await deleteProfileDurably(p.id))) {
+        toast.error(`Could not delete "${p.name}" — the change didn't reach disk.`);
+        return;
+      }
       refresh();
       toast.success(`Deleted "${p.name}".`);
     } catch (e) {

@@ -3,7 +3,7 @@ import { appStorage, initAppStorage, __resetAppStorageForTests } from '../src/ap
 import {
   createProfile, ensureProfilesInitialized, loadRegistry,
   exportProfileBackup, importProfileBackup, activateProfileDurably,
-  extractSharedApiKey,
+  extractSharedApiKey, deleteProfileDurably,
 } from '../src/profiles.js';
 import { importFullBackupFromEnvelope, exportFullBackup } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY, PROFILES_KEY } from '../src/profileKeys.js';
@@ -477,3 +477,33 @@ describe('extractSharedApiKey durability', () => {
   });
 });
 
+// Regression (PR #89 finding 33): deleteProfile only mutates the write-behind
+// cache; a fire-and-forget delete reported success and the profile came back
+// (or its files stayed orphaned) after a restart when the flush failed.
+describe('deleteProfileDurably', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('restores the profile and returns false when the delete flush fails', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]));
+    appStorage.setItem(ACTIVE_PROFILE_KEY, 'a');
+    appStorage.setItem('resume-p--b--resume-designer-data', '{"b":1}');
+    await appStorage.flush();
+
+    backend.write.mockImplementation(async () => { throw new Error('disk full'); });
+    backend.delete.mockImplementation(async () => { throw new Error('disk full'); });
+    await expect(deleteProfileDurably('b')).resolves.toBe(false);
+    expect((loadRegistry() || []).map((p) => p.id)).toContain('b');
+    expect(appStorage.getItem('resume-p--b--resume-designer-data')).toBe('{"b":1}');
+
+    backend.write.mockImplementation(async (key, value) => { backend.files.set(key, value); });
+    backend.delete.mockImplementation(async (key) => { backend.files.delete(key); });
+    await expect(deleteProfileDurably('b')).resolves.toBe(true);
+    expect(backend.files.has('resume-p--b--resume-designer-data')).toBe(false);
+    expect(JSON.parse(backend.files.get(PROFILES_KEY)).map((p) => p.id)).toEqual(['a']);
+  });
+});
