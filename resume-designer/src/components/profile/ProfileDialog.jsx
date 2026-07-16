@@ -145,7 +145,16 @@ export default function ProfileDialog() {
         ...imported,
         contactInfo: { ...DEFAULT_PROFILE.contactInfo, ...(imported.contactInfo || {}) },
       };
-      saveUserProfile(profileRef.current);
+      // Record the write result on the SAME tracked-save flag the debounce
+      // uses. A direct save that fails (passthrough quota) must not look
+      // durable: without this, closing the dialog leaves no pending timer and
+      // no recorded failure, so flush() reports success and a later profile
+      // switch reloads away the just-imported data. flush() retries on this
+      // flag and reports false, letting the switch guard abort.
+      failedSaveRef.current = saveUserProfile(profileRef.current) === false;
+      if (failedSaveRef.current) {
+        toast.error('Imported, but your storage is full — free space before switching profiles.');
+      }
       bump();
     }).catch((err) => {
       console.error('Failed to import profile:', err);
