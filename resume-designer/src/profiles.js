@@ -53,7 +53,7 @@ function saveRegistry(registry) {
 // unprefixed keys, so a source deleted early would read back as missing (data
 // looks lost) and a later resume could drop edits made in that window. Phase 1
 // copies; the caller deletes only after every copy is durable AND right before
-// it activates mapping (deleteAdoptedSources).
+// it activates mapping (in finishAdoption).
 //
 // COPY-ALWAYS (not copy-if-absent): the unprefixed source is authoritative
 // while adoption is incomplete — the user edits it mapping-off — so it must
@@ -79,21 +79,6 @@ async function copyUnprefixedToPhysical(profileId) {
     }
   }
   // Every copy must be durable before the caller deletes any source.
-  return appStorage.flush();
-}
-
-// Delete the unprefixed owned sources after copyUnprefixedToPhysical has copied
-// them. MUST run with mapping still INACTIVE (removeItem then targets the
-// unprefixed key, not the physical copy) and with NO reads between it and the
-// mapping switch — adoption is synchronous here, so that holds. Returns the
-// flush durability so the caller can keep the marker for a retry if the deletes
-// didn't land (harmless: the lingering sources equal their physical copies, so
-// the retry re-copies idempotently).
-async function deleteAdoptedSources() {
-  for (const k of appStorage.keys()) {
-    if (!k || isSharedKey(k) || isPhysicalKey(k) || !isOwnedKey(k)) continue;
-    appStorage.removeItem(k);
-  }
   return appStorage.flush();
 }
 
@@ -161,7 +146,26 @@ function rebuildRegistryFromKeys() {
   return registry;
 }
 
+/**
+ * Boot entry point. Wraps the resolver so that ANY unexpected storage failure
+ * during adoption (e.g. a passthrough QuotaExceededError thrown synchronously by
+ * the very first marker/registry setItem when localStorage is already full)
+ * NEVER escapes: main.js awaits this inside the try whose finally opens the
+ * React gate, so a throw here would skip the rest of init() and every reload
+ * would repeat against the same full store. On failure we degrade to mapping-off
+ * — the app runs on the unprefixed workspace and a later boot retries.
+ */
 export async function ensureProfilesInitialized() {
+  try {
+    return await resolveActiveProfile();
+  } catch (err) {
+    console.error('[profiles] adoption failed unexpectedly; running on unprefixed data:', err);
+    setProfileMapping(null);
+    return null;
+  }
+}
+
+async function resolveActiveProfile() {
   let registry = loadRegistry() || rebuildRegistryFromKeys();
 
   if (!registry) {
@@ -227,18 +231,39 @@ export async function ensureProfilesInitialized() {
  */
 async function finishAdoption(profileId) {
   if (!(await copyUnprefixedToPhysical(profileId))) return false;
-  // Copies durable. Delete sources while mapping is still off (removeItem hits
-  // the unprefixed keys), then activate mapping with no intervening reads.
-  const deleted = await deleteAdoptedSources();
+
+  // Delete the now-copied sources (mapping still off → removeItem hits the
+  // unprefixed keys). Track them so we can restore on a non-durable delete.
+  const sourceKeys = [];
+  for (const k of appStorage.keys()) {
+    if (!k || isSharedKey(k) || isPhysicalKey(k) || !isOwnedKey(k)) continue;
+    sourceKeys.push(k);
+    appStorage.removeItem(k);
+  }
+  if (!(await appStorage.flush())) {
+    // The source deletes didn't reach disk. Do NOT activate mapping: the marker
+    // lingers, and a mapping-on session's edits to the physical keys would be
+    // overwritten by the still-present unprefixed sources on the next boot's
+    // copy-always. Restore the sources to the cache from their durable physical
+    // copies so this mapping-off session still reads them, keep the marker, and
+    // retry on a later boot.
+    for (const k of sourceKeys) {
+      const v = appStorage.getItem(physicalKey(profileId, k));
+      if (v !== null) appStorage.setItem(k, v);
+    }
+    await appStorage.flush();
+    console.error('[profiles] adoption source cleanup did not reach disk; will retry next boot');
+    return false;
+  }
+
+  // Sources are DURABLY gone — no stale source can clobber the physical keys
+  // now, so it is finally safe to activate mapping. The marker removal is
+  // best-effort: if its flush fails the marker lingers, but the next boot finds
+  // no sources to copy and cleanly finalizes (removes the marker).
   setProfileMapping(profileId);
   extractSharedApiKey();
-  if (deleted) {
-    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
-    await appStorage.flush();
-  }
-  // If the source deletes didn't land, keep the marker: the next boot resumes
-  // and re-copies (the lingering sources equal their physical copies, so it is
-  // idempotent) and retries the deletes.
+  appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+  await appStorage.flush();
   return true;
 }
 

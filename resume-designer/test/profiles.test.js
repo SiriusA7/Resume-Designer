@@ -337,23 +337,54 @@ describe('adoption migration', () => {
     }
   });
 
-  it('keeps the marker when source deletes fail to reach disk', async () => {
-    const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
+  it('stays mapping-OFF (restoring sources) when source deletes fail to reach disk', async () => {
+    const backend = makeBackend({ 'resume-designer-data': '{"variants":{"KEEP":{}}}' });
     backend.delete.mockImplementation(async (key) => {
       if (key === 'resume-designer-data') throw new Error('disk full');
       backend.files.delete(key);
     });
     await initAppStorage({ backend });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
       const id = await ensureProfilesInitialized();
 
-      // Copies are durable, but the un-finalized migration must keep the
-      // marker so the next boot resumes and retries the source cleanup.
-      expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{}}');
+      // The source delete didn't land, so mapping must NOT activate — activating
+      // it and letting edits hit the physical key would let the next boot's
+      // copy-always clobber them from the lingering source. Instead the source
+      // is restored and the marker kept for a retry.
+      expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{"KEEP":{}}}');
       expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
+      // Mapping OFF → a read resolves to the restored unprefixed source, and a
+      // fresh write stays unprefixed (would hit the physical key if mapping were on).
+      expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
+      appStorage.setItem('resume-designer-data', '{"variants":{"NEW":{}}}');
+      expect(backend.files.get(`resume-p--${id}--resume-designer-data`)).toBe('{"variants":{"KEEP":{}}}');
     } finally {
+      errSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('degrades to mapping-off instead of aborting when the marker write throws (passthrough quota)', async () => {
+    // Browser passthrough: localStorage is already full, so the very first
+    // adoption metadata write throws synchronously. ensureProfilesInitialized
+    // must swallow it (return null, mapping off) — a throw would abort init().
+    localStorage.setItem('resume-designer-data', '{"variants":{"KEEP":{}}}');
+    const realSetItem = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(key, value) {
+      if (key === '__profile_adoption_pending__') throw new DOMException('quota', 'QuotaExceededError');
+      return realSetItem.call(this, key, value);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await ensureProfilesInitialized(); // must resolve, not throw
+      expect(result).toBeNull();
+      // App runs on the unprefixed workspace (mapping off).
+      expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
+    } finally {
+      spy.mockRestore();
       errSpy.mockRestore();
     }
   });
