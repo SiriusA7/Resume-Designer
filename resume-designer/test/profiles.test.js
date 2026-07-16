@@ -86,6 +86,15 @@ describe('registry CRUD', () => {
     }
   });
 
+  it('coerces a non-string emoji on load (switcher never renders a bad child)', () => {
+    appStorage.setItem(PROFILES_KEY, JSON.stringify([
+      { id: 'pcorrupt', name: 'Ash', emoji: {}, createdAt: 'x' },
+    ]));
+    const reg = loadRegistry();
+    expect(reg).toHaveLength(1);
+    expect(typeof reg[0].emoji).toBe('string'); // coerced to the default, not {}
+  });
+
   it('renames and re-emojis a profile', () => {
     const { a } = seedRegistry();
     renameProfile(a.id, { name: 'Ash S', emoji: '🦉' });

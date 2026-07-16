@@ -165,13 +165,30 @@ describe('format-2 export/restore', () => {
     expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-keep');
   });
 
+  it('rejects a non-string registry emoji before touching existing storage', () => {
+    // The switcher renders emoji directly as a React child; a non-string (e.g.
+    // {}) would throw and blank the app after the restore already wiped storage.
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'p', name: 'Profile', emoji: {} }],
+      activeProfile: 'p',
+      shared: {},
+      profiles: {},
+    })).toThrow(/string emoji/i);
+
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+
   it('rejects a non-string registry name before touching existing storage', () => {
     localStorage.setItem('resume-designer-theme', 'keep-me');
 
     expect(() => importFullBackupFromEnvelope({
       backupFormat: 2,
       kind: 'full',
-      registry: [{ id: 'p', name: 42 }],
+      registry: [{ id: 'p', name: 42, emoji: '🙂' }],
       activeProfile: 'p',
       shared: {},
       profiles: {},

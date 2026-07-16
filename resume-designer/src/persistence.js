@@ -503,11 +503,16 @@ function normalizeImportedValue(key, value) {
 
 function importFullBackupV2(parsed) {
   const registry = parsed.registry;
+  // A PRESENT emoji must be a string: the switcher renders it directly as a
+  // React child, so a non-string (e.g. {}) would throw and blank the app after
+  // a restore that already wiped the prior storage. A missing emoji is fine —
+  // loadRegistry coerces it to the default.
   const validRegistry = Array.isArray(registry) && registry.length > 0
-    && registry.every((p) => p && isValidProfileId(p.id) && typeof p.name === 'string');
+    && registry.every((p) => p && isValidProfileId(p.id) && typeof p.name === 'string'
+      && (p.emoji === undefined || typeof p.emoji === 'string'));
   const uniqueIds = validRegistry && new Set(registry.map((p) => p.id)).size === registry.length;
   if (!validRegistry || !uniqueIds) {
-    throw new Error('Invalid format-2 backup: registry entries must have unique valid ids and string names.');
+    throw new Error('Invalid format-2 backup: registry entries must have unique valid ids, string names, and (if present) string emoji.');
   }
   // Reject a non-plain-object `profiles` (incl. arrays) pre-wipe: an array
   // passes typeof 'object', then every registry id reads as a missing entry

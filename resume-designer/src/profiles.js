@@ -37,7 +37,11 @@ export function loadRegistry() {
     // the valid subset would silently orphan the invalid entry's workspace;
     // null instead routes boot through the registry rebuild, which recovers
     // every namespace found in storage.
-    return parsed.every(isValidEntry) ? parsed : null;
+    if (!parsed.every(isValidEntry)) return null;
+    // Coerce a non-string emoji (hand-edited / corrupt storage) to the default:
+    // the switcher renders it directly as a React child, so a non-string would
+    // throw and blank the app. Defense in depth beyond the backup-restore check.
+    return parsed.map((p) => (typeof p.emoji === 'string' ? p : { ...p, emoji: '🙂' }));
   } catch {
     return null;
   }
