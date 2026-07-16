@@ -26,7 +26,7 @@ import {
 } from '../variantManager.js';
 import { handleVariantThreadsForDelete } from './chat/deleteVariantThreadsFlow.js';
 import { openSettings } from '../settingsModal.js';
-import { ProfileSwitcher } from './profile/ProfileSwitcher.jsx';
+import { AccountAvatar } from './profile/AccountAvatar.jsx';
 
 // Format a variant's updatedAt for the selector menu (relative, then absolute).
 function formatDate(isoString) {
@@ -186,10 +186,11 @@ export default function Header() {
             Resume Designer
           </span>
         </div>
-        {/* Workspace identity: compact emoji-avatar switcher — context ("whose
-            workspace"), kept away from the right cluster's tools and its
-            unrelated Profile EDITOR button. */}
-        <ProfileSwitcher />
+        {/* Workspace identity: compact initials avatar opening Settings →
+            Account (switch/manage profiles + account stats). No emoji — the app
+            uses none — and kept away from the right cluster's unrelated Profile
+            EDITOR button. */}
+        <AccountAvatar />
       </div>
 
       {/* CENTER ZONE — New + variant selector + actions kebab, centered between

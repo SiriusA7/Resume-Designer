@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Sun, Moon, Monitor, Eye, EyeOff, X,
-  SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3,
+  SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3, UserCircle,
 } from 'lucide-react';
 
 import {
@@ -35,6 +35,7 @@ import {
 import { triggerManualUpdateCheck } from '../updateFlow.js';
 import { useUpdateBusy } from '../hooks/useUpdateBusy.js';
 import { ChangelogHistory } from './ChangelogHistory.jsx';
+import { AccountSection } from './settings/AccountSection.jsx';
 import { exportFullBackupWithFeedback, importBackupFromFile, importLegacyElectronWithFeedback } from '../backupFlow.js';
 import { getBridgeToken } from '../bridge.js';
 
@@ -56,6 +57,7 @@ const THEME_OPTIONS = [
 
 // Tab order matches the original settings modal. Updates is desktop-only.
 const TABS = [
+  { id: 'account', label: 'Account', Icon: UserCircle },
   { id: 'general', label: 'General', Icon: SlidersHorizontal },
   { id: 'api-keys', label: 'AI', Icon: Sparkles },
   ...(isTauri ? [{ id: 'updates', label: 'Updates', Icon: RefreshCw }] : []),
@@ -282,6 +284,9 @@ export default function SettingsDialog() {
           </nav>
 
           <div className="min-h-0 overflow-y-auto p-6">
+            {/* Account — profiles (switch/manage) + workspace stats */}
+            {tab === 'account' && <AccountSection />}
+
             {/* General */}
             {tab === 'general' && (
               <div className="space-y-6">
