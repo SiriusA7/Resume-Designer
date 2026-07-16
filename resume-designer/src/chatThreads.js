@@ -15,15 +15,14 @@ const THREADS_KEY = 'resume-designer-chat-threads';
 const MAX_PERSISTED = 50;
 const MAX_PERSISTED_REASONING = 8000; // chars; full reasoning stays in-memory only
 
-// Short random suffix so two threads created in the same millisecond can't collide.
+// Short random suffix so two threads created in the same millisecond can't
+// collide. crypto.getRandomValues (not Math.random — CodeQL's
+// js/insecure-randomness rule, and store.js's convention) has no secure-context
+// requirement, so it's available in both the Tauri webview and the browser.
 function randomSuffix() {
-  try {
-    const buf = new Uint32Array(1);
-    crypto.getRandomValues(buf);
-    return buf[0].toString(36);
-  } catch {
-    return Math.floor(Math.random() * 1e9).toString(36);
-  }
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0].toString(36);
 }
 
 export function makeThread(name = 'New Chat', initialMessages = [], homeVariantId = null) {

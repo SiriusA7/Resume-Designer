@@ -343,10 +343,23 @@ export function activateProfileMappingForPrint() {
   }
 }
 
-// Colon-free (":" separates the physical-key segments). createProfile
-// re-rolls on the (unlikely) collision with an existing registry id.
+// Cryptographically-secure base-36 suffix — replaces Math.random so CodeQL's
+// js/insecure-randomness rule stays quiet, and matches store.js's convention.
+// crypto.getRandomValues has no secure-context requirement, so it works in both
+// the Tauri custom-scheme webview and the browser build. base-36 of a Uint32 is
+// strictly [0-9a-z]: alphanumeric AND lowercase — exactly what isValidProfileId
+// requires and what the backup case-fold-uniqueness check depends on.
+function randomIdSuffix() {
+  const a = new Uint32Array(2);
+  crypto.getRandomValues(a);
+  return a[0].toString(36) + a[1].toString(36);
+}
+
+// Alphanumeric + lowercase ("--" separates the physical-key segments, and the
+// id must never contain it). createProfile re-rolls on the (astronomically
+// unlikely) collision with an existing registry id.
 export function generateProfileId() {
-  return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return `p${Date.now().toString(36)}${randomIdSuffix()}`;
 }
 
 export function getActiveProfileId() {
