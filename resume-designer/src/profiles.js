@@ -288,6 +288,19 @@ export function exportProfileBackup(profileId, filename) {
     const v = appStorage.getItem(k);
     if (v !== null) keys[logical] = v;
   }
+  // Incomplete-adoption recovery state (mapping off): the ACTIVE profile's live
+  // data still sits under unprefixed owned keys, so include them here too —
+  // otherwise a per-profile export of the recovering profile is empty. Only the
+  // active profile can have unprefixed data (it is the one being adopted), and
+  // it is authoritative (overrides any stale physical partial copy). A no-op in
+  // the normal mapping-on case, where no unprefixed owned keys exist.
+  if (profileId === getActiveProfileId()) {
+    for (const k of appStorage.keys()) {
+      if (!k || splitPhysicalKey(k) || isSharedKey(k) || !isOwnedKey(k)) continue;
+      const v = appStorage.getItem(k);
+      if (v !== null) keys[k] = v;
+    }
+  }
   const envelope = {
     backupFormat: 2,
     kind: 'profile',

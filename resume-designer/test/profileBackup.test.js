@@ -275,6 +275,22 @@ describe('per-profile export/import', () => {
     expect(localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
   });
 
+  it('exports the active profile\'s unprefixed live data in the recovery state', async () => {
+    // Incomplete-adoption recovery: mapping off, live data at unprefixed keys.
+    // A per-profile export of the recovering (active) profile must still capture
+    // it, not produce an empty file.
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'prec', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'prec');
+    localStorage.setItem('resume-designer-data', '{"variants":{"LIVE":{}}}');
+    localStorage.setItem('resume-designer-theme', 'dark'); // shared — must NOT leak into a profile export
+
+    const readDownload = captureDownload();
+    await exportProfileBackup('prec');
+    const envelope = await readDownload();
+    expect(envelope.keys['resume-designer-data']).toBe('{"variants":{"LIVE":{}}}');
+    expect(envelope.keys['resume-designer-theme']).toBeUndefined();
+  });
+
   it('rejects non-profile envelopes and unowned keys', async () => {
     await seedTwoProfiles();
     expect(() => importProfileBackup({ backupFormat: 1, keys: {} })).toThrow();
