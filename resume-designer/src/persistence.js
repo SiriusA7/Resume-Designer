@@ -489,19 +489,43 @@ function importFullBackupV2(parsed) {
   if (!registry.length || !parsed.profiles || typeof parsed.profiles !== 'object') {
     throw new Error('Invalid format-2 backup: missing registry or profiles.');
   }
-  for (const [pid, entry] of Object.entries(parsed.profiles)) {
-    for (const [k, v] of Object.entries(entry?.keys || {})) {
-      if (typeof v !== 'string') throw new Error(`Invalid backup: ${pid}/"${k}" must be a string value.`);
-      if (!isOwnedKey(k)) throw new Error(`Invalid backup: unrecognized key "${k}".`);
+
+  // Validate and collect every referenced profile before removing anything.
+  // A malformed or missing entry must never turn a restore into a destructive
+  // partial wipe, and collecting up front lets critical keys across ALL
+  // profiles be written before any best-effort history data.
+  const profileEntries = [];
+  for (const { id: pid } of registry) {
+    const entry = parsed.profiles[pid];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`Invalid format-2 backup: profile "${pid}" must be an object.`);
+    }
+    if (!entry.keys || typeof entry.keys !== 'object' || Array.isArray(entry.keys)) {
+      throw new Error(`Invalid format-2 backup: profile "${pid}" keys must be an object.`);
+    }
+    for (const [logicalKey, value] of Object.entries(entry.keys)) {
+      if (typeof value !== 'string') {
+        throw new Error(`Invalid backup: ${pid}/"${logicalKey}" must be a string value.`);
+      }
+      if (!isOwnedKey(logicalKey)) {
+        throw new Error(`Invalid backup: unrecognized key "${logicalKey}".`);
+      }
+      profileEntries.push({
+        physicalKey: physicalKey(pid, logicalKey),
+        logicalKey,
+        value,
+      });
     }
   }
 
   // Clean slate across ALL namespaces (full restore replaces everything).
+  let removedExistingKeys = 0;
   for (const k of appStorage.keys()) {
     const split = splitPhysicalKey(k);
     const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
     if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY || k === OPENROUTER_KEY_KEY) {
       appStorage.removeItem(k);
+      removedExistingKeys++;
     }
   }
 
@@ -514,25 +538,27 @@ function importFullBackupV2(parsed) {
     if (BACKUP_SHARED_KEYS.includes(k) && typeof v === 'string') appStorage.setItem(k, v);
   }
 
-  // Same quota strategy as format 1, per profile: critical keys first,
-  // bulky history best-effort.
+  // Same quota strategy as format 1, globally across every profile: critical
+  // keys first, then bulky history best-effort. Per-profile passes could let
+  // an early profile's history consume quota needed by a later profile's
+  // critical data.
   let keysImported = 0;
   let historySkipped = 0;
-  for (const [pid, entry] of Object.entries(parsed.profiles)) {
-    if (!registry.some((p) => p.id === pid)) continue;
-    const entries = Object.entries(entry.keys || {});
-    const nonHistory = entries.filter(([k]) => !k.startsWith(BACKUP_HISTORY_PREFIX));
-    const history = entries.filter(([k]) => k.startsWith(BACKUP_HISTORY_PREFIX));
-    for (const [k, v] of nonHistory) {
-      appStorage.setItem(physicalKey(pid, k), normalizeImportedValue(k, v));
-      keysImported++;
-    }
-    for (const [k, v] of history) {
-      if (writeOwnedKeyOrSkip(physicalKey(pid, k), v)) keysImported++;
-      else historySkipped++;
-    }
+  const nonHistory = profileEntries.filter(
+    ({ logicalKey }) => !logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
+  );
+  const history = profileEntries.filter(
+    ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
+  );
+  for (const { physicalKey: key, logicalKey, value } of nonHistory) {
+    appStorage.setItem(key, normalizeImportedValue(logicalKey, value));
+    keysImported++;
   }
-  return { keysImported, removedExistingKeys: 0, historySkipped };
+  for (const { physicalKey: key, value } of history) {
+    if (writeOwnedKeyOrSkip(key, value)) keysImported++;
+    else historySkipped++;
+  }
+  return { keysImported, removedExistingKeys, historySkipped };
 }
 
 export function importFullBackupFromEnvelope(parsed) {

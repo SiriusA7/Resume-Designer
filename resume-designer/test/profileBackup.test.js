@@ -50,6 +50,64 @@ describe('format-2 export/restore', () => {
     expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
     expect(localStorage.getItem(ACTIVE_PROFILE_KEY)).toBe(ashId);
   });
+
+  it('rejects a malformed profile before touching existing storage', () => {
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'p', name: 'Profile' }],
+      activeProfile: 'p',
+      shared: {},
+      profiles: { p: null },
+    })).toThrow(/invalid format-2 backup/i);
+
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+
+  it('reports the number of existing keys wiped during a round-trip restore', async () => {
+    await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+    const existingKeyCount = localStorage.length;
+
+    const result = importFullBackupFromEnvelope(envelope);
+
+    expect(existingKeyCount).toBeGreaterThan(0);
+    expect(result.removedExistingKeys).toBe(existingKeyCount);
+  });
+
+  it('writes critical data for every profile before best-effort history', () => {
+    const originalSetItem = Storage.prototype.setItem;
+    let historyAttempted = false;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (key.includes('resume-designer-history-')) {
+        historyAttempted = true;
+        throw new DOMException('quota exceeded', 'QuotaExceededError');
+      }
+      if (key === 'resume-p:b:resume-designer-data' && historyAttempted) {
+        throw new DOMException('quota exceeded', 'QuotaExceededError');
+      }
+      return originalSetItem.call(this, key, value);
+    });
+
+    const result = importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }],
+      activeProfile: 'a',
+      shared: {},
+      profiles: {
+        a: { keys: { 'resume-designer-history-v1': 'large-history' } },
+        b: { keys: { 'resume-designer-data': '{"variants":{}}' } },
+      },
+    });
+
+    expect(localStorage.getItem('resume-p:b:resume-designer-data')).toBe('{"variants":{}}');
+    expect(result.historySkipped).toBe(1);
+  });
 });
 
 describe('format-1 import scoping', () => {
