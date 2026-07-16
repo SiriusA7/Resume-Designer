@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button.jsx';
 import { Input } from '../ui/input.jsx';
@@ -25,6 +25,7 @@ import {
   deleteVariant, renameVariant, getVariants, generateUniqueVariantName,
 } from '../../persistence.js';
 import { loadThreads, countThreadsForVariant } from '../../chatThreads.js';
+import { appStorage } from '../../appStorage.js';
 import { handleVariantThreadsForDelete } from '../chat/deleteVariantThreadsFlow.js';
 import { STATUS_BADGE_CLASSES } from './statusStyles.js';
 import PreviewPane from './PreviewPane.jsx';
@@ -38,6 +39,13 @@ function ApplicationCard({ app, onRequestDelete }) {
   const [notes, setNotes] = useState(app.notes || '');
   const [showJd, setShowJd] = useState(false);
   const jd = app.jobId ? getJobDescription(app.jobId) : null;
+
+  // Latest note + app for the teardown handler below (its effect runs once, so
+  // a direct closure would capture stale values).
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+  const appRef = useRef(app);
+  appRef.current = app;
 
   // Re-seed local notes when switching between applications.
   useEffect(() => { setNotes(app.notes || ''); }, [app.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -54,6 +62,32 @@ function ApplicationCard({ app, onRequestDelete }) {
     const t = setTimeout(() => updateApplication(app.id, { notes }), 400);
     return () => clearTimeout(t);
   }, [notes, app.id, app.notes]);
+
+  // Synchronous teardown flush — the 400ms debounce still leaves a window where
+  // an edit lives only in local state. Persist the pending note when the card
+  // unmounts (Library dismissed) or the window is hidden/closed. On hide we
+  // also force appStorage to disk: main.js's own hidden-handler is registered
+  // first and runs before this one, so it would flush WITHOUT this just-written
+  // note otherwise.
+  useEffect(() => {
+    const flushPending = () => {
+      const a = appRef.current;
+      if (notesRef.current !== (a.notes || '')) {
+        updateApplication(a.id, { notes: notesRef.current });
+      }
+    };
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') {
+        flushPending();
+        appStorage.flush();
+      }
+    };
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      flushPending();
+    };
+  }, []);
 
   return (
     <div className="space-y-2 rounded-md border p-3">
