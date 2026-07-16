@@ -70,11 +70,16 @@ describe('registry CRUD', () => {
   });
 
   it('createProfile re-rolls a colliding generated id', () => {
-    // Deterministic generateProfileId: freeze time and step Math.random so
-    // the first roll collides with a seeded id, the second roll differs.
+    // Deterministic generateProfileId: freeze time and step crypto.getRandomValues
+    // so the first roll collides with a seeded id, the second roll differs.
     vi.spyOn(Date, 'now').mockReturnValue(1000000);
-    const rand = vi.spyOn(Math, 'random');
-    rand.mockReturnValueOnce(0.123456789).mockReturnValueOnce(0.123456789).mockReturnValueOnce(0.987654321);
+    let call = 0;
+    vi.spyOn(crypto, 'getRandomValues').mockImplementation((arr) => {
+      // Rolls #1 and #2 fill the SAME bytes (same id → collision); roll #3 differs.
+      const val = (++call <= 2) ? 111 : 222;
+      for (let i = 0; i < arr.length; i += 1) arr[i] = val;
+      return arr;
+    });
     try {
       const seeded = createProfile({ name: 'Seed' }); // uses roll #1
       const next = createProfile({ name: 'Next' });   // roll #2 collides, roll #3 wins
