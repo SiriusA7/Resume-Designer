@@ -8,6 +8,7 @@ import { importFullBackupFromEnvelope, exportFullBackup } from '../src/persisten
 import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY, PROFILES_KEY } from '../src/profileKeys.js';
 
 beforeEach(() => {
+  vi.restoreAllMocks(); // undo any Storage.prototype.setItem spy a prior test left installed
   __resetAppStorageForTests();
   localStorage.clear();
 });
@@ -289,6 +290,31 @@ describe('per-profile export/import', () => {
     const envelope = await readDownload();
     expect(envelope.keys['resume-designer-data']).toBe('{"variants":{"LIVE":{}}}');
     expect(envelope.keys['resume-designer-theme']).toBeUndefined();
+  });
+
+  it('rolls back a failed profile import so no partial workspace remains', async () => {
+    await seedTwoProfiles();
+    const before = loadRegistry().length;
+    const realSetItem = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(key, value) {
+      // Simulate quota hitting a bulky history key mid-import.
+      if (String(key).includes('resume-designer-history-')) throw new DOMException('quota', 'QuotaExceededError');
+      return realSetItem.call(this, key, value);
+    });
+    try {
+      expect(() => importProfileBackup({
+        backupFormat: 2, kind: 'profile', name: 'Imported', emoji: '🐢',
+        keys: { 'resume-designer-data': '{"variants":{}}', 'resume-designer-history-v1': 'big' },
+      })).toThrow(/quota/i);
+      // Registry entry rolled back…
+      expect(loadRegistry()).toHaveLength(before);
+      // …and the partially-written data key was cleaned up — only the two
+      // seeded profiles' data keys remain, none from the failed import.
+      const physicalDataKeys = Object.keys(localStorage).filter((k) => /^resume-p--.+--resume-designer-data$/.test(k));
+      expect(physicalDataKeys).toHaveLength(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('rejects non-profile envelopes and unowned keys', async () => {
