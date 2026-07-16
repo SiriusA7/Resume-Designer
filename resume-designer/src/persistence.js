@@ -328,9 +328,28 @@ export function exportAsMarkdown(data, filename) {
 // Round-tripping atomically as a single file keeps those refs
 // consistent — partial restores would risk dangling references.
 
-import { BACKUP_HISTORY_PREFIX, isOwnedKey, OPENROUTER_KEY_KEY } from './profileKeys.js';
+import {
+  BACKUP_HISTORY_PREFIX,
+  isOwnedKey,
+  OPENROUTER_KEY_KEY,
+  PROFILES_KEY,
+  ACTIVE_PROFILE_KEY,
+  splitPhysicalKey,
+  physicalKey,
+} from './profileKeys.js';
+import { loadRegistry, getActiveProfileId } from './profiles.js';
 
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
+
+// Shared machine-level keys that belong in a backup (parity with the old
+// BACKUP_FIXED_KEYS entries for theme/updates, plus the shared api key —
+// model-catalog and migration flags stay cache/flag-only, never backed up).
+const BACKUP_SHARED_KEYS = [
+  'resume-designer-theme',
+  'resume-designer-update-channel',
+  'resume-designer-auto-update-check',
+  OPENROUTER_KEY_KEY,
+];
 
 /**
  * Recognize a localStorage QuotaExceededError across browser engines.
@@ -374,7 +393,7 @@ function writeOwnedKeyOrSkip(key, value) {
     appStorage.setItem(key, value);
     return true;
   } catch (e) {
-    if (isQuotaExceededError(e) && key.startsWith(BACKUP_HISTORY_PREFIX)) {
+    if (isQuotaExceededError(e) && key.includes(BACKUP_HISTORY_PREFIX)) {
       console.warn(
         `[backup] Skipping history key "${key}" — storage quota exceeded.`
       );
@@ -384,32 +403,56 @@ function writeOwnedKeyOrSkip(key, value) {
   }
 }
 
-// Return all owned keys. appStorage.keys() already hands back a
-// snapshot array, so mutating storage while looping over it is safe.
-function collectOwnedKeys() {
-  return appStorage.keys().filter((k) => k && isOwnedKey(k));
+// Physical keys belonging to the ACTIVE profile, plus any unprefixed owned
+// keys (pre-adoption states), plus shared owned keys. This is the "what a
+// format-1 restore may remove/replace" set — other profiles are untouchable.
+function collectActiveOwnedKeys() {
+  const active = getActiveProfileId();
+  return appStorage.keys().filter((k) => {
+    if (!k) return false;
+    const split = splitPhysicalKey(k);
+    if (split) return split.profileId === active && isOwnedKey(split.logicalKey);
+    return isOwnedKey(k); // unprefixed per-profile keys AND shared owned keys (theme etc.)
+  });
 }
 
 /**
- * Write a JSON file containing every owned storage key/value.
+ * Write a JSON file containing the registry, shared keys, and every
+ * profile's owned keys (format 2). Pre-adoption unprefixed keys are
+ * impossible here (adoption runs before any UI), but shared owned keys
+ * (theme, update settings) route to the shared section.
  * Returns { keysExported, filename } for the caller to surface in UI.
  */
 export function exportFullBackup(filename) {
-  const keys = {};
-  for (const k of collectOwnedKeys()) {
-    const v = appStorage.getItem(k);
-    if (v !== null) keys[k] = v;
+  const profiles = {};
+  const shared = {};
+  for (const k of appStorage.keys()) {
+    if (!k) continue;
+    const split = splitPhysicalKey(k);
+    if (split && isOwnedKey(split.logicalKey)) {
+      const v = appStorage.getItem(k);
+      if (v !== null) ((profiles[split.profileId] ||= { keys: {} }).keys)[split.logicalKey] = v;
+    } else if (BACKUP_SHARED_KEYS.includes(k)) {
+      const v = appStorage.getItem(k);
+      if (v !== null) shared[k] = v;
+    }
   }
   const backup = {
-    backupFormat: 1,
+    backupFormat: 2,
+    kind: 'full',
     createdAt: new Date().toISOString(),
     source: 'in-app',
-    keys,
+    registry: loadRegistry() || [],
+    activeProfile: getActiveProfileId(),
+    shared,
+    profiles,
   };
   const stamp = new Date().toISOString().slice(0, 10);
   const name = filename || `resume-designer-backup-${stamp}.json`;
   downloadFile(JSON.stringify(backup, null, 2), name, 'application/json');
-  return { keysExported: Object.keys(keys).length, filename: name };
+  const keysExported = Object.values(profiles)
+    .reduce((n, p) => n + Object.keys(p.keys).length, Object.keys(shared).length);
+  return { keysExported, filename: name };
 }
 
 /**
@@ -439,11 +482,67 @@ function normalizeImportedValue(key, value) {
   return value;
 }
 
+function importFullBackupV2(parsed) {
+  const registry = Array.isArray(parsed.registry)
+    ? parsed.registry.filter((p) => p && typeof p.id === 'string' && p.id && !p.id.includes(':'))
+    : [];
+  if (!registry.length || !parsed.profiles || typeof parsed.profiles !== 'object') {
+    throw new Error('Invalid format-2 backup: missing registry or profiles.');
+  }
+  for (const [pid, entry] of Object.entries(parsed.profiles)) {
+    for (const [k, v] of Object.entries(entry?.keys || {})) {
+      if (typeof v !== 'string') throw new Error(`Invalid backup: ${pid}/"${k}" must be a string value.`);
+      if (!isOwnedKey(k)) throw new Error(`Invalid backup: unrecognized key "${k}".`);
+    }
+  }
+
+  // Clean slate across ALL namespaces (full restore replaces everything).
+  for (const k of appStorage.keys()) {
+    const split = splitPhysicalKey(k);
+    const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
+    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY || k === OPENROUTER_KEY_KEY) {
+      appStorage.removeItem(k);
+    }
+  }
+
+  appStorage.setItem(PROFILES_KEY, JSON.stringify(registry));
+  const active = registry.some((p) => p.id === parsed.activeProfile)
+    ? parsed.activeProfile : registry[0].id;
+  appStorage.setItem(ACTIVE_PROFILE_KEY, active);
+
+  for (const [k, v] of Object.entries(parsed.shared || {})) {
+    if (BACKUP_SHARED_KEYS.includes(k) && typeof v === 'string') appStorage.setItem(k, v);
+  }
+
+  // Same quota strategy as format 1, per profile: critical keys first,
+  // bulky history best-effort.
+  let keysImported = 0;
+  let historySkipped = 0;
+  for (const [pid, entry] of Object.entries(parsed.profiles)) {
+    if (!registry.some((p) => p.id === pid)) continue;
+    const entries = Object.entries(entry.keys || {});
+    const nonHistory = entries.filter(([k]) => !k.startsWith(BACKUP_HISTORY_PREFIX));
+    const history = entries.filter(([k]) => k.startsWith(BACKUP_HISTORY_PREFIX));
+    for (const [k, v] of nonHistory) {
+      appStorage.setItem(physicalKey(pid, k), normalizeImportedValue(k, v));
+      keysImported++;
+    }
+    for (const [k, v] of history) {
+      if (writeOwnedKeyOrSkip(physicalKey(pid, k), v)) keysImported++;
+      else historySkipped++;
+    }
+  }
+  return { keysImported, removedExistingKeys: 0, historySkipped };
+}
+
 export function importFullBackupFromEnvelope(parsed) {
+  if (parsed && parsed.backupFormat === 2 && parsed.kind === 'full') {
+    return importFullBackupV2(parsed);
+  }
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1").'
+      'Not a Resume Designer backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
     );
   }
   // Every value must be a string — that's what `appStorage.setItem`
@@ -455,9 +554,9 @@ export function importFullBackupFromEnvelope(parsed) {
     }
   }
 
-  // Clean slate: remove every existing owned key so the imported state
-  // is the canonical post-import state (no orphan keys from prior use).
-  const removed = collectOwnedKeys();
+  // Clean slate for the active profile only: remove its existing owned keys
+  // so the imported state is canonical without touching other profiles.
+  const removed = collectActiveOwnedKeys();
   for (const k of removed) appStorage.removeItem(k);
 
   // Two-pass write to handle the localStorage quota safely:
