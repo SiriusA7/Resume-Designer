@@ -239,6 +239,42 @@ describe('adoption migration', () => {
     }
   });
 
+  it('rolls back partial physical copies when adoption hits quota mid-copy (no leak)', async () => {
+    // Regression (PR #90 Codex P1): the copy DOUBLES storage, so a browser user
+    // near quota gets SOME namespaced duplicates written before a later setItem
+    // throws. Leaving them pins localStorage at quota (flush is a no-op in
+    // passthrough) and every restart re-fails — the unprefixed workspace can no
+    // longer save either. The failed copy must leave ZERO physical duplicates.
+    localStorage.setItem('resume-designer-data', '{"variants":{"KEEP":{}}}');
+    localStorage.setItem('resume-designer-job-descriptions', '[]');
+    const realSetItem = Storage.prototype.setItem;
+    let physWrites = 0;
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(key, value) {
+      // Let the FIRST physical copy land (a leaked duplicate), throw on the next.
+      if (String(key).startsWith('resume-p--') && ++physWrites >= 2) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      return realSetItem.call(this, key, value);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const id = await ensureProfilesInitialized();
+      expect(id).not.toBeNull();
+      // At least one physical copy was written before the throw…
+      expect(physWrites).toBeGreaterThanOrEqual(2);
+      // …yet none survive: the rollback removed every resume-p-- duplicate.
+      const leaked = Object.keys(localStorage).filter((k) => k.startsWith('resume-p--'));
+      expect(leaked).toEqual([]);
+      // Sources intact + adoption still pending for a later retry.
+      expect(localStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
+      expect(isAdoptionPending()).toBe(true);
+    } finally {
+      setItemSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
   it('keeps sources and the marker durable when adoption copies fail', async () => {
     const backend = makeBackend({ 'resume-designer-data': '{"variants":{}}' });
     backend.write.mockImplementation(async (key, value) => {
