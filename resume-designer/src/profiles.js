@@ -18,13 +18,23 @@ import {
 // key mapping never namespaces it.
 const PROFILE_ADOPTION_MARKER = 'resume-profile-adoption-pending';
 
-// True while a first-profile adoption is incomplete (marker persisted, mapping
-// left inactive — see ensureProfilesInitialized). The UI hides the profile
-// switcher in this recovery state: switching/creating a profile would change
-// the active id, and the next boot's resume would then move the still-unprefixed
-// live workspace into the WRONG profile, leaving the original one empty.
+// A degraded init can run mapping-off WITHOUT a persisted marker (the marker
+// write itself failed, or the resolver threw unexpectedly). The marker check
+// alone would then report "not pending" and unlock profile creation — which
+// would persist a fresh registry over the un-adopted unprefixed workspace and
+// hide it behind an empty namespace after reload. Session-scoped on purpose:
+// the next boot re-runs init and either succeeds or re-enters this state.
+let initDegraded = false;
+
+// True while a first-profile adoption is incomplete — marker persisted, OR
+// this session's init degraded without managing to persist one (see above).
+// Mapping is left inactive in both states (see ensureProfilesInitialized).
+// The UI hides the profile switcher and blocks create/import in this recovery
+// state: switching/creating a profile would change the active id, and the
+// next boot's resume would then move the still-unprefixed live workspace into
+// the WRONG profile, leaving the original one empty.
 export function isAdoptionPending() {
-  return appStorage.getItem(PROFILE_ADOPTION_MARKER) !== null;
+  return initDegraded || appStorage.getItem(PROFILE_ADOPTION_MARKER) !== null;
 }
 
 // A registry entry is valid iff id is strictly alphanumeric (anything else —
@@ -171,10 +181,12 @@ function rebuildRegistryFromKeys() {
  * — the app runs on the unprefixed workspace and a later boot retries.
  */
 export async function ensureProfilesInitialized() {
+  initDegraded = false;
   try {
     return await resolveActiveProfile();
   } catch (err) {
     console.error('[profiles] adoption failed unexpectedly; running on unprefixed data:', err);
+    initDegraded = true; // markerless recovery state — see isAdoptionPending
     setProfileMapping(null);
     return null;
   }
@@ -192,6 +204,7 @@ async function resolveActiveProfile() {
     appStorage.setItem(PROFILE_ADOPTION_MARKER, '1');
     if (!(await appStorage.flush())) {
       appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+      initDegraded = true; // markerless recovery state — see isAdoptionPending
       console.error('[profiles] adoption aborted: marker write did not reach disk');
       return null;
     }

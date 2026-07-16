@@ -415,6 +415,28 @@ describe('adoption migration', () => {
     }
   });
 
+  it('reports adoption pending (in-memory) after a markerless degraded init', async () => {
+    // The marker write itself threw, so NO marker persisted — the in-memory
+    // degraded flag must still lock profile creation: a later create would
+    // persist a fresh registry over the un-adopted unprefixed workspace and
+    // hide it behind an empty namespace after reload.
+    localStorage.setItem('resume-designer-data', '{"variants":{"KEEP":{}}}');
+    const realSetItem = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(key, value) {
+      if (key === 'resume-profile-adoption-pending') throw new DOMException('quota', 'QuotaExceededError');
+      return realSetItem.call(this, key, value);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await ensureProfilesInitialized();
+      expect(appStorage.getItem('resume-profile-adoption-pending')).toBeNull();
+      expect(isAdoptionPending()).toBe(true);
+    } finally {
+      spy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
   it('adopts existing unprefixed data into a first profile named from the user profile', async () => {
     localStorage.setItem('resume-designer-data', JSON.stringify({
       variants: {}, currentVariantId: null,
