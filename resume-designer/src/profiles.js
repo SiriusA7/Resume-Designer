@@ -13,6 +13,15 @@ import {
 // __adoption_pending__) so backups never carry it.
 const PROFILE_ADOPTION_MARKER = '__profile_adoption_pending__';
 
+// True while a first-profile adoption is incomplete (marker persisted, mapping
+// left inactive — see ensureProfilesInitialized). The UI hides the profile
+// switcher in this recovery state: switching/creating a profile would change
+// the active id, and the next boot's resume would then move the still-unprefixed
+// live workspace into the WRONG profile, leaving the original one empty.
+export function isAdoptionPending() {
+  return appStorage.getItem(PROFILE_ADOPTION_MARKER) !== null;
+}
+
 // A registry entry is valid iff id is strictly alphanumeric (anything else —
 // including '-' — could break the physical-key `--` separator parsing) and
 // name is a string.

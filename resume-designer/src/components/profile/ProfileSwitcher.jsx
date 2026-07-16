@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 
 import { appStorage } from '../../appStorage.js';
-import { loadRegistry, getActiveProfileId, setActiveProfile, createProfile } from '../../profiles.js';
+import { loadRegistry, getActiveProfileId, setActiveProfile, createProfile, isAdoptionPending } from '../../profiles.js';
 import { store } from '../../store.js';
 import { flushPendingProfileSave } from '../../userProfilePanel.js';
 
@@ -56,7 +56,10 @@ export function ProfileSwitcher() {
 
   const activeId = getActiveProfileId();
   const active = registry.find((p) => p.id === activeId);
-  if (!active || registry.length === 0) return null; // pre-adoption boot: hide
+  // Hide during the one-time boot migration (no registry / no active match) AND
+  // while an adoption is mid-recovery — switching profiles then would move the
+  // unprefixed live workspace into the wrong namespace on the next boot.
+  if (!active || registry.length === 0 || isAdoptionPending()) return null;
 
   const refresh = () => setRegistry(loadRegistry() || []);
 

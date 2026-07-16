@@ -5,7 +5,7 @@ import {
 import {
   loadRegistry, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile,
-  ensureProfilesInitialized, extractSharedApiKey,
+  ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending,
 } from '../src/profiles.js';
 import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 import { getSettings, saveSettings } from '../src/persistence.js';
@@ -160,6 +160,24 @@ describe('adoption migration', () => {
     expect(backend.files.has('resume-designer-data')).toBe(false);
     expect(backend.files.has('resume-designer-job-descriptions')).toBe(false);
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+  });
+
+  it('reports adoption pending while the marker is present (drives switcher hiding)', async () => {
+    localStorage.setItem('resume-designer-data', '{"variants":{"KEEP":{}}}');
+    const realSetItem = Storage.prototype.setItem;
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItemMock(key, value) {
+      if (String(key).startsWith('resume-p--')) throw new DOMException('quota', 'QuotaExceededError');
+      return realSetItem.call(this, key, value);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(isAdoptionPending()).toBe(false); // nothing started yet
+      await ensureProfilesInitialized();        // fails mid-adoption, marker persists
+      expect(isAdoptionPending()).toBe(true);
+    } finally {
+      setItemSpy.mockRestore();
+      errSpy.mockRestore();
+    }
   });
 
   it('survives a passthrough localStorage quota error during adoption', async () => {
