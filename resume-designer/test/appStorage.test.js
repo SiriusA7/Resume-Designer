@@ -68,6 +68,30 @@ describe('cached mode (disk backend)', () => {
     expect(backend.files.size).toBe(0);
   });
 
+  it('coalesces keystroke-rate writes across turns into far fewer disk writes', async () => {
+    // The application-notes field calls setItem() on every keystroke. The
+    // write-behind throttle must collapse a typing burst into a handful of disk
+    // writes (bounded by DRAIN_COALESCE_MS), NOT one serialized write per
+    // keystroke — otherwise a long note queues hundreds of atomic writes and
+    // the native close handler waits on the whole chain.
+    vi.useFakeTimers();
+    try {
+      const backend = makeBackend();
+      await initAppStorage({ backend });
+      for (let i = 1; i <= 10; i++) {
+        appStorage.setItem('resume-app-notes', 'x'.repeat(i)); // one per keystroke
+        await vi.advanceTimersByTimeAsync(40); // < the coalescing window
+      }
+      await appStorage.flush();
+      // 10 keystrokes ≈ 400ms → a couple of throttled writes, not ten, and the
+      // final value is durable on disk.
+      expect(backend.write.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(backend.files.get('resume-app-notes')).toBe('x'.repeat(10));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('clear() empties cache and backend', async () => {
     const backend = makeBackend({ a: '1', b: '2' });
     await initAppStorage({ backend });

@@ -60,6 +60,16 @@ let cache = new Map();
 let dirty = new Map(); // key -> 'write' | 'delete'
 let drainScheduled = false;
 let chain = Promise.resolve();
+// Write-behind coalescing window. setItem updates the cache synchronously
+// (close-safe) and marks the key dirty; the disk write is deferred this long so
+// a burst of rapid writes — e.g. typing into the application-notes field, which
+// calls setItem on every keystroke — collapses into ONE backend write of the
+// latest value instead of one write per keystroke. The drainScheduled guard
+// makes this a throttle, not a debounce: a drain always lands within this window
+// of the first dirty write even during continuous typing (bounded durability
+// lag), and flush() still forces an immediate synchronous drain for every
+// durability barrier (close, visibilitychange, import, print, profile ops).
+const DRAIN_COALESCE_MS = 250;
 let failureToastShown = false;
 // Monotonic count of permanently-failed disk writes (after retry). flush()
 // compares this before/after awaiting the write chain to tell durability
@@ -139,7 +149,7 @@ function reportWriteFailure(key, err) {
 function scheduleDrain() {
   if (drainScheduled || readOnly) return;
   drainScheduled = true;
-  setTimeout(drain, 0);
+  setTimeout(drain, DRAIN_COALESCE_MS);
 }
 
 function drain() {

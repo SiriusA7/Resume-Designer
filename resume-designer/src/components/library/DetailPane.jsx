@@ -82,8 +82,10 @@ function ApplicationCard({ app, onRequestDelete }) {
         // Persist on every edit so the note ALWAYS lives in appStorage — the
         // only way to survive a native window close, where React never unmounts
         // and no reliable pre-destroy visibilitychange fires, so the app's own
-        // close-flush (appStorage.flush) is what saves it. updateApplication is
-        // a cheap in-memory update + debounced disk write.
+        // close-flush (appStorage.flush) is what saves it. updateApplication is a
+        // cheap synchronous in-memory update; appStorage coalesces the resulting
+        // disk write (write-behind, DRAIN_COALESCE_MS), so a burst of keystrokes
+        // collapses into one backend write, not one per keystroke.
         onChange={(e) => { const v = e.target.value; setNotes(v); updateApplication(app.id, { notes: v }); }}
         placeholder="Notes (e.g. recruiter said reapply in 6 months)"
         className="min-h-[52px] text-[12.5px]"
