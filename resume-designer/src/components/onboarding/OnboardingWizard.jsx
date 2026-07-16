@@ -136,6 +136,17 @@ export default function OnboardingWizard() {
     }, 300);
   }, []);
 
+  // Explicit user dismissal (the header X): make it DURABLE by recording
+  // completion — otherwise an empty profile whose wizard was cancelled
+  // re-opens it on every future launch (shouldShowOnboarding sees no user
+  // variants). The empty-state canvas takes over from here. Programmatic
+  // closes (rd:close-onboarding) intentionally don't stamp: they aren't a
+  // user choice.
+  const dismiss = useCallback(() => {
+    completeOnboarding();
+    doClose();
+  }, [doClose]);
+
   // Wizard open/close bridge events.
   useEffect(() => {
     const onOpen = (e) => doOpen(e.detail || {});
@@ -445,7 +456,7 @@ export default function OnboardingWizard() {
                 id="wizard-close-btn"
                 title="Cancel"
                 aria-label="Cancel"
-                onClick={doClose}
+                onClick={dismiss}
               >
                 <X className="size-4" />
               </Button>

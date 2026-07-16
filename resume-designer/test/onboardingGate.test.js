@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
-import { whenOnboardingClosed } from '../src/onboarding.js';
+import { whenOnboardingClosed, shouldShowOnboarding } from '../src/onboarding.js';
 
 // Regression: the update / what's-new dialog used to open while the onboarding
 // wizard was on screen. The Radix Dialog pointer-locks <body>, so the wizard
@@ -41,5 +41,39 @@ describe('whenOnboardingClosed', () => {
     overlay.classList.remove('show');
     await vi.advanceTimersByTimeAsync(500);
     expect(settled).toBe(true);
+  });
+});
+
+// Regression (PR #89 finding 27): dismissing the wizard in an empty secondary
+// profile wasn't durable — shouldShowOnboarding() returned true for a
+// zero-variant profile BEFORE consulting the completed flag, so every later
+// launch into that profile re-opened the wizard. The flag now wins outright.
+describe('shouldShowOnboarding durability', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('stays hidden after completion even with zero variants', () => {
+    localStorage.setItem('resume-designer-onboarding-complete', 'true');
+    expect(shouldShowOnboarding()).toBe(false);
+  });
+
+  it('still shows on a genuine fresh install (no flag, no variants)', () => {
+    expect(shouldShowOnboarding()).toBe(true);
+  });
+
+  it('still shows when only built-in variants exist and no flag is set', () => {
+    localStorage.setItem('resume-designer-data', JSON.stringify({
+      variants: { b1: { builtIn: true, data: {} } },
+    }));
+    expect(shouldShowOnboarding()).toBe(true);
+  });
+
+  it('stays hidden when completed with only built-in variants', () => {
+    localStorage.setItem('resume-designer-onboarding-complete', 'true');
+    localStorage.setItem('resume-designer-data', JSON.stringify({
+      variants: { b1: { builtIn: true, data: {} } },
+    }));
+    expect(shouldShowOnboarding()).toBe(false);
   });
 });

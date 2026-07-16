@@ -27,14 +27,18 @@ const ONBOARDING_KEY = 'resume-designer-onboarding-complete';
  * @returns {boolean}
  */
 export function shouldShowOnboarding() {
+  // Honor the "completed" flag FIRST — completion (including an explicit
+  // dismissal via the wizard's X) is durable even for a profile with no user
+  // variants yet. Checked before the zero-variant test below, which would
+  // otherwise re-open the wizard on every launch into a dismissed empty
+  // profile; the empty-state canvas covers that case instead.
+  if (appStorage.getItem(ONBOARDING_KEY) === 'true') return false;
+
   const variants = getVariants();
   const variantList = Object.values(variants);
 
   // Always show on a fresh install (no variants at all).
   if (variantList.length === 0) return true;
-
-  // Honor the "completed" flag.
-  if (appStorage.getItem(ONBOARDING_KEY) === 'true') return false;
 
   // Show if only built-in variants exist (no user-created ones).
   return variantList.every((v) => v.builtIn);
