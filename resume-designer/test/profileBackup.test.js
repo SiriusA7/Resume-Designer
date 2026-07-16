@@ -51,6 +51,25 @@ describe('format-2 export/restore', () => {
     expect(localStorage.getItem(ACTIVE_PROFILE_KEY)).toBe(ashId);
   });
 
+  it('round-trips a freshly created profile that has no stored keys yet', async () => {
+    // A keyless profile exports with NO profiles entry (exportFullBackup only
+    // creates one per observed physical key) — the app's own backup must
+    // still restore, with the empty profile surviving in the registry.
+    const { ashId } = await seedTwoProfiles();
+    const empty = createProfile({ name: 'Fresh', emoji: '🌱' });
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+    expect(envelope.profiles[empty.id]).toBeUndefined();
+    expect(envelope.registry.map((p) => p.id)).toContain(empty.id);
+
+    localStorage.clear();
+    __resetAppStorageForTests();
+    expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
+    expect(loadRegistry()).toHaveLength(3);
+    expect(localStorage.getItem(ACTIVE_PROFILE_KEY)).toBe(ashId);
+  });
+
   it('rejects a malformed profile before touching existing storage', () => {
     localStorage.setItem('resume-designer-theme', 'keep-me');
 

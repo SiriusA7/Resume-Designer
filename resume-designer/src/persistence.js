@@ -497,6 +497,10 @@ function importFullBackupV2(parsed) {
   const profileEntries = [];
   for (const { id: pid } of registry) {
     const entry = parsed.profiles[pid];
+    // A registry profile with no stored keys yet exports with NO profiles
+    // entry at all (exportFullBackup only creates one per observed physical
+    // key) — a missing entry is a valid empty workspace, not corruption.
+    if (entry === undefined) continue;
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new Error(`Invalid format-2 backup: profile "${pid}" must be an object.`);
     }
