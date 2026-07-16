@@ -42,6 +42,19 @@ function ApplicationCard({ app, onRequestDelete }) {
   // Re-seed local notes when switching between applications.
   useEffect(() => { setNotes(app.notes || ''); }, [app.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Persist edits AS THEY HAPPEN (debounced), not only onBlur. Until blur the
+  // note lives solely in this component's local state, so quitting or reloading
+  // while the textarea still has focus loses the last edit — the native
+  // close-flush writes appStorage to disk but can't save what was never written
+  // to appStorage. The `notes === app.notes` guard makes the re-seed above (and
+  // the post-save prop update) a no-op; the cleanup cancels a stale timer when
+  // switching apps before it can save into the wrong one.
+  useEffect(() => {
+    if (notes === (app.notes || '')) return undefined;
+    const t = setTimeout(() => updateApplication(app.id, { notes }), 400);
+    return () => clearTimeout(t);
+  }, [notes, app.id, app.notes]);
+
   return (
     <div className="space-y-2 rounded-md border p-3">
       <div className="flex items-start justify-between gap-2">
