@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
-import { justUpdated, mergeReleases, normalizeRelease } from '../src/changelogService.js';
+import {
+  justUpdated,
+  mergeReleases,
+  normalizeRelease,
+  splitReleaseBody,
+} from '../src/changelogService.js';
 
 describe('justUpdated', () => {
   it('true when the seen version differs from current', () => {
@@ -73,5 +78,32 @@ describe('mergeReleases', () => {
   it('sorts unparseable versions last', () => {
     const out = mergeReleases([], [{ version: 'next' }, { version: '1.0.0' }]);
     expect(out.map((r) => r.version)).toEqual(['1.0.0', 'next']);
+  });
+});
+
+describe('splitReleaseBody', () => {
+  const digest = '## Resume Designer 1.16.0\n\n- New: a Library for your résumés.\n';
+  const grouped = '### ✨ New features\n**Library**\n- Add tiered library search module\n';
+  const body = `${digest}\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n\n${grouped}\n</details>`;
+
+  it('splits a marked body into digest summary and full log', () => {
+    const r = splitReleaseBody(body);
+    expect(r.summary).toBe(digest.trim());
+    expect(r.full).toContain('Add tiered library search module');
+    expect(r.full).not.toContain('<details>');
+    expect(r.full).not.toContain('</details>');
+  });
+
+  it('returns summary === full for unmarked (legacy) bodies', () => {
+    const r = splitReleaseBody(digest);
+    expect(r.summary).toBe(digest);
+    expect(r.full).toBe(digest);
+  });
+
+  it('normalizeRelease carries the split through', () => {
+    const rel = normalizeRelease({ tag_name: 'v1.16.0', published_at: 'd', body });
+    expect(rel.version).toBe('1.16.0');
+    expect(rel.summary).not.toBe(rel.full);
+    expect(rel.full).toContain('Add tiered library search module');
   });
 });

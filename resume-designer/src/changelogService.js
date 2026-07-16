@@ -1,7 +1,7 @@
 /**
  * Changelog data helpers — pure where possible (unit-tested) plus a GitHub
- * Releases fetch. Phase 1 sources history from release bodies; Phase 2 will
- * prefer a structured changelog.json asset (see the changelog plan, Task 10).
+ * Releases fetch. The <!-- full-log --> body marker is the structured source
+ * for splitting each release's digest summary from its full grouped log.
  *
  * Kept free of app imports at module load (the post-update entry point below
  * dynamic-imports persistence/native) so the unit tests import cleanly.
@@ -38,14 +38,35 @@ function versionFromBody(body) {
   return m ? m[1] : null;
 }
 
-// A GitHub release payload → our shape. Phase 1: summary === full === body.
+// Split point the release workflow writes between the digest and the
+// <details>-wrapped full grouped log (see release.yml "Finalize release
+// notes and body"). Legacy bodies have no marker → summary === full,
+// which is exactly the pre-digest behavior everywhere downstream.
+const FULL_LOG_MARKER = '<!-- full-log -->';
+
+export function splitReleaseBody(body) {
+  const text = String(body || '');
+  const i = text.indexOf(FULL_LOG_MARKER);
+  if (i === -1) return { summary: text, full: text };
+  const summary = text.slice(0, i).trim();
+  const full = text.slice(i + FULL_LOG_MARKER.length)
+    .replace(/<details>\s*<summary>[^<]*<\/summary>/i, '')
+    .replace(/<\/details>\s*$/i, '')
+    .trim();
+  // A malformed tail (empty full) degrades to the whole body rather than
+  // rendering an empty expander.
+  return { summary: summary || text, full: full || text };
+}
+
+// A GitHub release payload → our shape.
 export function normalizeRelease(release) {
   const body = release?.body || '';
+  const { summary, full } = splitReleaseBody(body);
   return {
     version: versionFromBody(body) || stripV(release?.tag_name),
     date: release?.published_at || null,
-    summary: body,
-    full: body,
+    summary,
+    full,
   };
 }
 
