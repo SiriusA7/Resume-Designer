@@ -1,7 +1,7 @@
 /**
  * Profile registry + lifecycle. Storage-only module: imports the appStorage
  * facade and pure key helpers, no DOM and no React, so vitest imports it
- * directly. The switch/reload orchestration lives in the UI (ProfileSwitcher).
+ * directly. The switch/reload orchestration lives in the UI (AccountSection).
  */
 import { appStorage, setProfileMapping } from './appStorage.js';
 import {
