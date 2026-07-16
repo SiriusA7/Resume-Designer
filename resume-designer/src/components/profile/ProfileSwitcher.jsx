@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 
 import { appStorage } from '../../appStorage.js';
 import { loadRegistry, getActiveProfileId, setActiveProfile, createProfile } from '../../profiles.js';
+import { store } from '../../store.js';
 import { flushPendingProfileSave } from '../../userProfilePanel.js';
 
 // Flush pending saves, repoint the active profile, reload. The reload is the
@@ -23,6 +24,7 @@ import { flushPendingProfileSave } from '../../userProfilePanel.js';
 // (same pattern as the backup-restore reload in backupFlow.js). If the pre-switch
 // flush isn't durable we abort so the current profile's latest edits aren't lost.
 async function switchTo(id) {
+  store.saveNow();
   flushPendingProfileSave();
   const durable = await appStorage.flush();
   if (!durable) {

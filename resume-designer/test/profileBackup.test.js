@@ -47,7 +47,8 @@ describe('format-2 export/restore', () => {
 
     localStorage.clear();
     __resetAppStorageForTests();
-    importFullBackupFromEnvelope(envelope);
+    const result = importFullBackupFromEnvelope(envelope);
+    expect(result.keysImported).toBeGreaterThan(0);
     expect(loadRegistry()).toHaveLength(2);
     expect(localStorage.getItem(`resume-p:${partnerId}:resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
     expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
@@ -83,6 +84,36 @@ describe('format-2 export/restore', () => {
       activeProfile: 'p',
       shared: {},
       profiles: { p: null },
+    })).toThrow(/invalid format-2 backup/i);
+
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+
+  it('rejects a non-string registry name before touching existing storage', () => {
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'p', name: 42 }],
+      activeProfile: 'p',
+      shared: {},
+      profiles: {},
+    })).toThrow(/invalid format-2 backup/i);
+
+    expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+
+  it('rejects duplicate registry ids before touching existing storage', () => {
+    localStorage.setItem('resume-designer-theme', 'keep-me');
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'same', name: 'One' }, { id: 'same', name: 'Two' }],
+      activeProfile: 'same',
+      shared: {},
+      profiles: {},
     })).toThrow(/invalid format-2 backup/i);
 
     expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');

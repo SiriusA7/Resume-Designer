@@ -483,10 +483,15 @@ function normalizeImportedValue(key, value) {
 }
 
 function importFullBackupV2(parsed) {
-  const registry = Array.isArray(parsed.registry)
-    ? parsed.registry.filter((p) => p && typeof p.id === 'string' && p.id && !p.id.includes(':'))
-    : [];
-  if (!registry.length || !parsed.profiles || typeof parsed.profiles !== 'object') {
+  const registry = parsed.registry;
+  const validRegistry = Array.isArray(registry) && registry.length > 0
+    && registry.every((p) => p && typeof p.id === 'string' && p.id !== ''
+      && !p.id.includes(':') && typeof p.name === 'string');
+  const uniqueIds = validRegistry && new Set(registry.map((p) => p.id)).size === registry.length;
+  if (!validRegistry || !uniqueIds) {
+    throw new Error('Invalid format-2 backup: registry entries must have unique valid ids and string names.');
+  }
+  if (!parsed.profiles || typeof parsed.profiles !== 'object') {
     throw new Error('Invalid format-2 backup: missing registry or profiles.');
   }
 

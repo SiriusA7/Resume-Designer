@@ -197,13 +197,23 @@ export async function importBackupFromFile(file) {
     } catch (_) {
       throw new Error('Selected file is not valid JSON.');
     }
-    if (!preview || preview.backupFormat !== 1 || !preview.keys) {
+    const isFormat1 = preview?.backupFormat === 1 && preview.keys;
+    const isFormat2Full = preview?.backupFormat === 2 && preview.kind === 'full';
+    if (!isFormat1 && !isFormat2Full) {
       throw new Error('Not a Resume Designer backup file.');
     }
-    const incoming = Object.keys(preview.keys).length;
+    const incoming = isFormat1
+      ? Object.keys(preview.keys).length
+      : Object.values(preview.profiles || {}).reduce(
+          (count, entry) => count + Object.keys(entry?.keys || {}).length,
+          Object.keys(preview.shared || {}).length
+        );
+    const profileNote = isFormat2Full && Array.isArray(preview.registry)
+      ? ` across ${preview.registry.length} ${preview.registry.length === 1 ? 'profile' : 'profiles'}`
+      : '';
     const ok = confirm(
       `Restore from backup?\n\n` +
-        `This backup contains ${incoming} keys ` +
+        `This backup contains ${incoming} keys${profileNote} ` +
         `(created ${preview.createdAt || 'unknown date'}).\n\n` +
         `Your current resumes, job descriptions, history, and ` +
         `settings will be REPLACED.\n\n` +

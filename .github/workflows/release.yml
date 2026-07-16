@@ -565,7 +565,8 @@ jobs:
           body_path: release-body.md
           prerelease: ${{ needs.decide.outputs.channel == 'next' }}
           make_latest: ${{ needs.decide.outputs.channel != 'next' }}
-          generate_release_notes: ${{ needs.decide.outputs.channel != 'next' }}
+          # The body already carries the digest + grouped log; generated notes duplicate it and break body parsing.
+          generate_release_notes: false
           files: |
             release-flat/*.dmg
             release-flat/*.app.tar.gz

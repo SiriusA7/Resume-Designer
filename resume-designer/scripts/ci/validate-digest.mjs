@@ -31,6 +31,9 @@ export function validateDigest(text, version) {
     return { ok: false, reason: 'sentinel appears before the end' };
   }
   const body = content.slice(0, -1);
+  if (body.some((l) => l.includes('<!--'))) {
+    return { ok: false, reason: 'digest must not contain HTML comments/markers' };
+  }
 
   const headingRe = new RegExp(`^##\\s+Resume Designer\\s+${escapeRe(String(version))}$`);
   if (!headingRe.test(body[0] || '')) {

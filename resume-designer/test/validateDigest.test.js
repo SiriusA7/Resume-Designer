@@ -53,6 +53,22 @@ describe('validateDigest', () => {
 });
 
 describe('validateDigest hardening', () => {
+  it('rejects a full-log marker embedded in a bullet', () => {
+    const sneaky = [`## Resume Designer ${V}`, '',
+      '- Something useful <!-- full-log --> with hidden structure.', '', SENTINEL, ''].join('\n');
+    const r = validateDigest(sneaky, V);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/HTML comments\/markers/i);
+  });
+
+  it('rejects an arbitrary HTML comment embedded in a bullet', () => {
+    const sneaky = [`## Resume Designer ${V}`, '',
+      '- Something useful <!-- x --> with a comment.', '', SENTINEL, ''].join('\n');
+    const r = validateDigest(sneaky, V);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/HTML comments\/markers/i);
+  });
+
   it('rejects an inline sentinel embedded in a bullet', () => {
     const sneaky = [`## Resume Designer ${V}`, '',
       `- Something something ${SENTINEL} mid-line.`, '', SENTINEL, ''].join('\n');
