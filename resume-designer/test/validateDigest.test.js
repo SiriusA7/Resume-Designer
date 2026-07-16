@@ -84,6 +84,22 @@ describe('validateDigest hardening', () => {
     expect(validateDigest(tabbed, V).ok).toBe(false);
   });
 
+  it('emits normalized bullets so indentation cannot ship as a code block', () => {
+    // The AI indented every bullet by four spaces. Validation trims for the
+    // checks, but the OLD emit path re-used the raw lines — Markdown renders a
+    // 4-space "- " line as a code block, silently breaking the digest. The
+    // emitted notes must carry no line indented before its bullet marker.
+    const indented = [`## Resume Designer ${V}`, '',
+      '    - Indented bullet one.',
+      '    - Indented bullet two.',
+      '', SENTINEL, ''].join('\n');
+    const r = validateDigest(indented, V);
+    expect(r.ok).toBe(true);
+    expect(r.notes.split('\n').every((l) => !/^\s+[-*]\s/.test(l))).toBe(true);
+    expect(r.notes).toContain('- Indented bullet one.');
+    expect(r.notes).not.toContain('    - Indented');
+  });
+
   it('rejects a non-bullet line (prose / injection) between heading and sentinel', () => {
     const withProse = [`## Resume Designer ${V}`, '',
       '- New: a Library for your résumés.',

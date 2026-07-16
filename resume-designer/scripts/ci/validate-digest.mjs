@@ -53,11 +53,14 @@ export function validateDigest(text, version) {
     return { ok: false, reason: `${bulletLines.length} bullets — digest must have at most ${MAX_BULLETS}` };
   }
 
-  const notes = lines
-    .filter((l) => l.trim() !== SENTINEL)
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim() + '\n';
+  // Emit the VALIDATED, normalized lines — never the raw input. The checks
+  // above run on trimmed `content`, so raw lines carrying leading whitespace
+  // (e.g. an AI that indents its bullets by four spaces) would pass validation
+  // yet ship verbatim — and Markdown renders an indented "- " line as a code
+  // block, not a bullet, silently violating the flat-digest contract. Rebuild
+  // from `body` so the published notes are exactly what was checked: heading,
+  // blank line, then the flat bullet list.
+  const notes = `${body[0]}\n\n${body.slice(1).join('\n')}\n`;
   return { ok: true, notes };
 }
 
