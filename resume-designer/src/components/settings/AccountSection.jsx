@@ -1,10 +1,14 @@
 import { useRef, useState } from 'react';
-import { Check, Download, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
+import { Check, Download, MoreHorizontal, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
 import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
@@ -43,11 +47,14 @@ function StatTile({ value, label, hint }) {
   );
 }
 
-function Avatar({ name }) {
+function Avatar({ name, className }) {
   return (
     <span
       aria-hidden
-      className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold tracking-tight text-primary"
+      className={cn(
+        'flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold tracking-tight text-primary',
+        className,
+      )}
     >
       {profileInitials(name)}
     </span>
@@ -82,6 +89,14 @@ export function AccountSection() {
   const adopting = isAdoptionPending();
 
   const refresh = () => setRegistry(loadRegistry() || []);
+
+  // The active profile renders as one distinct card; everyone else as compact
+  // rows in a capped scroll list — "which profile am I in?" is answerable at a
+  // glance and ten profiles don't swallow the tab. `current` can be null
+  // mid-recovery (active id not in a rebuilt registry); everything then
+  // renders as switchable rows, which is the honest state.
+  const current = registry.find((p) => p.id === activeId) || null;
+  const others = registry.filter((p) => p.id !== activeId);
 
   // Stats for the active workspace — read on render (the section mounts when the
   // user opens the Account tab, so these are fresh each visit).
@@ -170,64 +185,128 @@ export function AccountSection() {
           title="Profiles"
           description="Separate workspaces — each keeps its own résumés, job descriptions, applications, and chats. Switch to help someone else apply without mixing your data."
         />
-        <ul className="space-y-1.5">
-          {registry.map((p) => (
-            <li key={p.id} className="flex items-center gap-2.5 rounded-lg border px-3 py-2">
-              {editingId === p.id ? (
-                <>
-                  <Avatar name={draftName || p.name} />
+        {current && (
+          <div>
+            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Current profile</div>
+            <div className="rounded-lg border border-primary/25 bg-primary/5 px-3.5 py-3">
+              {editingId === current.id ? (
+                <div className="flex items-center gap-2.5">
+                  <Avatar name={draftName || current.name} className="size-9 text-[12.5px]" />
                   <Input
                     className="h-8 flex-1"
                     value={draftName}
                     autoFocus
                     onChange={(e) => setDraftName(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') saveRename(p.id);
+                      if (e.key === 'Enter') saveRename(current.id);
                       if (e.key === 'Escape') setEditingId(null);
                     }}
                   />
-                  <Button size="sm" className="h-8" onClick={() => saveRename(p.id)}>Save</Button>
-                </>
+                  <Button size="sm" className="h-8" onClick={() => saveRename(current.id)}>Save</Button>
+                </div>
               ) : (
-                <>
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:opacity-100"
-                    onClick={() => switchTo(p.id)}
-                    disabled={p.id === activeId || adopting}
-                    title={p.id === activeId ? 'Current profile' : (adopting ? 'Finish setup before switching' : `Switch to ${p.name}`)}
-                  >
-                    <Avatar name={p.name} />
-                    <span className="min-w-0 truncate text-[13.5px] font-medium">{p.name}</span>
-                    {p.id === activeId
-                      ? <span className="ml-1 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">Current</span>
-                      : <span className="text-[11.5px] text-muted-foreground">Switch</span>}
-                  </button>
-                  <Button
-                    variant="ghost" size="icon" className="size-8" title="Rename"
-                    onClick={() => { setEditingId(p.id); setDraftName(p.name); }}
-                  >
-                    <Pencil className="size-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost" size="icon" className="size-8" title="Export this profile"
-                    onClick={() => onExport(p)}
-                  >
-                    <Download className="size-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost" size="icon" className="size-8 text-muted-foreground hover:text-destructive"
-                    title={p.id === activeId ? 'Switch away before deleting' : (registry.length <= 1 ? 'Cannot delete the last profile' : 'Delete')}
-                    disabled={p.id === activeId || registry.length <= 1}
-                    onClick={() => onDelete(p)}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                </>
+                <div className="flex items-center gap-3">
+                  <Avatar name={current.name} className="size-9 text-[12.5px]" />
+                  {/* The name is the only shrinkable item in this row — the
+                      "current" semantics live in the section label above, so
+                      no pill/actions can crush it at narrow widths. */}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[14px] font-semibold">{current.name}</div>
+                    <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                      Everything you see and edit belongs to this profile.
+                    </p>
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="size-8 shrink-0" title="Profile actions">
+                        <MoreHorizontal className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => { setEditingId(current.id); setDraftName(current.name); }}>
+                        <Pencil className="size-3.5 shrink-0" />
+                        Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => onExport(current)}>
+                        <Download className="size-3.5 shrink-0" />
+                        Export
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               )}
-            </li>
-          ))}
-        </ul>
+            </div>
+          </div>
+        )}
+
+        {others.length > 0 && (
+          <div className={current ? 'mt-4' : undefined}>
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Other profiles</span>
+              <span className="text-[11.5px] tabular-nums text-muted-foreground">{others.length}</span>
+            </div>
+            <ul className="max-h-56 space-y-1 overflow-y-auto pr-0.5">
+              {others.map((p) => (
+                <li key={p.id} className="flex items-center gap-2.5 rounded-md border px-2.5 py-1.5">
+                  {editingId === p.id ? (
+                    <>
+                      <Avatar name={draftName || p.name} className="size-6 text-[10px]" />
+                      <Input
+                        className="h-7 flex-1"
+                        value={draftName}
+                        autoFocus
+                        onChange={(e) => setDraftName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveRename(p.id);
+                          if (e.key === 'Escape') setEditingId(null);
+                        }}
+                      />
+                      <Button size="sm" className="h-7" onClick={() => saveRename(p.id)}>Save</Button>
+                    </>
+                  ) : (
+                    <>
+                      <Avatar name={p.name} className="size-6 text-[10px]" />
+                      <span className="min-w-0 flex-1 truncate text-[13px]">{p.name}</span>
+                      <Button
+                        variant="outline" size="sm" className="h-7 px-2.5 text-[12px]"
+                        disabled={adopting}
+                        title={adopting ? 'Finish setup before switching' : `Switch to ${p.name}`}
+                        onClick={() => switchTo(p.id)}
+                      >
+                        Switch
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="size-7" title="More actions">
+                            <MoreHorizontal className="size-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={() => { setEditingId(p.id); setDraftName(p.name); }}>
+                            <Pencil className="size-3.5 shrink-0" />
+                            Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => onExport(p)}>
+                            <Download className="size-3.5 shrink-0" />
+                            Export
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onSelect={() => onDelete(p)}
+                          >
+                            <Trash2 className="size-3.5 shrink-0" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="mt-3 flex items-center gap-2">
           {adding ? (
