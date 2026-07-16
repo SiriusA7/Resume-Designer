@@ -47,53 +47,54 @@ function saveRegistry(registry) {
   appStorage.setItem(PROFILES_KEY, JSON.stringify(registry));
 }
 
-// Move every unprefixed per-profile owned key under the given profile's
-// namespace, ONE KEY AT A TIME: copy → make it durable → delete the source,
-// then move to the next. Mapping must be INACTIVE here — physical targets
-// pass through mapKey untouched either way.
+// Adoption is a two-phase move, split so that NO unprefixed source is ever
+// deleted while profile mapping is inactive. That ordering is load-bearing:
+// while adoption is incomplete the app runs mapping-OFF and reads/writes the
+// unprefixed keys, so a source deleted early would read back as missing (data
+// looks lost) and a later resume could drop edits made in that window. Phase 1
+// copies; the caller deletes only after every copy is durable AND right before
+// it activates mapping (deleteAdoptedSources).
 //
-// Per-key (not copy-all-then-delete-all) because copying every source before
-// deleting any would hold ~2× the data at peak. In browser passthrough mode
-// appStorage writes straight to localStorage (a hard ~5MB cap), so doubling
-// throws QuotaExceededError for anyone past ~half quota; moving one key at a
-// time keeps the peak at ~1× (only the in-flight key is duplicated). Cached
-// (Tauri) mode never hits that cap, but the per-key order costs nothing there.
+// COPY-ALWAYS (not copy-if-absent): the unprefixed source is authoritative
+// while adoption is incomplete — the user edits it mapping-off — so it must
+// overwrite any physical copy left by an earlier failed pass.
 //
-// Crash-safety survives: the copy is flushed durable BEFORE its source is
-// deleted, so a crash between the two leaves the source intact (the resume
-// re-copies). Copy-if-ABSENT so a resume (marker survived a failed source
-// delete, mapping already active last session) never overwrites edits the
-// user has since saved to the physical key with the stale source.
-async function migrateUnprefixedKeys(profileId) {
-  let anyMoved = false;
+// Phase 1 copies every source WITHOUT deleting it, so peak storage doubles
+// briefly. That is unavoidable if the split above is to be prevented; in
+// browser passthrough mode the doubling can throw QuotaExceededError, which is
+// CAUGHT here — sources stay intact, mapping stays off, and the boot retries
+// later (a graceful fallback, which is exactly what the storage-safety review
+// accepted as the alternative to a non-doubling move).
+async function copyUnprefixedToPhysical(profileId) {
   for (const k of appStorage.keys()) {
     if (!k || isSharedKey(k) || isPhysicalKey(k) || !isOwnedKey(k)) continue;
-    const target = physicalKey(profileId, k);
+    const v = appStorage.getItem(k);
+    if (v === null) continue;
     try {
-      if (appStorage.getItem(target) === null) {
-        const v = appStorage.getItem(k);
-        if (v !== null) appStorage.setItem(target, v);
-      }
+      appStorage.setItem(physicalKey(profileId, k), v);
     } catch (err) {
-      // Passthrough localStorage quota (or any synchronous write failure). The
-      // source is untouched; keep the marker and resume next boot — sources
-      // already moved this pass have freed their space, so the retry proceeds.
-      console.error('[profiles] adoption copy failed; will resume next boot:', err);
+      console.error('[profiles] adoption copy failed; keeping unprefixed sources:', err);
       await appStorage.flush();
       return false;
     }
-    // Copy durable before the source delete (a crash between them in cached
-    // mode would otherwise lose data), then free the source immediately.
-    if (!(await appStorage.flush())) {
-      console.error('[profiles] adoption copy did not reach disk — keeping sources; will resume next boot');
-      return false;
-    }
-    appStorage.removeItem(k);
-    anyMoved = true;
   }
-  // Persist the final source delete; a failed flush keeps the marker so the
-  // next boot resumes (copies are durable, so it just retries the deletes).
-  return anyMoved ? appStorage.flush() : true;
+  // Every copy must be durable before the caller deletes any source.
+  return appStorage.flush();
+}
+
+// Delete the unprefixed owned sources after copyUnprefixedToPhysical has copied
+// them. MUST run with mapping still INACTIVE (removeItem then targets the
+// unprefixed key, not the physical copy) and with NO reads between it and the
+// mapping switch — adoption is synchronous here, so that holds. Returns the
+// flush durability so the caller can keep the marker for a retry if the deletes
+// didn't land (harmless: the lingering sources equal their physical copies, so
+// the retry re-copies idempotently).
+async function deleteAdoptedSources() {
+  for (const k of appStorage.keys()) {
+    if (!k || isSharedKey(k) || isPhysicalKey(k) || !isOwnedKey(k)) continue;
+    appStorage.removeItem(k);
+  }
+  return appStorage.flush();
 }
 
 // Best-effort profile name for adoption: the user's own name if they filled
@@ -186,21 +187,15 @@ export async function ensureProfilesInitialized() {
       console.error('[profiles] adoption aborted: registry write did not reach disk');
       return null;
     }
-    const moved = await migrateUnprefixedKeys(id);
-    if (!moved) {
-      // Adoption didn't finish (browser quota, or a Tauri disk write/flush
-      // failure). Leave mapping INACTIVE so this session reads and writes the
-      // still-unprefixed source data (pre-profile behavior) — activating it
-      // would point every read at an empty namespace, hiding the user's
-      // résumés and letting new edits diverge into it. The marker persists, so
-      // a later boot resumes and completes adoption once space/disk allows.
+    if (!(await finishAdoption(id))) {
+      // Copies didn't all land (browser quota, or a Tauri disk failure). Leave
+      // mapping INACTIVE so this session reads/writes the still-intact
+      // unprefixed sources (pre-profile behavior); the marker persists so a
+      // later boot resumes once space/disk allows. Activating mapping here would
+      // point reads at an incomplete namespace and hide the user's résumés.
       console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
       return id;
     }
-    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
-    await appStorage.flush();
-    setProfileMapping(id);
-    extractSharedApiKey();
     return id;
   }
 
@@ -210,21 +205,41 @@ export async function ensureProfilesInitialized() {
     appStorage.setItem(ACTIVE_PROFILE_KEY, active);
   }
   if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) {
-    const moved = await migrateUnprefixedKeys(active); // resume interrupted adoption, same id
-    if (!moved) {
-      // Still incomplete — keep mapping off and run on the unprefixed source
-      // data this session (see the fresh-adoption branch); the marker persists
-      // for a later resume. Without this, a mapped read hits an empty namespace
-      // and the user's data appears lost.
+    if (!(await finishAdoption(active))) { // resume interrupted adoption, same id
       console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
-      return active;
+      return active; // keep mapping off, run on the unprefixed sources
     }
-    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
-    await appStorage.flush();
+    return active;
   }
   setProfileMapping(active);
   extractSharedApiKey();
   return active;
+}
+
+/**
+ * Complete an in-flight adoption for `profileId`: copy every unprefixed source
+ * to its physical key, and only once every copy is durable delete the sources
+ * (mapping still off) and activate mapping. Returns true on success (mapping is
+ * now active), false if copies didn't all land (caller keeps mapping off and
+ * the marker for a retry). The strict "delete only after all copies durable,
+ * immediately before activating mapping" order is what prevents a mapping-off
+ * session from ever seeing a half-migrated split.
+ */
+async function finishAdoption(profileId) {
+  if (!(await copyUnprefixedToPhysical(profileId))) return false;
+  // Copies durable. Delete sources while mapping is still off (removeItem hits
+  // the unprefixed keys), then activate mapping with no intervening reads.
+  const deleted = await deleteAdoptedSources();
+  setProfileMapping(profileId);
+  extractSharedApiKey();
+  if (deleted) {
+    appStorage.removeItem(PROFILE_ADOPTION_MARKER);
+    await appStorage.flush();
+  }
+  // If the source deletes didn't land, keep the marker: the next boot resumes
+  // and re-copies (the lingering sources equal their physical copies, so it is
+  // idempotent) and retries the deletes.
+  return true;
 }
 
 /**

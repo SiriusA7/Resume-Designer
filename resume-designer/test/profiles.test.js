@@ -113,7 +113,7 @@ describe('registry CRUD', () => {
 });
 
 describe('adoption migration', () => {
-  it('moves keys one at a time — each copy durable before its source delete, and sources freed as it goes', async () => {
+  it('copies EVERY source before deleting any (no mapping-off split), marker cleared last', async () => {
     const operations = [];
     const backend = makeBackend({
       'resume-designer-data': '{"variants":{}}',
@@ -137,22 +137,16 @@ describe('adoption migration', () => {
     expect(markerWrite).toBeLessThan(operations.indexOf(`write:${PROFILES_KEY}`));
     expect(markerWrite).toBeLessThan(operations.indexOf(`write:${ACTIVE_PROFILE_KEY}`));
 
-    // Each source's copy reaches disk before that source is deleted.
-    for (const src of ['resume-designer-data', 'resume-designer-job-descriptions']) {
-      const copy = operations.indexOf(`write:resume-p--${id}--${src}`);
-      const del = operations.indexOf(`delete:${src}`);
-      expect(copy).toBeGreaterThanOrEqual(0);
-      expect(del).toBeGreaterThan(copy);
-    }
-    // A source is deleted BEFORE the last copy is written — proving keys move
-    // one at a time (source freed as we go) rather than all-copied-then-all-
-    // deleted, which would double peak storage. This is the property the
-    // passthrough-quota fix depends on.
+    // EVERY source copy lands before ANY source is deleted. Deleting a source
+    // while some are still unprefixed would split the workspace across both
+    // namespaces — fatal because the recovery session reads mapping-off.
     const copyIdx = operations
       .map((o, i) => ({ o, i })).filter(({ o }) => o.startsWith(`write:resume-p--${id}--`)).map(({ i }) => i);
     const delIdx = operations
       .map((o, i) => ({ o, i })).filter(({ o }) => /^delete:resume-designer-(data|job-descriptions)$/.test(o)).map(({ i }) => i);
-    expect(Math.min(...delIdx)).toBeLessThan(Math.max(...copyIdx));
+    expect(copyIdx).toHaveLength(2);
+    expect(delIdx).toHaveLength(2);
+    expect(Math.max(...copyIdx)).toBeLessThan(Math.min(...delIdx));
 
     // Marker cleared last; sources gone; copies present.
     expect(operations.at(-1)).toBe('delete:__profile_adoption_pending__');
@@ -288,27 +282,59 @@ describe('adoption migration', () => {
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
   });
 
-  it('does not clobber post-adoption edits when resuming with a stale source', async () => {
-    // Prior session: copies landed but the source delete failed, so the marker
-    // survived AND the user kept working — their edits are on the PHYSICAL key
-    // while the STALE unprefixed source still lingers. The resume must not
-    // recopy the stale source over the newer physical value.
+  it('resume copies the authoritative unprefixed edit over a stale physical', async () => {
+    // The recovery session runs mapping-OFF, so the user's edits land on the
+    // UNPREFIXED source; a stale physical lingers from an earlier failed pass.
+    // Copy-ALWAYS: the resume must overwrite the stale physical with the
+    // authoritative unprefixed edit, not skip it (copy-if-absent would keep the
+    // stale value and then delete the newer source — the finding-14 clobber).
     const backend = makeBackend({
       '__profile_adoption_pending__': '1',
       [PROFILES_KEY]: JSON.stringify([{ id: 'pfixed', name: 'Ash', emoji: '🙂', createdAt: 'x' }]),
       [ACTIVE_PROFILE_KEY]: 'pfixed',
-      'resume-designer-data': '{"variants":{"OLD":{}}}',                       // stale source
-      'resume-p--pfixed--resume-designer-data': '{"variants":{"EDITED":{}}}',  // user's newer edit
+      'resume-designer-data': '{"variants":{"EDITED":{}}}',                      // recovery edit (authoritative)
+      'resume-p--pfixed--resume-designer-data': '{"variants":{"STALE":{}}}',     // stale physical from an earlier pass
     });
     await initAppStorage({ backend });
 
     const id = await ensureProfilesInitialized();
 
     expect(id).toBe('pfixed');
-    // The user's edit survives; the stale source is cleaned up; marker cleared.
     expect(backend.files.get('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{"EDITED":{}}}');
     expect(backend.files.has('resume-designer-data')).toBe(false);
     expect(backend.files.has('__profile_adoption_pending__')).toBe(false);
+  });
+
+  it('keeps all data readable unprefixed when adoption partially copies then fails (no split)', async () => {
+    // The bulky history key's copy fails after the data key was copied. Because
+    // NO source is deleted until every copy is durable, the mapping-off recovery
+    // session still reads BOTH keys from their intact unprefixed sources — no
+    // half-migrated split where already-moved keys read back as missing.
+    const backend = makeBackend({
+      'resume-designer-data': '{"variants":{"KEEP":{}}}',
+      'resume-designer-history-v1': 'big-history',
+    });
+    backend.write.mockImplementation(async (key, value) => {
+      if (key.endsWith('resume-designer-history-v1')) throw new Error('disk full');
+      backend.files.set(key, value);
+    });
+    await initAppStorage({ backend });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const id = await ensureProfilesInitialized();
+      expect(id).not.toBeNull();
+      // Mapping off → both keys resolve to their intact unprefixed sources.
+      expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
+      expect(appStorage.getItem('resume-designer-history-v1')).toBe('big-history');
+      // Neither source was deleted (no split); marker persists for a retry.
+      expect(backend.files.get('resume-designer-data')).toBe('{"variants":{"KEEP":{}}}');
+      expect(backend.files.get('resume-designer-history-v1')).toBe('big-history');
+      expect(backend.files.get('__profile_adoption_pending__')).toBe('1');
+    } finally {
+      errSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 
   it('keeps the marker when source deletes fail to reach disk', async () => {
