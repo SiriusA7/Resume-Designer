@@ -39,13 +39,18 @@ export function validateDigest(text, version) {
   if (!headingRe.test(body[0] || '')) {
     return { ok: false, reason: `first line must be "## Resume Designer ${version}"` };
   }
-  if (body.some((l) => l.startsWith('###'))) {
-    return { ok: false, reason: 'digest must be flat — no "###" section headers' };
+  // Every line after the heading MUST be a "- "/"* " bullet. The digest is a
+  // flat bullet list by contract; anything else (a stray paragraph, a leaked
+  // "###" section header, a prompt-injected instruction) means the AI ignored
+  // the format, so reject and fall back to the grouped changelog. This subsumes
+  // the old "no ### headers" and "at least one bullet" checks.
+  const bulletLines = body.slice(1);
+  if (bulletLines.some((l) => !/^[-*]\s+\S/.test(l))) {
+    return { ok: false, reason: 'every line after the heading must be a "- " bullet' };
   }
-  const bullets = body.filter((l) => /^[-*]\s+\S/.test(l));
-  if (bullets.length < 1) return { ok: false, reason: 'no bullets' };
-  if (bullets.length > MAX_BULLETS) {
-    return { ok: false, reason: `${bullets.length} bullets — digest must have at most ${MAX_BULLETS}` };
+  if (bulletLines.length < 1) return { ok: false, reason: 'no bullets' };
+  if (bulletLines.length > MAX_BULLETS) {
+    return { ok: false, reason: `${bulletLines.length} bullets — digest must have at most ${MAX_BULLETS}` };
   }
 
   const notes = lines
