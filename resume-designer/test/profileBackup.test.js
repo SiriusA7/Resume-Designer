@@ -3,6 +3,7 @@ import { appStorage, initAppStorage, __resetAppStorageForTests } from '../src/ap
 import {
   createProfile, ensureProfilesInitialized, loadRegistry,
   exportProfileBackup, importProfileBackup, activateProfileDurably,
+  extractSharedApiKey,
 } from '../src/profiles.js';
 import { importFullBackupFromEnvelope, exportFullBackup } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY, PROFILES_KEY } from '../src/profileKeys.js';
@@ -442,3 +443,37 @@ describe('activateProfileDurably', () => {
     expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe('b');
   });
 });
+
+// Regression (PR #89 finding 32): the one-time blob→shared API-key extraction
+// stripped the blob copy before the shared-key write was durable. If the
+// shared write failed at flush time while the smaller blob rewrite succeeded,
+// the only durable copy of the credential vanished on the next restart.
+describe('extractSharedApiKey durability', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('keeps the blob credential when the shared write is not durable', async () => {
+    const backend = makeBackend({
+      'resume-designer-data': JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }),
+    });
+    await initAppStorage({ backend });
+
+    backend.write.mockImplementation(async () => { throw new Error('disk full'); });
+    await extractSharedApiKey();
+    // The blob still carries the key — nothing was stripped.
+    expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBe('sk-blob');
+
+    // Simulate a restart after the disk recovers: the retry extracts and strips.
+    backend.write.mockImplementation(async (key, value) => { backend.files.set(key, value); });
+    __resetAppStorageForTests();
+    await initAppStorage({ backend });
+    await extractSharedApiKey();
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-blob');
+    expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
+    await appStorage.flush();
+    expect(backend.files.get(OPENROUTER_KEY_KEY)).toBe('sk-blob');
+  });
+});
+

@@ -109,7 +109,7 @@ function adoptionProfileName() {
  * shared key wins (never clobbered by a stale key from an imported backup).
  * Runs with mapping ACTIVE (reads the active profile's blob).
  */
-export function extractSharedApiKey() {
+export async function extractSharedApiKey() {
   try {
     const raw = appStorage.getItem('resume-designer-data');
     if (!raw) return;
@@ -118,6 +118,12 @@ export function extractSharedApiKey() {
     const inBlob = data?.settings?.openrouterKey;
     if (inBlob && appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
       appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
+      // Cached mode reports write failures only at flush time. Never strip
+      // the blob copy until the shared key is DURABLE — if the shared-key
+      // file write failed while the (smaller) blob rewrite succeeded, the
+      // only durable copy of the credential would vanish on restart. On a
+      // failed flush the blob keeps the key and the next boot retries.
+      if (!(await appStorage.flush())) return;
     }
     delete data.settings.openrouterKey;
     appStorage.setItem('resume-designer-data', JSON.stringify(data));
@@ -225,7 +231,7 @@ async function resolveActiveProfile() {
     return active;
   }
   setProfileMapping(active);
-  extractSharedApiKey();
+  await extractSharedApiKey();
   return active;
 }
 
@@ -270,7 +276,7 @@ async function finishAdoption(profileId) {
   // best-effort: if its flush fails the marker lingers, but the next boot finds
   // no sources to copy and cleanly finalizes (removes the marker).
   setProfileMapping(profileId);
-  extractSharedApiKey();
+  await extractSharedApiKey();
   appStorage.removeItem(PROFILE_ADOPTION_MARKER);
   await appStorage.flush();
   return true;
