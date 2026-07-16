@@ -16,7 +16,7 @@ import { appStorage } from '../../appStorage.js';
 import { store } from '../../store.js';
 import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
-  loadRegistry, getActiveProfileId, setActiveProfile, createProfile,
+  loadRegistry, getActiveProfileId, activateProfileDurably, createProfile,
   renameProfile, deleteProfile, exportProfileBackup, importProfileBackup,
   isAdoptionPending,
 } from '../../profiles.js';
@@ -111,8 +111,10 @@ export function AccountSection() {
       toast.error('Could not save your latest changes — profile switch cancelled.');
       return;
     }
-    setActiveProfile(id);
-    await appStorage.flush();
+    if (!(await activateProfileDurably(id, activeId))) {
+      toast.error("Could not switch profiles — the change didn't reach disk.");
+      return;
+    }
     window.location.reload();
   };
 
@@ -124,8 +126,15 @@ export function AccountSection() {
       return;
     }
     const profile = createProfile({ name });
-    setActiveProfile(profile.id); // new profiles start empty; land in them
-    await appStorage.flush();
+    // New profiles start empty; land in them — but only once the pointer is
+    // durable. On failure, unwind the half-created profile too so a later
+    // successful flush doesn't resurrect an empty registry entry.
+    if (!(await activateProfileDurably(profile.id, activeId))) {
+      try { deleteProfile(profile.id); } catch { /* best effort */ }
+      await appStorage.flush();
+      toast.error("Could not create the profile — the change didn't reach disk.");
+      return;
+    }
     window.location.reload();
   };
 

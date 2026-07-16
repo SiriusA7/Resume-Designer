@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appStorage, initAppStorage, __resetAppStorageForTests } from '../src/appStorage.js';
 import {
   createProfile, ensureProfilesInitialized, loadRegistry,
-  exportProfileBackup, importProfileBackup,
+  exportProfileBackup, importProfileBackup, activateProfileDurably,
 } from '../src/profiles.js';
 import { importFullBackupFromEnvelope, exportFullBackup } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY, PROFILES_KEY } from '../src/profileKeys.js';
@@ -406,5 +406,39 @@ describe('format-2 orphan profiles entries', () => {
       },
     })).toThrow(/not in the registry/i);
     expect(localStorage.getItem('resume-designer-theme')).toBe('keep-me');
+  });
+});
+
+// Regression (PR #89 finding 30): the profile switch reloaded even when the
+// active-pointer write never became durable (disk full / permissions) — the
+// next boot read the stale pointer and the switch appeared to undo itself,
+// while the pending in-cache pointer could ride a LATER flush and switch a
+// future boot unexpectedly. activateProfileDurably restores the pointer and
+// reports false so callers keep the session open instead of reloading.
+describe('activateProfileDurably', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('restores the pointer and returns false when the flush is not durable', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]));
+    appStorage.setItem(ACTIVE_PROFILE_KEY, 'a');
+    await appStorage.flush();
+
+    backend.write.mockImplementation(async () => { throw new Error('disk full'); });
+    await expect(activateProfileDurably('b', 'a')).resolves.toBe(false);
+    expect(appStorage.getItem(ACTIVE_PROFILE_KEY)).toBe('a'); // cache restored
+
+    // Disk recovers: the next flush persists the RESTORED pointer, not 'b'.
+    backend.write.mockImplementation(async (key, value) => { backend.files.set(key, value); });
+    await appStorage.flush();
+    expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe('a');
+
+    // And the success path reports true with the pointer durably switched.
+    await expect(activateProfileDurably('b', 'a')).resolves.toBe(true);
+    expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe('b');
   });
 });

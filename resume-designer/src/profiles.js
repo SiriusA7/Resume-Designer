@@ -308,6 +308,23 @@ export function setActiveProfile(id) {
   appStorage.setItem(ACTIVE_PROFILE_KEY, id);
 }
 
+/**
+ * Point the app at `id` and make the pointer DURABLE before the caller
+ * reloads. If the flush fails (disk full / permissions), restore `restoreId`
+ * and report false: reloading would boot from the stale on-disk pointer (the
+ * switch appears to undo itself), and the pending in-cache pointer would
+ * otherwise ride along with a LATER successful flush and switch some future
+ * boot unexpectedly. The restore write coalesces over the failed one, so the
+ * cache and (eventually) disk both settle on `restoreId`.
+ */
+export async function activateProfileDurably(id, restoreId) {
+  setActiveProfile(id);
+  if (await appStorage.flush()) return true;
+  setActiveProfile(restoreId);
+  await appStorage.flush();
+  return false;
+}
+
 export function createProfile({ name, emoji = '🙂' }) {
   const registry = loadRegistry() || [];
   let id = generateProfileId();
