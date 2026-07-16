@@ -482,15 +482,20 @@ function createStore() {
       }, SAVE_DEBOUNCE_MS);
     },
 
-    // Force immediate save
+    // Force immediate save. Returns whether the persist succeeded so callers
+    // that must not proceed on an unsaved edit (the profile switch reloads the
+    // window) can abort. On failure the dirty flag is kept (not markSaved) so a
+    // later save retries.
     saveNow() {
       if (saveTimeout) {
         clearTimeout(saveTimeout);
       }
       if (saveCallback && data) {
-        saveCallback(data);
-        this.markSaved();
+        const ok = saveCallback(data) !== false;
+        if (ok) this.markSaved();
+        return ok;
       }
+      return true;
     }
   };
 }

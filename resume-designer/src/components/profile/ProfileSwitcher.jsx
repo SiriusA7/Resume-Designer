@@ -21,14 +21,17 @@ import { flushPendingProfileSave } from '../../userProfilePanel.js';
 
 // Flush pending saves, repoint the active profile, reload. The reload is the
 // whole switching mechanism — every module re-boots from the new namespace
-// (same pattern as the backup-restore reload in backupFlow.js). If the pre-switch
-// flush isn't durable we abort so the current profile's latest edits aren't lost.
+// (same pattern as the backup-restore reload in backupFlow.js). We abort if the
+// pre-switch save isn't durable so the current profile's latest edits aren't
+// lost. store.saveNow() reports the persist result directly — appStorage.flush()
+// alone is not enough, because in browser passthrough mode it always returns
+// true even when the underlying localStorage write failed at quota.
 async function switchTo(id) {
-  store.saveNow();
+  const saved = store.saveNow();
   flushPendingProfileSave();
   const durable = await appStorage.flush();
-  if (!durable) {
-    toast.error('Could not save your latest changes to disk — profile switch cancelled.');
+  if (!saved || !durable) {
+    toast.error('Could not save your latest changes — profile switch cancelled.');
     return;
   }
   setActiveProfile(id);

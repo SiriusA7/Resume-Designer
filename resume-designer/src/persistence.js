@@ -298,8 +298,10 @@ export function initPersistence(variantId) {
             { once: true },
           );
         }
+        return ok; // let store.saveNow() report durability (profile-switch abort)
       }
     }
+    return true; // nothing to persist
   });
 }
 
