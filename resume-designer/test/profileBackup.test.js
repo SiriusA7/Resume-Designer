@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { appStorage, __resetAppStorageForTests } from '../src/appStorage.js';
+import { appStorage, initAppStorage, __resetAppStorageForTests } from '../src/appStorage.js';
 import {
   createProfile, ensureProfilesInitialized, loadRegistry,
   exportProfileBackup, importProfileBackup,
@@ -12,6 +12,18 @@ beforeEach(() => {
   __resetAppStorageForTests();
   localStorage.clear();
 });
+
+// In-memory fake of the Rust disk backend (the `invoke` seam) for cached-mode tests.
+function makeBackend(initial = {}) {
+  const files = new Map(Object.entries(initial));
+  return {
+    files,
+    loadAll: vi.fn(async () => Object.fromEntries(files)),
+    write: vi.fn(async (key, value) => { files.set(key, value); }),
+    delete: vi.fn(async (key) => { files.delete(key); }),
+    clear: vi.fn(async () => { files.clear(); }),
+  };
+}
 
 // jsdom: capture the download instead of clicking a real anchor.
 function captureDownload() {
@@ -287,7 +299,7 @@ describe('per-profile export/import', () => {
     expect(envelope).toMatchObject({ backupFormat: 2, kind: 'profile', name: 'Partner' });
     expect(envelope.keys['resume-designer-data']).toBe('{"variants":{"v2":{}}}');
 
-    const imported = importProfileBackup(envelope);
+    const imported = await importProfileBackup(envelope);
     expect(imported.id).not.toBe(partnerId);
     expect(loadRegistry()).toHaveLength(3);
     expect(localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
@@ -319,10 +331,10 @@ describe('per-profile export/import', () => {
       return realSetItem.call(this, key, value);
     });
     try {
-      expect(() => importProfileBackup({
+      await expect(importProfileBackup({
         backupFormat: 2, kind: 'profile', name: 'Imported', emoji: '🐢',
         keys: { 'resume-designer-data': '{"variants":{}}', 'resume-designer-history-v1': 'big' },
-      })).toThrow(/quota/i);
+      })).rejects.toThrow(/quota/i);
       // Registry entry rolled back…
       expect(loadRegistry()).toHaveLength(before);
       // …and the partially-written data key was cleaned up — only the two
@@ -336,9 +348,36 @@ describe('per-profile export/import', () => {
 
   it('rejects non-profile envelopes and unowned keys', async () => {
     await seedTwoProfiles();
-    expect(() => importProfileBackup({ backupFormat: 1, keys: {} })).toThrow();
-    expect(() => importProfileBackup({
+    await expect(importProfileBackup({ backupFormat: 1, keys: {} })).rejects.toThrow();
+    await expect(importProfileBackup({
       backupFormat: 2, kind: 'profile', name: 'X', keys: { evil: 'x' },
-    })).toThrow(/unrecognized/i);
+    })).rejects.toThrow(/unrecognized/i);
+  });
+
+  it('rolls back a profile import whose disk writes are not durable (cached mode)', async () => {
+    // Cached/Tauri store: setItem doesn't throw on disk-full — the failure only
+    // surfaces at flush(). Import must flush and roll back rather than report
+    // success on a write that never reached disk.
+    const backend = makeBackend({
+      'resume-designer-profiles': JSON.stringify([{ id: 'pkeep', name: 'Ash', emoji: '🙂', createdAt: 'x' }]),
+      'resume-designer-active-profile': 'pkeep',
+    });
+    backend.write.mockImplementation(async (key, value) => {
+      if (key.startsWith('resume-p--')) throw new Error('disk full'); // imported profile's keys
+      backend.files.set(key, value);
+    });
+    await initAppStorage({ backend });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(importProfileBackup({
+        backupFormat: 2, kind: 'profile', name: 'Imported', emoji: '🐢',
+        keys: { 'resume-designer-data': '{"variants":{}}' },
+      })).rejects.toThrow(/disk/i);
+      // Rolled back: only the original profile remains, no imported keys on disk.
+      expect(loadRegistry()).toHaveLength(1);
+      expect([...backend.files.keys()].some((k) => k.startsWith('resume-p--'))).toBe(false);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

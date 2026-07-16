@@ -155,7 +155,7 @@ export function AccountSection() {
     if (!file || adopting) return;
     try {
       const parsed = JSON.parse(await file.text());
-      const profile = importProfileBackup(parsed);
+      const profile = await importProfileBackup(parsed);
       refresh();
       toast.success(`Imported "${profile.name}" as a new profile.`);
     } catch (err) {

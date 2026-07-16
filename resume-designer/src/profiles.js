@@ -381,7 +381,17 @@ export function exportProfileBackup(profileId, filename) {
   });
 }
 
-export function importProfileBackup(parsed) {
+// Remove a just-imported profile's partial keys and its registry entry so a
+// failed import never leaves a half-written workspace the user can switch into.
+function rollbackImportedProfile(id) {
+  const prefix = physicalKey(id, '');
+  for (const k of appStorage.keys()) {
+    if (k && k.startsWith(prefix)) appStorage.removeItem(k);
+  }
+  saveRegistry((loadRegistry() || []).filter((p) => p.id !== id));
+}
+
+export async function importProfileBackup(parsed) {
   if (!parsed || parsed.backupFormat !== 2 || parsed.kind !== 'profile'
       || !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error('Not a Resume Designer profile export (expected backupFormat 2, kind "profile").');
@@ -399,16 +409,20 @@ export function importProfileBackup(parsed) {
       appStorage.setItem(physicalKey(profile.id, k), v);
     }
   } catch (err) {
-    // A key write failed (browser localStorage quota — bulky history keys are
-    // the usual trigger) after createProfile already persisted the registry
-    // entry. Roll back both the entry and any partial keys so the user can't
-    // later switch into a half-written workspace.
-    const prefix = physicalKey(profile.id, '');
-    for (const k of appStorage.keys()) {
-      if (k && k.startsWith(prefix)) appStorage.removeItem(k);
-    }
-    saveRegistry((loadRegistry() || []).filter((p) => p.id !== profile.id));
+    // Browser passthrough: setItem throws synchronously at localStorage quota
+    // (bulky history keys are the usual trigger) after createProfile already
+    // persisted the registry entry. Roll back and surface the failure.
+    rollbackImportedProfile(profile.id);
     throw err;
+  }
+  // Cached (Tauri) disk store: setItem never throws on disk-full/permission —
+  // that only surfaces through flush(). Confirm the writes are durable before
+  // reporting success, or the profile survives the session in cache but is
+  // missing/partial after a restart. Roll back a non-durable import.
+  if (!(await appStorage.flush())) {
+    rollbackImportedProfile(profile.id);
+    await appStorage.flush();
+    throw new Error('Could not save the imported profile to disk.');
   }
   return profile;
 }
