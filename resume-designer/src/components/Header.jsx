@@ -26,6 +26,7 @@ import {
 } from '../variantManager.js';
 import { handleVariantThreadsForDelete } from './chat/deleteVariantThreadsFlow.js';
 import { openSettings } from '../settingsModal.js';
+import { ProfileSwitcher } from './profile/ProfileSwitcher.jsx';
 
 // Format a variant's updatedAt for the selector menu (relative, then absolute).
 function formatDate(isoString) {
@@ -281,6 +282,10 @@ export default function Header() {
           half is the gap beside the variant group, and a wrapper opt-out would make
           that strip non-draggable (the buttons self-exempt — see note above). */}
       <div className="flex flex-1 items-center justify-end gap-1.5 max-[900px]:gap-1">
+        {/* Profile switcher — first in the right cluster, always visible (like the
+            settings gear + PDF). Renders null pre-adoption / with no active match. */}
+        <ProfileSwitcher />
+
         {/* Desktop actions — hidden ≤768px; tighter gaps ≤900px. */}
         <div className="flex items-center gap-1.5 max-[900px]:gap-0.5 max-[768px]:hidden">
           {/* Tools, promoted to regular header buttons (icon + short label;
