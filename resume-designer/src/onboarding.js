@@ -75,18 +75,29 @@ const ONBOARDING_OPEN_SELECTOR = '.onboarding-overlay.show';
 const ONBOARDING_CLOSE_POLL_MS = 400;
 
 /**
- * Resolve once the onboarding wizard is not on screen (immediately if it
- * isn't). Used by the update / what's-new dialog: opening a modal Radix
- * Dialog while the wizard is up pointer-locks <body>, leaving the wizard
- * painted on top (z-[3000]) but completely inert until the hidden dialog
- * underneath is dismissed by an overlay click. Deferring the dialog until
- * the wizard closes sequences the two instead of stacking them.
+ * Resolve once the onboarding wizard is neither on screen NOR due to open
+ * (immediately if both hold). Used by the update / what's-new dialog: opening
+ * a modal Radix Dialog while the wizard is up pointer-locks <body>, leaving
+ * the wizard painted on top (z-[3000]) but completely inert until the hidden
+ * dialog underneath is dismissed by an overlay click. Deferring the dialog
+ * until the wizard closes sequences the two instead of stacking them.
+ *
+ * "Due to open" (the shouldShowOnboarding() term) matters because main.js
+ * launches the changelog/update checks BEFORE its 300ms first-run timer — a
+ * fast check would find no overlay yet, open the dialog, and the wizard would
+ * then mount on top of it, recreating exactly the stacking this gate exists
+ * to prevent. That timer opens the wizard iff shouldShowOnboarding(), and the
+ * flag goes durably false on completion or an explicit dismissal — so if the
+ * user leaves a due wizard unfinished, the dialog simply stays deferred to a
+ * later launch rather than interrupting setup.
  */
 export function whenOnboardingClosed() {
-  if (!document.querySelector(ONBOARDING_OPEN_SELECTOR)) return Promise.resolve();
+  const blocked = () =>
+    !!document.querySelector(ONBOARDING_OPEN_SELECTOR) || shouldShowOnboarding();
+  if (!blocked()) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setInterval(() => {
-      if (!document.querySelector(ONBOARDING_OPEN_SELECTOR)) {
+      if (!blocked()) {
         clearInterval(timer);
         resolve();
       }

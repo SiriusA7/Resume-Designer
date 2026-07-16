@@ -8,9 +8,34 @@ import { whenOnboardingClosed, shouldShowOnboarding } from '../src/onboarding.js
 // hidden dialog behind it was dismissed by an overlay click. showUpdateNotes()
 // now awaits whenOnboardingClosed() — these tests pin that gate's behavior.
 describe('whenOnboardingClosed', () => {
+  beforeEach(() => {
+    // The gate also waits while onboarding is DUE to open (finding 29); mark
+    // it completed so these overlay-focused cases test the overlay condition
+    // in isolation.
+    localStorage.clear();
+    localStorage.setItem('resume-designer-onboarding-complete', 'true');
+  });
   afterEach(() => {
     document.body.innerHTML = '';
     vi.useRealTimers();
+  });
+
+  it('waits while onboarding is due to open but not yet mounted', async () => {
+    // Boot race: main.js fires the update/what's-new checks before its 300ms
+    // first-run timer mounts the wizard — "no overlay yet" must not open the
+    // dialog when the wizard is about to appear.
+    vi.useFakeTimers();
+    localStorage.removeItem('resume-designer-onboarding-complete'); // fresh profile: due
+
+    let settled = false;
+    whenOnboardingClosed().then(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(settled).toBe(false);
+
+    localStorage.setItem('resume-designer-onboarding-complete', 'true'); // dismissal stamps this
+    await vi.advanceTimersByTimeAsync(500);
+    expect(settled).toBe(true);
   });
 
   it('resolves immediately when the wizard is not on screen', async () => {
