@@ -360,6 +360,22 @@ export function renameProfile(id, { name, emoji }) {
     : p)));
 }
 
+/**
+ * Rename `id` and make it DURABLE (same contract as the other *Durably
+ * helpers): in cached mode registry-write failures surface only at flush(),
+ * so a fire-and-forget rename could close the editor showing a name that
+ * reverts after restart. On a failed flush the previous registry is restored
+ * and false returned so the caller keeps the editor open.
+ */
+export async function renameProfileDurably(id, patch) {
+  const registryBefore = loadRegistry() || [];
+  renameProfile(id, patch);
+  if (await appStorage.flush()) return true;
+  try { saveRegistry(registryBefore); } catch { /* keep going */ }
+  await appStorage.flush();
+  return false;
+}
+
 export function deleteProfile(id) {
   const registry = loadRegistry() || [];
   if (registry.length <= 1) throw new Error('Cannot delete the last profile.');

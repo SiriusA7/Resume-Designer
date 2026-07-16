@@ -17,7 +17,7 @@ import { store } from '../../store.js';
 import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
   loadRegistry, getActiveProfileId, activateProfileDurably, createProfile,
-  renameProfile, deleteProfile, deleteProfileDurably, exportProfileBackup,
+  renameProfileDurably, deleteProfile, deleteProfileDurably, exportProfileBackup,
   importProfileBackup, isAdoptionPending,
 } from '../../profiles.js';
 import { getVariants, getUserProfile } from '../../persistence.js';
@@ -147,9 +147,22 @@ export function AccountSection() {
     window.location.reload();
   };
 
-  const saveRename = (id) => {
+  const saveRename = async (id) => {
     const name = draftName.trim();
-    if (name) renameProfile(id, { name });
+    if (name) {
+      // Durable-or-keep-editing: a passthrough quota throw (registry grows)
+      // or a cached-mode flush failure must not close the editor showing a
+      // rename that reverts after restart.
+      try {
+        if (!(await renameProfileDurably(id, { name }))) {
+          toast.error("Could not rename — the change didn't reach disk.");
+          return;
+        }
+      } catch (e) {
+        toast.error(String(e.message || e));
+        return;
+      }
+    }
     setEditingId(null);
     refresh();
   };

@@ -3,7 +3,7 @@ import { appStorage, initAppStorage, __resetAppStorageForTests } from '../src/ap
 import {
   createProfile, ensureProfilesInitialized, loadRegistry,
   exportProfileBackup, importProfileBackup, activateProfileDurably,
-  extractSharedApiKey, deleteProfileDurably,
+  extractSharedApiKey, deleteProfileDurably, renameProfileDurably,
 } from '../src/profiles.js';
 import { importFullBackupFromEnvelope, importFullBackupDurably, exportFullBackup } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY, ACTIVE_PROFILE_KEY, PROFILES_KEY } from '../src/profileKeys.js';
@@ -593,5 +593,30 @@ describe('importFullBackupDurably', () => {
     expect(result.keysImported).toBeGreaterThan(0);
     expect(result.rollback).toBeUndefined();
     expect(backend.files.get('resume-p--pA--resume-designer-data')).toBe('{"a":1}');
+  });
+});
+
+// Regression (PR #89 finding 37): renames were fire-and-forget — a cached-mode
+// registry-write failure surfaced only at flush() and was never checked, so
+// the editor closed showing a rename that reverted after restart.
+describe('renameProfileDurably', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    __resetAppStorageForTests();
+  });
+
+  it('reverts the rename and returns false when the flush fails', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'a', name: 'Old' }, { id: 'b', name: 'B' }]));
+    await appStorage.flush();
+
+    backend.write.mockImplementation(async () => { throw new Error('disk full'); });
+    await expect(renameProfileDurably('a', { name: 'New' })).resolves.toBe(false);
+    expect((loadRegistry() || []).find((p) => p.id === 'a').name).toBe('Old');
+
+    backend.write.mockImplementation(async (key, value) => { backend.files.set(key, value); });
+    await expect(renameProfileDurably('a', { name: 'New' })).resolves.toBe(true);
+    expect(JSON.parse(backend.files.get(PROFILES_KEY)).find((p) => p.id === 'a').name).toBe('New');
   });
 });
