@@ -629,6 +629,25 @@ describe('importFullBackupDurably', () => {
   });
 });
 
+describe('profile ops refuse to run during a restore', () => {
+  beforeEach(() => { localStorage.clear(); __resetAppStorageForTests(); });
+
+  it('activateProfileDurably and createProfile bail while the restore guard is armed', async () => {
+    // A restore defers every write, so flush() would report false success and the
+    // op would silently no-op (pointer discarded on reload). The ops must refuse.
+    const backend = makeBackend({ [PROFILES_KEY]: JSON.stringify([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]) });
+    await initAppStorage({ backend });
+    appStorage.beginRestoreGuard();
+
+    await expect(activateProfileDurably('b', 'a')).resolves.toBe(false);
+    await expect(renameProfileDurably('a', { name: 'X' })).resolves.toBe(false);
+    await expect(deleteProfileDurably('b')).resolves.toBe(false);
+    expect(() => createProfile({ name: 'New' })).toThrow(/restore is in progress/i);
+
+    appStorage.endRestoreGuard();
+  });
+});
+
 // Regression (PR #89 finding 37): renames were fire-and-forget — a cached-mode
 // registry-write failure surfaced only at flush() and was never checked, so
 // the editor closed showing a rename that reverted after restart.
