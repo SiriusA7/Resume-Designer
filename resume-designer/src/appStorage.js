@@ -59,7 +59,18 @@ let backendImpl = null;
 let cache = new Map();
 let dirty = new Map(); // key -> 'write' | 'delete'
 let drainScheduled = false;
+let drainTimer = null; // handle for the pending coalescing setTimeout; cleared whenever a drain runs
 let chain = Promise.resolve();
+// Write-behind coalescing window. setItem updates the cache synchronously
+// (close-safe) and marks the key dirty; the disk write is deferred this long so
+// a burst of rapid writes — e.g. typing into the application-notes field, which
+// calls setItem on every keystroke — collapses into ONE backend write of the
+// latest value instead of one write per keystroke. The drainScheduled guard
+// makes this a throttle, not a debounce: a drain always lands within this window
+// of the first dirty write even during continuous typing (bounded durability
+// lag), and flush() still forces an immediate synchronous drain for every
+// durability barrier (close, visibilitychange, import, print, profile ops).
+const DRAIN_COALESCE_MS = 250;
 let failureToastShown = false;
 // Monotonic count of permanently-failed disk writes (after retry). flush()
 // compares this before/after awaiting the write chain to tell durability
@@ -139,11 +150,21 @@ function reportWriteFailure(key, err) {
 function scheduleDrain() {
   if (drainScheduled || readOnly) return;
   drainScheduled = true;
-  setTimeout(drain, 0);
+  drainTimer = setTimeout(drain, DRAIN_COALESCE_MS);
 }
 
 function drain() {
   drainScheduled = false;
+  // Disarm the coalescing timer. flush() calls drain() directly (bypassing the
+  // timer) at every durability barrier; without this the timer stays armed and
+  // later fires a spurious drain that clears drainScheduled while a newer timer
+  // is already pending — cascading overlapping timers back toward one write per
+  // keystroke. When the timer itself fires drain(), clearTimeout on the
+  // just-fired id is a harmless no-op.
+  if (drainTimer) {
+    clearTimeout(drainTimer);
+    drainTimer = null;
+  }
   const batch = [...dirty.entries()];
   dirty.clear();
   for (const [key, op] of batch) {
@@ -389,6 +410,10 @@ export function __resetAppStorageForTests() {
   cache = new Map();
   dirty = new Map();
   drainScheduled = false;
+  if (drainTimer) {
+    clearTimeout(drainTimer);
+    drainTimer = null;
+  }
   chain = Promise.resolve();
   failureToastShown = false;
   writeFailures = 0;

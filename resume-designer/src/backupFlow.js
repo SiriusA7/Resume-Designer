@@ -86,7 +86,15 @@ function reloadWithOverlay(message = 'Reloading…') {
  * createElement (no innerHTML) so the message can never be interpreted as HTML.
  * Reuses the existing .modal-overlay / .modal classes for theming + dark mode.
  */
-function showImportSuccessAndReload(message) {
+// `resumeSavesOnFlushFailure` is true ONLY for the merge path: if the final
+// flush fails there and we stay put, resuming is safe because the store still
+// matches the merged data. It is FALSE for a replace, whose store is stale — a
+// resume would let the next close/background save overwrite the imported
+// profile — so a replace stays suspended (the user reloads/retries).
+function showImportSuccessAndReload(message, resumeSavesOnFlushFailure = false) {
+  // Saving is already suspended by the caller (before the durable import ran),
+  // so the stale in-memory résumé can't be written back while this modal waits
+  // on the user or during the reload.
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'import-success-modal-overlay';
@@ -138,6 +146,12 @@ function showImportSuccessAndReload(message) {
     // tell the user (the generic storage-failure toast has already fired too).
     const durable = await appStorage.flush();
     if (!durable) {
+      // Import couldn't reach disk and we're staying put (no reload). Re-enable
+      // saving ONLY when safe (merge path) so the app stays functional once the
+      // user frees space; a replace keeps saves suspended because its store is
+      // stale and a resume would clobber the imported profile on the next
+      // close/background save.
+      if (resumeSavesOnFlushFailure) store.resumeSaves();
       alert(
         'Your backup was imported, but it could NOT be saved to disk — your '
         + 'disk may be full. Don\'t close the app yet: free up space, then use '
@@ -184,6 +198,14 @@ export function exportFullBackupWithFeedback() {
  */
 export async function importBackupFromFile(file) {
   if (!file) return;
+  // Whether THIS invocation ACQUIRED the save suspension (flipped it off→on).
+  // Two ways it stays false: (1) an early throw — malformed JSON, wrong format —
+  // reaches the catch before suspendSaves() runs; (2) saves were ALREADY
+  // suspended by a prior import (e.g. a Replace whose success-modal flush failed
+  // stays suspended, awaiting a reload). In both cases the catch must NOT resume
+  // — that stale store would overwrite restored data on the next close/background
+  // save. Resume only a suspension this call owns.
+  let suspendedHere = false;
   try {
     // Parse FIRST so we can show the key count BEFORE confirming (avoids the
     // "destructive confirm with unknown payload" anti-pattern). This is also
@@ -232,6 +254,16 @@ export async function importBackupFromFile(file) {
       console.warn('[backup] pre-import flush failed:', err);
     }
 
+    // Suspend saves BEFORE the import — importFullBackupDurably writes
+    // appStorage synchronously and then AWAITS the disk flush; without this, a
+    // visibilitychange/close during that await would fire store.saveNow() and
+    // write the stale in-memory résumé over the just-imported data. Resumed in
+    // the catch below if the import throws (it rolls appStorage back, so the
+    // store is consistent again and the app keeps running without a reload).
+    // suspendSaves() returns TRUE only if it flipped the latch on — false if a
+    // prior import already had saves suspended (see the suspendedHere note).
+    suspendedHere = store.suspendSaves();
+
     // SYNCHRONOUS call (not importFullBackup(file), which would do a second
     // file.text() — that await would yield AFTER our flush but BEFORE the
     // writes, reopening the race). importFullBackupDurably takes the
@@ -255,6 +287,9 @@ export async function importBackupFromFile(file) {
         backupNote
     );
   } catch (err) {
+    // Resume only a suspension THIS call acquired — an early throw (before
+    // suspendSaves) or a re-latched prior suspension must not be unlocked here.
+    if (suspendedHere) store.resumeSaves(); // import rolled back — app keeps running
     console.error('[backup] Import failed:', err);
     alert(`Import failed: ${err.message ?? String(err)}`);
   }
@@ -270,6 +305,9 @@ export async function importBackupFromFile(file) {
  */
 export async function importLegacyElectronWithFeedback(mode = 'replace') {
   const merging = mode === 'merge';
+  // See importBackupFromFile: TRUE only if this call ACQUIRED the suspension, so
+  // the catch never resumes one a prior import (or an early throw) left in place.
+  let suspendedHere = false;
   try {
     const probe = await probeLegacyElectronData();
     if (!probe?.found) {
@@ -296,6 +334,10 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       console.warn('[backup] pre-import flush failed:', err);
     }
 
+    // Suspend saves before the import writes appStorage (see the format-2 path
+    // above for the flush-await race); resumed in the catch if it throws.
+    suspendedHere = store.suspendSaves();
+
     const result = merging
       ? importFullBackupMerge(envelope)
       : await importFullBackupDurably(envelope);
@@ -309,8 +351,11 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       ? `Merged your previous app's résumés and settings into this one.`
       : `Imported ${result.keysImported} keys from your previous app `
         + `(removed ${result.removedExistingKeys} existing keys).`;
-    showImportSuccessAndReload(summary + skipped);
+    // Only the merge path may resume saves if the final flush fails (its store
+    // isn't stale); a legacy replace stays suspended like the format-2 one.
+    showImportSuccessAndReload(summary + skipped, merging);
   } catch (err) {
+    if (suspendedHere) store.resumeSaves(); // resume only a suspension THIS call created
     console.error('[backup] Legacy import failed:', err);
     alert(`Couldn't import data from the previous app: ${err.message ?? String(err)}`);
   }
