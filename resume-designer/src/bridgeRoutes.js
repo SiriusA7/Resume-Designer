@@ -87,6 +87,9 @@ export function createBridgeRouter(deps) {
       }
 
       if (method === 'POST' && path === '/applications') {
+        // A destructive import is rewriting storage and awaiting its reload;
+        // persisting now would serialize a stale cache over the restored keys.
+        if (deps.writesSuspended?.()) return json(503, { error: 'a data import is in progress; retry after the app reloads' });
         const variantId = typeof parsed.variantId === 'string' ? parsed.variantId.trim() : '';
         if (!variantId) return json(400, { error: 'variantId is required' });
         const variant = findVariant(deps.getVariants(), variantId);
@@ -105,6 +108,7 @@ export function createBridgeRouter(deps) {
       }
 
       if (method === 'POST' && path === '/profile/answers') {
+        if (deps.writesSuspended?.()) return json(503, { error: 'a data import is in progress; retry after the app reloads' });
         const question = typeof parsed.question === 'string' ? parsed.question.trim() : '';
         const answer = typeof parsed.answer === 'string' ? parsed.answer.trim() : '';
         if (!question || !answer) return json(400, { error: 'question and answer are required' });

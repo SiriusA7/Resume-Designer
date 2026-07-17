@@ -191,6 +191,41 @@ describe('POST /profile/answers', () => {
   });
 });
 
+describe('write suspension during a destructive import', () => {
+  it('503s POST /applications while writes are suspended, without persisting', async () => {
+    const deps = makeDeps({ writesSuspended: () => true });
+    const res = await route(deps, {
+      method: 'POST', path: '/applications', authorization: AUTH,
+      body: JSON.stringify({ variantId: 'v-1', company: 'Acme' }),
+    });
+    expect(res.status).toBe(503);
+    expect(deps.addApplication).not.toHaveBeenCalled();
+  });
+  it('503s POST /profile/answers while writes are suspended, without persisting', async () => {
+    const deps = makeDeps({ writesSuspended: () => true });
+    const res = await route(deps, {
+      method: 'POST', path: '/profile/answers', authorization: AUTH,
+      body: JSON.stringify({ question: 'Notice period?', answer: '4 weeks' }),
+    });
+    expect(res.status).toBe(503);
+    expect(deps.saveLearnedAnswer).not.toHaveBeenCalled();
+  });
+  it('still serves reads while writes are suspended (only mutations are gated)', async () => {
+    const deps = makeDeps({ writesSuspended: () => true });
+    const res = await route(deps, { method: 'GET', path: '/resumes', authorization: AUTH, body: '' });
+    expect(res.status).toBe(200);
+  });
+  it('accepts writes once the flag clears', async () => {
+    const deps = makeDeps({ writesSuspended: () => false });
+    const res = await route(deps, {
+      method: 'POST', path: '/applications', authorization: AUTH,
+      body: JSON.stringify({ variantId: 'v-1', company: 'Acme' }),
+    });
+    expect(res.status).toBe(201);
+    expect(deps.addApplication).toHaveBeenCalled();
+  });
+});
+
 describe('fallthrough', () => {
   it('404s unknown routes and wrong methods', async () => {
     for (const req of [

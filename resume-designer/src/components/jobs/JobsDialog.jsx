@@ -288,6 +288,17 @@ export default function JobsDialog() {
           hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
         },
       );
+      // The pinned variant may have been DELETED during the long generation
+      // await (the dialog can be dismissed and the résumé deleted from the
+      // Library). Bail before recording drafts — otherwise recordTailorDrafts
+      // creates application records for a variant that no longer exists, leaving
+      // orphan timeline lanes that can't be opened. The loadVariant guard below
+      // is too late: it runs only after this, and only when the current variant
+      // differs.
+      if (variantId && !Object.hasOwn(getVariants(), variantId)) {
+        toast.error('The resume this tailoring was generated for no longer exists.');
+        return;
+      }
       if (variantId) {
         recordTailorDrafts(variantId, variantName, activeJDs);
       }

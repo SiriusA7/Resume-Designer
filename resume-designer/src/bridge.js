@@ -9,6 +9,7 @@
  */
 
 import { appStorage } from './appStorage.js';
+import { store } from './store.js';
 import { createBridgeRouter } from './bridgeRoutes.js';
 import { getVariants, getUserProfile } from './persistence.js';
 import { addApplication } from './applications.js';
@@ -70,6 +71,12 @@ export async function initBridge() {
     saveLearnedAnswer,
     complete: completeForBridge,
     exportVariantPdf,
+    // Reject persisting writes while a destructive import is mid-flight — the
+    // bridge's writers (addApplication / saveLearnedAnswer) bypass the store, so
+    // store.suspendSaves() alone doesn't stop them serializing stale caches over
+    // the just-restored keys. Cleared automatically when the import reloads (or
+    // resumes saves on failure), since this reads the store's live flag.
+    writesSuspended: () => store.areSavesSuspended(),
   });
 
   await listen('bridge:request', async (event) => {
