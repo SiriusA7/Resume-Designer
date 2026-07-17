@@ -21,7 +21,11 @@ import { initPrintMode } from './main.js';
 // or capturing the wrong resume. The label must match this print window's own
 // label, which pdf.js filters on (it spawned us with that label).
 initAppStorage({ readOnly: true })
-  .then(() => initPrintMode())
+  .then(async () => {
+    const { activateProfileMappingForPrint } = await import('./profiles.js');
+    activateProfileMappingForPrint();
+    return initPrintMode();
+  })
   .catch(async (err) => {
     console.error('[PrintEntry] read-only storage init failed — aborting export:', err);
     try {

@@ -37,6 +37,14 @@ export function ChangelogHistory() {
             )}
           </summary>
           <SafeMarkdown className="chat-markdown mt-2 text-sm" content={r.summary} baseUrl={CHANGELOG_LINK_BASE} />
+          {r.full !== r.summary && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                Full changelog
+              </summary>
+              <SafeMarkdown className="chat-markdown mt-2 text-xs" content={r.full} baseUrl={CHANGELOG_LINK_BASE} />
+            </details>
+          )}
         </details>
       ))}
     </div>

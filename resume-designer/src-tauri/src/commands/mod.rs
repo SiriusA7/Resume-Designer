@@ -43,6 +43,9 @@ pub mod migration;
 // webview localStorage). Not platform-gated: every build needs it.
 pub mod storage;
 
+/// Loopback HTTP bridge for the companion browser extension.
+pub mod bridge;
+
 // Desktop-only: runtime update-channel selection (stable/beta) for the updater.
 // `tauri-plugin-updater` is itself a cfg(desktop) dependency.
 #[cfg(desktop)]

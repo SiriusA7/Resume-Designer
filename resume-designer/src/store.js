@@ -119,6 +119,13 @@ function createStore() {
   const listeners = new Set();
   let saveCallback = null;
   let saveTimeout = null;
+  // Latched off before a destructive restore reloads the window. Between the
+  // restore writing appStorage and the reload booting from it, the in-memory
+  // `data` is the STALE pre-import résumé; a save in that window (the
+  // visibilitychange/close handlers call saveNow) would write it back into the
+  // freshly-restored profile — corrupting the backup. Once suspended it stays
+  // suspended: the only path forward from a restore is the reload.
+  let savesSuspended = false;
   const SAVE_DEBOUNCE_MS = 500;
   
   // Undo/redo history with metadata
@@ -469,8 +476,46 @@ function createStore() {
       saveCallback = callback;
     },
 
+    // Latch saving off ahead of a destructive import (see savesSuspended).
+    // Called BEFORE the import runs, so the store can't write its stale résumé
+    // over the imported data during the import's own async flush. Cancels any
+    // pending debounce so it can't fire either.
+    //
+    // Returns TRUE only when this call actually acquired the latch (flipped it
+    // off→on). A caller may only resumeSaves() if it acquired here — otherwise
+    // it would release a suspension a prior import still relies on (e.g. a
+    // Replace whose success-modal flush failed keeps saves suspended, and a
+    // later retry that re-latches then rolls back must NOT resume it).
+    suspendSaves() {
+      const acquired = !savesSuspended;
+      savesSuspended = true;
+      if (saveTimeout) {
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+      }
+      return acquired;
+    },
+
+    // Re-enable saving after an import FAILED and rolled back: the store still
+    // matches the (rolled-back) appStorage, and the app keeps running without a
+    // reload, so it must be able to save again. On a SUCCESSFUL import this is
+    // never called — the window reloads with saves still suspended.
+    resumeSaves() {
+      savesSuspended = false;
+    },
+
+    // True while a destructive import is mid-flight (saves suspended, awaiting
+    // the success-modal reload or a failure resume). The single source of truth
+    // for "no persistence may happen right now" — the companion-extension bridge
+    // reads this to reject writes that would otherwise serialize stale caches
+    // over the just-restored keys (its writers bypass the store entirely).
+    areSavesSuspended() {
+      return savesSuspended;
+    },
+
     // Schedule a debounced save
     scheduleSave() {
+      if (savesSuspended) return;
       if (saveTimeout) {
         clearTimeout(saveTimeout);
       }
@@ -482,15 +527,24 @@ function createStore() {
       }, SAVE_DEBOUNCE_MS);
     },
 
-    // Force immediate save
+    // Force immediate save. Returns whether the persist succeeded so callers
+    // that must not proceed on an unsaved edit (the profile switch reloads the
+    // window) can abort. On failure the dirty flag is kept (not markSaved) so a
+    // later save retries.
     saveNow() {
       if (saveTimeout) {
         clearTimeout(saveTimeout);
       }
+      // Suspended after a restore: the in-memory data is stale, so writing it
+      // would clobber the just-restored workspace. Report success so shutdown
+      // callers (close/visibilitychange) don't treat the no-op as a failure.
+      if (savesSuspended) return true;
       if (saveCallback && data) {
-        saveCallback(data);
-        this.markSaved();
+        const ok = saveCallback(data) !== false;
+        if (ok) this.markSaved();
+        return ok;
       }
+      return true;
     }
   };
 }

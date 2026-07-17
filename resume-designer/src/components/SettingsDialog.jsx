@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Sun, Moon, Monitor, Eye, EyeOff, X,
-  SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3,
+  SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3, UserCircle,
 } from 'lucide-react';
 
 import {
@@ -35,7 +35,9 @@ import {
 import { triggerManualUpdateCheck } from '../updateFlow.js';
 import { useUpdateBusy } from '../hooks/useUpdateBusy.js';
 import { ChangelogHistory } from './ChangelogHistory.jsx';
+import { AccountSection } from './settings/AccountSection.jsx';
 import { exportFullBackupWithFeedback, importBackupFromFile, importLegacyElectronWithFeedback } from '../backupFlow.js';
+import { getBridgeToken } from '../bridge.js';
 
 // Settings panel — composed from genuine shadcn primitives following shadcn's own
 // settings/forms patterns: a left nav rail (ghost items, terracotta-tinted active
@@ -55,6 +57,7 @@ const THEME_OPTIONS = [
 
 // Tab order matches the original settings modal. Updates is desktop-only.
 const TABS = [
+  { id: 'account', label: 'Account', Icon: UserCircle },
   { id: 'general', label: 'General', Icon: SlidersHorizontal },
   { id: 'api-keys', label: 'AI', Icon: Sparkles },
   ...(isTauri ? [{ id: 'updates', label: 'Updates', Icon: RefreshCw }] : []),
@@ -138,6 +141,8 @@ export default function SettingsDialog() {
   // Form/display state, seeded from the services each time the dialog opens.
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [showBridgeToken, setShowBridgeToken] = useState(false);
+  const [copiedBridgeToken, setCopiedBridgeToken] = useState(false);
   const [autoFallback, setAutoFallback] = useState(false);
   const [theme, setThemeState] = useState('system');
   const [channel, setChannel] = useState('stable');
@@ -279,6 +284,9 @@ export default function SettingsDialog() {
           </nav>
 
           <div className="min-h-0 overflow-y-auto p-6">
+            {/* Account — profiles (switch/manage) + workspace stats */}
+            {tab === 'account' && <AccountSection />}
+
             {/* General */}
             {tab === 'general' && (
               <div className="space-y-6">
@@ -468,6 +476,50 @@ export default function SettingsDialog() {
                       </Button>
                       <Button type="button" variant="outline" onClick={() => importLegacyElectronWithFeedback('replace')}>
                         Replace with previous data
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {isTauri && (
+                  <div className="mt-6">
+                    <SectionHeader
+                      title="Companion extension"
+                      description="The browser extension pairs with the app at this address using this token. Treat the token like a password."
+                    />
+                    <div className="flex items-center gap-2">
+                      <Input readOnly value="http://127.0.0.1:17872" aria-label="Bridge address" className="w-52 shrink-0 font-mono text-xs" />
+                      <Input
+                        readOnly
+                        type={showBridgeToken ? 'text' : 'password'}
+                        value={getBridgeToken()}
+                        className="font-mono text-xs"
+                        aria-label="Bridge pairing token"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        title="Show/hide token"
+                        aria-label="Show/hide token"
+                        onClick={() => setShowBridgeToken((v) => !v)}
+                      >
+                        {showBridgeToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(getBridgeToken());
+                          } catch (e) {
+                            console.warn('[Bridge] copy failed:', e);
+                            return;
+                          }
+                          setCopiedBridgeToken(true);
+                          setTimeout(() => setCopiedBridgeToken(false), 1500);
+                        }}
+                      >
+                        {copiedBridgeToken ? 'Copied' : 'Copy'}
                       </Button>
                     </div>
                   </div>

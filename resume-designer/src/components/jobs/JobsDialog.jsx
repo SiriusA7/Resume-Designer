@@ -27,11 +27,12 @@ import {
   analyzeAgainstJobs, generateResumeChanges, getConfiguredProviders,
   getAllModels, isConfigured, validateModelId, getDefaultModelId,
 } from '../../aiService.js';
-import { getSettings, saveSettings, saveVariantAnalysis, getVariantAnalysis } from '../../persistence.js';
+import { getSettings, saveSettings, saveVariantAnalysis, getVariantAnalysis, getVariants } from '../../persistence.js';
+import { recordTailorDrafts } from '../../applications.js';
 import { createChangeSet } from '../../diffEngine.js';
 import { showDiffView } from '../../diffView.js';
 import { store } from '../../store.js';
-import { getCurrentId } from '../../variantManager.js';
+import { getCurrentId, loadVariant } from '../../variantManager.js';
 import { applyRecommendationToStore } from '../../jobRecommendations.js';
 import { JobCard } from './JobCard.jsx';
 import { AnalysisResults } from './AnalysisResults.jsx';
@@ -271,6 +272,10 @@ export default function JobsDialog() {
     setGenReasoning('');
     setLastRun(null);
     setIsAnalyzing(true);
+    // Pin the tailor target BEFORE the await: a variant switch mid-generation
+    // must not attach the resulting drafts to the newly-selected variant.
+    const variantId = getCurrentId();
+    const variantName = variantId ? getVariants()[variantId]?.name || '' : '';
     try {
       const result = await generateResumeChanges(
         model,
@@ -283,7 +288,33 @@ export default function JobsDialog() {
           hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
         },
       );
+      // The pinned variant may have been DELETED during the long generation
+      // await (the dialog can be dismissed and the résumé deleted from the
+      // Library). Bail before recording drafts — otherwise recordTailorDrafts
+      // creates application records for a variant that no longer exists, leaving
+      // orphan timeline lanes that can't be opened. The loadVariant guard below
+      // is too late: it runs only after this, and only when the current variant
+      // differs.
+      if (variantId && !Object.hasOwn(getVariants(), variantId)) {
+        toast.error('The resume this tailoring was generated for no longer exists.');
+        return;
+      }
+      if (variantId) {
+        recordTailorDrafts(variantId, variantName, activeJDs);
+      }
       if (result.changes && Object.keys(result.changes).length > 0) {
+        // The changes were generated for the pinned variant. If the user
+        // switched resumes mid-generation (the dialog can be dismissed while
+        // the request runs), switch back before diffing — otherwise the diff
+        // is computed and applied against the wrong resume. Same cross-résumé
+        // guard as the chat apply flow.
+        if (variantId && getCurrentId() !== variantId) {
+          if (!loadVariant(variantId)) {
+            toast.error('The resume this tailoring was generated for no longer exists.');
+            return;
+          }
+          toast.info(`Switched back to "${variantName}" to review its tailored changes.`);
+        }
         const changeSet = createChangeSet(store.getData(), result.changes);
         setOpen(false);
         showDiffView(changeSet);

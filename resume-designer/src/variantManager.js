@@ -68,6 +68,15 @@ export function getVariantsSnapshot() {
 }
 
 /**
+ * Recompute + publish the variants snapshot after persistence-level edits made
+ * outside this module (the Library dialog renames/deletes non-current variants
+ * straight through persistence.js, which can't notify subscribers itself).
+ */
+export function refreshVariants() {
+  notify();
+}
+
+/**
  * Variants sorted most-recently-modified first (matching the old header order).
  */
 export function getVariantList() {

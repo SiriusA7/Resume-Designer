@@ -1107,3 +1107,24 @@ function renderContactCreative(contact) {
   
   return items.join(' <span class="contact-sep">•</span> ');
 }
+
+// Layout id → renderer. Single source of truth for the layout dispatch that
+// main.js (live editor) and the Library preview share.
+const LAYOUT_RENDERERS = {
+  sidebar: renderResume,
+  stacked: renderResumeStacked,
+  'stacked-vertical': renderResumeStackedVertical,
+  'right-sidebar': renderResumeRightSidebar,
+  compact: renderResumeCompact,
+  executive: renderResumeExecutive,
+  classic: renderResumeClassic,
+  'classic-featured': renderResumeClassicFeatured,
+  modern: renderResumeModern,
+  timeline: renderResumeTimeline,
+  creative: renderResumeCreative,
+};
+
+/** Render resume data with the renderer for `layout` (unknown → sidebar). */
+export function renderResumeForLayout(data, layout) {
+  return (LAYOUT_RENDERERS[layout] || renderResume)(data);
+}

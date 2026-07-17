@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Plus, Copy, Pencil, Trash2, MoreHorizontal, Upload, Download,
-  ChevronDown, Settings, FileDown, User, Briefcase, History, Menu, Check, Loader2,
+  ChevronDown, Settings, FileDown, User, Briefcase, History, Menu, Check, Loader2, LibraryBig,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -24,12 +24,9 @@ import {
   loadVariant, duplicateVariant, deleteCurrentVariant, renameCurrentVariant,
   importVariant, exportCurrentVariant, getCurrentId,
 } from '../variantManager.js';
-import {
-  loadThreads, persistThreads, reassignThreadsForDeletedVariant, countThreadsForVariant,
-  threadIdsForVariant,
-} from '../chatThreads.js';
-import { askDeleteVariantThreads } from './chat/DeleteVariantThreadsDialog.jsx';
+import { handleVariantThreadsForDelete } from './chat/deleteVariantThreadsFlow.js';
 import { openSettings } from '../settingsModal.js';
+import { AccountAvatar } from './profile/AccountAvatar.jsx';
 
 // Format a variant's updatedAt for the selector menu (relative, then absolute).
 function formatDate(isoString) {
@@ -139,27 +136,12 @@ export default function Header() {
     // them, and reassign BEFORE deleteCurrentVariant() so the id still exists.
     // After delete, loadVariant(newId) fires dataLoaded and useChat's follow
     // effect reloads threads, so the change is reflected automatically.
-    const deletingId = getCurrentId();
-    const all = loadThreads().threads;
-    const n = countThreadsForVariant(all, deletingId);
-    if (n > 0) {
-      const choice = await askDeleteVariantThreads({ name: currentName, count: n });
-      if (choice === 'cancel') return;
-      persistThreads(
-        reassignThreadsForDeletedVariant(all, deletingId, choice === 'delete' ? 'delete' : 'general')
-      );
-      // Dropping threads bypasses useChat.deleteThread, so a reply still
-      // streaming in one of them would keep running with its commit target
-      // gone — and the background-stream banner can't render it (the thread
-      // no longer exists to look up). Tell the chat engine which ids were
-      // deleted so it can abort an orphaned in-flight stream. (Keeping
-      // threads → General leaves the stream valid; no event needed.)
-      if (choice === 'delete') {
-        window.dispatchEvent(new CustomEvent('rd:threads-deleted', {
-          detail: { threadIds: threadIdsForVariant(all, deletingId) },
-        }));
-      }
-    } else {
+    const { cancelled, hadThreads } = await handleVariantThreadsForDelete({
+      variantId: getCurrentId(),
+      variantName: currentName,
+    });
+    if (cancelled) return;
+    if (!hadThreads) {
       const ok = await confirmDestructive({
         title: 'Delete this resume?',
         description: `"${currentName}" will be permanently deleted. This can't be undone.`,
@@ -183,16 +165,17 @@ export default function Header() {
   const toolItems = [
     { key: 'profile', label: 'User Profile', short: 'Profile', Icon: User, run: () => window.openUserProfilePanel?.() },
     { key: 'jobs', label: 'Job Descriptions', short: 'Jobs', Icon: Briefcase, run: () => window.openJobDescriptionPanel?.() },
+    { key: 'library', label: 'Resume Library', short: 'Library', Icon: LibraryBig, run: () => window.dispatchEvent(new CustomEvent('rd:open-library')) },
     { key: 'history', label: 'Version History', short: 'History', Icon: History, run: () => window.openHistoryPanel?.() },
   ];
 
   return createPortal(
     <>
-      {/* LEFT ZONE — brand only. `flex-1` (matched by the right zone's flex-1)
-          makes the CENTER zone sit at the header's center. Draggable (no
-          interactive children) so the window keeps drag area now that the variant
-          group occupies the middle. */}
-      <div className="flex min-w-0 flex-1 items-center">
+      {/* LEFT ZONE — brand + profile identity. `flex-1` (matched by the right
+          zone's flex-1) makes the CENTER zone sit at the header's center. The
+          wrapper stays draggable; the switcher button self-exempts like every
+          other header control (see drag-safety note above). */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {/* Brand: terracotta rounded-square mark + Geist 600 wordmark.
             Geometry pinned to mockup: 24px mark, rounded-[7px], 14.5px wordmark. */}
         <div className="flex shrink-0 items-center gap-2.5">
@@ -203,6 +186,11 @@ export default function Header() {
             Resume Designer
           </span>
         </div>
+        {/* Workspace identity: compact initials avatar opening Settings →
+            Account (switch/manage profiles + account stats). No emoji — the app
+            uses none — and kept away from the right cluster's unrelated Profile
+            EDITOR button. */}
+        <AccountAvatar />
       </div>
 
       {/* CENTER ZONE — New + variant selector + actions kebab, centered between
@@ -234,18 +222,29 @@ export default function Header() {
                 <ChevronDown className="size-[13px] shrink-0 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-[60vh] min-w-56 overflow-y-auto">
-              {list.map((v) => (
-                <DropdownMenuItem key={v.id} onSelect={() => loadVariant(v.id)}>
-                  <Check className={cn('size-3.5 shrink-0', v.id !== currentId && 'opacity-0')} />
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{v.name}</span>
-                    {v.updatedAt && (
-                      <span className="text-xs text-muted-foreground">{formatDate(v.updatedAt)}</span>
-                    )}
-                  </span>
+            {/* The variant list scrolls in an inner wrapper so the "View all"
+                footer stays anchored — visible however long the list gets. */}
+            <DropdownMenuContent align="start" className="flex min-w-56 flex-col p-0">
+              <div className="max-h-[52vh] overflow-y-auto p-1">
+                {list.map((v) => (
+                  <DropdownMenuItem key={v.id} onSelect={() => loadVariant(v.id)}>
+                    <Check className={cn('size-3.5 shrink-0', v.id !== currentId && 'opacity-0')} />
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">{v.name}</span>
+                      {v.updatedAt && (
+                        <span className="text-xs text-muted-foreground">{formatDate(v.updatedAt)}</span>
+                      )}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </div>
+              <DropdownMenuSeparator className="my-0" />
+              <div className="p-1">
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent('rd:open-library'))}>
+                  <LibraryBig className="size-3.5 shrink-0" />
+                  <span>View all resumes…</span>
                 </DropdownMenuItem>
-              ))}
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
 

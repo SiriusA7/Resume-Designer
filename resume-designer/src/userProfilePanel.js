@@ -22,6 +22,12 @@ export function openUserProfilePanel() {
 }
 
 // Synchronously flush any pending profile autosave (safe to call anytime).
+// CustomEvent dispatch runs listeners synchronously, so the ProfileDialog's
+// handler has written its persist result to detail.ok by the time dispatch
+// returns. Returns false only when a mounted dialog reports a failed save
+// (passthrough quota); undefined (no dialog / nothing pending) counts as ok.
 export function flushPendingProfileSave() {
-  window.dispatchEvent(new CustomEvent('rd:profile-flush'));
+  const event = new CustomEvent('rd:profile-flush', { detail: {} });
+  window.dispatchEvent(event);
+  return event.detail.ok !== false;
 }

@@ -5,6 +5,7 @@ import {
   whenStorageReady,
   markStorageReady,
   __resetAppStorageForTests,
+  setProfileMapping,
 } from '../src/appStorage.js';
 
 // In-memory fake of the Rust backend (the `invoke` seam).
@@ -21,6 +22,7 @@ function makeBackend(initial = {}) {
 
 beforeEach(() => {
   __resetAppStorageForTests();
+  setProfileMapping(null);
   localStorage.clear();
 });
 
@@ -64,6 +66,49 @@ describe('cached mode (disk backend)', () => {
     await appStorage.flush();
     expect(backend.delete).toHaveBeenCalledWith('resume-zoom');
     expect(backend.files.size).toBe(0);
+  });
+
+  it('coalesces keystroke-rate writes across turns into far fewer disk writes', async () => {
+    // The application-notes field calls setItem() on every keystroke. The
+    // write-behind throttle must collapse a typing burst into a handful of disk
+    // writes (bounded by DRAIN_COALESCE_MS), NOT one serialized write per
+    // keystroke — otherwise a long note queues hundreds of atomic writes and
+    // the native close handler waits on the whole chain.
+    vi.useFakeTimers();
+    try {
+      const backend = makeBackend();
+      await initAppStorage({ backend });
+      for (let i = 1; i <= 10; i++) {
+        appStorage.setItem('resume-app-notes', 'x'.repeat(i)); // one per keystroke
+        await vi.advanceTimersByTimeAsync(40); // < the coalescing window
+      }
+      await appStorage.flush();
+      // 10 keystrokes ≈ 400ms → a couple of throttled writes, not ten, and the
+      // final value is durable on disk.
+      expect(backend.write.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(backend.files.get('resume-app-notes')).toBe('x'.repeat(10));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disarms the pending coalescing timer when a flush forces the drain', async () => {
+    // flush() drains immediately, bypassing the coalescing timer. That timer
+    // must be cancelled, or it fires later, drains a fresh keystroke early, and
+    // clears drainScheduled while a newer timer is pending — cascading
+    // overlapping timers back toward one backend write per keystroke.
+    vi.useFakeTimers();
+    try {
+      const backend = makeBackend();
+      await initAppStorage({ backend });
+      appStorage.setItem('resume-app-notes', 'a'); // arms the coalescing timer
+      expect(vi.getTimerCount()).toBe(1);
+      await appStorage.flush(); // forces a drain...
+      expect(vi.getTimerCount()).toBe(0); // ...and must leave no stale timer armed
+      expect(backend.files.get('resume-app-notes')).toBe('a');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clear() empties cache and backend', async () => {
@@ -344,5 +389,158 @@ describe('storage-ready mount gate', () => {
     markStorageReady();
     await Promise.resolve();
     expect(opened).toBe(true);
+  });
+});
+
+describe('profile mapping', () => {
+  it('namespaces per-profile keys once a profile is active', () => {
+    setProfileMapping('p1');
+    appStorage.setItem('resume-designer-data', '{"a":1}');
+    expect(localStorage.getItem('resume-p--p1--resume-designer-data')).toBe('{"a":1}');
+    expect(localStorage.getItem('resume-designer-data')).toBeNull();
+    expect(appStorage.getItem('resume-designer-data')).toBe('{"a":1}');
+    appStorage.removeItem('resume-designer-data');
+    expect(localStorage.getItem('resume-p--p1--resume-designer-data')).toBeNull();
+  });
+
+  it('leaves shared keys and physical keys unmapped', () => {
+    setProfileMapping('p1');
+    appStorage.setItem('resume-designer-theme', 'dark');
+    expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
+    appStorage.setItem('resume-p--p2--resume-zoom', '1.5');
+    expect(localStorage.getItem('resume-p--p2--resume-zoom')).toBe('1.5');
+  });
+
+  it('keys() returns physical names', () => {
+    setProfileMapping('p1');
+    appStorage.setItem('resume-designer-data', 'x');
+    expect(appStorage.keys()).toContain('resume-p--p1--resume-designer-data');
+  });
+
+  it('is identity before any profile is set (boot/migration reads)', () => {
+    appStorage.setItem('resume-designer-data', 'y');
+    expect(localStorage.getItem('resume-designer-data')).toBe('y');
+  });
+});
+
+describe('restore guard (blocks external writers mid-import, replays on failed restore)', () => {
+  it('defers external writes while armed; import writes before it still land', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+
+    // The import's own synchronous restore write happens BEFORE the guard arms.
+    appStorage.setItem('resume-designer-data', 'restored');
+    appStorage.beginRestoreGuard();
+
+    // A late async completion tries to write while the restore awaits its flush.
+    appStorage.setItem('resume-designer-chat-threads', 'late-reply');
+    appStorage.removeItem('resume-designer-data'); // …and something tries to drop a restored key
+    await appStorage.flush();
+
+    // Guarded ops never reached disk; the pre-guard restore write did. This arm
+    // has NO snapshot, so reads return the committed cache — the deferred write is
+    // invisible to reads and not persisted (read-your-writes applies only in the
+    // snapshot-isolated window).
+    expect(backend.files.get('resume-designer-data')).toBe('restored');
+    expect(backend.files.has('resume-designer-chat-threads')).toBe(false);
+    expect(appStorage.getItem('resume-designer-chat-threads')).toBeNull();
+  });
+
+  it('replays the latest skipped write per key after a failed-restore rollback', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.beginRestoreGuard();
+    appStorage.setItem('resume-designer-chat-threads', 'first');
+    appStorage.setItem('resume-designer-chat-threads', 'latest'); // only the latest survives
+
+    // Failure path: disarm, (rollback would run here), replay, flush.
+    appStorage.endRestoreGuard();
+    appStorage.flushDeferredWrites();
+    await appStorage.flush();
+
+    expect(backend.files.get('resume-designer-chat-threads')).toBe('latest');
+    expect(appStorage.getItem('resume-designer-chat-threads')).toBe('latest');
+  });
+
+  it('discards deferred writes when the guard stays armed (success path reloads)', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.beginRestoreGuard();
+    appStorage.setItem('resume-designer-chat-threads', 'lost-on-reload');
+    await appStorage.flush();
+    // No flushDeferredWrites(): a successful restore reloads, discarding these.
+    expect(backend.files.has('resume-designer-chat-threads')).toBe(false);
+  });
+
+  it('serves pre-restore reads under the guard so read-modify-writes replay safely', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    // The import already wrote the RESTORED value to cache, then arms the guard
+    // with the pre-restore snapshot (the value it removed).
+    appStorage.setItem('resume-token-usage', 'RESTORED');
+    appStorage.beginRestoreGuard(new Map([['resume-token-usage', 'PRE:100']]));
+
+    // A read-modify-write writer reads PRE-restore (not the uncommitted RESTORED
+    // value) and accumulates across completions via its own in-flight deferred write.
+    expect(appStorage.getItem('resume-token-usage')).toBe('PRE:100');
+    appStorage.setItem('resume-token-usage', 'PRE:100+a');
+    expect(appStorage.getItem('resume-token-usage')).toBe('PRE:100+a');
+    appStorage.setItem('resume-token-usage', 'PRE:100+a+b');
+
+    // Failed restore: disarm, rollback restores pre-restore, replay the deferred.
+    appStorage.endRestoreGuard();
+    appStorage.setItem('resume-token-usage', 'PRE:100'); // (rollback restores pre-restore)
+    appStorage.flushDeferredWrites();
+    await appStorage.flush();
+    // The accumulated write replayed on top of pre-restore — prior history intact,
+    // NOT clobbered with the RESTORED-derived value.
+    expect(backend.files.get('resume-token-usage')).toBe('PRE:100+a+b');
+  });
+
+  it('reads an ABSENT pre-restore key as null, then replays the writer\'s OWN new write', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.setItem('resume-token-usage', 'IMPORTED:50'); // the backup ADDED a new key
+    await appStorage.flush();
+    // Empty pre-restore map + the key listed as WRITTEN → beginRestoreGuard marks
+    // it absent (null): mirrors an import adding a previously-absent key.
+    appStorage.beginRestoreGuard(new Map(), ['resume-token-usage']);
+
+    // A read-modify-write writer sees "absent" (not the uncommitted imported value),
+    // so its write is its OWN first record derived from null.
+    expect(appStorage.getItem('resume-token-usage')).toBeNull();
+    appStorage.setItem('resume-token-usage', 'usage-a'); // its deferred write
+
+    // Failed restore: rollback removes the added (imported) key; replay then writes
+    // the writer's OWN record — real paid activity — NOT the discarded imported value.
+    appStorage.endRestoreGuard();
+    appStorage.removeItem('resume-token-usage'); // (rollback removes the added key)
+    appStorage.flushDeferredWrites();
+    await appStorage.flush();
+    expect(backend.files.get('resume-token-usage')).toBe('usage-a');
+  });
+
+  it('maps snapshot keys to physical so a format-1 (logical) written key isolates', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    setProfileMapping('p1'); // owned reads/writes now map to resume-p--p1--<logical>
+    appStorage.setItem('resume-designer-data', 'IMPORTED'); // import added it (writes the physical key)
+    await appStorage.flush();
+    // The import passes the LOGICAL written key; beginRestoreGuard must map it to
+    // physical, or the mapped read would miss it and leak the imported value.
+    appStorage.beginRestoreGuard(new Map(), ['resume-designer-data']);
+    expect(appStorage.getItem('resume-designer-data')).toBeNull(); // reads absent, not IMPORTED
+  });
+
+  it('reads the committed cache (not a deferred stale value) when the guard has no snapshot', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.setItem('resume-designer-chat-threads', 'IMPORTED');
+    await appStorage.flush();
+    appStorage.beginRestoreGuard(); // stay-put re-arm: no snapshot
+    appStorage.setItem('resume-designer-chat-threads', 'STALE-post-alert'); // deferred (blocked)
+    // A recovery export must serialize the committed cache, NOT the deferred value.
+    expect(appStorage.getItem('resume-designer-chat-threads')).toBe('IMPORTED');
+    expect(backend.files.get('resume-designer-chat-threads')).toBe('IMPORTED'); // cache protected
   });
 });

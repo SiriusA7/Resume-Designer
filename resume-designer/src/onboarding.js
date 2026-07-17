@@ -27,14 +27,18 @@ const ONBOARDING_KEY = 'resume-designer-onboarding-complete';
  * @returns {boolean}
  */
 export function shouldShowOnboarding() {
+  // Honor the "completed" flag FIRST — completion (including an explicit
+  // dismissal via the wizard's X) is durable even for a profile with no user
+  // variants yet. Checked before the zero-variant test below, which would
+  // otherwise re-open the wizard on every launch into a dismissed empty
+  // profile; the empty-state canvas covers that case instead.
+  if (appStorage.getItem(ONBOARDING_KEY) === 'true') return false;
+
   const variants = getVariants();
   const variantList = Object.values(variants);
 
   // Always show on a fresh install (no variants at all).
   if (variantList.length === 0) return true;
-
-  // Honor the "completed" flag.
-  if (appStorage.getItem(ONBOARDING_KEY) === 'true') return false;
 
   // Show if only built-in variants exist (no user-created ones).
   return variantList.every((v) => v.builtIn);
@@ -62,4 +66,41 @@ export function showOnboardingWizard(options = {}) {
 /** Close the onboarding wizard. */
 export function closeOnboardingWizard() {
   window.dispatchEvent(new CustomEvent('rd:close-onboarding'));
+}
+
+// `.onboarding-overlay.show` is the wizard's "on screen" contract token (same
+// one styles/onboarding.css keys off); `show` drops the instant a close
+// starts, so a fading-out wizard already counts as closed.
+const ONBOARDING_OPEN_SELECTOR = '.onboarding-overlay.show';
+const ONBOARDING_CLOSE_POLL_MS = 400;
+
+/**
+ * Resolve once the onboarding wizard is neither on screen NOR due to open
+ * (immediately if both hold). Used by the update / what's-new dialog: opening
+ * a modal Radix Dialog while the wizard is up pointer-locks <body>, leaving
+ * the wizard painted on top (z-[3000]) but completely inert until the hidden
+ * dialog underneath is dismissed by an overlay click. Deferring the dialog
+ * until the wizard closes sequences the two instead of stacking them.
+ *
+ * "Due to open" (the shouldShowOnboarding() term) matters because main.js
+ * launches the changelog/update checks BEFORE its 300ms first-run timer — a
+ * fast check would find no overlay yet, open the dialog, and the wizard would
+ * then mount on top of it, recreating exactly the stacking this gate exists
+ * to prevent. That timer opens the wizard iff shouldShowOnboarding(), and the
+ * flag goes durably false on completion or an explicit dismissal — so if the
+ * user leaves a due wizard unfinished, the dialog simply stays deferred to a
+ * later launch rather than interrupting setup.
+ */
+export function whenOnboardingClosed() {
+  const blocked = () =>
+    !!document.querySelector(ONBOARDING_OPEN_SELECTOR) || shouldShowOnboarding();
+  if (!blocked()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (!blocked()) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, ONBOARDING_CLOSE_POLL_MS);
+  });
 }
