@@ -219,6 +219,12 @@ async function maybeAutoMigrateLegacyData() {
     // Durable variant: a disk-full flush failure rolls the (empty-ish) store
     // back and throws into the catch below — flag 'failed', boot continues.
     const result = await importFullBackupDurably(envelope);
+    // Non-reloading caller: importFullBackupDurably keeps the restore guard armed
+    // on success (interactive callers rely on continuous ownership), but this boot
+    // path continues WITHOUT a reload — release it now, or the migration flag and
+    // every profile-init write below would be silently deferred and lost.
+    appStorage.endRestoreGuard();
+    appStorage.discardDeferredWrites();
     appStorage.setItem(ELECTRON_MIGRATION_FLAG, 'imported');
     console.log(
       `[migration] Imported ${result.keysImported} keys from legacy Electron data` +

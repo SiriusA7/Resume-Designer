@@ -78,6 +78,9 @@ export function initApplications() {
 }
 
 function save() {
+  // Writes during a destructive backup import are blocked centrally by
+  // appStorage's restore guard (which replays this write if the restore fails),
+  // so there is no per-writer suspension check here.
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(applications));
   } catch (e) {

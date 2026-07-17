@@ -729,6 +729,11 @@ function importFullBackupV2(parsed) {
   return {
     keysImported, removedExistingKeys, historySkipped,
     rollback: () => rollbackWipedImport(written, priorValues),
+    // For the guard's read isolation: pre-restore values (of removed keys) + the
+    // keys written; appStorage normalizes both to physical form and marks the
+    // added keys absent.
+    preRestore: priorValues,
+    writtenKeys: written,
   };
 }
 
@@ -820,6 +825,8 @@ export function importFullBackupFromEnvelope(parsed) {
     removedExistingKeys: priorValues.size,
     historySkipped,
     rollback: () => rollbackWipedImport(written, priorValues),
+    preRestore: priorValues, // see the format-2 path
+    writtenKeys: written,
   };
 }
 
@@ -835,14 +842,41 @@ export function importFullBackupFromEnvelope(parsed) {
  * for the merge path.
  */
 export async function importFullBackupDurably(parsed) {
-  const { rollback, ...result } = importFullBackupFromEnvelope(parsed);
+  // Serialize restores: if one is already mid-flight (guard armed during its
+  // flush await / success modal), bail before writing — otherwise these
+  // synchronous writes get deferred by the active guard and then cleared.
+  if (appStorage.isRestoreGuardActive()) {
+    throw new Error('Another restore is already in progress — wait for it to finish before importing again.');
+  }
+  const { rollback, preRestore, writtenKeys, ...result } = importFullBackupFromEnvelope(parsed);
+  // The synchronous restore writes are done. Block every OTHER appStorage writer
+  // from here until the reload, so a late async completion (chat/AI reply, tailor
+  // draft, design-setting edit) can't clobber the just-restored keys during the
+  // flush await and the interactive gap before the success overlay/reload. Pass
+  // the pre-restore snapshot so reads stay isolated: a read-modify-write writer
+  // (e.g. token tracking) sees the PRE-restore value, keeping its deferred write
+  // replay-safe if this restore then rolls back.
+  appStorage.beginRestoreGuard(preRestore, writtenKeys);
   if (!(await appStorage.flush())) {
+    // Restore failed: stop guarding so the rollback writes reach storage, roll
+    // back to the pre-import snapshot, then replay the writes skipped during the
+    // window on top of it (so an in-flight completion isn't lost), and persist.
+    appStorage.endRestoreGuard();
     rollback();
+    appStorage.flushDeferredWrites();
     await appStorage.flush();
     throw new Error(
       'The backup could not be written to disk (is the disk full?). Your previous data was restored.'
     );
   }
+  // Success: the restore is durable. Clear the pre-restore snapshot (no rollback
+  // can follow, so reads should now see the restored cache) but KEEP the guard
+  // armed. Interactive callers need CONTINUOUS ownership from here through their
+  // modal + reload — releasing here would open an unguarded MICROTASK gap before
+  // the awaiting caller reaches showImportSuccessAndReload(), during which a
+  // queued AI/chat completion could clobber the restored cache. The boot Electron
+  // migration (non-reloading) releases the guard itself right after this returns.
+  appStorage.clearPreRestoreSnapshot();
   return result;
 }
 
@@ -902,6 +936,11 @@ export async function importFullBackup(file) {
  * confirmation toast.
  */
 export function importFullBackupMerge(parsed) {
+  // Serialize restores (see importFullBackupDurably): don't run a merge while
+  // another restore's guard is active, or its writes would be deferred + cleared.
+  if (appStorage.isRestoreGuardActive()) {
+    throw new Error('Another restore is already in progress — wait for it to finish before importing again.');
+  }
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
