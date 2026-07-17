@@ -594,6 +594,58 @@ describe('importFullBackupDurably', () => {
     expect(result.rollback).toBeUndefined();
     expect(backend.files.get('resume-p--pA--resume-designer-data')).toBe('{"a":1}');
   });
+
+  it('keeps the guard armed on success; a non-reloading caller releases it to keep writing', async () => {
+    // Interactive callers need CONTINUOUS ownership (no unguarded microtask gap),
+    // so a successful importFullBackupDurably leaves the guard armed. The boot
+    // Electron migration continues booting WITHOUT a reload, so it must release the
+    // guard itself — otherwise its migration flag + profile-init writes would be
+    // silently deferred (adoption reporting success while nothing persisted).
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+
+    await importFullBackupDurably(envelope());
+    expect(appStorage.isRestoreGuardActive()).toBe(true); // still armed for interactive continuity
+
+    // The migration releases it, then its migration-flag write reaches disk.
+    appStorage.endRestoreGuard();
+    appStorage.discardDeferredWrites();
+    appStorage.setItem('resume-designer-post-import', 'imported');
+    await appStorage.flush();
+    expect(backend.files.get('resume-designer-post-import')).toBe('imported');
+  });
+
+  it('rejects a second import while a restore guard is already active (serialize)', async () => {
+    // A first restore mid-flight (awaiting flush / success modal) leaves the guard
+    // armed; a second import must bail rather than have its writes deferred + cleared.
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    appStorage.beginRestoreGuard();
+
+    await expect(importFullBackupDurably(envelope())).rejects.toThrow(/already in progress/i);
+    expect(backend.files.has('resume-p--pA--resume-designer-data')).toBe(false); // nothing written
+
+    appStorage.endRestoreGuard();
+  });
+});
+
+describe('profile ops refuse to run during a restore', () => {
+  beforeEach(() => { localStorage.clear(); __resetAppStorageForTests(); });
+
+  it('activateProfileDurably and createProfile bail while the restore guard is armed', async () => {
+    // A restore defers every write, so flush() would report false success and the
+    // op would silently no-op (pointer discarded on reload). The ops must refuse.
+    const backend = makeBackend({ [PROFILES_KEY]: JSON.stringify([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }]) });
+    await initAppStorage({ backend });
+    appStorage.beginRestoreGuard();
+
+    await expect(activateProfileDurably('b', 'a')).resolves.toBe(false);
+    await expect(renameProfileDurably('a', { name: 'X' })).resolves.toBe(false);
+    await expect(deleteProfileDurably('b')).resolves.toBe(false);
+    expect(() => createProfile({ name: 'New' })).toThrow(/restore is in progress/i);
+
+    appStorage.endRestoreGuard();
+  });
 });
 
 // Regression (PR #89 finding 37): renames were fire-and-forget — a cached-mode

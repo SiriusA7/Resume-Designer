@@ -78,6 +78,25 @@ let failureToastShown = false;
 // actually reached disk — see flush().
 let writeFailures = 0;
 
+// Restore guard: for a caller-bounded window during a destructive backup restore,
+// appStorage BLOCKS every other ("external") writer so a late async completion (a
+// chat/AI reply, a tailor draft, a design-setting edit) can't serialize a
+// pre-import snapshot over the just-restored keys. The import arms the guard AFTER
+// its synchronous restore writes (single-threaded, so its own writes are already
+// applied — no bypass needed) and RELEASES it on success; the interactive reload
+// funnel re-arms it across the modal + reload. A non-reloading caller (the boot
+// migration) relies on that release, or every subsequent write would be deferred.
+// Skipped writes are recorded (latest op per key) so a FAILED restore can replay
+// them after its rollback instead of silently dropping them.
+let restoreGuardActive = false;
+const deferredDuringRestore = new Map(); // mapped key -> { op: 'write'|'delete', value? }
+// Pre-restore values (mapped key -> value) served for READS while the guard is
+// armed, so a read-modify-write writer (e.g. token tracking) sees the pre-restore
+// state — snapshot isolation — and its deferred write stays replay-safe if the
+// restore rolls back. Null for the interactive modal re-arm (the import already
+// committed; reads should see the restored cache and no rollback follows).
+let preRestoreSnapshot = null;
+
 // Readiness signal for the React chrome. App.jsx gates every storage-reading
 // child on this so their mount-time facade reads can never execute before the
 // BOOT DATA is in place — that means initAppStorage() has picked a mode AND
@@ -208,6 +227,19 @@ function drain() {
 export const appStorage = {
   getItem(key) {
     key = mapKey(activeProfileId, key);
+    // Isolated-read window ONLY — a durable import's flush await, where the
+    // snapshot is present: serve the writer's own in-flight deferred write (so
+    // successive read-modify-writes accumulate) then the PRE-restore value, so
+    // writers compute against pre-restore rather than the uncommitted restored
+    // value a failed restore would roll back. Once the snapshot is cleared (the
+    // success modal, or a stay-put final-flush failure), reads return the
+    // committed cache — a recovery export must serialize THAT, not a deferred
+    // stale value from a post-alert write.
+    if (restoreGuardActive && preRestoreSnapshot) {
+      const pending = deferredDuringRestore.get(key);
+      if (pending) return pending.op === 'delete' ? null : pending.value;
+      if (preRestoreSnapshot.has(key)) return preRestoreSnapshot.get(key);
+    }
     if (mode === 'passthrough') return localStorage.getItem(key);
     return cache.has(key) ? cache.get(key) : null;
   },
@@ -215,6 +247,9 @@ export const appStorage = {
   setItem(key, value) {
     key = mapKey(activeProfileId, key);
     const v = String(value);
+    // Blocked mid-restore: record the latest write and skip cache+disk (see the
+    // restoreGuardActive note). The import's own writes ran before the guard armed.
+    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'write', value: v }); return; }
     if (mode === 'passthrough') {
       // readOnly passthrough (print window whose disk load failed): there is
       // no separate cache here, and it must never touch localStorage — no-op.
@@ -230,6 +265,7 @@ export const appStorage = {
 
   removeItem(key) {
     key = mapKey(activeProfileId, key);
+    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'delete' }); return; }
     if (mode === 'passthrough') {
       if (readOnly) return; // see setItem: readOnly passthrough never writes
       localStorage.removeItem(key);
@@ -286,6 +322,109 @@ export const appStorage = {
     if (dirty.size) drain();
     await chain;
     return writeFailures === before;
+  },
+
+  /**
+   * Arm the restore guard: while armed, every external setItem/removeItem is
+   * recorded (latest op per key) and skipped instead of touching cache/disk, and
+   * READS are served from `preRestore` (a mapped-key -> value snapshot of the
+   * pre-restore state) so read-modify-write writers compute against pre-restore.
+   * The caller MUST later release it — endRestoreGuard() + flushDeferredWrites()
+   * on a failed restore, or endRestoreGuard() + discardDeferredWrites() on success
+   * — or a non-reloading caller would defer every subsequent write. The import's
+   * own writes ran synchronously BEFORE this, so they are already applied. The
+   * interactive modal re-arm passes no snapshot (the import committed; reads
+   * should see the restored cache, and no rollback follows).
+   */
+  beginRestoreGuard(preRestore = null, writtenKeys = null) {
+    restoreGuardActive = true;
+    deferredDuringRestore.clear();
+    if (!preRestore) { preRestoreSnapshot = null; return; }
+    // Normalize snapshot keys to the PHYSICAL form getItem() reads by — a format-1
+    // restore passes logical written keys while profile mapping is active, so an
+    // unmapped snapshot key would never match the mapped read. Then mark keys the
+    // backup ADDED (written but absent pre-restore) as null, so their writers read
+    // "absent" instead of the uncommitted imported value.
+    preRestoreSnapshot = new Map();
+    for (const [k, v] of preRestore) preRestoreSnapshot.set(mapKey(activeProfileId, k), v);
+    if (writtenKeys) {
+      for (const k of writtenKeys) {
+        const mk = mapKey(activeProfileId, k);
+        if (!preRestoreSnapshot.has(mk)) preRestoreSnapshot.set(mk, null);
+      }
+    }
+  },
+
+  /**
+   * Disarm WITHOUT replaying — the restore failed and is about to roll back,
+   * whose writes must reach storage. The recorded writes are kept so
+   * flushDeferredWrites() can replay them on top of the restored snapshot.
+   */
+  endRestoreGuard() {
+    restoreGuardActive = false;
+    preRestoreSnapshot = null;
+  },
+
+  /**
+   * Drop the pre-restore snapshot while KEEPING the guard armed. Called on a
+   * successful durable import: the restore committed (no rollback can follow), so
+   * reads should now return the restored cache, but the guard stays armed for the
+   * interactive caller's continuous ownership through its modal + reload.
+   */
+  clearPreRestoreSnapshot() {
+    preRestoreSnapshot = null;
+  },
+
+  /**
+   * Replay the external writes skipped during the guard window (latest per key),
+   * then clear them. Called on a FAILED restore AFTER endRestoreGuard() and the
+   * rollback, so an in-flight completion the user paid for lands on top of the
+   * rolled-back data instead of being lost. Never called on success — the reload
+   * discards the guard state.
+   */
+  flushDeferredWrites() {
+    // Replay ALL deferred writes. The snapshot already made writers read the
+    // pre-restore value (null for keys the backup added), so a replayed write
+    // carries the writer's OWN new activity — e.g. a paid AI request's first
+    // token-usage record — NOT the discarded imported value. Dropping writes to
+    // previously-absent keys would lose real work done during the window.
+    let applied = false;
+    for (const [key, entry] of deferredDuringRestore) {
+      if (mode === 'passthrough') {
+        if (entry.op === 'delete') localStorage.removeItem(key);
+        else localStorage.setItem(key, entry.value);
+      } else if (entry.op === 'delete') {
+        cache.delete(key);
+        dirty.set(key, 'delete');
+      } else {
+        cache.set(key, entry.value);
+        dirty.set(key, 'write');
+      }
+      applied = true;
+    }
+    deferredDuringRestore.clear();
+    preRestoreSnapshot = null;
+    if (applied && mode !== 'passthrough') scheduleDrain();
+  },
+
+  /**
+   * Drop the writes skipped during the guard window WITHOUT applying them — the
+   * success path, where the reload boots from the (canonical) restored data.
+   */
+  discardDeferredWrites() {
+    deferredDuringRestore.clear();
+    preRestoreSnapshot = null;
+  },
+
+  /**
+   * Whether a restore guard is currently armed. Import entry points check this to
+   * SERIALIZE: a second restore started while one is mid-flight (the first is
+   * awaiting its flush, or its success modal is open) must bail — otherwise its
+   * synchronous writes are silently deferred by the active guard and its own
+   * beginRestoreGuard() then clears them, reporting a success that never applied.
+   */
+  isRestoreGuardActive() {
+    return restoreGuardActive;
   },
 };
 
@@ -417,4 +556,7 @@ export function __resetAppStorageForTests() {
   chain = Promise.resolve();
   failureToastShown = false;
   writeFailures = 0;
+  restoreGuardActive = false;
+  deferredDuringRestore.clear();
+  preRestoreSnapshot = null;
 }

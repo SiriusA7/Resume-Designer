@@ -382,6 +382,10 @@ export function setActiveProfile(id) {
  * cache and (eventually) disk both settle on `restoreId`.
  */
 export async function activateProfileDurably(id, restoreId) {
+  // A backup restore is mid-flight: the guard would only DEFER this pointer write
+  // (flush() then reports false success), and the deferred pointer is discarded on
+  // the restore's reload — so the switch would silently no-op. Refuse it instead.
+  if (appStorage.isRestoreGuardActive()) return false;
   setActiveProfile(id);
   if (await appStorage.flush()) return true;
   setActiveProfile(restoreId);
@@ -390,6 +394,12 @@ export async function activateProfileDurably(id, restoreId) {
 }
 
 export function createProfile({ name, emoji = '🙂' }) {
+  // During a restore the registry write would only be deferred (and discarded on
+  // reload); throw so callers (incl. importProfileBackup) surface it rather than
+  // report a create that never persists. Matches the quota-throw contract.
+  if (appStorage.isRestoreGuardActive()) {
+    throw new Error('A backup restore is in progress — wait for it to finish before creating a profile.');
+  }
   const registry = loadRegistry() || [];
   let id = generateProfileId();
   while (registry.some((p) => p.id === id)) id = generateProfileId();
@@ -413,6 +423,7 @@ export function renameProfile(id, { name, emoji }) {
  * and false returned so the caller keeps the editor open.
  */
 export async function renameProfileDurably(id, patch) {
+  if (appStorage.isRestoreGuardActive()) return false; // see activateProfileDurably: a deferred write can't be reported durable
   const registryBefore = loadRegistry() || [];
   renameProfile(id, patch);
   if (await appStorage.flush()) return true;
@@ -442,6 +453,7 @@ export function deleteProfile(id) {
  * announcing a deletion that never reached disk.
  */
 export async function deleteProfileDurably(id) {
+  if (appStorage.isRestoreGuardActive()) return false; // see activateProfileDurably: a deferred write can't be reported durable
   const registryBefore = loadRegistry() || [];
   const prefix = physicalKey(id, '');
   const snapshot = new Map();

@@ -27,6 +27,8 @@ export function normalizeQuestion(q) {
 }
 
 function save() {
+  // Writes during a destructive backup import are blocked centrally by
+  // appStorage's restore guard, so there is no per-writer suspension check here.
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(answers));
   } catch (e) {

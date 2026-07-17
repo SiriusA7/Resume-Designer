@@ -91,10 +91,15 @@ function reloadWithOverlay(message = 'Reloading…') {
 // matches the merged data. It is FALSE for a replace, whose store is stale — a
 // resume would let the next close/background save overwrite the imported
 // profile — so a replace stays suspended (the user reloads/retries).
-function showImportSuccessAndReload(message, resumeSavesOnFlushFailure = false) {
-  // Saving is already suspended by the caller (before the durable import ran),
-  // so the stale in-memory résumé can't be written back while this modal waits
-  // on the user or during the reload.
+function showImportSuccessAndReload(message) {
+  // Saving is already suspended by the caller (before the durable import ran), so
+  // the stale in-memory résumé can't be written back while this modal waits on the
+  // user or during the reload. The durable import keeps its restore guard armed on
+  // success (continuous ownership — no unguarded microtask gap), so only ARM here
+  // if it isn't already: the legacy Merge path is synchronous and never armed one.
+  // Either way, EVERY other appStorage writer stays blocked through the modal +
+  // reload; the reload boots from the restored data and resets the guard.
+  if (!appStorage.isRestoreGuardActive()) appStorage.beginRestoreGuard();
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'import-success-modal-overlay';
@@ -146,17 +151,20 @@ function showImportSuccessAndReload(message, resumeSavesOnFlushFailure = false) 
     // tell the user (the generic storage-failure toast has already fired too).
     const durable = await appStorage.flush();
     if (!durable) {
-      // Import couldn't reach disk and we're staying put (no reload). Re-enable
-      // saving ONLY when safe (merge path) so the app stays functional once the
-      // user frees space; a replace keeps saves suspended because its store is
-      // stale and a resume would clobber the imported profile on the next
-      // close/background save.
-      if (resumeSavesOnFlushFailure) store.resumeSaves();
+      // Import couldn't reach disk; staying put (no reload). KEEP the guard armed:
+      // module caches were never reloaded from the imported storage, so a
+      // post-alert stale write (e.g. a chat update serializing the pre-import
+      // in-memory list) would clobber the imported data. DISCARD the modal-window
+      // deferred writes rather than replay them — for a merge they were derived
+      // from the pre-import in-memory state, so replaying would ALSO overwrite the
+      // imported keys. Writes stay guarded and saves stay suspended until reload;
+      // the user exports a copy, then reloads.
+      appStorage.discardDeferredWrites();
       alert(
         'Your backup was imported, but it could NOT be saved to disk — your '
-        + 'disk may be full. Don\'t close the app yet: free up space, then use '
-        + 'Settings → Data → Export Backup to save a copy, or try the import '
-        + 'again. (Reloading now would lose the imported data.)'
+        + 'disk may be full. Free up space, then use Settings → Data → Export '
+        + 'Backup to save a copy. Reloading or closing the app before the copy '
+        + 'is saved will lose the imported data.'
       );
       return;
     }
@@ -351,9 +359,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       ? `Merged your previous app's résumés and settings into this one.`
       : `Imported ${result.keysImported} keys from your previous app `
         + `(removed ${result.removedExistingKeys} existing keys).`;
-    // Only the merge path may resume saves if the final flush fails (its store
-    // isn't stale); a legacy replace stays suspended like the format-2 one.
-    showImportSuccessAndReload(summary + skipped, merging);
+    showImportSuccessAndReload(summary + skipped);
   } catch (err) {
     if (suspendedHere) store.resumeSaves(); // resume only a suspension THIS call created
     console.error('[backup] Legacy import failed:', err);

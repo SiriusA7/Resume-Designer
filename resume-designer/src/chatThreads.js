@@ -192,6 +192,9 @@ export function countThreadsForVariant(threads, variantId) {
 }
 
 export function persistThreads(threads) {
+  // Writes during a destructive backup import are blocked centrally by
+  // appStorage's restore guard (which also replays this write if the restore
+  // fails), so there is no per-writer suspension check here.
   try {
     appStorage.setItem(THREADS_KEY, JSON.stringify(threads));
   } catch (e) {
