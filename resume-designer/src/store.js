@@ -504,6 +504,15 @@ function createStore() {
       savesSuspended = false;
     },
 
+    // True while a destructive import is mid-flight (saves suspended, awaiting
+    // the success-modal reload or a failure resume). The single source of truth
+    // for "no persistence may happen right now" — the companion-extension bridge
+    // reads this to reject writes that would otherwise serialize stale caches
+    // over the just-restored keys (its writers bypass the store entirely).
+    areSavesSuspended() {
+      return savesSuspended;
+    },
+
     // Schedule a debounced save
     scheduleSave() {
       if (savesSuspended) return;
