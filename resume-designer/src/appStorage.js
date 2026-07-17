@@ -383,6 +383,14 @@ export const appStorage = {
    * discards the guard state.
    */
   flushDeferredWrites() {
+    // Only reached in CACHED mode — importFullBackupDurably's failure path, which
+    // can't trigger in passthrough (its flush() is always durable). Guard so a
+    // stray passthrough call is a clean no-op rather than a null-backend drain.
+    if (mode !== 'cached') {
+      deferredDuringRestore.clear();
+      preRestoreSnapshot = null;
+      return;
+    }
     // Replay ALL deferred writes. The snapshot already made writers read the
     // pre-restore value (null for keys the backup added), so a replayed write
     // carries the writer's OWN new activity — e.g. a paid AI request's first
@@ -390,10 +398,7 @@ export const appStorage = {
     // previously-absent keys would lose real work done during the window.
     let applied = false;
     for (const [key, entry] of deferredDuringRestore) {
-      if (mode === 'passthrough') {
-        if (entry.op === 'delete') localStorage.removeItem(key);
-        else localStorage.setItem(key, entry.value);
-      } else if (entry.op === 'delete') {
+      if (entry.op === 'delete') {
         cache.delete(key);
         dirty.set(key, 'delete');
       } else {
@@ -404,7 +409,7 @@ export const appStorage = {
     }
     deferredDuringRestore.clear();
     preRestoreSnapshot = null;
-    if (applied && mode !== 'passthrough') scheduleDrain();
+    if (applied) scheduleDrain();
   },
 
   /**
