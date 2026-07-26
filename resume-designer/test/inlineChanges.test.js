@@ -264,3 +264,114 @@ describe('container-path changes resolve from descendant paths', () => {
     expect(experience.every((e) => e != null)).toBe(true);
   });
 });
+
+describe('array removals resolve by identity — stale indexes must not misfire', () => {
+  // Several removals on ONE array all carry indexes into the ORIGINAL array
+  // (diffArray numbers unmatched old items before anything is spliced), so
+  // applying by raw index breaks after the first splice shifts the survivors
+  // down: the next stale index deletes the wrong item, or (out of range)
+  // silently nothing — while the session still marks it applied.
+  const baseData = () => ({
+    experience: [{
+      id: 'e1', title: 'Dev', company: 'Acme',
+      bullets: [
+        'Led the platform team through a full rewrite',
+        'Cut infra spend by 40% over two quarters',
+        'Wrote quarterly OKR reports',
+        'Organized the team offsite',
+      ],
+    }],
+    education: ['BSc — State U — 2015', 'MSc — Tech U — 2017', 'Cert — Online — 2020'],
+  });
+
+  beforeEach(() => {
+    store.setData(baseData(), true, null);
+  });
+
+  // Codex's case: four bullets shortened to two → the diff emits MODIFYs at
+  // [0]/[1] and REMOVEs at ORIGINAL indices [2]/[3].
+  const shortenedBullets = ['Led a full platform rewrite', 'Cut infra spend 40%'];
+  const shortenBulletsChangeSet = () => {
+    const changeSet = createChangeSet(store.getData(), {
+      'experience[0].bullets': shortenedBullets,
+    });
+    // Guard the fixture: the removals really target the original indices.
+    expect(changeSet.changes.filter((c) => c.type === 'remove').map((c) => c.path))
+      .toEqual(['experience[0].bullets[2]', 'experience[0].bullets[3]']);
+    return changeSet;
+  };
+
+  it('batch apply-all: both removals land and the two intended bullets survive', () => {
+    showInlineChanges(shortenBulletsChangeSet());
+    applyAllInlineChanges();
+    expect(store.get('experience[0].bullets')).toEqual(shortenedBullets);
+  });
+
+  it('one-at-a-time in change-set order (hover menu): same surviving bullets', () => {
+    const changeSet = shortenBulletsChangeSet();
+    showInlineChanges(changeSet);
+    for (const change of changeSet.changes) applyInlineChange(change.path);
+    expect(store.get('experience[0].bullets')).toEqual(shortenedBullets);
+  });
+
+  // Non-adjacent removals (original indices 0 and 2 of four): an off-by-one
+  // that happens to survive adjacent tail removals still deletes the wrong
+  // item here — after removing e1, stale index 2 points at e4, not e3.
+  const fourRoles = () => ([
+    { id: 'e1', title: 'Dev', company: 'Acme' },
+    { id: 'e2', title: 'PM', company: 'Beta' },
+    { id: 'e3', title: 'SRE', company: 'Gamma' },
+    { id: 'e4', title: 'CTO', company: 'Delta' },
+  ]);
+  const dropFirstAndThirdChangeSet = () => {
+    const changeSet = createChangeSet(store.getData(), {
+      experience: fourRoles().filter((e) => e.id === 'e2' || e.id === 'e4'),
+    });
+    expect(changeSet.changes.map((c) => [c.type, c.path]))
+      .toEqual([['remove', 'experience[0]'], ['remove', 'experience[2]']]);
+    return changeSet;
+  };
+
+  it('non-adjacent removals via batch apply-all remove the right items', () => {
+    store.setData({ experience: fourRoles() }, true, null);
+    showInlineChanges(dropFirstAndThirdChangeSet());
+    applyAllInlineChanges();
+    expect(store.get('experience').map((e) => e.id)).toEqual(['e2', 'e4']);
+  });
+
+  it('non-adjacent removals applied one at a time never delete the wrong item', () => {
+    store.setData({ experience: fourRoles() }, true, null);
+    showInlineChanges(dropFirstAndThirdChangeSet());
+    applyInlineChange('experience[0]');
+    applyInlineChange('experience[2]');
+    expect(store.get('experience').map((e) => e.id)).toEqual(['e2', 'e4']);
+  });
+
+  it('duplicate values: each removal takes one occurrence, recorded index preferred', () => {
+    store.setData({
+      experience: [{ id: 'e1', title: 'Dev', company: 'Acme', bullets: ['x', 'y', 'x', 'z'] }],
+    }, true, null);
+    // Hand-built: positional string matching only ever emits tail removals, so
+    // the diff itself cannot ask for the 'x' at 0 and the 'x' at 2 — but the
+    // apply primitive must still take one occurrence per removal, not double-
+    // delete one of them or take 'z'.
+    showInlineChanges(makeChangeSet([
+      { path: 'experience[0].bullets[0]', type: 'remove', oldValue: 'x', newValue: null },
+      { path: 'experience[0].bullets[2]', type: 'remove', oldValue: 'x', newValue: null },
+    ]));
+    applyInlineChange('experience[0].bullets[0]');
+    applyInlineChange('experience[0].bullets[2]');
+    expect(store.get('experience[0].bullets')).toEqual(['y', 'z']);
+  });
+
+  it('a single removal on a string array still works (no regression)', () => {
+    const changeSet = createChangeSet(store.getData(), {
+      education: ['BSc — State U — 2015', 'MSc — Tech U — 2017'],
+    });
+    expect(changeSet.changes.filter((c) => c.type === 'remove').map((c) => c.path))
+      .toEqual(['education[2]']);
+    showInlineChanges(changeSet);
+    applyInlineChange('education[2]');
+    expect(store.get('education')).toEqual(['BSc — State U — 2015', 'MSc — Tech U — 2017']);
+  });
+});
