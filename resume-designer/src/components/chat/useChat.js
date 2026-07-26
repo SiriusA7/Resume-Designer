@@ -3,6 +3,7 @@ import {
   chat, generateBullets, getFeedback, improveSummary, isConfigured, getConfiguredProviders,
   generateResumeChanges, getDefaultModelId, validateModelId, isSafeModelSlug, getAllModels,
   modelSupportsReasoning, getCustomModels, removeCustomModel, fetchModelCatalog,
+  getAllCatalogModels, refreshCatalogIfStale, CATALOG_UPDATED_EVENT,
   profileInterviewChat, extractProfileFromInterview, saveExtractedProfile,
 } from '../../aiService.js';
 import { getSettings, saveSettings, getUserProfile, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
@@ -16,13 +17,16 @@ import {
 } from '../../chatThreads.js';
 import { getCurrentId, loadVariant, getVariantList } from '../../variantManager.js';
 
-// AI model catalog, derived from aiService's curated MODELS (single source of
-// truth). Shape: [{ group, options: [{ value: slug, label }] }]. Custom slugs
-// typed into the dropdown aren't listed here but are still selectable.
-export const AI_MODELS = Object.entries(getAllModels()).map(([group, models]) => ({
-  group,
-  options: models.map((m) => ({ value: m.id, label: m.label })),
-}));
+// AI model catalog for the picker's Featured section. This MUST be a function,
+// not a module constant: the catalog refreshes at runtime, and a constant
+// evaluated at import time could never reflect it.
+// Shape: [{ group, options: [{ value: slug, label }] }]
+export function getAIModels() {
+  return Object.entries(getAllModels()).map(([group, models]) => ({
+    group,
+    options: models.map((m) => ({ value: m.id, label: m.label })),
+  }));
+}
 
 const FALLBACK_MODEL = 'anthropic/claude-sonnet-4.6';
 
@@ -40,12 +44,14 @@ const CHANGE_KEYWORDS = [
 
 export function getModelLabel(value) {
   if (!value) return 'Select Model';
-  for (const group of AI_MODELS) {
+  for (const group of getAIModels()) {
     for (const opt of group.options) {
       if (opt.value === value) return opt.label;
     }
   }
-  // Custom slug not in the curated list — prettify the model part of the slug.
+  const fromCatalog = getAllCatalogModels().find((m) => m.id === value);
+  if (fromCatalog) return fromCatalog.name;
+  // Custom slug not in the catalog — prettify the model part of the slug.
   // e.g. "anthropic/claude-opus-4.8" -> "Claude Opus 4.8"
   const modelPart = String(value).split('/').pop() || String(value);
   const pretty = modelPart
@@ -170,6 +176,15 @@ export function useChat() {
   const [configuredProviders, setConfiguredProviders] = useState(() => getConfiguredProviders());
   const [customModels, setCustomModels] = useState(() => (isConfigured() ? getCustomModels() : []));
   const [reasoningSupported, setReasoningSupported] = useState(() => modelSupportsReasoning(getInitialModel()));
+
+  // Bumped whenever a catalog refresh lands, so every model picker re-renders
+  // with the new list. Mirrors the SETTINGS_UPDATED_EVENT pattern.
+  const [catalogRev, setCatalogRev] = useState(0);
+  useEffect(() => {
+    const onCatalog = () => setCatalogRev((n) => n + 1);
+    window.addEventListener(CATALOG_UPDATED_EVENT, onCatalog);
+    return () => window.removeEventListener(CATALOG_UPDATED_EVENT, onCatalog);
+  }, []);
 
   const refreshCustomModels = () => setCustomModels(isConfigured() ? getCustomModels() : []);
 
@@ -1100,6 +1115,7 @@ Let's begin!`);
     messages, threads, currentThreadId, loading, thinking, streamingMessage, streamThreadId, contextChips,
     currentModel, reasoningEffort, webSearchEnabled,
     configured, configuredProviders, reasoningSupported, customModels,
+    catalogRev, refreshCatalog: refreshCatalogIfStale,
     // active résumé (re-read each render; the follow effect re-renders on switch)
     currentVariantId: getCurrentId(),
     // actions

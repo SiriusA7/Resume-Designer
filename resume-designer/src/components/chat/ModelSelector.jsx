@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
-import { AI_MODELS, getModelLabel } from './useChat.js';
+import { getAIModels, getModelLabel } from './useChat.js';
 
 /**
  * Model picker — curated groups + the user's cached custom slugs (removable) +
@@ -53,7 +53,7 @@ export function ModelSelector({
           <>
             <Command>
               <CommandList className="max-h-[260px]">
-                {AI_MODELS.map((group) => (
+                {getAIModels().map((group) => (
                   <CommandGroup
                     key={group.group}
                     heading={group.group}
