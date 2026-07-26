@@ -800,6 +800,7 @@ function startEditing(element) {
 
   // Make editable
   element.contentEditable = 'true';
+  element.spellcheck = true;
   element.classList.add('editing');
   
   // Focus and select all text
@@ -844,6 +845,7 @@ function finishEditing(element) {
   
   // Remove editing state
   element.contentEditable = 'false';
+  element.spellcheck = false;
   element.classList.remove('editing');
   
   if (activeElement === element) {

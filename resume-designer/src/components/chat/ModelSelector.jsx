@@ -95,6 +95,7 @@ export function ModelSelector({
                 <Input
                   className={cn('h-[30px] font-mono text-xs', invalid && 'border-destructive')}
                   aria-invalid={invalid || undefined}
+                  spellCheck={false}
                   placeholder="Custom slug, e.g. anthropic/claude-opus-4.8"
                   value={slug}
                   onChange={(e) => { setSlug(e.target.value); setInvalid(false); }}
