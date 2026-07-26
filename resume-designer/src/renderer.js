@@ -159,15 +159,21 @@ function splitSectionsByMode(sections = []) {
   return { lists, skills };
 }
 
+// Layouts with no sidebar — their renderers ignore `area` and render every
+// section in one column (see partitionSectionsByArea below). Exported so the
+// structure panel can explain that Area has no visible effect on them.
+export const SINGLE_COLUMN_LAYOUTS = new Set([
+  'stacked', 'stacked-vertical', 'classic', 'classic-featured', 'creative',
+]);
+
 /**
  * Split sections by column. Indices are preserved because every data-editable
  * path and every AI change path is `sections[<original index>]…`.
  *
  * Only the six layouts that actually have a sidebar call this. The five
- * sidebar-less layouts (stacked, stacked-vertical, classic, classic-featured,
- * creative) deliberately ignore `area` and render every section in their single
- * column — forcing the distinction there would change existing résumés' output
- * for no benefit.
+ * sidebar-less layouts (SINGLE_COLUMN_LAYOUTS above) deliberately ignore
+ * `area` and render every section in their single column — forcing the
+ * distinction there would change existing résumés' output for no benefit.
  */
 export function partitionSectionsByArea(sections = []) {
   const main = [];

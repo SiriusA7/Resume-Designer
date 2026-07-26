@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
 
 import { store, generateId, experienceSortValue } from '../../store.js';
+import { SINGLE_COLUMN_LAYOUTS } from '../../renderer.js';
+import { getSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { SortableList, SortableItem, DragHandle } from '../Sortable.jsx';
 import { PanelSection } from './PanelSection.jsx';
 import DesignTab from './DesignTab.jsx';
@@ -156,8 +158,8 @@ function SectionContentList({ sectionIndex, content }) {
   );
 }
 
-function SectionItem({ section, index }) {
-  const type = section?.type === 'skills' ? 'skills' : 'list';
+function SectionItem({ section, index, activeLayout }) {
+  const type = ['skills', 'paragraph'].includes(section?.type) ? section.type : 'list';
   const removeSection = async () => {
     const ok = await confirmDestructive({
       title: 'Delete this section?',
@@ -178,20 +180,41 @@ function SectionItem({ section, index }) {
         />
         <RowDeleteButton title="Delete section" onClick={removeSection} />
       </div>
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">Display</span>
-        <Segmented size="xs">
-          {[['list', 'Bulleted'], ['skills', 'Inline Tags']].map(([t, label]) => (
-            <SegmentedItem
-              key={t} size="xs"
-              active={type === t}
-              onClick={() => store.update(`sections[${index}].type`, t)}
-            >
-              {label}
-            </SegmentedItem>
-          ))}
-        </Segmented>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Area</span>
+          <Segmented size="xs">
+            {[['sidebar', 'Sidebar'], ['main', 'Main']].map(([a, label]) => (
+              <SegmentedItem
+                key={a} size="xs"
+                active={(section.area || 'sidebar') === a}
+                onClick={() => store.update(`sections[${index}].area`, a)}
+              >
+                {label}
+              </SegmentedItem>
+            ))}
+          </Segmented>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Display</span>
+          <Segmented size="xs">
+            {[['list', 'Bulleted'], ['skills', 'Inline Tags'], ['paragraph', 'Paragraph']].map(([t, label]) => (
+              <SegmentedItem
+                key={t} size="xs"
+                active={type === t}
+                onClick={() => store.update(`sections[${index}].type`, t)}
+              >
+                {label}
+              </SegmentedItem>
+            ))}
+          </Segmented>
+        </div>
       </div>
+      {SINGLE_COLUMN_LAYOUTS.has(activeLayout) && (
+        <p className="text-[11px] text-muted-foreground">
+          This template uses a single column, so Area has no visible effect here.
+        </p>
+      )}
       <SectionContentList sectionIndex={index} content={section.content || []} />
     </SortableItem>
   );
@@ -286,6 +309,10 @@ export default function StructurePanel() {
   // survives reload/variant-switch without polluting undo history. Seeded from
   // saved data on open + kept in sync via the store subscription below.
   const [sortMode, setSortMode] = useState(() => store.getData()?.experienceSortMode || 'date');
+  // Active template, for the single-column note on section items. The layout is
+  // a design SETTING (getSettings().layout), not résumé data, and switching it
+  // emits no store event — so track it via the settings-updated window event.
+  const [activeLayout, setActiveLayout] = useState(() => getSettings().layout || 'sidebar');
   const tabContentRef = useRef(null);
   const scrollPos = useRef(0);
 
@@ -309,6 +336,13 @@ export default function StructurePanel() {
     document.getElementById('toggle-structure-panel')?.classList.toggle('active', open);
     document.querySelector('.app')?.classList.toggle('panel-open', open);
   }, [open]);
+
+  // Follow template switches (DesignTab → saveSettings → this event).
+  useEffect(() => {
+    const onSettings = () => setActiveLayout(getSettings().layout || 'sidebar');
+    window.addEventListener(SETTINGS_UPDATED_EVENT, onSettings);
+    return () => window.removeEventListener(SETTINGS_UPDATED_EVENT, onSettings);
+  }, []);
 
   // Remount the content form on external store changes (and local array ops),
   // but never on a local text edit (localEdit gate).
@@ -344,12 +378,17 @@ export default function StructurePanel() {
   const addSection = (templateKey) => {
     const template = SECTION_TEMPLATES[templateKey];
     if (!template) return;
-    store.addToArray('sections', { id: generateId('section'), ...JSON.parse(JSON.stringify(template)) });
+    store.addToArray('sections', {
+      id: generateId('section'), area: 'sidebar',
+      ...JSON.parse(JSON.stringify(template)),
+    });
   };
   const addCustomSection = () => {
     const title = customTitle.trim();
     if (!title) return;
-    store.addToArray('sections', { id: generateId('section'), title, type: 'list', content: ['Item 1'] });
+    store.addToArray('sections', {
+      id: generateId('section'), title, type: 'list', area: 'sidebar', content: ['Item 1'],
+    });
     setRenameOpen(false);
     setCustomTitle('');
   };
@@ -432,7 +471,7 @@ export default function StructurePanel() {
 
         {tab === 'sidebar' && (
           <>
-            <PanelSection title="Sidebar Sections" {...sectionProps('sidebar-sections')} headerExtra={
+            <PanelSection title="Sections" {...sectionProps('sidebar-sections')} headerExtra={
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" type="button" className="size-7" title="Add section">
@@ -449,7 +488,7 @@ export default function StructurePanel() {
             }>
               <SortableList className="space-y-2" ids={sections.map((s, i) => s.id || `section-${i}`)}
                 onReorder={(from, to) => store.moveInArray('sections', from, to)}>
-                {sections.map((section, i) => <SectionItem key={section.id || `section-${i}`} section={section} index={i} />)}
+                {sections.map((section, i) => <SectionItem key={section.id || `section-${i}`} section={section} index={i} activeLayout={activeLayout} />)}
               </SortableList>
             </PanelSection>
 

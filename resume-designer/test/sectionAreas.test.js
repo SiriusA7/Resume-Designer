@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { migrateSectionAreas } from '../src/store.js';
 import { normalizeSectionType } from '../src/renderer.js';
-import { partitionSectionsByArea, renderResumeForLayout } from '../src/renderer.js';
+import { partitionSectionsByArea, renderResumeForLayout, SINGLE_COLUMN_LAYOUTS } from '../src/renderer.js';
 
 describe('migrateSectionAreas', () => {
   it('defaults existing sections to the sidebar so output is unchanged', () => {
@@ -116,6 +116,28 @@ describe('layout rendering', () => {
     const html = renderResumeForLayout(data, 'sidebar');
     expect(html).toContain('<h3 class="sidebar-title" data-editable="sections[0].title">Languages</h3>');
     expect(html).toContain('data-editable="sections[0].content[0]"');
+  });
+
+  it('SINGLE_COLUMN_LAYOUTS matches actual renderer behaviour', () => {
+    // The structure panel imports this set to explain that Area has no visible
+    // effect on single-column templates. Pin it against what the renderers
+    // actually do, so adding a layout (or giving one a sidebar) can't silently
+    // desynchronise the UI note: a layout is in the set iff it does NOT render
+    // a main column for main-area sections.
+    const ALL_LAYOUTS = [
+      'sidebar', 'stacked', 'stacked-vertical', 'right-sidebar', 'compact',
+      'executive', 'classic', 'classic-featured', 'modern', 'timeline', 'creative',
+    ];
+    for (const layout of ALL_LAYOUTS) {
+      const html = renderResumeForLayout(DATA, layout);
+      if (SINGLE_COLUMN_LAYOUTS.has(layout)) {
+        expect(html, layout).not.toContain('main-custom-section');
+        expect(html, layout).toContain('Publications'); // still rendered, one column
+      } else {
+        expect(html, layout).toContain('main-custom-section');
+      }
+    }
+    expect(SINGLE_COLUMN_LAYOUTS.size).toBe(5);
   });
 
   it('renders a sidebar paragraph section as prose, not skill tags', () => {
