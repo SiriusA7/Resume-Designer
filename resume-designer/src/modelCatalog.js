@@ -57,6 +57,11 @@ export function familyRoot(id) {
   return id.slice(id.indexOf('/') + 1).replace(/\d+(\.\d+)*/g, '#');
 }
 
+/** Newest first, then descending id — the tiebreak deriveFeatured relies on. */
+function newestFirst(a, b) {
+  return b.created - a.created || b.id.localeCompare(a.id);
+}
+
 /**
  * Derive the "featured" shortlist live from the catalog. Two structural rules,
  * deliberately free of vendor-specific version parsing (which was prototyped
@@ -65,6 +70,10 @@ export function familyRoot(id) {
  *   1. prefix-sibling — drop X when another surviving id is a strict prefix of
  *      it, so `claude-opus-5` beats `claude-opus-5-fast`.
  *   2. family-root    — keep only the newest model per version-agnostic root.
+ *
+ * Both `created` sorts break ties on descending id: `created` has second
+ * granularity and same-second sibling releases do happen, so without the
+ * secondary key the pick would follow API response order, not catalog content.
  */
 export function deriveFeatured(entries, perProvider = 4) {
   const grouped = {};
@@ -76,12 +85,12 @@ export function deriveFeatured(entries, perProvider = 4) {
     const bases = pool.filter((m) => !ids.some((o) => o !== m.id && m.id.startsWith(`${o}-`)));
 
     const byRoot = new Map();
-    for (const m of [...bases].sort((a, b) => b.created - a.created)) {
+    for (const m of [...bases].sort(newestFirst)) {
       const root = familyRoot(m.id);
       if (!byRoot.has(root)) byRoot.set(root, m);
     }
 
-    const top = [...byRoot.values()].sort((a, b) => b.created - a.created).slice(0, perProvider);
+    const top = [...byRoot.values()].sort(newestFirst).slice(0, perProvider);
     if (top.length) grouped[label] = top;
   }
   return grouped;

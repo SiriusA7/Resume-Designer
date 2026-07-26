@@ -102,6 +102,18 @@ describe('deriveFeatured', () => {
   it('caps each provider at perProvider entries', () => {
     expect(deriveFeatured(catalog, 1).Anthropic).toHaveLength(1);
   });
+
+  it('is independent of catalog order when created timestamps tie', () => {
+    // Different families, same second — only the tiebreak can order these.
+    const tied = [
+      entry('anthropic/claude-opus-5', 500),
+      entry('anthropic/claude-haiku-5', 500),
+    ];
+    const forward = deriveFeatured(tied).Anthropic.map((m) => m.id);
+    const reversed = deriveFeatured([...tied].reverse()).Anthropic.map((m) => m.id);
+    expect(reversed).toEqual(forward);
+    expect(forward).toEqual(['anthropic/claude-opus-5', 'anthropic/claude-haiku-5']);
+  });
 });
 
 import { CATALOG_SOFT_TTL_MS } from '../src/modelCatalog.js';
