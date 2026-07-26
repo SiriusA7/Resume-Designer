@@ -546,12 +546,39 @@ ${EMPHASIS_GUIDANCE}`;
 }
 
 /**
+ * Parse a generate-resume response into résumé data plus the gap report.
+ * `gaps` is stripped from the résumé object — it is advice about the résumé,
+ * not a field of it, and would otherwise be persisted as résumé content.
+ */
+export function parseGeneratedResume(responseText) {
+  let jsonStr = String(responseText || '').trim();
+  const fenced = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) jsonStr = fenced[1].trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    console.error('Failed to parse AI response as JSON:', responseText);
+    throw new Error('AI response was not valid JSON. Please try again.');
+  }
+
+  const { gaps, ...resume } = parsed;
+  return {
+    resume,
+    gaps: Array.isArray(gaps)
+      ? gaps.filter((g) => g && typeof g.requirement === 'string')
+      : [],
+  };
+}
+
+/**
  * Generate a complete resume from user profile, tailored for a specific job
  * @param {string} modelId - The AI model to use
  * @param {Object} jobDescription - The job description object { title, company, description }
  * @param {Object} options - Additional options
  * @param {string} options.reasoningEffort - Reasoning effort level: 'none', 'low', 'medium', 'high'
- * @returns {Object} Generated resume data
+ * @returns {Promise<{resume: Object, gaps: Array<{requirement: string, severity: string, note: string}>}>} Generated resume data plus the gap report
  */
 export async function generateResumeFromProfileForJob(modelId, jobDescription, options = {}) {
   const profile = getUserProfile();
@@ -674,22 +701,9 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
     signal: options.signal,
   });
   
-  // Parse the JSON response
-  try {
-    let jsonStr = response.trim();
-    // Remove markdown code blocks if present
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-    
-    const resume = JSON.parse(jsonStr);
-    console.log('[AI Service] Generated resume from profile:', resume);
-    return resume;
-  } catch {
-    console.error('Failed to parse AI response as JSON:', response);
-    throw new Error('AI response was not valid JSON. Please try again.');
-  }
+  const { resume, gaps } = parseGeneratedResume(response);
+  console.log('[AI Service] Generated resume from profile:', resume, 'gaps:', gaps);
+  return { resume, gaps };
 }
 
 // Get user profile context for AI

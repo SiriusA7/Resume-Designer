@@ -172,6 +172,7 @@ export function buildResumeFromInterview(answers) {
 
 /**
  * Generate a tailored resume from the saved profile for a target job.
+ * @returns {Promise<{resume: Object, gaps: Array<{requirement: string, severity: string, note: string}>}>}
  */
 export function generateResumeForJob(modelId, targetJob, reasoningEffort, options = {}) {
   if (!modelId) throw new Error('No AI model configured');
