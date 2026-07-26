@@ -11,8 +11,8 @@
  * markdown, pagination and every layout work by construction.
  */
 
-import { store } from './store.js';
 import * as session from './changeSession.js';
+import { applyChangeToStore } from './changeApply.js';
 import { markChangedNodes, clearChangeMarks } from './changePreview.js';
 
 // Re-render is owned by main.js (it holds the render pipeline); inlineChanges
@@ -123,7 +123,7 @@ export function applyInlineChange(path) {
   if (!changeSet || session.getStatus(path) !== 'pending') return;
   const change = changeSet.changes.find((c) => c.path === path);
   if (!change) return;
-  store.update(path, changeSet.proposedChanges[path]);
+  applyChangeToStore(change);
   session.setStatus(path, 'applied');
   if (!session.hasPending()) hideInlineChanges(); else requestRerender();
 }
@@ -137,8 +137,12 @@ export function rejectInlineChange(path) {
 export function applyAllInlineChanges() {
   const changeSet = session.getChangeSet();
   if (!changeSet) return;
-  for (const path of session.pendingPaths()) {
-    store.update(path, changeSet.proposedChanges[path]);
+  // Iterate the change objects (not just paths): applying needs each change's
+  // type and newValue — `proposedChanges[path]` is NOT equivalent, since the
+  // diff decomposes container proposals into leaf paths absent from that map.
+  const pending = new Set(session.pendingPaths());
+  for (const change of changeSet.changes) {
+    if (pending.has(change.path)) applyChangeToStore(change);
   }
   session.setAllPending('applied');
   hideInlineChanges();

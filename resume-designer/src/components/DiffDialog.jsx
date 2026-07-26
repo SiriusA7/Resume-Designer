@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 import { DIFF_TYPES, getPathLabel } from '../diffEngine.js';
-import { store } from '../store.js';
+import { applyChangeToStore } from '../changeApply.js';
 
 // Diff review dialog — the React/shadcn rebuild of the former vanilla diffView.js
 // overlay (§5.9). Always mounted; opens on the `rd:open-diff` window event that
@@ -19,7 +19,7 @@ import { store } from '../store.js';
 // ScrollArea):
 //   • inline / side-by-side modes (default side-by-side), word-level del/ins diff
 //     reusing change.wordDiff from diffEngine (untouched);
-//   • per-change Apply (store.update / store.removeFromArray for `path[idx]`),
+//   • per-change Apply via the shared applyChangeToStore helper (changeApply.js),
 //     Reject (drops the card; closes when none remain), Applied badge swap;
 //   • A apply-next · R reject-next · Enter apply-all · Esc close (ignored while
 //     typing in an input/textarea), click-outside close, body scroll lock,
@@ -264,16 +264,7 @@ export default function DiffDialog() {
         const change = cs.changes.find((c) => c.path === path);
         if (!change) return prevApplied;
 
-        if (change.type === DIFF_TYPES.REMOVE) {
-          const arrayMatch = path.match(/^(.+)\[(\d+)\]$/);
-          if (arrayMatch) {
-            store.removeFromArray(arrayMatch[1], parseInt(arrayMatch[2], 10));
-          } else {
-            store.update(path, undefined);
-          }
-        } else {
-          store.update(path, change.newValue);
-        }
+        applyChangeToStore(change);
 
         onApplyRef.current?.();
 
