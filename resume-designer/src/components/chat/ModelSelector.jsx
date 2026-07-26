@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 
 import { getAIModels, getModelLabel } from './useChat.js';
 import { fetchModelCatalog, getAllCatalogModels } from '../../aiService.js';
+import { shouldSpellcheck } from '../../spellcheck.js';
 
 /**
  * Model picker — featured groups + the user's cached custom slugs (removable) +
@@ -176,7 +177,7 @@ export function ModelSelector({
                 <Input
                   className={cn('h-[30px] font-mono text-xs', invalid && 'border-destructive')}
                   aria-invalid={invalid || undefined}
-                  spellCheck={false}
+                  spellCheck={shouldSpellcheck('slug')}
                   placeholder="Custom slug, e.g. anthropic/claude-opus-4.8"
                   value={slug}
                   onChange={(e) => { setSlug(e.target.value); setInvalid(false); }}

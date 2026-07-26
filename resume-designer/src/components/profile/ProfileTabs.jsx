@@ -9,6 +9,8 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 
+import { shouldSpellcheck } from '../../spellcheck.js';
+
 // The profile editor's per-tab content, rebuilt on genuine shadcn primitives to
 // match SettingsDialog's idiom (Label + Input grids, SectionHeader, entry cards
 // = `rounded-lg border bg-card p-4`, dashed outline add buttons, muted empty
@@ -422,7 +424,7 @@ function ProjectsTab({ profile, scheduleSave, refresh }) {
         )}
         renderBody={(proj, i) => (
           <>
-            <Input placeholder="URL (optional)" defaultValue={proj.url || ''} onChange={(e) => set(i, 'url')(e.target.value)} spellCheck={false} />
+            <Input placeholder="URL (optional)" defaultValue={proj.url || ''} onChange={(e) => set(i, 'url')(e.target.value)} spellCheck={shouldSpellcheck('url')} />
             <Textarea
               rows={4}
               placeholder="Describe the project: what problem does it solve? What technologies did you use? What was your role? What was the outcome?"
