@@ -636,7 +636,9 @@ function showAIButton(element) {
   const container = aiButton.container || aiButton;
   
   // Check if element has pending change and update button appearance
-  const hasChange = element.dataset.hasChange;
+  // (data-change-status/-type are set by inlineChanges' decorateRenderedResume;
+  // decided paths keep the attributes but drop the pending status).
+  const hasChange = element.dataset.changeStatus === 'pending' ? element.dataset.changeType : undefined;
   if (hasChange) {
     aiButton.classList.add('has-change', `change-${hasChange}`);
     aiButton.innerHTML = `
