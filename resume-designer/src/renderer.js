@@ -159,6 +159,36 @@ function splitSectionsByMode(sections = []) {
   return { lists, skills };
 }
 
+/**
+ * Split sections by column. Indices are preserved because every data-editable
+ * path and every AI change path is `sections[<original index>]…`.
+ *
+ * Only the six layouts that actually have a sidebar call this. The five
+ * sidebar-less layouts (stacked, stacked-vertical, classic, classic-featured,
+ * creative) deliberately ignore `area` and render every section in their single
+ * column — forcing the distinction there would change existing résumés' output
+ * for no benefit.
+ */
+export function partitionSectionsByArea(sections = []) {
+  const main = [];
+  const sidebar = [];
+  sections.forEach((section, sIdx) => {
+    (section && section.area === 'main' ? main : sidebar).push({ section, sIdx });
+  });
+  return { main, sidebar };
+}
+
+/** Render the main-column custom sections, in array order. */
+export function renderMainSections(data) {
+  const { main } = partitionSectionsByArea(data.sections || []);
+  if (main.length === 0) return '';
+  return main.map(({ section, sIdx }) => `
+      <section class="resume-section main-custom-section">
+        <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
+        ${renderSectionContent(section, sIdx, 'main')}
+      </section>`).join('');
+}
+
 function normalizeTools(tools) {
   const raw = Array.isArray(tools) ? tools.join(' • ') : (tools || '');
   return splitByBulletSeparators(raw);
@@ -245,7 +275,7 @@ export function renderResume(data) {
               `).join('')}
             </div>
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </section>
     </div>
   `;
@@ -497,8 +527,8 @@ function renderSidebar(data) {
   
   // Render sidebar sections
   if (data.sections) {
-    for (let sIdx = 0; sIdx < data.sections.length; sIdx++) {
-      const section = data.sections[sIdx];
+    const { sidebar } = partitionSectionsByArea(data.sections);
+    for (const { section, sIdx } of sidebar) {
       const mode = normalizeSectionType(section?.type);
 
       if (mode !== 'skills') {
@@ -641,7 +671,7 @@ export function renderResumeRightSidebar(data) {
               `).join('')}
             </div>
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </section>
       
       <aside class="resume-sidebar">
@@ -679,7 +709,7 @@ export function renderResumeCompact(data) {
               <h2 class="section-title">Experience</h2>
               ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
             </div>
-          ` : ''}
+          ` : ''}${renderMainSections(data)}
         </section>
         
         <aside class="compact-sidebar">
@@ -742,7 +772,7 @@ export function renderResumeExecutive(data) {
               <h2 class="section-title">Professional Experience</h2>
               ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
             </div>
-          ` : ''}
+          ` : ''}${renderMainSections(data)}
         </div>
         
         <div class="executive-side">
@@ -964,7 +994,7 @@ export function renderResumeModern(data) {
             <h2 class="section-title">Experience</h2>
             ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </main>
     </div>
   `;
@@ -1023,7 +1053,7 @@ export function renderResumeTimeline(data) {
               `).join('')}
             </div>
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </main>
       
       <aside class="resume-sidebar timeline-sidebar">

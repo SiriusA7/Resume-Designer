@@ -381,6 +381,23 @@
   margin-bottom: 0;
 }
 
+/* The layout containers reset their <p>s (.sidebar-content p,
+   .stacked-skill-content p, .stacked-vertical-content p — specificity 0,1,1),
+   which outranks bare .section-paragraph (0,1,0) and would leave consecutive
+   prose entries flush there. Restate the prose gap at higher specificity for
+   those containers — same shape as the highlight-gap overrides they sit by. */
+.sidebar-content p.section-paragraph,
+.stacked-skill-content p.section-paragraph,
+.stacked-vertical-content p.section-paragraph {
+  margin: 0 0 var(--section-item-gap, 4px);
+}
+
+.sidebar-content p.section-paragraph:last-child,
+.stacked-skill-content p.section-paragraph:last-child,
+.stacked-vertical-content p.section-paragraph:last-child {
+  margin-bottom: 0;
+}
+
 /* ==========================================================================
    Experience
    ========================================================================== */
