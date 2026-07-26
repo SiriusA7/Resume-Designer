@@ -558,6 +558,13 @@ export function parseGeneratedResume(responseText) {
   let parsed;
   try {
     parsed = JSON.parse(jsonStr);
+    // JSON.parse happily returns null, strings, numbers and arrays; only an
+    // object can be a résumé. Anything else would either throw a raw TypeError
+    // on the destructure below ('null') or yield a nonsense résumé ('"text"',
+    // '[…]'), so route it through the same friendly error.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('not a JSON object');
+    }
   } catch {
     console.error('Failed to parse AI response as JSON:', responseText);
     throw new Error('AI response was not valid JSON. Please try again.');

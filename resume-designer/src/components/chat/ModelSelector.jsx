@@ -40,19 +40,33 @@ export function ModelSelector({
   }, [open, configured, onRefreshCatalog]);
 
   // The refresh above is fire-and-forget, so the loading row below would spin
-  // forever when the fetch fails with nothing cached. fetchModelCatalog() never
-  // throws and joins the same in-flight request; if it settles with the catalog
-  // still empty, the load failed — say so instead of spinning.
+  // forever when the fetch fails with nothing cached. fetchModelCatalog() joins
+  // the same in-flight request; if it settles with the catalog still empty, the
+  // load failed — say so instead of spinning. It never throws today, but that
+  // invariant lives in aiService.js — the .catch keeps this component correct
+  // locally if it ever changes.
   const catalogEmpty = allModels.length === 0;
   useEffect(() => {
     if (!open || !configured || !catalogEmpty) return undefined;
     let cancelled = false;
     setCatalogFailed(false);
-    fetchModelCatalog().then(() => {
-      if (!cancelled && getAllCatalogModels().length === 0) setCatalogFailed(true);
-    });
+    fetchModelCatalog()
+      .then(() => {
+        if (!cancelled && getAllCatalogModels().length === 0) setCatalogFailed(true);
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogFailed(true);
+      });
     return () => { cancelled = true; };
   }, [open, configured, catalogEmpty]);
+
+  // A failed load leaves catalogFailed latched, so reopening would paint the
+  // "Couldn't load" notice for one frame before the effect above resets it.
+  // Clear on close — here rather than in onOpenChange, because pick()/applySlug()
+  // close by calling setOpen(false) directly.
+  useEffect(() => {
+    if (!open) setCatalogFailed(false);
+  }, [open]);
 
   // Ids already listed in the Featured/Custom groups above — excluded from
   // "All models" so no model renders (and matches search) twice.

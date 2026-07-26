@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { GROUNDING_RULES, buildGenerateResumePrompt } from '../src/aiService.js';
 import { parseGeneratedResume } from '../src/aiService.js';
 
@@ -57,4 +57,19 @@ describe('parseGeneratedResume', () => {
   it('throws a clear error on non-JSON', () => {
     expect(() => parseGeneratedResume('sorry, I cannot')).toThrow(/valid JSON/i);
   });
+
+  // JSON.parse succeeds on these, but only an object can be a résumé: 'null'
+  // used to escape as a raw destructure TypeError, a string/array as a
+  // nonsense résumé. All must take the same friendly error path.
+  it.each(['null', '"a plain string"', '[1, 2, 3]', 'true'])(
+    'treats non-object JSON %s as invalid',
+    (payload) => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        expect(() => parseGeneratedResume(payload)).toThrow(/valid JSON/i);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
 });

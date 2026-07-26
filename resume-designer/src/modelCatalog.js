@@ -8,11 +8,16 @@
 // whose version differs rather than misreading an older, narrower record.
 export const CATALOG_SCHEMA_VERSION = 2;
 
-/** Reduce one raw /models entry to the fields we actually use. */
+/**
+ * Reduce one raw /models entry to the fields we actually use. `raw` must be an
+ * object with a string `id` — the fetch loop in aiService filters anything
+ * else before calling this. (Individual fields are still defensively typed:
+ * the API omits or reshapes them freely.)
+ */
 export function toCatalogEntry(raw) {
-  const arch = (raw && raw.architecture) || {};
-  const top = (raw && raw.top_provider) || {};
-  const params = Array.isArray(raw && raw.supported_parameters) ? raw.supported_parameters : [];
+  const arch = raw.architecture || {};
+  const top = raw.top_provider || {};
+  const params = Array.isArray(raw.supported_parameters) ? raw.supported_parameters : [];
   return {
     id: raw.id,
     name: typeof raw.name === 'string' ? raw.name : raw.id,
