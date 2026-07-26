@@ -19,6 +19,20 @@ const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_REFERER = 'https://github.com/ashproto/Resume-Designer';
 const OPENROUTER_TITLE = 'Resume Designer';
 
+// The single anti-fabrication contract, injected into every prompt that writes
+// or rewrites résumé content. Users reported the assistant inventing employers,
+// metrics and achievements; the prompts previously contained no constraint
+// against it while actively asking for "the BEST possible resume".
+const GROUNDING_RULES_TEXT = `TRUTHFULNESS — these rules override every other instruction, including any request to make the resume stronger or more competitive:
+- Use ONLY facts present in the user's profile. Never invent employers, job titles, dates, degrees, certifications, tools, projects, or achievements.
+- Never introduce a number, percentage, duration, team size, or currency figure that does not appear in the profile. If a metric would strengthen a bullet but the profile does not supply it, write the bullet WITHOUT the metric. Do not estimate, do not approximate, and do not emit placeholders such as "[X]%" or "N+".
+- Rephrasing, reframing, reordering, condensing and emphasis are allowed. Adding new claims is not.
+- Aligning with the job description means describing genuinely-held experience in the job's vocabulary. It NEVER means claiming skills, tools or domains the profile does not evidence.
+- Never inflate scope or seniority. If the profile says "contributed to" or "assisted with", the resume may not say "led", "owned" or "drove".
+- If the profile is too thin to fill a section well, leave it short. A shorter truthful resume is the correct output.`;
+
+export const GROUNDING_RULES = GROUNDING_RULES_TEXT;
+
 // Curated model catalog, keyed by OpenRouter slug. The slug is the SINGLE
 // canonical identifier: it is the storage key, the dropdown value, AND the
 // `model` field sent on the wire. Users may also type any other OpenRouter
@@ -72,7 +86,9 @@ When suggesting changes:
 When asked to rewrite or improve text, provide the improved version directly.
 When asked for feedback, be constructive and specific.
 
-Current resume context will be provided with each message.`;
+Current resume context will be provided with each message.
+
+${GROUNDING_RULES_TEXT}`;
 
 // Résumé text fields are rendered with light markdown — the renderer converts
 // **text** → bold and _text_ → italic before display AND before PDF capture, so no
@@ -110,7 +126,9 @@ Rules:
 4. Keep unchanged fields out of the response
 5. The explanation field should be inside the JSON
 
-${EMPHASIS_GUIDANCE}`;
+${EMPHASIS_GUIDANCE}
+
+${GROUNDING_RULES_TEXT}`;
 
 // System prompt for job description analysis
 const JOB_ANALYSIS_PROMPT = `You are an expert resume consultant and ATS (Applicant Tracking System) specialist. Analyze resumes against job descriptions to help candidates improve their match rate.
@@ -156,7 +174,9 @@ Respond in the following JSON format:
       "impactReason": "Addresses critical keyword gap for required skill"
     }
   ]
-}`;
+}
+
+${GROUNDING_RULES_TEXT}`;
 
 // System prompt for profile interview
 const PROFILE_INTERVIEW_PROMPT = `You are a friendly career coach conducting an interview to learn about someone's professional background. Your goal is to gather detailed information that will help create better resumes.
@@ -433,6 +453,99 @@ export function checkProfileHasData() {
 }
 
 /**
+ * Build the generate-a-resume-for-this-job prompt. Extracted from
+ * generateResumeFromProfileForJob so the wording is unit-testable without a
+ * network call — the grounding rules are a correctness requirement, not styling.
+ */
+export function buildGenerateResumePrompt(profileContext, jobDescription) {
+  return `You are an expert resume consultant and ATS optimization specialist. Create the strongest resume the user's profile truthfully supports, targeted at the job below.
+
+${GROUNDING_RULES_TEXT}
+
+${profileContext}
+
+## Target Job
+
+**Position:** ${jobDescription.title || 'Not specified'}
+**Company:** ${jobDescription.company || 'Not specified'}
+
+**Job Description:**
+${jobDescription.description}
+
+## Your Task
+
+Create an ATS-optimized resume that:
+1. Surfaces the experience and skills from the profile most relevant to this job
+2. Uses the job description's vocabulary for experience the profile actually evidences
+3. Orders experience by relevance (most relevant first), and ALSO provides
+   machine-readable startDate/endDate per role so the app can re-sort chronologically
+4. Writes a professional summary grounded in the profile and targeted at this position
+5. Writes bullets that quantify results ONLY where the profile supplies the number
+6. Includes 3-4 highlights that are DISTINCT, career-level achievements — not
+   restatements of the experience bullets
+7. Separates concrete tools/software from competency skills (see the fields below)
+8. Reports, in "gaps", what this job asks for that the profile does not support
+
+Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in this exact format:
+{
+  "name": "Full Name from profile",
+  "tagline": "Professional title supported by the profile",
+  "email": "email from profile if available",
+  "phone": "phone from profile if available",
+  "location": "location from profile if available",
+  "linkedin": "linkedin url if available",
+  "portfolio": "portfolio url if available",
+  "summary": "2-3 sentence summary, every claim traceable to the profile",
+  "highlights": [
+    "Career-level achievement, distinct from the experience bullets below",
+    "Another high-level qualification matching the job (not repeated below)",
+    "Summary-level achievement relevant to the role"
+  ],
+  "skills": ["competency1", "competency2", "... (at most 12, most relevant only)"],
+  "tools": ["Concrete tool/software/platform e.g. Figma", "Git", "Docker"],
+  "experience": [
+    {
+      "title": "Job Title",
+      "company": "Company Name",
+      "location": "City, State",
+      "startDate": "YYYY-MM (machine-readable; YYYY ok if month unknown)",
+      "endDate": "YYYY-MM or Present (machine-readable)",
+      "dates": "Human-readable range shown on the resume, e.g. Jan 2022 - Jun 2024",
+      "bullets": [
+        "Achievement bullet drawn from the profile, relevant to the target job",
+        "Another bullet highlighting relevant, evidenced skills"
+      ]
+    }
+  ],
+  "education": [
+    { "degree": "Degree Name", "school": "School Name", "year": "Year" }
+  ],
+  "certifications": ["Certification present in the profile"],
+  "gaps": [
+    {
+      "requirement": "What the job asks for that the profile does not support",
+      "severity": "high | medium | low",
+      "note": "One sentence on what the user would need to add to close it"
+    }
+  ]
+}
+
+IMPORTANT:
+- Only include sections that have relevant content from the profile
+- Order experience by relevance (most relevant first); ALWAYS include
+  machine-readable startDate/endDate so the app can offer a chronological view
+- Put concrete tools/software/platforms (e.g. Figma, Git, Docker, Excel) in
+  "tools"; keep "skills" for competencies. Do NOT duplicate an item across both.
+- Limit "highlights" to 3-4 entries, each a DISTINCT career-level achievement
+- Select at most 12 of the most relevant skills (quality over quantity)
+- Use action verbs, but never ones that overstate the profile's scope
+- "gaps" must be honest and may be empty. Do NOT close a gap by inventing
+  experience — reporting it is the correct behaviour.
+
+${EMPHASIS_GUIDANCE}`;
+}
+
+/**
  * Generate a complete resume from user profile, tailored for a specific job
  * @param {string} modelId - The AI model to use
  * @param {Object} jobDescription - The job description object { title, company, description }
@@ -550,88 +663,7 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
   }
   
   // Build the prompt
-  const prompt = `You are an expert resume consultant and ATS optimization specialist. Your task is to create the BEST possible resume from the user's profile data, specifically tailored for a target job.
-
-${profileContext}
-
-## Target Job
-
-**Position:** ${jobDescription.title || 'Not specified'}
-**Company:** ${jobDescription.company || 'Not specified'}
-
-**Job Description:**
-${jobDescription.description}
-
-## Your Task
-
-Create a complete, ATS-optimized resume that:
-1. Highlights the most relevant experience and skills for this specific job
-2. Uses keywords and phrases from the job description naturally
-3. Orders experience by relevance to the target role (most relevant first), and
-   ALSO provides machine-readable startDate/endDate per role so the app can
-   re-sort chronologically
-4. Writes a compelling professional summary tailored to this position
-5. Creates impactful bullet points with quantifiable achievements where possible
-6. Includes 3-4 highlights that are DISTINCT, career-level achievements — not
-   restatements of the experience bullets
-7. Separates concrete tools/software from competency skills (see the fields below)
-
-Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in this exact format:
-{
-  "name": "Full Name from profile",
-  "tagline": "Professional title tailored to target job",
-  "email": "email from profile if available",
-  "phone": "phone from profile if available",
-  "location": "location from profile if available",
-  "linkedin": "linkedin url if available",
-  "portfolio": "portfolio url if available",
-  "summary": "2-3 sentence compelling summary tailored for this specific job",
-  "highlights": [
-    "Career-level achievement, distinct from the experience bullets below",
-    "Another high-level qualification matching the job (not repeated below)",
-    "Quantifiable, summary-level achievement relevant to the role"
-  ],
-  "skills": ["competency1", "competency2", "... (at most 12, most relevant only)"],
-  "tools": ["Concrete tool/software/platform e.g. Figma", "Git", "Docker"],
-  "experience": [
-    {
-      "title": "Job Title",
-      "company": "Company Name",
-      "location": "City, State",
-      "startDate": "YYYY-MM (machine-readable; YYYY ok if month unknown)",
-      "endDate": "YYYY-MM or "Present" (machine-readable)",
-      "dates": "Human-readable range shown on the resume, e.g. Jan 2022 - Jun 2024",
-      "bullets": [
-        "Achievement bullet with quantifiable results relevant to target job",
-        "Another impactful bullet highlighting relevant skills",
-        "More achievements tailored to the job requirements"
-      ]
-    }
-  ],
-  "education": [
-    {
-      "degree": "Degree Name",
-      "school": "School Name",
-      "year": "Year"
-    }
-  ],
-  "certifications": ["Relevant certification 1", "Relevant certification 2"]
-}
-
-IMPORTANT:
-- Only include sections that have relevant content from the profile
-- Order experience by relevance (most relevant first); ALWAYS include
-  machine-readable startDate/endDate so the app can offer a chronological view
-- Put concrete tools/software/platforms (e.g. Figma, Git, Docker, Excel) in
-  "tools"; keep "skills" for competencies. Do NOT duplicate an item across both.
-- Limit "highlights" to 3-4 entries, each a DISTINCT career-level achievement,
-  not a copy of an experience bullet
-- Select at most 12 of the most relevant skills (quality over quantity)
-- Use action verbs and quantify achievements where possible
-- Include keywords from the job description naturally
-- Make the summary compelling and specific to this role
-
-${EMPHASIS_GUIDANCE}`;
+  const prompt = buildGenerateResumePrompt(profileContext, jobDescription);
 
   const messages = [{ role: 'user', content: prompt }];
   

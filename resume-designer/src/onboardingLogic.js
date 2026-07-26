@@ -7,7 +7,7 @@
  * the necessary store/persistence/AI side effects); no document access.
  */
 import { generateId, experienceSortValue } from './store.js';
-import { getDefaultModelId, chat, generateResumeFromProfileForJob, getAllModels, getCustomModels, isConfigured } from './aiService.js';
+import { getDefaultModelId, chat, generateResumeFromProfileForJob, getAllModels, getCustomModels, isConfigured, GROUNDING_RULES } from './aiService.js';
 import { generateUniqueVariantName, saveVariant } from './persistence.js';
 import { parseResumeText } from './resumeParser.js';
 import { addJobDescription } from './jobDescriptions.js';
@@ -208,9 +208,11 @@ Experience: ${(resume.experience || []).map((e) => `${e.title} at ${e.company}`)
 
   const prompt = `You are helping tailor a resume for specific job applications. Based on the resume and target job(s) below, create:
 
-1. A compelling professional SUMMARY (2-3 sentences) that positions the candidate as ideal for the target role(s)
-2. A HIGHLIGHTS section (3-4 bullet points) of DISTINCT, career-level achievements for these jobs — NOT restatements of the experience bullets
-3. Identify KEY SKILLS that match the job requirements
+${GROUNDING_RULES}
+
+1. A professional SUMMARY (2-3 sentences) positioning the candidate for the target role(s) using only what the resume below evidences
+2. A HIGHLIGHTS section (3-4 bullet points) of DISTINCT, career-level achievements already present in the resume — NOT restatements of the experience bullets, and NOT new claims
+3. Identify KEY SKILLS that match the job requirements AND appear in the resume
 
 Resume Information:
 ${resumeContext}
