@@ -178,12 +178,19 @@ export function partitionSectionsByArea(sections = []) {
   return { main, sidebar };
 }
 
-/** Render the main-column custom sections, in array order. */
+/**
+ * Render the main-column custom sections, in array order.
+ *
+ * The wrapper carries `section` because the margin-spaced main columns
+ * (`.compact-main .section`, `.executive-main .section + .section`) drive
+ * inter-section spacing off that class — without it, consecutive main
+ * sections render flush in those layouts. The gap-spaced columns ignore it.
+ */
 export function renderMainSections(data) {
   const { main } = partitionSectionsByArea(data.sections || []);
   if (main.length === 0) return '';
   return main.map(({ section, sIdx }) => `
-      <section class="resume-section main-custom-section">
+      <section class="section resume-section main-custom-section">
         <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
         ${renderSectionContent(section, sIdx, 'main')}
       </section>`).join('');

@@ -937,6 +937,14 @@
   width: 100%;
 }
 
+/* Executive's main column is a plain block (no flex gap, no per-section
+   margin) because it historically held a single section (experience). Main-area
+   custom sections render after it, so space every section that follows another
+   — the existing single-section résumé matches nothing here and is unchanged. */
+.executive-main .section + .section {
+  margin-top: var(--section-spacing, 0.8rem);
+}
+
 .executive-side {
   background: var(--sidebar-bg);
   padding: var(--page-margin-top, 0.4in) var(--page-margin-right, 0.35in) var(--page-margin-bottom, 0.4in) 0.35in;

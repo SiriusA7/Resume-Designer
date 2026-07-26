@@ -89,6 +89,17 @@ describe('layout rendering', () => {
     }
   });
 
+  it('marks main custom sections with the section class that spaces them', () => {
+    // The margin-spaced main columns drive inter-section spacing off `.section`
+    // (`.compact-main .section`, `.executive-main .section + .section` in
+    // styles/resume.css) — without the class, consecutive main sections render
+    // flush there. The gap-spaced columns (flex gap) are indifferent to it.
+    for (const layout of ['sidebar', 'right-sidebar', 'compact', 'executive', 'modern', 'timeline']) {
+      const html = renderResumeForLayout(DATA, layout);
+      expect(html, layout).toContain('<section class="section resume-section main-custom-section">');
+    }
+  });
+
   it('sidebar-less layouts render every section, ignoring area', () => {
     for (const layout of ['stacked', 'classic', 'creative']) {
       const html = renderResumeForLayout(DATA, layout);
