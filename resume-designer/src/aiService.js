@@ -9,6 +9,7 @@ import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
 import { appStorage } from './appStorage.js';
+import { toCatalogEntry, CATALOG_SCHEMA_VERSION } from './modelCatalog.js';
 
 // OpenRouter — a single OpenAI-compatible endpoint fronting every provider.
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
@@ -297,7 +298,8 @@ function readCatalogCache() {
   if (catalogMemo) return catalogMemo;
   try {
     const parsed = JSON.parse(appStorage.getItem(CATALOG_STORAGE_KEY) || 'null');
-    if (parsed && parsed.models && typeof parsed.fetchedAt === 'number') {
+    if (parsed && parsed.models && typeof parsed.fetchedAt === 'number'
+        && parsed.version === CATALOG_SCHEMA_VERSION) {
       catalogMemo = parsed;
       return parsed;
     }
@@ -322,10 +324,9 @@ export async function fetchModelCatalog(force = false) {
       const models = {};
       for (const m of (data && data.data) || []) {
         if (!m || typeof m.id !== 'string') continue;
-        const params = Array.isArray(m.supported_parameters) ? m.supported_parameters : [];
-        models[m.id] = { reasoning: params.includes('reasoning') };
+        models[m.id] = toCatalogEntry(m);
       }
-      const fresh = { fetchedAt: Date.now(), models };
+      const fresh = { version: CATALOG_SCHEMA_VERSION, fetchedAt: Date.now(), models };
       catalogMemo = fresh;
       try { appStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(fresh)); } catch (_) { /* quota */ }
       return fresh;
