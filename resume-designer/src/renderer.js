@@ -11,8 +11,10 @@
 // each separator (it adds no width; the gap comes from .skill-sep's margin).
 const SKILL_SEPARATOR = '<span class="skill-sep">•</span><wbr>';
 
-function normalizeSectionType(type) {
-  return type === 'skills' ? 'skills' : 'list';
+export function normalizeSectionType(type) {
+  if (type === 'skills') return 'skills';
+  if (type === 'paragraph') return 'paragraph';
+  return 'list';
 }
 
 function splitByBulletSeparators(line) {
@@ -64,7 +66,12 @@ function formatSkillsLineStacked(line) {
 }
 
 function renderSectionLine(line, mode, variant = 'sidebar') {
-  if (normalizeSectionType(mode) === 'list') {
+  const normalized = normalizeSectionType(mode);
+  if (normalized === 'paragraph') {
+    // Prose: inline markdown only — no bullet-splitting, no wrapper spans.
+    return formatInlineMarkdown(line);
+  }
+  if (normalized === 'list') {
     return formatListLine(line);
   }
   return variant === 'stacked' ? formatSkillsLineStacked(line) : formatSkillsLine(line);
@@ -72,6 +79,14 @@ function renderSectionLine(line, mode, variant = 'sidebar') {
 
 function renderSectionContent(section, sIdx, variant = 'sidebar') {
   const mode = normalizeSectionType(section?.type);
+
+  if (mode === 'paragraph') {
+    return (section.content || [])
+      .map((line, i) =>
+        `<p class="section-paragraph" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode, variant)}</p>`)
+      .join('');
+  }
+
   if (mode === 'skills') {
     // Skills render as individual, separately-editable tags that flow inline and
     // wrap — NOT one block <p> per item (which would stack them vertically once
@@ -95,6 +110,12 @@ function renderSectionContent(section, sIdx, variant = 'sidebar') {
 
 function renderClassicSectionContent(section, sIdx) {
   const mode = normalizeSectionType(section?.type);
+  if (mode === 'paragraph') {
+    return (section.content || [])
+      .map((line, i) =>
+        `<p class="section-paragraph" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
+      .join('');
+  }
   if (mode === 'list') {
     return (section.content || [])
       .map((line, i) => `<p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
@@ -107,6 +128,12 @@ function renderClassicSectionContent(section, sIdx) {
 
 function renderCreativeSectionContent(section, sIdx) {
   const mode = normalizeSectionType(section?.type);
+  if (mode === 'paragraph') {
+    return (section.content || [])
+      .map((line, i) =>
+        `<p class="section-paragraph" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
+      .join('');
+  }
   if (mode === 'list') {
     return (section.content || [])
       .map((line, i) => `<p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
@@ -474,8 +501,8 @@ function renderSidebar(data) {
       const section = data.sections[sIdx];
       const mode = normalizeSectionType(section?.type);
 
-      if (mode === 'list') {
-        // Render as block-level bullets
+      if (mode !== 'skills') {
+        // Render as block-level content (bullets or paragraphs)
         html += `
           <div class="sidebar-section" data-section-id="${section.id || sIdx}">
             <h3 class="sidebar-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>

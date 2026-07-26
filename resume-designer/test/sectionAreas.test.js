@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { migrateSectionAreas } from '../src/store.js';
+import { normalizeSectionType } from '../src/renderer.js';
 
 describe('migrateSectionAreas', () => {
   it('defaults existing sections to the sidebar so output is unchanged', () => {
@@ -30,5 +31,18 @@ describe('migrateSectionAreas', () => {
     const input = { sections: [{ id: 's1' }] };
     migrateSectionAreas(input);
     expect(input.sections[0].area).toBeUndefined();
+  });
+});
+
+describe('normalizeSectionType', () => {
+  it('recognises the three display types', () => {
+    expect(normalizeSectionType('list')).toBe('list');
+    expect(normalizeSectionType('skills')).toBe('skills');
+    expect(normalizeSectionType('paragraph')).toBe('paragraph');
+  });
+
+  it('falls back to list for anything unknown', () => {
+    expect(normalizeSectionType('bogus')).toBe('list');
+    expect(normalizeSectionType(undefined)).toBe('list');
   });
 });
