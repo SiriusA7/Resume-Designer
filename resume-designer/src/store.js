@@ -4,6 +4,12 @@
  */
 
 import { appStorage } from './appStorage.js';
+// The ONE guarded path-write primitive. store.update is reachable with
+// AI-supplied paths (applyChangeToStore routes every accepted change here), so
+// the __proto__/constructor/prototype segment guard must hold at this layer
+// too — not only in createChangeSet's pre-filter. diffEngine imports nothing
+// from this module (only the npm `diff` package), so sharing creates no cycle.
+import { setByPath } from './diffEngine.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -68,34 +74,6 @@ function getByPath(obj, path) {
     }
     return current[key];
   }, obj);
-}
-
-// Set nested value by path
-function setByPath(obj, path, value) {
-  const keys = path.split('.');
-  const lastKey = keys.pop();
-  
-  let current = obj;
-  for (const key of keys) {
-    // Handle array index notation
-    const match = key.match(/^(\w+)\[(\d+)\]$/);
-    if (match) {
-      current = current[match[1]][parseInt(match[2])];
-    } else {
-      if (current[key] === undefined) {
-        current[key] = {};
-      }
-      current = current[key];
-    }
-  }
-  
-  // Handle array index in last key
-  const lastMatch = lastKey.match(/^(\w+)\[(\d+)\]$/);
-  if (lastMatch) {
-    current[lastMatch[1]][parseInt(lastMatch[2])] = value;
-  } else {
-    current[lastKey] = value;
-  }
 }
 
 // History persistence key prefix
