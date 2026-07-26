@@ -8,7 +8,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { cn } from '@/lib/utils';
 
 import { getAIModels, getModelLabel } from './useChat.js';
-import { getAllCatalogModels } from '../../aiService.js';
+import { fetchModelCatalog, getAllCatalogModels } from '../../aiService.js';
 
 /**
  * Model picker — featured groups + the user's cached custom slugs (removable) +
@@ -25,6 +25,7 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const [slug, setSlug] = useState('');
   const [invalid, setInvalid] = useState(false);
+  const [catalogFailed, setCatalogFailed] = useState(false);
 
   // Recomputed when the popover opens or a catalog refresh lands.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -38,9 +39,29 @@ export function ModelSelector({
     if (open && configured) onRefreshCatalog();
   }, [open, configured, onRefreshCatalog]);
 
-  const featuredIds = useMemo(
-    () => new Set(featured.flatMap((g) => g.options.map((o) => o.value))),
-    [featured],
+  // The refresh above is fire-and-forget, so the loading row below would spin
+  // forever when the fetch fails with nothing cached. fetchModelCatalog() never
+  // throws and joins the same in-flight request; if it settles with the catalog
+  // still empty, the load failed — say so instead of spinning.
+  const catalogEmpty = allModels.length === 0;
+  useEffect(() => {
+    if (!open || !configured || !catalogEmpty) return undefined;
+    let cancelled = false;
+    setCatalogFailed(false);
+    fetchModelCatalog().then(() => {
+      if (!cancelled && getAllCatalogModels().length === 0) setCatalogFailed(true);
+    });
+    return () => { cancelled = true; };
+  }, [open, configured, catalogEmpty]);
+
+  // Ids already listed in the Featured/Custom groups above — excluded from
+  // "All models" so no model renders (and matches search) twice.
+  const listedIds = useMemo(
+    () => new Set([
+      ...featured.flatMap((g) => g.options.map((o) => o.value)),
+      ...customModels,
+    ]),
+    [featured, customModels],
   );
 
   const pick = (value) => { onSelect(value); setOpen(false); };
@@ -82,7 +103,7 @@ export function ModelSelector({
                     className="[&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-primary"
                   >
                     {group.options.map((opt) => (
-                      <CommandItem key={opt.value} value={opt.value} onSelect={() => pick(opt.value)}>
+                      <CommandItem key={opt.value} value={opt.value} keywords={[opt.label]} onSelect={() => pick(opt.value)}>
                         <Check className={cn('size-4', opt.value !== currentModel && 'opacity-0')} />
                         <span className="min-w-0 truncate">{opt.label}</span>
                       </CommandItem>
@@ -93,7 +114,7 @@ export function ModelSelector({
                 {customModels.length > 0 && (
                   <CommandGroup heading="Custom">
                     {customModels.map((s) => (
-                      <CommandItem key={s} value={s} onSelect={() => pick(s)}>
+                      <CommandItem key={s} value={s} keywords={[getModelLabel(s)]} onSelect={() => pick(s)}>
                         <Check className={cn('size-4', s !== currentModel && 'opacity-0')} />
                         <span className="min-w-0 flex-1 truncate">{getModelLabel(s)}</span>
                         <span
@@ -112,8 +133,8 @@ export function ModelSelector({
 
                 {allModels.length > 0 && (
                   <CommandGroup heading="All models">
-                    {allModels.filter((m) => !featuredIds.has(m.id)).map((m) => (
-                      <CommandItem key={m.id} value={m.id} onSelect={() => pick(m.id)}>
+                    {allModels.filter((m) => !listedIds.has(m.id)).map((m) => (
+                      <CommandItem key={m.id} value={m.id} keywords={[m.name]} onSelect={() => pick(m.id)}>
                         <Check className={cn('size-4', m.id !== currentModel && 'opacity-0')} />
                         <span className="min-w-0 truncate">{m.name}</span>
                       </CommandItem>
@@ -123,10 +144,16 @@ export function ModelSelector({
               </CommandList>
             </Command>
 
-            {allModels.length === 0 && (
+            {catalogEmpty && (
               <div className="flex items-center gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
-                <Loader2 className="size-3 animate-spin" />
-                Loading the model catalog…
+                {catalogFailed ? (
+                  "Couldn't load the full model list — showing built-in models."
+                ) : (
+                  <>
+                    <Loader2 className="size-3 animate-spin" />
+                    Loading the model catalog…
+                  </>
+                )}
               </div>
             )}
 
