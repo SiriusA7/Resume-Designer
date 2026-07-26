@@ -26,9 +26,12 @@ describe('applyPendingToData', () => {
   });
 
   it('leaves applied paths alone — the store already holds them', () => {
-    const next = applyPendingToData({ summary: 'New **bold**', name: 'A' }, changeSet,
-      new Map([['summary', 'applied']]));
-    expect(next.summary).toBe('New **bold**');
+    // The store value has diverged from the proposal (the user edited it after
+    // applying). Re-projecting an applied path would clobber that edit, so the
+    // diverged value must survive projection untouched.
+    const next = applyPendingToData({ summary: 'New **bold** (edited by user)', name: 'A' },
+      changeSet, new Map([['summary', 'applied']]));
+    expect(next.summary).toBe('New **bold** (edited by user)');
   });
 });
 
@@ -62,6 +65,20 @@ describe('markChangedNodes', () => {
     const root = document.getElementById('root');
     markChangedNodes(root, {
       changes: [{ path: 'experience[0].bullets[1]', type: 'modify' }],
+      proposedChanges: {},
+    }, new Map());
+    expect(root.querySelector('p').dataset.changeStatus).toBe('pending');
+  });
+
+  it('escapes quotes and backslashes in paths', () => {
+    // Brackets and dots are literal inside a quoted attribute selector — the
+    // characters escapeAttr actually exists for are `"` and `\`.
+    document.body.innerHTML = '<div id="root"><p>x</p></div>';
+    const root = document.getElementById('root');
+    const path = 'sections["Awards"].note\\alt';
+    root.querySelector('p').setAttribute('data-editable', path);
+    markChangedNodes(root, {
+      changes: [{ path, type: 'modify' }],
       proposedChanges: {},
     }, new Map());
     expect(root.querySelector('p').dataset.changeStatus).toBe('pending');
