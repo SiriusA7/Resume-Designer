@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   startSession, endSession, getChangeSet, getStatus, setStatus,
-  setAllPending, pendingPaths, hasPending, subscribe,
+  setAllPending, pendingPaths, hasPending, subscribe, statusMap,
 } from '../src/changeSession.js';
-import { statusMap } from '../src/changeSession.js';
 
 const changeSet = (paths) => ({
   changes: paths.map((p) => ({ path: p, type: 'modify', oldValue: 'a', newValue: 'b' })),
@@ -81,15 +80,17 @@ describe('changeSession edge semantics', () => {
   it('a throwing listener does not prevent later listeners from being notified', () => {
     const origError = console.error;
     console.error = () => {};
+    let notified = 0;
+    const unsubThrow = subscribe(() => { throw new Error('boom'); });
+    const unsubCount = subscribe(() => notified++);
     try {
-      let notified = 0;
-      const unsubThrow = subscribe(() => { throw new Error('boom'); });
-      const unsubCount = subscribe(() => notified++);
       startSession(changeSet(['summary']));
       expect(notified).toBe(1);
+    } finally {
+      // In the finally so a failed assertion cannot leak the throwing
+      // listener into every later test in the file.
       unsubThrow();
       unsubCount();
-    } finally {
       console.error = origError;
     }
   });

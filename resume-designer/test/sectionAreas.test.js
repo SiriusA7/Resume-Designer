@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { migrateSectionAreas } from '../src/store.js';
-import { normalizeSectionType } from '../src/renderer.js';
-import { partitionSectionsByArea, renderResumeForLayout, SINGLE_COLUMN_LAYOUTS } from '../src/renderer.js';
+import {
+  normalizeSectionType, partitionSectionsByArea, renderResumeForLayout, SINGLE_COLUMN_LAYOUTS,
+} from '../src/renderer.js';
 
 describe('migrateSectionAreas', () => {
   it('defaults existing sections to the sidebar so output is unchanged', () => {

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  GROUNDING_RULES, buildGenerateResumePrompt, chat, generateResumeChanges, analyzeAgainstJobs,
+  GROUNDING_RULES, buildGenerateResumePrompt, parseGeneratedResume,
+  chat, generateResumeChanges, analyzeAgainstJobs,
 } from '../src/aiService.js';
-import { parseGeneratedResume } from '../src/aiService.js';
 import { saveSettings } from '../src/persistence.js';
 import { store } from '../src/store.js';
 
@@ -68,7 +68,14 @@ describe('parseGeneratedResume', () => {
   });
 
   it('throws a clear error on non-JSON', () => {
-    expect(() => parseGeneratedResume('sorry, I cannot')).toThrow(/valid JSON/i);
+    // parseGeneratedResume logs the raw response on this path; keep the run
+    // output clean without silencing console.error anywhere else.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => parseGeneratedResume('sorry, I cannot')).toThrow(/valid JSON/i);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   // JSON.parse succeeds on these, but only an object can be a résumé: 'null'
