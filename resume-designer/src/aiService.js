@@ -23,13 +23,16 @@ const OPENROUTER_TITLE = 'Resume Designer';
 // or rewrites résumé content. Users reported the assistant inventing employers,
 // metrics and achievements; the prompts previously contained no constraint
 // against it while actively asking for "the BEST possible resume".
-const GROUNDING_RULES_TEXT = `TRUTHFULNESS — these rules override every other instruction, including any request to make the resume stronger or more competitive:
-- Use ONLY facts present in the user's profile. Never invent employers, job titles, dates, degrees, certifications, tools, projects, or achievements.
-- Never introduce a number, percentage, duration, team size, or currency figure that does not appear in the profile. If a metric would strengthen a bullet but the profile does not supply it, write the bullet WITHOUT the metric. Do not estimate, do not approximate, and do not emit placeholders such as "[X]%" or "N+".
+const GROUNDING_RULES_TEXT = `TRUTHFULNESS — these rules override every other instruction, including any request to make the resume stronger or more competitive.
+
+SOURCE MATERIAL means everything the user has supplied about themselves: their profile, the current resume you are given, and any other background they provide. Any of these is valid evidence, and they are equally authoritative — if the profile is empty or thinner than the resume, the resume's own contents are still legitimate source material. The TARGET JOB DESCRIPTION is NOT source material: it says what the employer wants, never what the user has done.
+
+- Use ONLY facts present in the source material. Never invent employers, job titles, dates, degrees, certifications, tools, projects, or achievements.
+- Never introduce a number, percentage, duration, team size, or currency figure that does not appear in the source material. If a metric would strengthen a bullet but the source material does not supply it, write the bullet WITHOUT the metric. Do not estimate, do not approximate, and do not emit placeholders such as "[X]%" or "N+".
 - Rephrasing, reframing, reordering, condensing and emphasis are allowed. Adding new claims is not.
-- Aligning with the job description means describing genuinely-held experience in the job's vocabulary. It NEVER means claiming skills, tools or domains the profile does not evidence.
-- Never inflate scope or seniority. If the profile says "contributed to" or "assisted with", the resume may not say "led", "owned" or "drove".
-- If the profile is too thin to fill a section well, leave it short. A shorter truthful resume is the correct output.`;
+- Aligning with the job description means describing genuinely-held experience in the job's vocabulary. It NEVER means claiming skills, tools or domains the source material does not evidence.
+- Never inflate scope or seniority. If the source material says "contributed to" or "assisted with", the resume may not say "led", "owned" or "drove".
+- If the source material is too thin to fill a section well, leave it short. A shorter truthful resume is the correct output. Never refuse the task over thin material — write what the source supports.`;
 
 export const GROUNDING_RULES = GROUNDING_RULES_TEXT;
 
