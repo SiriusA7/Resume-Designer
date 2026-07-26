@@ -31,6 +31,29 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+// Full reduced-shape catalog entry (the fields toCatalogEntry persists), built
+// so it survives deriveFeatured's rules unless an override breaks one.
+function catalogEntry(id, overrides = {}) {
+  return {
+    id,
+    name: id,
+    created: 1000,
+    contextLength: 200000,
+    maxTokens: 8192,
+    reasoning: true,
+    outputModalities: ['text'],
+    ...overrides,
+  };
+}
+
+function seedCatalog(models) {
+  localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({
+    version: CATALOG_SCHEMA_VERSION,
+    fetchedAt: Date.now(),
+    models,
+  }));
+}
+
 describe('catalog cache version gate (readCatalogCache)', () => {
   it('discards an old-shape versionless cache instead of reading it', async () => {
     // Old narrow shape from before versioning: no `version` key. The entry says
@@ -60,5 +83,118 @@ describe('catalog cache version gate (readCatalogCache)', () => {
     // The cached entry (reasoning: false) overrides the optimistic default —
     // proves a valid same-version cache IS read.
     expect(modelSupportsReasoning(SLUG)).toBe(false);
+  });
+});
+
+// getAllModels() backs the picker's "Featured" section. Synchronous, cache-only
+// (no network): catalog cached → groups derived via deriveFeatured; no catalog,
+// or a degenerate one → the hardcoded MODELS shortlist. The fallback is
+// load-bearing — if it broke, a cold start (first run / offline) would render
+// an EMPTY model picker.
+describe('getAllModels', () => {
+  // Every entry the picker consumes must have exactly this shape.
+  function expectPickerShape(groups) {
+    for (const [group, models] of Object.entries(groups)) {
+      expect(models.length).toBeGreaterThan(0);
+      for (const m of models) {
+        expect(Object.keys(m).sort()).toEqual(['group', 'id', 'label', 'model']);
+        expect(m.model).toBe(m.id);
+        expect(m.group).toBe(group);
+        expect(typeof m.label).toBe('string');
+        expect(m.label.length).toBeGreaterThan(0);
+      }
+    }
+  }
+
+  // The fallback IS the hardcoded shortlist: same ids, nothing else.
+  function expectHardcodedFallback(groups, getAvailableModelIds) {
+    expectPickerShape(groups);
+    const flatIds = Object.values(groups).flat().map((m) => m.id);
+    expect(flatIds.sort()).toEqual([...getAvailableModelIds()].sort());
+  }
+
+  it('returns the hardcoded shortlist groups when no catalog is cached', async () => {
+    const { getAllModels, getAvailableModelIds } = await importFreshAiService();
+
+    const groups = getAllModels();
+
+    expect(Object.keys(groups)).toEqual(
+      ['Anthropic', 'OpenAI', 'Google', 'xAI', 'DeepSeek', 'Mistral'],
+    );
+    expectHardcodedFallback(groups, getAvailableModelIds);
+  });
+
+  it('derives groups from the cached catalog instead of the hardcoded map', async () => {
+    // Neither slug is in the curated MODELS map, so any hardcoded leakage into
+    // the result (or any ignored catalog) fails the exact match below.
+    seedCatalog({
+      'anthropic/claude-probe-9': catalogEntry('anthropic/claude-probe-9', { name: 'Claude Probe 9' }),
+      'openai/gpt-probe-9': catalogEntry('openai/gpt-probe-9', { name: 'GPT Probe 9' }),
+    });
+
+    const { getAllModels } = await importFreshAiService();
+
+    expect(getAllModels()).toEqual({
+      Anthropic: [{
+        id: 'anthropic/claude-probe-9',
+        model: 'anthropic/claude-probe-9',
+        label: 'Claude Probe 9',
+        group: 'Anthropic',
+      }],
+      OpenAI: [{
+        id: 'openai/gpt-probe-9',
+        model: 'openai/gpt-probe-9',
+        label: 'GPT Probe 9',
+        group: 'OpenAI',
+      }],
+    });
+  });
+
+  it('falls back to the shortlist when a valid-version cache has no models', async () => {
+    seedCatalog({});
+
+    const { getAllModels, getAvailableModelIds } = await importFreshAiService();
+
+    expectHardcodedFallback(getAllModels(), getAvailableModelIds);
+  });
+
+  it('falls back to the shortlist when every cached model is filtered out', async () => {
+    // Non-empty cache, but nothing survives deriveFeatured — one entry per
+    // filter: `:` tier, dated snapshot, non-text output, non-featured provider.
+    // Without the empty-`grouped` guard this would return {} → empty picker.
+    seedCatalog({
+      'anthropic/claude-probe-9:free': catalogEntry('anthropic/claude-probe-9:free'),
+      'openai/gpt-probe-2024-11-20': catalogEntry('openai/gpt-probe-2024-11-20'),
+      'google/gemini-probe': catalogEntry('google/gemini-probe', { outputModalities: ['text', 'image'] }),
+      'qwen/qwen-probe': catalogEntry('qwen/qwen-probe'),
+    });
+
+    const { getAllModels, getAvailableModelIds } = await importFreshAiService();
+
+    expectHardcodedFallback(getAllModels(), getAvailableModelIds);
+  });
+});
+
+describe('getAllCatalogModels', () => {
+  it('returns [] when no catalog is cached', async () => {
+    const { getAllCatalogModels } = await importFreshAiService();
+
+    expect(getAllCatalogModels()).toEqual([]);
+  });
+
+  it('returns every catalog model sorted newest-created first', async () => {
+    // Insertion order (100, 300, 200) matches neither sort direction, so a
+    // missing sort cannot pass by Object.values() ordering accident.
+    seedCatalog({
+      'vendor/model-old': catalogEntry('vendor/model-old', { created: 100 }),
+      'vendor/model-new': catalogEntry('vendor/model-new', { created: 300 }),
+      'vendor/model-mid': catalogEntry('vendor/model-mid', { created: 200 }),
+    });
+
+    const { getAllCatalogModels } = await importFreshAiService();
+
+    expect(getAllCatalogModels().map((m) => m.id)).toEqual(
+      ['vendor/model-new', 'vendor/model-mid', 'vendor/model-old'],
+    );
   });
 });
