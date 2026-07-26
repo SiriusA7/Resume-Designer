@@ -5,6 +5,7 @@ import {
   deriveFeatured,
   isGeneralChatModel,
   familyRoot,
+  stripGroupPrefix,
 } from '../src/modelCatalog.js';
 
 const RAW = {
@@ -113,6 +114,21 @@ describe('deriveFeatured', () => {
     const reversed = deriveFeatured([...tied].reverse()).Anthropic.map((m) => m.id);
     expect(reversed).toEqual(forward);
     expect(forward).toEqual(['anthropic/claude-opus-5', 'anthropic/claude-haiku-5']);
+  });
+});
+
+describe('stripGroupPrefix', () => {
+  it('strips a provider prefix that repeats the group heading', () => {
+    expect(stripGroupPrefix('Anthropic: Claude Opus 5', 'Anthropic')).toBe('Claude Opus 5');
+    expect(stripGroupPrefix('Google: Gemini 3.6 Flash', 'Google')).toBe('Gemini 3.6 Flash');
+  });
+
+  it('leaves unprefixed labels unchanged', () => {
+    expect(stripGroupPrefix('Claude Opus 5', 'Anthropic')).toBe('Claude Opus 5');
+  });
+
+  it('leaves a colon prefix that is not the group heading unchanged', () => {
+    expect(stripGroupPrefix('Meta: Llama 4 Maverick', 'Anthropic')).toBe('Meta: Llama 4 Maverick');
   });
 });
 

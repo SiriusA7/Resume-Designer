@@ -96,6 +96,17 @@ export function deriveFeatured(entries, perProvider = 4) {
   return grouped;
 }
 
+/**
+ * Strip a redundant "<Group>: " provider prefix from a label rendered under
+ * that same group heading. OpenRouter names are inconsistently prefixed
+ * ("Anthropic: Claude Opus 5" vs "Claude Opus 5"); only the exact own-group
+ * prefix is stripped, so a colon inside a legitimate model name survives.
+ */
+export function stripGroupPrefix(label, group) {
+  const prefix = `${group}: `;
+  return label.startsWith(prefix) ? label.slice(prefix.length) : label;
+}
+
 // Opening a model picker revalidates if the cache is older than this. The 24h
 // hard TTL in aiService still backs the reasoning-support path; this only
 // governs how eagerly the picker refreshes.

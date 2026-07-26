@@ -10,7 +10,7 @@ import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
 import { appStorage } from './appStorage.js';
 import {
-  toCatalogEntry, CATALOG_SCHEMA_VERSION, deriveFeatured, CATALOG_SOFT_TTL_MS,
+  toCatalogEntry, CATALOG_SCHEMA_VERSION, deriveFeatured, stripGroupPrefix, CATALOG_SOFT_TTL_MS,
 } from './modelCatalog.js';
 
 // OpenRouter — a single OpenAI-compatible endpoint fronting every provider.
@@ -1318,7 +1318,7 @@ export function getAllModels() {
   if (entries.length) {
     const grouped = {};
     for (const [group, models] of Object.entries(deriveFeatured(entries))) {
-      grouped[group] = models.map((m) => ({ id: m.id, model: m.id, label: m.name, group }));
+      grouped[group] = models.map((m) => ({ id: m.id, model: m.id, label: stripGroupPrefix(m.name, group), group }));
     }
     if (Object.keys(grouped).length) return grouped;
   }
