@@ -347,7 +347,7 @@ export function createChangeSet(currentData, proposedChanges) {
  * @param {string} path - Dot-notation path (e.g., "experience[0].title")
  * @param {*} value - Value to set
  */
-function setByPath(obj, path, value) {
+export function setByPath(obj, path, value) {
   const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
   let current = obj;
   
