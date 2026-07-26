@@ -5,7 +5,7 @@ import {
   showInlineChanges, hideInlineChanges, isInlineChangesActive,
   applyInlineChange, rejectInlineChange, applyAllInlineChanges,
 } from '../src/inlineChanges.js';
-import { getStatus, hasPending, setStatus } from '../src/changeSession.js';
+import { getStatus, hasPending, setStatus, subscribe } from '../src/changeSession.js';
 import { createChangeSet } from '../src/diffEngine.js';
 import { store } from '../src/store.js';
 
@@ -120,6 +120,29 @@ describe('apply semantics — what applying actually writes to the store', () =>
     expect(experience[0].id).toBe('e2');
     // Writing a value instead of splicing would leave an undefined/null hole.
     expect(experience.every((e) => e != null)).toBe(true);
+  });
+
+  it('bulk dismiss from another surface keeps applied writes, drops the rest, and notifies', () => {
+    // Task 14 contract: DiffDialog's "Reject All" calls hideInlineChanges() as
+    // the bulk-dismiss path. Prior applies must survive in the store, undecided
+    // paths must never be written, and subscribers (the chat message's buttons,
+    // the dialog itself) must be told so every surface stands down together.
+    showInlineChanges(makeChangeSet([
+      { path: 'summary', type: 'modify', newValue: 'New summary' },
+      { path: 'name', type: 'modify', newValue: 'B' },
+    ]));
+    applyInlineChange('summary');
+
+    let notified = 0;
+    const unsub = subscribe(() => notified++);
+    hideInlineChanges();
+    unsub();
+
+    expect(notified).toBe(1); // endSession reached every subscriber
+    expect(isInlineChangesActive()).toBe(false);
+    expect(hasPending()).toBe(false);
+    expect(store.get('summary')).toBe('New summary'); // applied before dismiss — kept
+    expect(store.get('name')).toBe('A'); // still pending at dismiss — never written
   });
 
   it('apply-all applies every pending change and skips rejected ones', () => {
