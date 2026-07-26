@@ -112,6 +112,24 @@ export const CHANGE_TYPES = {
   REMOVE: 'remove'
 };
 
+// Sections gained an `area` in 2026-07. Every pre-existing section is a sidebar
+// section by definition, so stamping 'sidebar' keeps rendered output identical.
+// Additive on purpose: the array, its indices and every sections[i].content[j]
+// path are untouched, so AI change paths, data-editable attributes, saved
+// variants and backups keep working without their own migration.
+const SECTION_AREAS = new Set(['main', 'sidebar']);
+
+export function migrateSectionAreas(data) {
+  if (!data || !Array.isArray(data.sections)) return data;
+  return {
+    ...data,
+    sections: data.sections.map((section) => ({
+      ...section,
+      area: SECTION_AREAS.has(section && section.area) ? section.area : 'sidebar',
+    })),
+  };
+}
+
 // Create the store
 function createStore() {
   let data = null;
@@ -151,7 +169,7 @@ function createStore() {
 
     // Set entire data object
     setData(newData, skipSave = false, variantId = null) {
-      data = deepClone(newData);
+      data = deepClone(migrateSectionAreas(newData));
       isDirty = false;
       
       // Track current variant for history persistence
@@ -569,6 +587,7 @@ export const EMPTY_RESUME = {
       id: generateId('section'),
       title: 'Skills',
       type: 'list',
+      area: 'sidebar',
       content: ['Skill 1', 'Skill 2', 'Skill 3']
     }
   ],
