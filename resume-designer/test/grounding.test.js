@@ -1,6 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
-import { GROUNDING_RULES, buildGenerateResumePrompt } from '../src/aiService.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  GROUNDING_RULES, buildGenerateResumePrompt, chat, generateResumeChanges, analyzeAgainstJobs,
+} from '../src/aiService.js';
 import { parseGeneratedResume } from '../src/aiService.js';
+import { saveSettings } from '../src/persistence.js';
+import { store } from '../src/store.js';
+
+// onboardingLogic statically imports resumeParser, whose pdfjs-dist import
+// needs browser APIs jsdom doesn't have. tailorResume never touches the
+// parser, so stub the module out (same pattern as onboardingSaveQuota.test.js).
+vi.mock('../src/resumeParser.js', () => ({
+  parseResumeText: vi.fn(),
+  parseResumeFile: vi.fn(),
+}));
+const { tailorResume } = await import('../src/onboardingLogic.js');
 
 describe('GROUNDING_RULES', () => {
   it('forbids inventing facts and metrics', () => {
@@ -72,4 +85,81 @@ describe('parseGeneratedResume', () => {
       }
     },
   );
+});
+
+// Four of the five grounding-rule injections live in module-private prompts
+// (SYSTEM_PROMPT, CHANGE_GENERATION_PROMPT and JOB_ANALYSIS_PROMPT in
+// aiService.js; the tailorResume prompt in onboardingLogic.js), so a refactor
+// could silently drop one without failing anything above. Pin them through the
+// public entry points: stub fetch, drive each call until it issues its request,
+// and assert the grounding contract is inside the captured request body. The
+// stubbed response is a 500 — the prompt is fully assembled before the response
+// is ever read, and failing fast keeps the stream machinery out of the test.
+describe('grounding rules reach every AI entry point', () => {
+  const MODEL = 'anthropic/claude-sonnet-4.6';
+  const JOB = { title: 'Designer', company: 'Acme', description: 'Do design.' };
+  let fetchSpy;
+
+  beforeEach(() => {
+    localStorage.clear();
+    // aiService logs profile/context chatter via console.log on these paths;
+    // keep the run output clean without hiding errors.
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    saveSettings({ openrouterKey: 'test-key' });
+    fetchSpy = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  function capturedBody() {
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    return JSON.parse(fetchSpy.mock.calls[0][1].body);
+  }
+
+  function systemMessageOf(body) {
+    const system = body.messages.find((m) => m.role === 'system');
+    expect(system).toBeDefined();
+    return system.content;
+  }
+
+  it('chat() sends the default system prompt with the grounding rules embedded', async () => {
+    await expect(chat(MODEL, [{ role: 'user', content: 'Hi' }], false)).rejects.toThrow();
+
+    expect(systemMessageOf(capturedBody())).toContain(GROUNDING_RULES);
+  });
+
+  it('generateResumeChanges() sends the change-generation prompt with the rules', async () => {
+    store.setData({ name: 'Ada', experience: [], education: [], sections: [] }, true);
+
+    await expect(generateResumeChanges(MODEL, 'Punch up the summary')).rejects.toThrow();
+
+    const system = systemMessageOf(capturedBody());
+    // The marker pins WHICH prompt was captured; the rules pin the injection.
+    expect(system).toContain('JSON object containing the changes');
+    expect(system).toContain(GROUNDING_RULES);
+  });
+
+  it('analyzeAgainstJobs() sends the job-analysis prompt with the rules', async () => {
+    store.setData({ name: 'Ada', experience: [], education: [], sections: [] }, true);
+
+    await expect(analyzeAgainstJobs(MODEL, [JOB])).rejects.toThrow();
+
+    const system = systemMessageOf(capturedBody());
+    expect(system).toContain('ATS');
+    expect(system).toContain(GROUNDING_RULES);
+  });
+
+  it('tailorResume() embeds the grounding rules in its user prompt', async () => {
+    await expect(tailorResume({ name: 'Ada', summary: 'Engineer' }, [JOB])).rejects.toThrow();
+
+    const body = capturedBody();
+    const user = body.messages.find((m) => m.role === 'user');
+    expect(user.content).toContain('HIGHLIGHTS');
+    expect(user.content).toContain(GROUNDING_RULES);
+  });
 });

@@ -101,10 +101,23 @@ describe('layout rendering', () => {
   });
 
   it('sidebar-less layouts render every section, ignoring area', () => {
-    for (const layout of ['stacked', 'classic', 'creative']) {
+    for (const layout of ['stacked', 'stacked-vertical', 'classic', 'classic-featured', 'creative']) {
       const html = renderResumeForLayout(DATA, layout);
       expect(html, layout).toContain('Publications');
       expect(html, layout).toContain('Skills');
+    }
+  });
+
+  it('sidebar layouts keep a sidebar section out of the main column', () => {
+    // Converse of the main-column test above: removing the area partition
+    // inside renderMainSections would render sidebar sections in BOTH columns
+    // and every other test here would still pass.
+    for (const layout of ['sidebar', 'right-sidebar', 'compact', 'executive', 'modern', 'timeline']) {
+      const html = renderResumeForLayout(DATA, layout);
+      // Skills (sections[0], area: sidebar) renders via the shared renderSidebar…
+      expect(html, layout).toContain('<h3 class="sidebar-title" data-editable="sections[0].title">Skills</h3>');
+      // …and never as a main-column custom section.
+      expect(html, layout).not.toContain('<h2 class="section-title" data-editable="sections[0].title">');
     }
   });
 

@@ -94,6 +94,25 @@ describe('changeSession edge semantics', () => {
     }
   });
 
+  it('setAllPending notifies exactly once per batch, after every path is decided', () => {
+    startSession(changeSet(['a', 'b', 'c']));
+    setStatus('a', 'rejected');
+    // Record what a subscriber would see: each entry is one notification,
+    // its value the pending count at that moment. Moving notify() inside the
+    // loop would both multiply the entries and expose a half-decided set.
+    const observed = [];
+    const unsub = subscribe(() => observed.push(pendingPaths().length));
+    try {
+      setAllPending('applied');
+      expect(observed).toEqual([0]);
+      // Nothing left undecided — a second batch must not notify at all.
+      setAllPending('applied');
+      expect(observed).toEqual([0]);
+    } finally {
+      unsub();
+    }
+  });
+
   it('a no-op setStatus does not notify — one notification per real transition', () => {
     startSession(changeSet(['summary']));
     setStatus('summary', 'applied');

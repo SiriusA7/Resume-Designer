@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CATALOG_SCHEMA_VERSION } from '../src/modelCatalog.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CATALOG_SCHEMA_VERSION, CATALOG_SOFT_TTL_MS } from '../src/modelCatalog.js';
 
 // Regression tests for the catalog-cache version gate in aiService.js
 // (readCatalogCache): a stored cache is honored ONLY when its `version`
@@ -46,10 +46,10 @@ function catalogEntry(id, overrides = {}) {
   };
 }
 
-function seedCatalog(models) {
+function seedCatalog(models, fetchedAt = Date.now()) {
   localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify({
     version: CATALOG_SCHEMA_VERSION,
-    fetchedAt: Date.now(),
+    fetchedAt,
     models,
   }));
 }
@@ -172,6 +172,69 @@ describe('getAllModels', () => {
     const { getAllModels, getAvailableModelIds } = await importFreshAiService();
 
     expectHardcodedFallback(getAllModels(), getAvailableModelIds);
+  });
+});
+
+// refreshCatalogIfStale is the picker's stale-while-revalidate trigger, and
+// CATALOG_UPDATED_EVENT is how a landed refresh reaches React (catalogRev).
+// Neither had durable tests: a regression in the soft-TTL gate would either
+// hammer the endpoint on every popover open or never revalidate at all, and a
+// dropped event would leave the picker rendering a stale list forever.
+describe('refreshCatalogIfStale + CATALOG_UPDATED_EVENT', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetchWith(rawModels) {
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ data: rawModels }),
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+    return fetchSpy;
+  }
+
+  it('does not refetch while the cache is fresher than the soft TTL', async () => {
+    seedCatalog({ [SLUG]: catalogEntry(SLUG) }); // fetchedAt: now
+    const fetchSpy = stubFetchWith([]);
+    const { refreshCatalogIfStale } = await importFreshAiService();
+
+    refreshCatalogIfStale();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('refetches once the cache is older than the soft TTL', async () => {
+    // Older than the 5-min soft TTL but well inside the 24h hard TTL, so the
+    // refetch can only come from refreshCatalogIfStale forcing it — a plain
+    // fetchModelCatalog() would still return the cache as "fresh".
+    seedCatalog({ [SLUG]: catalogEntry(SLUG) }, Date.now() - CATALOG_SOFT_TTL_MS - 1000);
+    const fetchSpy = stubFetchWith([{ id: SLUG, name: 'Uncurated Test Model' }]);
+    const { refreshCatalogIfStale, fetchModelCatalog } = await importFreshAiService();
+
+    refreshCatalogIfStale();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // Join the in-flight refresh so it settles inside the test; joining must
+    // not trigger a second request.
+    await fetchModelCatalog(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches CATALOG_UPDATED_EVENT with detail.fetchedAt on a successful fetch', async () => {
+    stubFetchWith([{ id: SLUG, name: 'Uncurated Test Model' }]);
+    const { fetchModelCatalog, CATALOG_UPDATED_EVENT } = await importFreshAiService();
+    const details = [];
+    const onUpdate = (e) => details.push(e.detail);
+    window.addEventListener(CATALOG_UPDATED_EVENT, onUpdate);
+    try {
+      const result = await fetchModelCatalog(true);
+      expect(details).toHaveLength(1);
+      expect(typeof details[0].fetchedAt).toBe('number');
+      expect(details[0].fetchedAt).toBe(result.fetchedAt);
+    } finally {
+      window.removeEventListener(CATALOG_UPDATED_EVENT, onUpdate);
+    }
   });
 });
 
