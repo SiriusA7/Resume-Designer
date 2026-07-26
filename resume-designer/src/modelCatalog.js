@@ -86,3 +86,8 @@ export function deriveFeatured(entries, perProvider = 4) {
   }
   return grouped;
 }
+
+// Opening a model picker revalidates if the cache is older than this. The 24h
+// hard TTL in aiService still backs the reasoning-support path; this only
+// governs how eagerly the picker refreshes.
+export const CATALOG_SOFT_TTL_MS = 5 * 60 * 1000;

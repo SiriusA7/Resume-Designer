@@ -9,7 +9,9 @@ import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
 import { appStorage } from './appStorage.js';
-import { toCatalogEntry, CATALOG_SCHEMA_VERSION } from './modelCatalog.js';
+import {
+  toCatalogEntry, CATALOG_SCHEMA_VERSION, deriveFeatured, CATALOG_SOFT_TTL_MS,
+} from './modelCatalog.js';
 
 // OpenRouter — a single OpenAI-compatible endpoint fronting every provider.
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
@@ -291,6 +293,7 @@ export function getAvailableModelIds() {
 const MODELS_ENDPOINT = 'https://openrouter.ai/api/v1/models';
 const CATALOG_STORAGE_KEY = 'resume-designer-model-catalog';
 const CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+export const CATALOG_UPDATED_EVENT = 'resume-designer-catalog-updated';
 let catalogMemo = null;
 let catalogInflight = null;
 
@@ -329,6 +332,9 @@ export async function fetchModelCatalog(force = false) {
       const fresh = { version: CATALOG_SCHEMA_VERSION, fetchedAt: Date.now(), models };
       catalogMemo = fresh;
       try { appStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(fresh)); } catch (_) { /* quota */ }
+      try {
+        window.dispatchEvent(new CustomEvent(CATALOG_UPDATED_EVENT, { detail: { fetchedAt: fresh.fetchedAt } }));
+      } catch (_) { /* non-DOM context */ }
       return fresh;
     } catch (e) {
       console.warn('[aiService] model catalog fetch failed:', (e && e.message) || e);
@@ -901,12 +907,14 @@ async function streamOpenRouter(modelId, messages, options = {}, hooks = {}) {
     apiMessages.push(msg);
   }
 
+  const catalogEntry = readCatalogCache()?.models?.[modelId];
+  const modelMaxTokens = cfg?.maxTokens || catalogEntry?.maxTokens || 8192;
   const requestBody = {
     model: modelId,
     messages: apiMessages,
     // Reasoning competes with the completion budget; give the answer headroom
     // when thinking is on (OpenRouter clamps to the model's real max).
-    max_tokens: reasoningOn ? Math.max(cfg?.maxTokens || 8192, 16000) : (cfg?.maxTokens || 8192),
+    max_tokens: reasoningOn ? Math.max(modelMaxTokens, 16000) : modelMaxTokens,
     stream: true,
     usage: { include: true },
   };
@@ -1300,21 +1308,42 @@ export function getModelsForProvider(group) {
 }
 
 /**
- * Get all curated models grouped by display group (Anthropic / OpenAI / Google).
- * The slug IS the id and the wire `model`. Custom slugs aren't listed here.
- * @returns {Object} Models grouped by group label
+ * Models grouped for the picker's "Featured" section. Derived live from the
+ * cached OpenRouter catalog; falls back to the built-in MODELS shortlist when
+ * the catalog has never loaded (first run, offline).
  */
 export function getAllModels() {
-  const grouped = {};
+  const cached = readCatalogCache();
+  const entries = cached ? Object.values(cached.models) : [];
+  if (entries.length) {
+    const grouped = {};
+    for (const [group, models] of Object.entries(deriveFeatured(entries))) {
+      grouped[group] = models.map((m) => ({ id: m.id, model: m.id, label: m.name, group }));
+    }
+    if (Object.keys(grouped).length) return grouped;
+  }
+  // Offline / first run — the hardcoded shortlist is the backstop.
+  const fallback = {};
   for (const [id, config] of Object.entries(MODELS)) {
-    (grouped[config.group] = grouped[config.group] || []).push({
-      id,
-      model: id,
-      label: config.label,
-      group: config.group
+    (fallback[config.group] = fallback[config.group] || []).push({
+      id, model: id, label: config.label, group: config.group,
     });
   }
-  return grouped;
+  return fallback;
+}
+
+/** Every catalog model, newest first — backs the picker's searchable list. */
+export function getAllCatalogModels() {
+  const cached = readCatalogCache();
+  if (!cached) return [];
+  return Object.values(cached.models).sort((a, b) => b.created - a.created);
+}
+
+/** Stale-while-revalidate: refresh in the background if the soft TTL lapsed. */
+export function refreshCatalogIfStale() {
+  const cached = readCatalogCache();
+  if (cached && (Date.now() - cached.fetchedAt) < CATALOG_SOFT_TTL_MS) return;
+  fetchModelCatalog(true);
 }
 
 /**

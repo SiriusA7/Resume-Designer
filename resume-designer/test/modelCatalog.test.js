@@ -103,3 +103,11 @@ describe('deriveFeatured', () => {
     expect(deriveFeatured(catalog, 1).Anthropic).toHaveLength(1);
   });
 });
+
+import { CATALOG_SOFT_TTL_MS } from '../src/modelCatalog.js';
+
+describe('catalog refresh policy', () => {
+  it('uses a short soft TTL so opening the picker revalidates', () => {
+    expect(CATALOG_SOFT_TTL_MS).toBe(5 * 60 * 1000);
+  });
+});
