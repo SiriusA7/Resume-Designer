@@ -363,6 +363,7 @@ export default function SettingsDialog() {
                       placeholder="sk-or-v1-..."
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
+                      spellCheck={false}
                     />
                     <Button
                       type="button"
@@ -494,6 +495,7 @@ export default function SettingsDialog() {
                         value={getBridgeToken()}
                         className="font-mono text-xs"
                         aria-label="Bridge pairing token"
+                        spellCheck={false}
                       />
                       <Button
                         type="button"

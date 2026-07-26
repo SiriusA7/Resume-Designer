@@ -422,7 +422,7 @@ function ProjectsTab({ profile, scheduleSave, refresh }) {
         )}
         renderBody={(proj, i) => (
           <>
-            <Input placeholder="URL (optional)" defaultValue={proj.url || ''} onChange={(e) => set(i, 'url')(e.target.value)} />
+            <Input placeholder="URL (optional)" defaultValue={proj.url || ''} onChange={(e) => set(i, 'url')(e.target.value)} spellCheck={false} />
             <Textarea
               rows={4}
               placeholder="Describe the project: what problem does it solve? What technologies did you use? What was your role? What was the outcome?"
