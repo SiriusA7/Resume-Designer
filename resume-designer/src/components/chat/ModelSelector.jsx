@@ -1,28 +1,47 @@
-import { useState } from 'react';
-import { Check, ChevronDown, Settings2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, ChevronDown, Loader2, Settings2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
 import { getAIModels, getModelLabel } from './useChat.js';
+import { getAllCatalogModels } from '../../aiService.js';
 
 /**
- * Model picker — curated groups + the user's cached custom slugs (removable) +
- * a free-type custom-slug field. A controlled shadcn Popover hosting the real
- * Command primitive (the shadcn combobox pattern: selected item = visible
- * leading Check, others transparent). Radix portals the content to <body>, so
- * the glass blur escapes the frosted panel for free.
+ * Model picker — featured groups + the user's cached custom slugs (removable) +
+ * a searchable "All models" section backed by the live catalog + a free-type
+ * custom-slug field. A controlled shadcn Popover hosting the real Command
+ * primitive (the shadcn combobox pattern: selected item = visible leading
+ * Check, others transparent). Radix portals the content to <body>, so the
+ * glass blur escapes the frosted panel for free.
  */
 export function ModelSelector({
-  currentModel, configured, customModels,
+  currentModel, configured, customModels, catalogRev, onRefreshCatalog,
   onSelect, onApplyCustomSlug, onRemoveCustom, onConfigure,
 }) {
   const [open, setOpen] = useState(false);
   const [slug, setSlug] = useState('');
   const [invalid, setInvalid] = useState(false);
+
+  // Recomputed when the popover opens or a catalog refresh lands.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const featured = useMemo(() => getAIModels(), [open, catalogRev]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const allModels = useMemo(() => getAllCatalogModels(), [open, catalogRev]);
+
+  // Stale-while-revalidate: the lists above render from cache immediately, and
+  // this kicks a background refresh that swaps them in via catalogRev.
+  useEffect(() => {
+    if (open && configured) onRefreshCatalog();
+  }, [open, configured, onRefreshCatalog]);
+
+  const featuredIds = useMemo(
+    () => new Set(featured.flatMap((g) => g.options.map((o) => o.value))),
+    [featured],
+  );
 
   const pick = (value) => { onSelect(value); setOpen(false); };
 
@@ -42,7 +61,7 @@ export function ModelSelector({
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 max-w-40 gap-1.5 px-2 text-xs font-normal text-muted-foreground"
+          className="h-7 min-w-0 flex-1 gap-1.5 px-2 text-xs font-normal text-muted-foreground"
         >
           <span className="min-w-0 truncate">{getModelLabel(currentModel)}</span>
           <ChevronDown className="size-3 shrink-0 opacity-60" />
@@ -52,8 +71,11 @@ export function ModelSelector({
         {configured ? (
           <>
             <Command>
-              <CommandList className="max-h-[260px]">
-                {getAIModels().map((group) => (
+              <CommandInput placeholder="Search 300+ models…" />
+              <CommandList className="max-h-[300px]">
+                <CommandEmpty>No model matches.</CommandEmpty>
+
+                {featured.map((group) => (
                   <CommandGroup
                     key={group.group}
                     heading={group.group}
@@ -87,8 +109,26 @@ export function ModelSelector({
                     ))}
                   </CommandGroup>
                 )}
+
+                {allModels.length > 0 && (
+                  <CommandGroup heading="All models">
+                    {allModels.filter((m) => !featuredIds.has(m.id)).map((m) => (
+                      <CommandItem key={m.id} value={m.id} onSelect={() => pick(m.id)}>
+                        <Check className={cn('size-4', m.id !== currentModel && 'opacity-0')} />
+                        <span className="min-w-0 truncate">{m.name}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
               </CommandList>
             </Command>
+
+            {allModels.length === 0 && (
+              <div className="flex items-center gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" />
+                Loading the model catalog…
+              </div>
+            )}
 
             <div className="border-t p-2">
               <div className="flex gap-1.5">

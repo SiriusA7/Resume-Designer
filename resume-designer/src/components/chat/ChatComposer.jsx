@@ -48,7 +48,7 @@ const CHIP_ICONS = {
  */
 export function ChatComposer({
   contextChips, onRemoveChip, onClearChips, onSend, loading,
-  currentModel, configured, customModels,
+  currentModel, configured, customModels, catalogRev, onRefreshCatalog,
   onSelectModel, onApplyCustomSlug, onRemoveCustom, onConfigure,
   reasoningEffort, reasoningSupported, onSetReasoning,
   webSearchEnabled, onToggleWebSearch,
@@ -215,6 +215,8 @@ export function ChatComposer({
             currentModel={currentModel}
             configured={configured}
             customModels={customModels}
+            catalogRev={catalogRev}
+            onRefreshCatalog={onRefreshCatalog}
             onSelect={onSelectModel}
             onApplyCustomSlug={onApplyCustomSlug}
             onRemoveCustom={onRemoveCustom}

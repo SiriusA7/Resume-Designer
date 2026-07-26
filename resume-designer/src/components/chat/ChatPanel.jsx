@@ -272,6 +272,8 @@ export default function ChatPanel() {
           currentModel={chat.currentModel}
           configured={chat.configured}
           customModels={chat.customModels}
+          catalogRev={chat.catalogRev}
+          onRefreshCatalog={chat.refreshCatalog}
           onSelectModel={chat.selectModel}
           onApplyCustomSlug={chat.applyCustomSlug}
           onRemoveCustom={chat.removeCustomModelEntry}
