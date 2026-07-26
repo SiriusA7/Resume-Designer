@@ -13,7 +13,7 @@
 
 import * as session from './changeSession.js';
 import { applyChangeToStore } from './changeApply.js';
-import { markChangedNodes, clearChangeMarks } from './changePreview.js';
+import { markChangedNodes, clearChangeMarks, isDescendantPath } from './changePreview.js';
 import { store } from './store.js';
 
 // Re-render is owned by main.js (it holds the render pipeline); inlineChanges
@@ -76,11 +76,28 @@ export function decorateRenderedResume(rootEl) {
  * The still-pending change for a path, or null once it is decided (or absent).
  * Drives inlineEditor's hover menu: decided paths fall back to the normal
  * AI-context menu automatically.
+ *
+ * An exact-path change always wins. When none exists, fall back to a change at
+ * an ANCESTOR of the queried path (isDescendantPath's `.`/`[` boundary rule):
+ * whole-item adds/removes carry container paths like `experience[1]` that the
+ * renderer never emits, so the hover lands on a descendant (`experience[1]
+ * .title`) and must still surface Apply/Reject for the container change. The
+ * returned change keeps its own container path — callers act on change.path,
+ * and its status is tracked under that path too. Deepest ancestor wins so a
+ * more specific container is never shadowed by a broader one.
  */
 export function getPendingChange(path) {
   const changeSet = session.getChangeSet();
-  if (!changeSet || session.getStatus(path) !== 'pending') return null;
-  return changeSet.changes.find((c) => c.path === path) || null;
+  if (!changeSet) return null;
+  const exact = changeSet.changes.find((c) => c.path === path);
+  if (exact) return session.getStatus(path) === 'pending' ? exact : null;
+  let ancestor = null;
+  for (const change of changeSet.changes) {
+    if (!isDescendantPath(path, change.path)) continue;
+    if (!ancestor || change.path.length > ancestor.path.length) ancestor = change;
+  }
+  if (!ancestor || session.getStatus(ancestor.path) !== 'pending') return null;
+  return ancestor;
 }
 
 /**

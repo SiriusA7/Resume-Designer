@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
-import { applyPendingToData, markChangedNodes, clearChangeMarks } from '../src/changePreview.js';
+import {
+  applyPendingToData, markChangedNodes, clearChangeMarks, isDescendantPath,
+} from '../src/changePreview.js';
 import { createChangeSet } from '../src/diffEngine.js';
 
 const changeSet = {
@@ -136,5 +138,92 @@ describe('markChangedNodes', () => {
     markChangedNodes(root, changeSet, new Map());
     clearChangeMarks(root);
     expect(root.querySelector('p').dataset.changeStatus).toBeUndefined();
+  });
+});
+
+describe('markChangedNodes — whole-item container changes', () => {
+  // Whole-item adds/removes carry container paths (`experience[1]`) that the
+  // renderer never emits: only descendants (`experience[1].title`, …) carry
+  // data-editable. Without the descendant fallback those changes were
+  // invisible — nothing highlighted, nothing hoverable.
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  const containerSet = (path, type) => ({ changes: [{ path, type }], proposedChanges: {} });
+
+  it('a container-path change marks all of its rendered descendants', () => {
+    document.body.innerHTML = `
+      <div id="root">
+        <p data-editable="experience[1].title">t</p>
+        <p data-editable="experience[1].bullets[0]">b0</p>
+        <p data-editable="experience[1].bullets[1]">b1</p>
+        <p data-editable="experience[0].title">other item</p>
+        <p data-editable="summary">unrelated</p>
+      </div>`;
+    const root = document.getElementById('root');
+    markChangedNodes(root, containerSet('experience[1]', 'add'), new Map());
+    const marked = Array.from(root.querySelectorAll('[data-change-status="pending"]'))
+      .map((el) => el.dataset.editable).sort();
+    expect(marked).toEqual([
+      'experience[1].bullets[0]', 'experience[1].bullets[1]', 'experience[1].title',
+    ]);
+    expect(root.querySelector('[data-editable="experience[1].title"]').dataset.changeType)
+      .toBe('add');
+  });
+
+  it('boundary rule: experience[1] never marks experience[10].title', () => {
+    document.body.innerHTML = `
+      <div id="root">
+        <p data-editable="experience[10].title">tenth item</p>
+        <p data-editable="experience[1].title">first item</p>
+      </div>`;
+    const root = document.getElementById('root');
+    markChangedNodes(root, containerSet('experience[1]', 'remove'), new Map());
+    expect(root.querySelector('[data-editable="experience[10].title"]').dataset.changeStatus)
+      .toBeUndefined();
+    expect(root.querySelector('[data-editable="experience[1].title"]').dataset.changeStatus)
+      .toBe('pending');
+  });
+
+  it('an exact-match change marks only its own node, never descendants', () => {
+    // The fallback must be a FALLBACK: when the exact path matches, prefix
+    // matching must not run — that loose `^=` behaviour is the old bug where a
+    // leaf change grabbed an arbitrary wrong node.
+    document.body.innerHTML = `
+      <div id="root">
+        <p data-editable="sections[1]">exact</p>
+        <p data-editable="sections[1].title">descendant</p>
+      </div>`;
+    const root = document.getElementById('root');
+    markChangedNodes(root, containerSet('sections[1]', 'modify'), new Map());
+    expect(root.querySelector('[data-editable="sections[1]"]').dataset.changeStatus)
+      .toBe('pending');
+    expect(root.querySelector('[data-editable="sections[1].title"]').dataset.changeStatus)
+      .toBeUndefined();
+  });
+});
+
+describe('isDescendantPath — the segment-boundary rule', () => {
+  it('requires a `.` or `[` boundary right after the ancestor', () => {
+    expect(isDescendantPath('experience[1].title', 'experience[1]')).toBe(true);
+    expect(isDescendantPath('experience[1].bullets[0]', 'experience[1]')).toBe(true);
+    expect(isDescendantPath('experience[0].title', 'experience')).toBe(true);
+    expect(isDescendantPath('sections[1].content[0]', 'sections[1]')).toBe(true);
+    // Not descendants: sibling indices, equal paths, reversed direction.
+    expect(isDescendantPath('experience[10].title', 'experience[1]')).toBe(false);
+    expect(isDescendantPath('experience[1]', 'experience[1]')).toBe(false);
+    expect(isDescendantPath('experience[1]', 'experience[1].title')).toBe(false);
+  });
+
+  it('rejects bare prefixes a naive startsWith would admit (the proof)', () => {
+    const naive = (path, ancestor) => path.startsWith(ancestor);
+    // The headline pair happens to be rejected by naive startsWith too — the
+    // ancestor's trailing `]` breaks the prefix against `[10` by accident:
+    expect(naive('experience[10].title', 'experience[1]')).toBe(false);
+    // …but for an ancestor NOT ending in `]` the accident evaporates: naive
+    // startsWith claims a same-prefix SIBLING field, the boundary rule
+    // doesn't. This is what makes the explicit boundary load-bearing rather
+    // than a restatement of startsWith.
+    expect(naive('experienceNotes', 'experience')).toBe(true);
+    expect(isDescendantPath('experienceNotes', 'experience')).toBe(false);
   });
 });

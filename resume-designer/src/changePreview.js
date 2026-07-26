@@ -51,6 +51,22 @@ function escapeAttr(value) {
 }
 
 /**
+ * True when `path` addresses something INSIDE `ancestorPath` — i.e. it
+ * continues the ancestor at a segment boundary (`.` or `[`). A bare string
+ * prefix is NOT enough, and the boundary must not be relaxed: without it,
+ * `experience` would claim a hypothetical `experienceNotes` sibling. (For
+ * index paths like `experience[1]` vs `experience[10].title` the trailing `]`
+ * happens to break the prefix on its own — do not rely on that accident.)
+ * Equal paths are not descendant: exact matches are the callers' primary case
+ * and are handled before this fallback.
+ */
+export function isDescendantPath(path, ancestorPath) {
+  if (!path || !ancestorPath || !path.startsWith(ancestorPath)) return false;
+  const boundary = path[ancestorPath.length];
+  return boundary === '.' || boundary === '[';
+}
+
+/**
  * Tag every node belonging to a changed path with its status, for CSS styling.
  * Marks ALL matches deliberately: pagination clones nodes across pages, so one
  * path legitimately maps to several elements and marking only the first left
@@ -60,7 +76,22 @@ export function markChangedNodes(rootEl, changeSet, statuses) {
   if (!rootEl || !changeSet) return;
   for (const change of changeSet.changes) {
     const status = statuses.get(change.path) || 'pending';
-    const nodes = rootEl.querySelectorAll(`[data-editable="${escapeAttr(change.path)}"]`);
+    let nodes = rootEl.querySelectorAll(`[data-editable="${escapeAttr(change.path)}"]`);
+    if (nodes.length === 0) {
+      // Whole-item fallback: for container paths like `experience[1]` or
+      // `sections[0]` (whole-item add/remove) the renderer emits no exact
+      // node — only descendants (`experience[1].title`, …) carry
+      // data-editable. Mark ALL of those so the whole item lights up.
+      //
+      // This is deliberately NOT the loose `^=` prefix matching that once
+      // bound a leaf change to an arbitrary wrong node: it runs only when the
+      // exact path matched nothing, it requires a `.`/`[` segment boundary
+      // right after the path (isDescendantPath — `experience[1]` never claims
+      // `experience[10].title`), and it marks every matching descendant
+      // instead of picking one. Keep all three properties.
+      nodes = Array.from(rootEl.querySelectorAll('[data-editable]'))
+        .filter((el) => isDescendantPath(el.dataset.editable, change.path));
+    }
     for (const node of nodes) {
       node.dataset.changeStatus = status;
       node.dataset.changeType = change.type;

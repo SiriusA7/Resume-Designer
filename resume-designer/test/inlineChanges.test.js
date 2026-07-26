@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   initInlineChanges, showInlineChanges, hideInlineChanges, isInlineChangesActive,
-  applyInlineChange, rejectInlineChange, applyAllInlineChanges,
+  applyInlineChange, rejectInlineChange, applyAllInlineChanges, getPendingChange,
 } from '../src/inlineChanges.js';
 import { getStatus, hasPending, setStatus, subscribe } from '../src/changeSession.js';
 import { createChangeSet } from '../src/diffEngine.js';
@@ -194,5 +194,73 @@ describe('apply semantics — what applying actually writes to the store', () =>
     expect(experience).toHaveLength(1);
     expect(experience[0].id).toBe('e2');
     expect(isInlineChangesActive()).toBe(false);
+  });
+});
+
+describe('container-path changes resolve from descendant paths', () => {
+  // Whole-item adds/removes carry container paths (`experience[1]`) the
+  // renderer never emits — the hover always lands on a descendant node, and
+  // the menu must still surface Apply/Reject for the container change.
+  const baseData = () => ({
+    experience: [
+      { id: 'e1', title: 'Dev', company: 'Acme', bullets: ['x'] },
+      { id: 'e2', title: 'PM', company: 'Beta', bullets: ['y'] },
+    ],
+  });
+
+  beforeEach(() => {
+    store.setData(baseData(), true, null);
+  });
+
+  it('resolves a pending container change from any descendant path', () => {
+    const change = {
+      path: 'experience[1]', type: 'add',
+      newValue: { title: 'New role', company: 'C', bullets: ['z'] },
+    };
+    showInlineChanges(makeChangeSet([change]));
+    expect(getPendingChange('experience[1].title')).toBe(change);
+    expect(getPendingChange('experience[1].bullets[0]')).toBe(change);
+    // The resolved change keeps its own container path — that is what the
+    // menu's Apply/Reject buttons must act on.
+    expect(getPendingChange('experience[1].title').path).toBe('experience[1]');
+  });
+
+  it('boundary rule: experience[10].title never resolves experience[1]', () => {
+    showInlineChanges(makeChangeSet([
+      { path: 'experience[1]', type: 'remove', newValue: null },
+    ]));
+    expect(getPendingChange('experience[10].title')).toBeNull();
+  });
+
+  it('an exact-path change wins over an ancestor, and stops resolving once decided', () => {
+    const leaf = { path: 'experience[1].title', type: 'modify', newValue: 'T' };
+    const container = { path: 'experience[1]', type: 'add', newValue: {} };
+    showInlineChanges(makeChangeSet([container, leaf]));
+    expect(getPendingChange('experience[1].title')).toBe(leaf);
+
+    // Once the container change is decided, its descendants must fall back to
+    // the normal AI-context menu — not keep offering a dead Apply/Reject.
+    showInlineChanges(makeChangeSet([container]));
+    rejectInlineChange('experience[1]');
+    expect(getPendingChange('experience[1].bullets[0]')).toBeNull();
+  });
+
+  it('applying the resolved container change removes the whole item (splice)', () => {
+    // Real diff: dropping e1 emits a whole-item REMOVE at experience[0].
+    const changeSet = createChangeSet(store.getData(), {
+      experience: baseData().experience.filter((e) => e.id !== 'e1'),
+    });
+    showInlineChanges(changeSet);
+
+    // Hover lands on a rendered descendant of the doomed item.
+    const resolved = getPendingChange('experience[0].title');
+    expect(resolved?.path).toBe('experience[0]');
+    expect(resolved?.type).toBe('remove');
+
+    applyInlineChange(resolved.path);
+    const experience = store.get('experience');
+    expect(experience).toHaveLength(1);
+    expect(experience[0].id).toBe('e2');
+    expect(experience.every((e) => e != null)).toBe(true);
   });
 });

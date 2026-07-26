@@ -176,7 +176,14 @@ function showAIMenu(element) {
     // Show apply/reject/review options for pending changes
     // Get original content to show what's being replaced
     const originalContent = getOriginalContent(path);
-    
+
+    // The pending change may live at a CONTAINER path above the hovered node
+    // (whole-item add/remove, e.g. hovering `experience[1].title` while the
+    // change is at `experience[1]`). Apply/Reject must act on the change's own
+    // path — that is the key the session tracks and applyChangeToStore splices
+    // or writes by.
+    const actionPath = pendingChange.path;
+
     menuContent = `
       ${originalContent ? `
         <div class="editable-ai-menu-preview compact original">
@@ -185,13 +192,13 @@ function showAIMenu(element) {
         </div>
       ` : ''}
       <div class="editable-ai-menu-actions">
-        <button class="editable-ai-menu-item apply-btn" data-action="apply-change" data-path="${path}">
+        <button class="editable-ai-menu-item apply-btn" data-action="apply-change" data-path="${actionPath}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="20 6 9 17 4 12"/>
           </svg>
           <span>Apply</span>
         </button>
-        <button class="editable-ai-menu-item reject-btn" data-action="reject-change" data-path="${path}">
+        <button class="editable-ai-menu-item reject-btn" data-action="reject-change" data-path="${actionPath}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/>
             <line x1="6" y1="6" x2="18" y2="18"/>
