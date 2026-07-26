@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { DIFF_TYPES, getPathLabel } from '../diffEngine.js';
 import { applyChangeToStore } from '../changeApply.js';
 import * as changeSession from '../changeSession.js';
+import { isSupersededSession } from '../changeSessionGuard.js';
 import {
   applyAllInlineChanges, applyInlineChange, hideInlineChanges, rejectInlineChange,
 } from '../inlineChanges.js';
@@ -29,8 +30,11 @@ import {
 //     change set is the one the session is reviewing (the chat / inline-preview
 //     flow) — decisions here delegate to inlineChanges' shared actions, so the
 //     inline highlights and the chat message's buttons stand down in lockstep.
-//     Jobs "Tailor" and History "Compare" open change sets that never entered
-//     the session; those keep per-open local state exactly as before;
+//     If a follow-up proposal replaces the session's change set while the
+//     dialog is open, the dialog closes rather than act on a set it never
+//     displayed (isSupersededSession). Jobs "Tailor" and History "Compare"
+//     open change sets that never entered the session; those keep per-open
+//     local state exactly as before;
 //   • A apply-next · R reject-next · Enter apply-all · Esc close (ignored while
 //     typing in an input/textarea), click-outside close, body scroll lock,
 //     empty state, and auto-close 500ms after every change is handled;
@@ -225,7 +229,8 @@ export default function DiffDialog() {
   // Whether the shared session owns this dialog's change set — latched at open
   // (true for the chat / inline-preview entry points, false for Jobs and
   // History) rather than re-derived, because deciding the last path ends the
-  // session out from under the still-open dialog.
+  // session out from under the still-open dialog. A session *replaced* by a
+  // different set is detected separately — see superseded() below.
   const ownedRef = useRef(false);
   const csRef = useRef(null);
   // Statuses last seen while the session owned our change set. While the
@@ -235,12 +240,31 @@ export default function DiffDialog() {
   // grace instead of every card flashing back to pending.
   const statusesRef = useRef(new Map());
 
+  // Liveness guard: a follow-up proposal can replace the session's change set
+  // behind this open dialog — nothing ends session A when the user sends
+  // another request; the stream-completion path just startSession(B)s over it.
+  // The inline delegates below resolve paths against the LIVE session, so
+  // acting then would apply a set the dialog never displayed. The subscribe
+  // callback closes the dialog the moment this trips; the decision handlers
+  // also re-check at action time because setOpen(false) is async and Radix
+  // keeps the content clickable through its exit animation. A null live
+  // session is NOT supersession — after endSession the delegates are safe
+  // no-ops and the dialog keeps its final frame through the auto-close grace.
+  const superseded = useCallback(
+    () => isSupersededSession(csRef.current, changeSession.getChangeSet(), ownedRef.current),
+    [],
+  );
+
   useEffect(() => changeSession.subscribe(() => {
+    if (superseded()) {
+      setOpen(false);
+      return;
+    }
     if (csRef.current && changeSession.getChangeSet() === csRef.current) {
       statusesRef.current = changeSession.statusMap();
     }
     setSessionRev((n) => n + 1);
-  }), []);
+  }), [superseded]);
 
   // Derived with plain `const`, not useMemo: the statuses live outside React
   // where a memo's dependency list cannot see them, and the Sets are tiny —
@@ -319,14 +343,14 @@ export default function DiffDialog() {
       const change = changeSet.changes.find((c) => c.path === path);
       if (!change) return;
       if (ownedRef.current) {
-        applyInlineChange(path);
+        if (!superseded()) applyInlineChange(path);
         return;
       }
       applyChangeToStore(change);
       onApplyRef.current?.();
       setLocalApplied((prev) => new Set(prev).add(path));
     },
-    [changeSet, applied, rejected],
+    [changeSet, applied, rejected, superseded],
   );
 
   // Reject = hide the card from the list. The close-when-everything-is-handled
@@ -336,10 +360,13 @@ export default function DiffDialog() {
   const rejectChange = useCallback(
     (path) => {
       if (!changeSet || applied.has(path) || rejected.has(path)) return;
-      if (ownedRef.current) rejectInlineChange(path);
-      else setLocalRejected((prev) => new Set(prev).add(path));
+      if (ownedRef.current) {
+        if (!superseded()) rejectInlineChange(path);
+        return;
+      }
+      setLocalRejected((prev) => new Set(prev).add(path));
     },
-    [changeSet, applied, rejected],
+    [changeSet, applied, rejected, superseded],
   );
 
   // The next still-actionable change (not applied, not rejected) for A / R.
@@ -356,22 +383,24 @@ export default function DiffDialog() {
     const cs = changeSet;
     if (!cs) return;
     if (ownedRef.current) {
-      applyAllInlineChanges();
+      if (!superseded()) applyAllInlineChanges();
       return;
     }
     for (const change of cs.changes) {
       if (!applied.has(change.path) && !rejected.has(change.path)) applyChange(change.path);
     }
-  }, [changeSet, applied, rejected, applyChange]);
+  }, [changeSet, applied, rejected, applyChange, superseded]);
 
   // "Reject All" — in session mode this is the bulk dismiss the inline preview
   // otherwise lacks: end the session (the chat button and the résumé highlights
   // stand down together) and restore the résumé view to the stored data.
   // Changes already applied stay applied. Standalone opens just close, as before.
+  // A superseded dialog only closes — ending the live session here would
+  // dismiss a preview it never displayed.
   const rejectAll = useCallback(() => {
-    if (ownedRef.current) hideInlineChanges();
+    if (ownedRef.current && !superseded()) hideInlineChanges();
     close();
-  }, [close]);
+  }, [close, superseded]);
 
   // Keyboard shortcuts: A apply-next · R reject-next · Enter apply-all · Esc
   // close. Ignored while typing in an input/textarea. Esc is handled here (the
