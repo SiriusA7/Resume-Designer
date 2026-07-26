@@ -13,20 +13,33 @@
  * Nothing here ever writes text into the DOM.
  */
 
-import { setByPath } from './diffEngine.js';
+import { DIFF_TYPES, setByPath } from './diffEngine.js';
 
 /**
  * Résumé data with still-pending changes projected in.
- * Applied paths are skipped (the store already holds them); rejected paths keep
- * their original value.
+ *
+ * Projects from `changeSet.changes` — the LEAF paths the diff decomposes each
+ * proposal into — because that is the key space the status map, markChangedNodes
+ * and applyChangeToStore all share. `proposedChanges` is keyed by whatever
+ * container the model sent (e.g. a whole shortened array for a removal), so
+ * projecting from it re-applies entire containers regardless of per-leaf
+ * decisions.
+ *
+ * Per leaf: applied paths are skipped (the store already holds them); rejected
+ * paths keep their original value; a pending REMOVE also projects nothing — the
+ * copy starts from the store data, so the doomed item is already in place, and
+ * it must STAY visible so the renderer emits a node for markChangedNodes to tag
+ * (data-change-type="remove") and for the hover menu to reject. Splicing it out
+ * is applyChangeToStore's job when the removal is accepted.
  */
 export function applyPendingToData(data, changeSet, statuses) {
   const next = JSON.parse(JSON.stringify(data));
   if (!changeSet) return next;
-  for (const [path, value] of Object.entries(changeSet.proposedChanges || {})) {
-    const status = statuses.get(path) || 'pending';
+  for (const change of changeSet.changes || []) {
+    const status = statuses.get(change.path) || 'pending';
     if (status !== 'pending') continue;
-    setByPath(next, path, value);
+    if (change.type === DIFF_TYPES.REMOVE) continue;
+    setByPath(next, change.path, change.newValue);
   }
   return next;
 }

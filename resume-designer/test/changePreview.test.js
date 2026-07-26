@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
 import { applyPendingToData, markChangedNodes, clearChangeMarks } from '../src/changePreview.js';
+import { createChangeSet } from '../src/diffEngine.js';
 
 const changeSet = {
   changes: [
@@ -32,6 +33,51 @@ describe('applyPendingToData', () => {
     const next = applyPendingToData({ summary: 'New **bold** (edited by user)', name: 'A' },
       changeSet, new Map([['summary', 'applied']]));
     expect(next.summary).toBe('New **bold** (edited by user)');
+  });
+});
+
+describe('applyPendingToData with container-keyed proposals', () => {
+  // The model has no leaf "delete" syntax: a removal arrives as the whole
+  // shortened array (proposedChanges keyed by the CONTAINER path). The diff
+  // decomposes that into leaf changes — the same key space as the status map,
+  // markChangedNodes and applyChangeToStore — so the projection must work at
+  // leaf granularity too, not re-apply whole containers.
+
+  it('keeps a pending REMOVE visible and markable instead of vanishing it', () => {
+    const data = {
+      experience: [{ id: 'e1', title: 'T', company: 'C', bullets: ['keep me', 'drop me'] }],
+    };
+    const cs = createChangeSet(data, { 'experience[0].bullets': ['keep me'] });
+    // Sanity: the diff really decomposed the container into a leaf REMOVE.
+    expect(cs.changes.some(
+      (c) => c.path === 'experience[0].bullets[1]' && c.type === 'remove'
+    )).toBe(true);
+
+    // The doomed bullet must survive projection: it needs a rendered node to
+    // carry the "to be removed" highlight and the inline reject control.
+    const next = applyPendingToData(data, cs, new Map());
+    expect(next.experience[0].bullets).toEqual(['keep me', 'drop me']);
+
+    // And that node gets tagged as a pending removal.
+    document.body.innerHTML =
+      '<div id="root"><p data-editable="experience[0].bullets[1]">drop me</p></div>';
+    const root = document.getElementById('root');
+    markChangedNodes(root, cs, new Map());
+    expect(root.querySelector('p').dataset.changeStatus).toBe('pending');
+    expect(root.querySelector('p').dataset.changeType).toBe('remove');
+  });
+
+  it('shows the ORIGINAL value for a rejected leaf while a sibling stays pending', () => {
+    const data = { skills: ['JS', 'CSS'] };
+    const cs = createChangeSet(data, { skills: ['TypeScript', 'Tailwind'] });
+    expect(cs.changes.map((c) => c.path).sort()).toEqual(['skills[0]', 'skills[1]']);
+
+    // Rejecting skills[1] while skills[0] is still pending: the rejected leaf
+    // must show its original value — a rejected leaf gets no highlight, so a
+    // re-applied proposal there would read as accepted résumé text.
+    const next = applyPendingToData(data, cs, new Map([['skills[1]', 'rejected']]));
+    expect(next.skills[0]).toBe('TypeScript');
+    expect(next.skills[1]).toBe('CSS');
   });
 });
 
