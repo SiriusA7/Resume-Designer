@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
-  showInlineChanges, hideInlineChanges, isInlineChangesActive,
+  initInlineChanges, showInlineChanges, hideInlineChanges, isInlineChangesActive,
   applyInlineChange, rejectInlineChange, applyAllInlineChanges,
 } from '../src/inlineChanges.js';
 import { getStatus, hasPending, setStatus, subscribe } from '../src/changeSession.js';
@@ -143,6 +143,38 @@ describe('apply semantics — what applying actually writes to the store', () =>
     expect(hasPending()).toBe(false);
     expect(store.get('summary')).toBe('New summary'); // applied before dismiss — kept
     expect(store.get('name')).toBe('A'); // still pending at dismiss — never written
+  });
+
+  it('loading a different document ends the in-flight session', () => {
+    // A proposal made against résumé A must not survive into résumé B:
+    // renderCurrentResume would project A's pending changes onto B's data, and
+    // an apply (inline hover, or a still-open DiffDialog delegating here)
+    // would write A's proposed value into B. initInlineChanges hooks the
+    // store's 'dataLoaded' — the event every document load emits — to end the
+    // session centrally.
+    initInlineChanges(() => {});
+    showInlineChanges(makeChangeSet([
+      { path: 'summary', type: 'modify', newValue: 'A improved' },
+    ]));
+    expect(isInlineChangesActive()).toBe(true);
+
+    // Switch to résumé B (variant switch / import / restore all land here).
+    store.setData({ summary: 'Resume B summary', name: 'B' }, true, null);
+
+    expect(isInlineChangesActive()).toBe(false);
+    expect(hasPending()).toBe(false);
+    // A stale apply — e.g. a click queued against the old preview — must
+    // no-op instead of writing A's proposal into B.
+    applyInlineChange('summary');
+    expect(store.get('summary')).toBe('Resume B summary');
+  });
+
+  it('first load with no session in flight is a harmless no-op', () => {
+    initInlineChanges(() => {});
+    expect(isInlineChangesActive()).toBe(false);
+    store.setData(baseData(), true, null);
+    expect(isInlineChangesActive()).toBe(false);
+    expect(store.get('summary')).toBe('Old summary');
   });
 
   it('apply-all applies every pending change and skips rejected ones', () => {

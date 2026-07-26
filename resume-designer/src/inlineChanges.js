@@ -14,15 +14,33 @@
 import * as session from './changeSession.js';
 import { applyChangeToStore } from './changeApply.js';
 import { markChangedNodes, clearChangeMarks } from './changePreview.js';
+import { store } from './store.js';
 
 // Re-render is owned by main.js (it holds the render pipeline); inlineChanges
 // only asks for one. Set via initInlineChanges.
 let requestRerender = () => {};
 
+// A 'dataLoaded' means a DIFFERENT document now backs the render: variant
+// switch, import, backup restore. A session started against the previous
+// document must not survive it — renderCurrentResume would project the old
+// résumé's pending changes onto the new one, and accepting (inline or from a
+// still-open DiffDialog, which delegates here) would write the old proposal
+// into the new document. store.setData is the one entry point every document
+// load goes through, so this hook covers every loadVariant caller centrally.
+// No render loop: hideInlineChanges only clears DOM marks, ends the session
+// (notifying React listeners that set state) and re-renders — none of which
+// call setData. On first load / no session it never fires. Named (not inline)
+// so repeated init calls dedupe in the store's listener Set.
+function endSessionOnDataLoaded(event) {
+  if (event !== 'dataLoaded' || !session.getChangeSet()) return;
+  hideInlineChanges();
+}
+
 export function initInlineChanges(onRerender) {
   if (typeof onRerender === 'function') requestRerender = onRerender;
   addInlineStyles();
   document.addEventListener('click', handleInlineAction);
+  store.subscribe(endSessionOnDataLoaded);
 }
 
 /** Begin previewing a change set. Replaces any preview already showing. */
