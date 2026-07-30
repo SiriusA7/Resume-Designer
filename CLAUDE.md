@@ -1,9 +1,14 @@
 <!-- project-stack-start -->
 
-This repo is **Resume Designer**, a Tauri 2 desktop app (macOS + Windows) for
-designing résumés, with AI chat assistance and vector PDF export. The app code
-lives in `resume-designer/`; the repo root also holds `website/` (GitHub Pages
-marketing site) and `docs/`.
+This repo is **on paper** (formerly Resume Designer), a Tauri 2 desktop app
+(macOS + Windows) for designing résumés, with AI chat assistance and vector PDF
+export. The app code lives in `resume-designer/`; the repo root also holds
+`website/` (GitHub Pages marketing site) and `docs/`.
+
+The directory name `resume-designer/`, the GitHub repo slug, the bundle
+identifier `com.resumedesigner.app`, and every `resume-designer-*` storage key
+are **deliberately unchanged** by the rename — they are paths and data
+addresses, not branding. See "Project rules" below.
 
 When working on build, packaging, signing, or updater code, **read
 `resume-designer/TAURI.md` first** — it is the authoritative guide for the
@@ -48,6 +53,30 @@ npm run tauri:build  # production desktop build (see TAURI.md for targets)
 - Conventional commits, enforced by commitlint in CI on **every commit in a PR** (both `main` and `next`): subjects must start lowercase (e.g. `fix(chat): …`).
 - Branch flow: feature branches → `next` (beta channel) → promotion PR to `main`.
 - The `next` **git tag** is the beta release anchor — never delete it. Use `refs/heads/next` / `origin/next` when you mean the branch, to avoid the branch/tag ambiguity.
+
+### Naming (the "on paper" rename)
+
+The app is branded **on paper** — always lowercase, never "On Paper". Where a
+space is illegal, use `on-paper` (npm package, export filenames); the Rust lib
+is `on_paper_lib`.
+
+These are **frozen and must never be renamed**, however tempting a sweep looks:
+
+- **Bundle identifier `com.resumedesigner.app`** — Tauri derives the app-data
+  directory from it, so it is the on-disk address of every user's résumés.
+  Changing it ships via the auto-updater and factory-resets the app.
+- **Every `resume-designer-*` / `resume-*` storage key** — desktop storage is
+  one file per key, so these are filenames. Renaming them also turns the
+  wipe-before-validate path in `persistence.js` into a silent data loss on the
+  next backup import.
+- **The legacy Electron key list and paths in `src-tauri/src/commands/migration.rs`**
+  — historical facts about a shipped app's on-disk database, not configuration.
+- **The `resume-designer/` directory and the GitHub repo slug** — the repo slug
+  is compiled into the updater endpoints of every shipped binary.
+
+Never sweep on the bare string `resume-`: it also names the `.resume-page` /
+`.resume-sidebar` CSS classes that pagination and PDF page-splitting depend on.
+Drive any key-related change off `BACKUP_FIXED_KEYS` in `src/profileKeys.js`.
 
 ### UI
 

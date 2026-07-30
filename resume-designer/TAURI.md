@@ -1,6 +1,6 @@
 # Tauri Desktop App Guide
 
-This document covers building, distributing, and updating the Resume Designer desktop app, which is built with [Tauri 2](https://v2.tauri.app/).
+This document covers building, distributing, and updating the on paper desktop app, which is built with [Tauri 2](https://v2.tauri.app/).
 
 ## Quick Start
 

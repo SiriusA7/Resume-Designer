@@ -1,7 +1,7 @@
 {
-  "name": "resume-designer",
+  "name": "on-paper",
   "version": "1.0.0",
-  "description": "Creative resume designer and generator.",
+  "description": "Design, tailor, and export beautiful resumes.",
   "type": "module",
   "license": "CC-BY-NC-SA-4.0",
   "engines": {

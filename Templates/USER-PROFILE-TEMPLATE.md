@@ -2,7 +2,7 @@
 
 > This template helps you provide detailed background information to the AI assistant.
 > Fill out the sections below with your professional details, then import this file
-> into the Resume Designer using the "Import" button in the User Profile panel.
+> back into on paper using the "Import" button in the User Profile panel.
 >
 > **Tips:**
 > - Be as detailed as possible - the more context you provide, the better the AI suggestions
@@ -138,7 +138,7 @@ _Your content here..._
 2. Delete any placeholder text (italicized text)
 3. Remove sections you don't need
 4. Save the file
-5. In Resume Designer, go to User Profile and click "Import"
+5. In the app, go to User Profile and click "Import"
 6. Select this file to import your profile data
 
 The imported data will be used by the AI to provide more personalized and accurate

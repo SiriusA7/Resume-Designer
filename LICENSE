@@ -1,4 +1,4 @@
-Resume Designer
+on paper (formerly Resume Designer)
 Copyright (c) 2026 Ash Shah
 
 Licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
@@ -10,7 +10,7 @@ PLAIN-LANGUAGE SUMMARY (a courtesy explanation, not a substitute for the
 license text that follows)
 ==============================================================================
 
-You are free to use, study, modify, and share Resume Designer, under these
+You are free to use, study, modify, and share this software, under these
 terms:
 
   * Use it for anything, including your job and commercial projects.
@@ -19,10 +19,10 @@ terms:
     about the software itself, not about the work you produce with it.
 
   * Your documents are yours. Resumes, PDFs, backups, profile data, and other
-    outputs you create with Resume Designer are not licensed by this project
+    outputs you create with the app are not licensed by this project
     license.
 
-  * Don't commercialize the app itself. You may not sell Resume Designer,
+  * Don't commercialize the app itself. You may not sell this software,
     repackage and sell it, or offer it as a paid hosted service or paid API.
 
   * Attribution. Keep the credit and this license with any copies or
@@ -31,7 +31,7 @@ terms:
   * ShareAlike. If you distribute a modified version, license your changes
     under these same terms (CC BY-NC-SA 4.0).
 
-Want to use Resume Designer commercially in a way this license doesn't allow?
+Want to use this software commercially in a way this license doesn't allow?
 Open an issue to work something out.
 
 This is a source-available, noncommercial license. It is NOT an OSI-approved
