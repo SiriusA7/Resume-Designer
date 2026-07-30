@@ -79,7 +79,7 @@ npm run tauri:build:mac:arm64
 Outputs live under `src-tauri/target/<arch>/release/bundle/`:
 
 - **macOS**: `bundle/dmg/Resume Designer_<version>_<arch>.dmg`, `bundle/macos/Resume Designer.app`, plus an `.app.tar.gz` + `.app.tar.gz.sig` pair (the updater bundle and its minisign signature).
-- **Windows**: `bundle/nsis/Resume Designer_<version>_x64-setup.exe`, plus `.nsis.zip` + `.nsis.zip.sig` for the updater.
+- **Windows**: `bundle/nsis/Resume Designer_<version>_x64-setup.exe`, plus `.exe.sig` for the updater. (With `createUpdaterArtifacts: true` Tauri 2 produces the **v2** updater format on Windows: the `-setup.exe` *is* the updater payload and `.exe.sig` is its detached signature. No `.nsis.zip` is emitted — see the "Normalize Windows artifact filenames" step in `release.yml`.)
 
 ## Code Signing & Notarization (macOS)
 
@@ -120,9 +120,27 @@ The CI workflow validates that all of these are present before starting the macO
 
 ### Generate the minisign keypair (one-time)
 
+> [!CAUTION]
+> **ALREADY DONE. NEVER REGENERATE THIS KEYPAIR.** The key exists, its public
+> half is baked into `tauri.conf.json` (`plugins.updater.pubkey`), and its
+> private half lives in the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret. This
+> section is **historical** — it documents how the existing key was made.
+>
+> Regenerating it and updating both the config and the secret is *internally
+> consistent*: the build succeeds and CI goes green. But every already-installed
+> app carries the **old** pubkey and will reject every future update with a
+> signature-verification failure — silently, with no in-app signal and no
+> auto-recovery. The only fix is for 100% of users to manually download and
+> reinstall.
+>
+> The filename below contains the old product slug. **Leave it alone.** The
+> GitHub secret stores the key's *contents*, not its path, so renaming the local
+> file buys nothing and only invites someone to re-run the command.
+
 Tauri's updater signs every release artifact with a minisign key and verifies the signature against the public key baked into the app.
 
 ```bash
+# HISTORICAL — do not run. See the caution above.
 cd resume-designer
 npx tauri signer generate -w ~/.tauri/resume-designer.key
 # Set and remember a password when prompted.
@@ -151,6 +169,51 @@ The Tauri CLI reads these env vars during `tauri build` to produce signed update
 - A 10-second watchdog timer surfaces a clear error if the restart-into-installer step fails (e.g. malformed signature).
 
 The `latest.json` manifest is assembled by CI from the per-platform `.sig` files and uploaded to the release.
+
+### Where the endpoint actually lives (read before changing it)
+
+> [!IMPORTANT]
+> **`plugins.updater.endpoints` in `tauri.conf.json` is inert at runtime.** The
+> endpoints installed apps actually use are the Rust constants
+> `STABLE_ENDPOINT` / `BETA_ENDPOINT` in
+> [src-tauri/src/commands/updater.rs](src-tauri/src/commands/updater.rs).
+
+This trips people up because the config value is the greppable one. The chain:
+
+- `check()` from the JS `plugin-updater` cannot override the endpoint, so
+  `src/native.js` routes every check through the Rust `check_update_on_channel`
+  command instead.
+- That command builds its own updater from `endpoints_for(channel)`, which
+  returns the Rust constants. The config value is never consulted.
+- Meanwhile `release.yml` **rewrites** the config endpoint for beta builds,
+  deriving it from `github.repository`. So the config value self-corrects on a
+  repo rename while the Rust constants stay frozen.
+
+The failure mode: someone renames the repo, greps `tauri.conf.json`, updates it,
+watches the beta build go green, and ships — having changed nothing about where
+installed apps look. `test/updaterEndpoints.test.js` asserts the two stay in
+sync so this can't happen silently.
+
+### Preparing for a repo rename
+
+Both endpoints hardcode `ashproto/Resume-Designer`. If the repo is ever renamed,
+every already-installed build reaches the new location **only** via GitHub's 301
+redirect — and that redirect is destroyed permanently the instant anything is
+created at the old path again. It is an unmonitored single point of failure on
+the entire installed base's update path.
+
+The durable fix is to stop pointing at GitHub at all: serve `latest.json` from a
+domain we control (`onpaper.pro`) and let it redirect or proxy to whatever the
+release location happens to be. Because the endpoint is baked into every shipped
+binary, **this has to ship to users before the rename, not with it.** Sequence:
+
+1. Publish `latest.json` (and the beta manifest) to the owned domain from CI.
+2. Ship a release whose Rust constants point at the owned domain. Wait for
+   adoption.
+3. Only then rename the repo — installed apps never notice, because the URL they
+   were compiled with never changed.
+
+Until step 2 has shipped and been adopted, treat the repo name as load-bearing.
 
 ### Switching update channels (in-app)
 

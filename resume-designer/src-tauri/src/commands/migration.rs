@@ -51,9 +51,21 @@ const TAG_LATIN1: u8 = 0x01;
 // ---------- App-owned localStorage keys ----------
 //
 // Listed explicitly so unrelated keys (e.g. `devtools://` entries from
-// Chromium's own devtools instance) can't slip into our backup. Kept in
-// sync with `BACKUP_FIXED_KEYS` in src/persistence.js — when adding a
-// new app-owned key, update both lists.
+// Chromium's own devtools instance) can't slip into our backup.
+//
+// FROZEN — DO NOT RENAME OR "KEEP IN SYNC" WITH THE FRONTEND.
+//
+// These strings are historical facts about a *shipped Electron app's*
+// LevelDB that already exists on users' disks; they are not configuration.
+// Nothing we ship from now on can change what that database was written
+// with. An earlier version of this comment told you to keep the list in
+// sync with the frontend's owned-key list — that instruction is wrong and
+// actively dangerous: renaming these would make `is_app_key` match nothing,
+// `find_existing` return None, and the probe report "Found 0 keys" for a
+// database full of the user's resumes.
+//
+// Adding a *new* app-owned key to the frontend requires no change here —
+// the Electron app never wrote it.
 const FIXED_KEYS: &[&str] = &[
     "resume-designer-data",
     "resume-designer-job-descriptions",

@@ -10,6 +10,7 @@ import { appStorage } from './appStorage.js';
 // too — not only in createChangeSet's pre-filter. diffEngine imports nothing
 // from this module (only the npm `diff` package), so sharing creates no cycle.
 import { setByPath } from './diffEngine.js';
+import { BACKUP_HISTORY_PREFIX } from './profileKeys.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -76,8 +77,10 @@ function getByPath(obj, path) {
   }, obj);
 }
 
-// History persistence key prefix
-const HISTORY_KEY_PREFIX = 'resume-designer-history-';
+// History persistence key prefix. Re-exported from profileKeys.js rather than
+// re-declared: isOwnedKey() keys off the same constant, so a second literal
+// here would have to stay byte-identical with nothing enforcing it.
+const HISTORY_KEY_PREFIX = BACKUP_HISTORY_PREFIX;
 
 // Change type constants
 export const CHANGE_TYPES = {
