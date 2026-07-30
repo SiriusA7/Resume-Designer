@@ -313,6 +313,69 @@ installing the pre-rename build first, then updating.
    - Prompt "Restart Now?" → after click, relaunch into the new version.
    - Confirm via DevTools: `(await import('./native.js')).getAppInfo()`.
 
+### Cutting the rename release (one-time)
+
+The release that changes the app's name needs a few things the normal flow does
+not. Read this once before publishing it.
+
+**1. Choose the version deliberately.** Versions are *computed*, not stored —
+`scripts/ci/compute-version.mjs` takes the latest `v*` tag as the base and reads
+Conventional Commits in `<tag>..HEAD` to pick major/minor/patch. The `version`
+fields in `package.json`, `tauri.conf.json`, and `Cargo.toml` are placeholders
+that CI overwrites at build time; editing them by hand achieves nothing.
+
+The rename commits are `feat:`, so the computed version is a **minor** bump. To
+release it as `2.0.0` instead, use the documented escape hatch: run the release
+via `workflow_dispatch` and set the **version input** (`RELEASE_VERSION_OVERRIDE`)
+to `2.0.0`. Do **not** fake a `BREAKING CHANGE:` marker to force it — nothing
+about the rename is breaking, and that phrase in *any* commit body silently
+turns every future release into a major bump.
+
+> `detectBumpType` is a plain case-insensitive **substring** test over every
+> commit subject *and body* in `<latest tag>..HEAD` — not a Conventional Commits
+> parser. So merely *writing about* the marker in a commit message trips it, even
+> in a message warning against it. This actually happened while writing this
+> section: the commit adding it computed `bump=major` until the body was reworded
+> to hyphenate the phrase. Spell it with a hyphen in commit messages; prose in
+> tracked files like this one is safe, since only commit messages are scanned.
+
+**2. Expect one degraded changelog on the beta channel.** Builds older than this
+release parse `## Resume Designer <version>` only, so they cannot read the new
+heading and fall back to the git tag. For a **stable** release that is harmless —
+the tag *is* the version. For the transitional **beta** it shows `next`, because
+betas publish under the rolling `next` tag. It self-corrects as soon as the user
+updates, since this release's parser accepts both names permanently.
+
+**3. Windows users must reinstall.** See "Windows upgrade identity" above. Say so
+in the release notes.
+
+**4. macOS keeps the old folder name.** The updater unpacks onto the running
+bundle's path, so an auto-updated install stays at
+`/Applications/Resume Designer.app` while Finder, Dock, and Spotlight all show
+"on paper" (those read `CFBundleDisplayName`). Gatekeeper validates contents, not
+the folder name, so this is cosmetic. Only a fresh DMG install produces
+`/Applications/on paper.app`. Mention it; do not try to rename the bundle from
+inside the updater — it races the running process.
+
+**5. Re-capture the screenshots.** `website/hero.jpg` and
+`docs/screenshots/hero.png` both show the old wordmark in the app header. There
+is no scriptable capture path in this repo, so these need a manual native
+capture after the rename build is installed.
+
+**6. The one test that actually matters.** A fresh install proves nothing about
+data continuity. Install the **pre-rename** build, create a résumé, then let the
+**real updater** deliver the rename build, and confirm the résumé, both
+profiles, the OpenRouter key, the update channel, and the onboarding-complete
+flag all survive — and that onboarding does not re-run and no Electron
+re-import is triggered. This works because `identifier` is unchanged; that field
+is the address of the app-data directory, so it must stay
+`com.resumedesigner.app` forever.
+
+**7. Out of repo.** Point DNS for `onpaper.pro` at GitHub Pages and set it as the
+custom domain in repo Settings → Pages (the `CNAME` file is already committed);
+redirect `on-paper.app` and `useonpaper.com` to it. Leave the repo name, the
+`next` tag, and all eight release secrets alone.
+
 ## System requirements
 
 - **macOS 14.4 (Sonoma) or later.** `bundle.macOS.minimumSystemVersion` is set to `14.4` in `tauri.conf.json`, so older versions cannot install the app. The floor is driven by pdf.js: the in-app PDF preview and PDF/DOCX import use pdf.js 5, whose modern build relies on `Promise.withResolvers` — shipped in the WebKit bundled with macOS 14.4 (Safari 17.4); older WKWebViews would fail those features at runtime. (PDF export itself uses `WKWebView.createPDF(configuration:completionHandler:)`, available since macOS 11.)
