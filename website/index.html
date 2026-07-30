@@ -3,18 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Resume Designer — one master profile, infinite tailored resumes</title>
-  <meta name="description" content="Resume Designer is a free, source-available, AI-assisted resume builder for macOS, Windows, and the browser. Keep one master profile, spin off job-tailored resumes, and export to PDF — privately, on your own machine. Bring your own OpenRouter key.">
+<title>on paper — one master profile, infinite tailored resumes</title>
+  <meta name="description" content="on paper is a free, source-available, AI-assisted resume builder for macOS, Windows, and the browser. Keep one master profile, spin off job-tailored resumes, and export to PDF — privately, on your own machine. Bring your own OpenRouter key.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://onpaper.pro/">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Resume Designer — one master profile, infinite tailored resumes">
+  <meta property="og:site_name" content="on paper">
+  <meta property="og:title" content="on paper — one master profile, infinite tailored resumes">
   <meta property="og:description" content="Free, source-available, AI-assisted resume builder. One master profile, infinite job-tailored resumes, export to PDF — privately, on your own machine.">
-  <meta property="og:url" content="https://ashproto.github.io/Resume-Designer/">
-  <meta property="og:image" content="https://ashproto.github.io/Resume-Designer/hero.jpg">
+  <meta property="og:url" content="https://onpaper.pro/">
+  <meta property="og:image" content="https://onpaper.pro/hero.jpg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Resume Designer — one master profile, infinite tailored resumes">
+  <meta name="twitter:title" content="on paper — one master profile, infinite tailored resumes">
   <meta name="twitter:description" content="Free, source-available, AI-assisted resume builder. One master profile, infinite job-tailored resumes, export to PDF — privately, on your own machine.">
-  <meta name="twitter:image" content="https://ashproto.github.io/Resume-Designer/hero.jpg">
+  <meta name="twitter:image" content="https://onpaper.pro/hero.jpg">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap');
 
@@ -235,7 +237,11 @@ a{color:inherit;text-decoration:none;}
 
 /* ===== NAV ===== */
 .nav{display:flex;align-items:center;justify-content:space-between;padding:22px 28px;max-width:1040px;margin:0 auto;}
-.brand{display:flex;align-items:center;gap:11px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:19px;letter-spacing:-0.01em;}
+/* nowrap: the wordmark is two lowercase words, so a line break renders it as
+   "on" / "paper" — two unrelated words with no capital to signal it's one name.
+   Broke at <=360px (a very common Android width). Text is only ~53px wide, so
+   this can't overflow. Matches the app header's own whitespace-nowrap. */
+.brand{display:flex;align-items:center;gap:11px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:19px;letter-spacing:-0.01em;white-space:nowrap;}
 .mark{width:34px;height:34px;border-radius:9px;background:var(--ink);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 .nav-links{display:flex;align-items:center;gap:24px;font-size:14px;font-weight:500;}
 .nav-links a.lnk{color:var(--ink);opacity:.72;transition:opacity .15s;}
@@ -450,14 +456,14 @@ a{color:inherit;text-decoration:none;}
 </style>
 </head>
 <body>
-  <h1 class="sr-only">Resume Designer — a local-first, AI-assisted resume builder for macOS, Windows, and the browser.</h1>
+  <h1 class="sr-only">on paper — a local-first, AI-assisted resume builder for macOS, Windows, and the browser.</h1>
 
   <nav class="nav">
     <div class="brand">
       <span class="mark" aria-hidden="true">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 3h8l4 4v14H6z" stroke="var(--paper)" stroke-width="2" stroke-linejoin="round"/><path d="M13 3v5h5" stroke="var(--acid)" stroke-width="2" stroke-linejoin="round"/><path d="M9 13h6M9 17h4" stroke="var(--paper)" stroke-width="2" stroke-linecap="round"/></svg>
       </span>
-      Resume Designer
+      on paper
     </div>
     <div class="nav-links">
       <a class="lnk" href="#features">Features</a>
@@ -503,7 +509,7 @@ a{color:inherit;text-decoration:none;}
       <div class="shot">
         <span class="shot-tag">macOS · Windows · browser</span>
         <div class="shot-frame">
-          <img src="hero.jpg" alt="Resume Designer app" style="width:100%;height:auto;border-radius:8px">
+          <img src="hero.jpg" alt="on paper app" style="width:100%;height:auto;border-radius:8px">
         </div>
       </div>
     </header>
@@ -698,7 +704,7 @@ a{color:inherit;text-decoration:none;}
           <div class="steps">
             <div class="step"><span class="si">1</span><div><div class="st">Create a free OpenRouter account</div><div class="sd">Sign up at openrouter.ai — no card required to start.</div></div></div>
             <div class="step"><span class="si">2</span><div><div class="st">Generate an API key</div><div class="sd">From your OpenRouter dashboard, create a new key.</div></div></div>
-            <div class="step"><span class="si">3</span><div><div class="st">Paste it into Settings</div><div class="sd">Drop the key into Resume Designer's settings panel.</div></div></div>
+            <div class="step"><span class="si">3</span><div><div class="st">Paste it into Settings</div><div class="sd">Drop the key into on paper's settings panel.</div></div></div>
             <div class="step"><span class="si">4</span><div><div class="st">Pick a model</div><div class="sd">Claude, GPT, Gemini, and more — switch any time.</div></div></div>
           </div>
           <div class="key-note">
@@ -731,7 +737,7 @@ a{color:inherit;text-decoration:none;}
         </div>
         <div class="faq">
           <div class="q">Is my data private?</div>
-          <div class="a">Yes. Resume Designer is local-first: your profile, resumes, and settings stay on your device. There's no account, no backend, and no telemetry.</div>
+          <div class="a">Yes — on paper is local-first: your profile, resumes, and settings stay on your device. There's no account, no backend, and no telemetry.</div>
         </div>
         <div class="faq">
           <div class="q">Do I need the AI?</div>
@@ -753,7 +759,7 @@ a{color:inherit;text-decoration:none;}
             Source-available · CC BY-NC-SA 4.0
           </span>
           <h2>Free to use, study, and reshape.</h2>
-          <p>Resume Designer is licensed under CC BY-NC-SA 4.0. Read the code, fork it, send a pull request — just don't commercialize the app itself without a separate arrangement.</p>
+          <p>Licensed under CC BY-NC-SA 4.0. Read the code, fork it, send a pull request — just don't commercialize the app itself without a separate arrangement.</p>
         </div>
         <a class="obtn" href="https://github.com/ashproto/Resume-Designer">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.54 2.87 8.39 6.84 9.74.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.57 2.34 1.12 2.91.85.09-.66.35-1.12.63-1.37-2.22-.26-4.55-1.14-4.55-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.3 9.3 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
@@ -804,7 +810,7 @@ a{color:inherit;text-decoration:none;}
         </div>
       </div>
       <div class="foot-base">
-        <span>© 2026 Resume Designer · Licensed under CC BY-NC-SA 4.0</span>
+        <span>© 2026 on paper · Licensed under CC BY-NC-SA 4.0</span>
       </div>
     </footer>
   </div>
