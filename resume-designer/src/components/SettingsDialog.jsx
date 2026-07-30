@@ -292,7 +292,7 @@ export default function SettingsDialog() {
             {tab === 'general' && (
               <div className="space-y-6">
                 <section>
-                  <SectionHeader title="Appearance" description="Customize how Resume Designer looks on this device." />
+                  <SectionHeader title="Appearance" description="Customize how the app looks on this device." />
                   <Label className="mb-2 block text-[13.5px] font-medium">Theme</Label>
                   <Segmented className="flex w-full">
                     {THEME_OPTIONS.map(({ value, label, Icon }) => (
@@ -345,7 +345,7 @@ export default function SettingsDialog() {
                 <section>
                   <SectionHeader title="About" />
                   <SettingRow label="Version">
-                    <Badge variant="secondary">Resume Designer {version}</Badge>
+                    <Badge variant="secondary">on paper {version}</Badge>
                   </SettingRow>
                 </section>
               </div>

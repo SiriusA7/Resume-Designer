@@ -92,7 +92,7 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
           <KeyRound className="size-5 text-muted-foreground" />
         </div>
         <StepHeader
-          title="Welcome to Resume Designer"
+          title="Welcome to on paper"
           description="This app uses AI to help you create professional resumes. Enter your OpenRouter API key to get started."
         />
 

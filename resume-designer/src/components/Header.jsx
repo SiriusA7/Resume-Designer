@@ -180,10 +180,10 @@ export default function Header() {
             Geometry pinned to mockup: 24px mark, rounded-[7px], 14.5px wordmark. */}
         <div className="flex shrink-0 items-center gap-2.5">
           <span className="flex size-6 items-center justify-center rounded-[7px] bg-primary text-[13px] font-bold text-primary-foreground">
-            R
+            o
           </span>
           <span className="whitespace-nowrap text-[14.5px] font-semibold tracking-[-0.01em]">
-            Resume Designer
+            on paper
           </span>
         </div>
         {/* Workspace identity: compact initials avatar opening Settings →

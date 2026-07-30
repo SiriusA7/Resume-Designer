@@ -1,6 +1,6 @@
 # Bridge API reference
 
-The **companion bridge** is a loopback HTTP server the Resume Designer desktop
+The **companion bridge** is a loopback HTTP server the on paper desktop
 app runs so a browser companion extension can read your résumés, ask the app's
 AI to draft answers, export PDFs, and record job applications — all against the
 one running app instance, with no separate account or cloud service.
@@ -65,7 +65,7 @@ HTTP 401
 - Because every request round-trips through the running app's JavaScript (see
   [Design notes](#design-notes)), the app must be **running and unlocked**. If
   the webview does not answer in time the server returns
-  `504 {"error":"the app did not answer in time — is Resume Designer running and unlocked?"}`.
+  `504 {"error":"the app did not answer in time — is on paper running and unlocked?"}`.
   Timeouts: **180 s** for `/ai/*` and any `…/pdf` path (model latency / PDF
   render), **30 s** for everything else.
 - If the app window is unavailable to receive the request at all, the server

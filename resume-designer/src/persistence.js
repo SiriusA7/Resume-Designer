@@ -525,7 +525,7 @@ export function exportFullBackup(filename) {
     profiles,
   };
   const stamp = new Date().toISOString().slice(0, 10);
-  const name = filename || `resume-designer-backup-${stamp}.json`;
+  const name = filename || `on-paper-backup-${stamp}.json`;
   downloadFile(JSON.stringify(backup, null, 2), name, 'application/json');
   const keysExported = Object.values(profiles)
     .reduce((n, p) => n + Object.keys(p.keys).length, Object.keys(shared).length);
@@ -744,7 +744,7 @@ export function importFullBackupFromEnvelope(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
+      'Not an on paper backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
     );
   }
   // Every value must be a string — that's what `appStorage.setItem`
@@ -944,7 +944,7 @@ export function importFullBackupMerge(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1").'
+      'Not an on paper backup envelope (missing "backupFormat: 1").'
     );
   }
   for (const [k, v] of Object.entries(parsed.keys)) {

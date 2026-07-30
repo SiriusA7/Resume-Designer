@@ -17,7 +17,7 @@ import {
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 // Optional attribution headers (OpenRouter app leaderboard); harmless if unused.
 const OPENROUTER_REFERER = 'https://github.com/ashproto/Resume-Designer';
-const OPENROUTER_TITLE = 'Resume Designer';
+const OPENROUTER_TITLE = 'on paper';
 
 // The single anti-fabrication contract, injected into every prompt that writes
 // or rewrites résumé content. Users reported the assistant inventing employers,

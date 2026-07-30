@@ -1,5 +1,5 @@
 /**
- * Resume Designer - Main Application
+ * on paper - Main Application
  * Integrates all components: store, header bar, chat panel, inline editor, structure panel
  */
 
