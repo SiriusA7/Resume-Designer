@@ -30,11 +30,21 @@ function stripV(tag) {
 }
 
 // The release workflow stamps the true build version into the body's first
-// heading ("## Resume Designer $VERSION", release.yml). Beta builds publish
+// heading ("## <product> $VERSION", release.yml). Beta builds publish
 // under the rolling `next` TAG while the app version is x.y.z-next.N, so the
 // tag alone can't identify the build — prefer the heading, fall back to tag.
+//
+// BOTH PRODUCT NAMES ARE PERMANENT. This reads release bodies off the GitHub
+// API, so it sees the app's whole published history — every release cut before
+// the "Resume Designer" → "on paper" rename still carries the old heading and
+// always will. Dropping the old alternative silently regresses beta version
+// labels on historical releases to the rolling `next` tag. Match is liberal
+// (case-insensitive, flexible spacing) because this parses remote text whose
+// only failure mode is a wrong-but-plausible version label.
+const VERSION_HEADING_RE = /^##\s+(?:Resume Designer|on paper)\s+(\S+)\s*$/im;
+
 function versionFromBody(body) {
-  const m = String(body || '').match(/^##\s+Resume Designer\s+(\S+)\s*$/m);
+  const m = String(body || '').match(VERSION_HEADING_RE);
   return m ? m[1] : null;
 }
 
