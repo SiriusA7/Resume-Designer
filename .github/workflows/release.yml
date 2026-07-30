@@ -186,17 +186,32 @@ jobs:
           set -euo pipefail
           # Tauri emits "<productName>.app.tar.gz" without arch — collides
           # between matrix builds when both arms write to the same release-flat
-          # dir. Also "Resume Designer" has a space, which GitHub rewrites to
+          # dir. Also "on paper" has a space, which GitHub rewrites to
           # "." in uploaded asset names, breaking latest.json's URL field.
           # Rename to a no-space arch-suffixed form; the latest.json regex
           # (aarch64.*\.app\.tar\.gz$ / x(86_)?64.*\.app\.tar\.gz$) still matches.
+          #
+          # Matched by glob rather than by product name: hardcoding it meant a
+          # rename failed here under `set -e`, killing both macOS arms and — via
+          # `needs: build-macos` — the whole release, on every channel.
           cd macos
-          mv "Resume Designer.app.tar.gz" "Resume-Designer_${ARCH}.app.tar.gz"
-          mv "Resume Designer.app.tar.gz.sig" "Resume-Designer_${ARCH}.app.tar.gz.sig"
+          archive=''; sig=''
+          for f in *.app.tar.gz;     do if [ -f "$f" ]; then archive="$f"; fi; done
+          for f in *.app.tar.gz.sig; do if [ -f "$f" ]; then sig="$f"; fi; done
+          if [ -z "$archive" ] || [ -z "$sig" ]; then
+            echo "::error::expected an .app.tar.gz + .app.tar.gz.sig pair in $(pwd)"
+            ls -la
+            exit 1
+          fi
+          mv "$archive" "on-paper_${ARCH}.app.tar.gz"
+          mv "$sig"     "on-paper_${ARCH}.app.tar.gz.sig"
           cd ../dmg
           for f in *.dmg; do
             newname="${f// /-}"
-            [ "$f" != "$newname" ] && mv "$f" "$newname"
+            # `if` rather than `[ ... ] && mv`: as the last command in the loop
+            # body, a false test makes the loop exit non-zero and `set -e` aborts
+            # the job. Only reachable if productName ever loses its space.
+            if [ "$f" != "$newname" ]; then mv "$f" "$newname"; fi
           done
 
       - name: Upload macOS ${{ matrix.arch }} artifacts
@@ -281,7 +296,8 @@ jobs:
           for f in *.exe *.exe.sig; do
             [ -f "$f" ] || continue
             newname="${f// /-}"
-            [ "$f" != "$newname" ] && mv "$f" "$newname"
+            # `if` rather than `[ ... ] && mv` — see the macOS step for why.
+            if [ "$f" != "$newname" ]; then mv "$f" "$newname"; fi
           done
 
       - name: Upload Windows artifacts
@@ -567,7 +583,7 @@ jobs:
         with:
           tag_name: ${{ needs.decide.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ needs.decide.outputs.channel == 'next' && 'Resume Designer (beta)' || format('Resume Designer {0}', needs.decide.outputs.version) }}
+          name: ${{ needs.decide.outputs.channel == 'next' && 'on paper (beta)' || format('on paper {0}', needs.decide.outputs.version) }}
           body_path: release-body.md
           prerelease: ${{ needs.decide.outputs.channel == 'next' }}
           make_latest: ${{ needs.decide.outputs.channel != 'next' }}

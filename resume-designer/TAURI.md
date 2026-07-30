@@ -78,8 +78,15 @@ npm run tauri:build:mac:arm64
 
 Outputs live under `src-tauri/target/<arch>/release/bundle/`:
 
-- **macOS**: `bundle/dmg/Resume Designer_<version>_<arch>.dmg`, `bundle/macos/Resume Designer.app`, plus an `.app.tar.gz` + `.app.tar.gz.sig` pair (the updater bundle and its minisign signature).
-- **Windows**: `bundle/nsis/Resume Designer_<version>_x64-setup.exe`, plus `.exe.sig` for the updater. (With `createUpdaterArtifacts: true` Tauri 2 produces the **v2** updater format on Windows: the `-setup.exe` *is* the updater payload and `.exe.sig` is its detached signature. No `.nsis.zip` is emitted — see the "Normalize Windows artifact filenames" step in `release.yml`.)
+- **macOS**: `bundle/dmg/on paper_<version>_<arch>.dmg`, `bundle/macos/on paper.app`, plus an `.app.tar.gz` + `.app.tar.gz.sig` pair (the updater bundle and its minisign signature).
+- **Windows**: `bundle/nsis/on paper_<version>_x64-setup.exe`, plus `.exe.sig` for the updater. (With `createUpdaterArtifacts: true` Tauri 2 produces the **v2** updater format on Windows: the `-setup.exe` *is* the updater payload and `.exe.sig` is its detached signature. No `.nsis.zip` is emitted — see the "Normalize Windows artifact filenames" step in `release.yml`.)
+
+> These are **local build** names, which use `productName` verbatim and so
+> contain a space. The names attached to a GitHub Release are different: the
+> two "Normalize … artifact filenames" steps in `release.yml` replace spaces
+> with hyphens first, because GitHub rewrites spaces in asset names to `.` and
+> that would break `latest.json`'s URL field. The README's download table
+> therefore lists the hyphenated forms (`on-paper_<version>_aarch64.dmg`).
 
 ## Code Signing & Notarization (macOS)
 

@@ -57,9 +57,9 @@ Grab the latest installer from the [**Releases page**](https://github.com/ashpro
 
 | Platform | File | Notes |
 | --- | --- | --- |
-| macOS (Apple Silicon) | `Resume Designer_<version>_aarch64.dmg` | Signed & notarized |
-| macOS (Intel) | `Resume Designer_<version>_x64.dmg` | Signed & notarized |
-| Windows | `Resume Designer_<version>_x64-setup.exe` | Currently unsigned — see note below |
+| macOS (Apple Silicon) | `on-paper_<version>_aarch64.dmg` | Signed & notarized |
+| macOS (Intel) | `on-paper_<version>_x64.dmg` | Signed & notarized |
+| Windows | `on-paper_<version>_x64-setup.exe` | Currently unsigned — see note below |
 
 The app updates itself: when a new release is published, it prompts you to download and restart.
 

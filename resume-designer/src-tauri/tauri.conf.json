@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Resume Designer",
+  "productName": "on paper",
   "version": "1.0.0",
   "identifier": "com.resumedesigner.app",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Resume Designer",
+        "title": "on paper",
         "width": 1400,
         "height": 900,
         "minWidth": 750,
@@ -49,9 +49,9 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
-    "shortDescription": "Creative resume designer and generator.",
-    "longDescription": "Creative resume designer and generator.",
-    "copyright": "",
+    "shortDescription": "Design, tailor, and export beautiful resumes.",
+    "longDescription": "Keep one master profile and spin off as many job-tailored resumes as you need, with optional AI assistance and vector PDF export — privately, on your own machine.",
+    "copyright": "© 2026 Ash Shah",
     "publisher": "Ash Shah",
     "macOS": {
       "entitlements": "Entitlements.plist",
