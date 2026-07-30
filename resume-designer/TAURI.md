@@ -256,6 +256,53 @@ The desktop **Tools** menu has an **Update channel: Stable / Beta** toggle next 
 
 Currently **not** signed. Users will see a Microsoft Defender SmartScreen warning the first time they run the installer. To add Authenticode signing later, set the `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD` GitHub secrets — `tauri-action` will pick them up automatically.
 
+### Windows upgrade identity (why the rename needs a reinstall there)
+
+Windows install identity is keyed on **`productName` + `bundle.publisher`**, not
+on the bundle identifier. The NSIS template derives all of these from them:
+
+```
+UNINSTKEY      = …\Uninstall\${PRODUCTNAME}
+MANUPRODUCTKEY = Software\${MANUFACTURER}\${PRODUCTNAME}
+INSTDIR        = $LOCALAPPDATA\${PRODUCTNAME}
+shortcuts      = ${PRODUCTNAME}.lnk
+```
+
+So renaming `productName` from "Resume Designer" to "on paper" makes the new
+installer invisible to the old install. **User data is unaffected** — that
+follows the bundle identifier, which is frozen — but the old Add/Remove Programs
+entry, install directory, and shortcuts all persist alongside the new ones, and
+the existing shortcuts keep launching the old binary. In the worst reading, an
+update-mode install skips shortcut creation entirely, so the user sees the new
+build once and every later launch runs the old one, which prompts to update
+again — a loop the user never escapes.
+
+**Decision: ship the rename as a manual reinstall on Windows.** No NSIS
+migration hook. Two reasons:
+
+1. There is effectively no Windows installed base to migrate. Across the app's
+   entire release history the Windows installer has ~15 total downloads, never
+   more than one per release — the signature of smoke-testing each build, not of
+   users. (The app has no telemetry, so download counts are the only signal;
+   treat this as evidence, not proof.)
+2. An installer hook cannot be tested from this repo's CI or from a Mac. PR CI
+   builds macOS only, and the `x86_64-pc-windows-msvc` target does not build on
+   the maintainer's machine (`ring`'s C code fails; the mingw target only
+   type-checks Rust). Shipping an untested `.nsh` that runs an uninstaller on a
+   user's machine is a worse risk than the duplicate entry it removes.
+
+Do **not** change `bundle.publisher` while this stands. It is `${MANUFACTURER}`
+and the only registry anchor a future hook could search on.
+
+**If the Windows base ever becomes real**, the fix is a
+`bundle.windows.nsis.installerHooks` `.nsh` implementing `NSIS_HOOK_PREINSTALL`
+that reads `HKCU\Software\Ash Shah\Resume Designer` and the old
+`UninstallString`, runs the old uninstaller silently *without* `/UPDATE` (so its
+shortcuts go but app-data deletion is not triggered), **and explicitly creates
+the new shortcuts itself** — the hook cannot make Tauri's
+`CreateOrUpdate*Shortcut` functions run. Validate it on a real Windows box by
+installing the pre-rename build first, then updating.
+
 ### Testing updates end-to-end
 
 1. Install a signed Tauri build from a previous GitHub Release (or trigger one via `workflow_dispatch`).
