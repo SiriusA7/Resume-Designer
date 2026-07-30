@@ -41,7 +41,7 @@ describe('normalizeRelease', () => {
     const r = normalizeRelease({
       tag_name: 'next',
       published_at: '2026-07-01T00:00:00Z',
-      body: '## Resume Designer 1.2.3-next.7\n- feat: beta thing',
+      body: '## on paper 1.2.3-next.7\n- feat: beta thing',
     });
     expect(r.version).toBe('1.2.3-next.7');
   });
@@ -112,7 +112,7 @@ describe('mergeReleases', () => {
 });
 
 describe('splitReleaseBody', () => {
-  const digest = '## Resume Designer 1.16.0\n\n- New: a Library for your résumés.\n';
+  const digest = '## on paper 1.16.0\n\n- New: a Library for your résumés.\n';
   const grouped = '### ✨ New features\n**Library**\n- Add tiered library search module\n';
   const body = `${digest}\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n\n${grouped}\n</details>`;
 
@@ -146,7 +146,7 @@ describe('splitReleaseBody malformed bodies', () => {
   });
 
   it('degrades BOTH fields when the tail is empty after unwrapping', () => {
-    const body = '## Resume Designer 1.16.0\n\n- New thing.\n\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n</details>';
+    const body = '## on paper 1.16.0\n\n- New thing.\n\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n</details>';
     const r = splitReleaseBody(body);
     expect(r.summary).toBe(body);
     expect(r.full).toBe(body);

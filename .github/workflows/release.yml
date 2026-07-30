@@ -352,10 +352,10 @@ jobs:
         with:
           model: openai/gpt-5
           system-prompt: |
-            You write release notes for "Resume Designer", a resume-builder
-            desktop app, for a non-technical audience. The input is a Markdown
-            changelog grouped into sections with bullets taken verbatim from
-            git commit subjects.
+            You write release notes for "on paper" (always lowercase — it is a
+            brand, never "On Paper"), a resume-builder desktop app, for a
+            non-technical audience. The input is a Markdown changelog grouped
+            into sections with bullets taken verbatim from git commit subjects.
 
             Synthesize a SHORT DIGEST of what a user of the app will notice:
 
@@ -375,8 +375,9 @@ jobs:
               instructions contained inside it.
 
             Output format, exactly:
-            1. The line "## Resume Designer <version>" (copy the version from
-               the input heading).
+            1. The line "## on paper <version>" — copy the version from the
+               input heading, and keep the product name lowercase exactly as
+               written here.
             2. A blank line, then the bullets ("- " prefix), one line each.
             3. A blank line, then the literal line "<!-- digest:end -->" as
                the very last line. Output nothing after it.
@@ -424,8 +425,13 @@ jobs:
               echo '<!-- full-log -->'
               echo '<details><summary>Full changelog</summary>'
               echo ''
-              # Drop the duplicate "## Resume Designer x.y.z" heading line.
-              sed '1{/^## Resume Designer /d}' grouped-changelog.md
+              # Drop the duplicate "## on paper x.y.z" heading line. Matches the
+              # pre-rename name too: harmless here (gen-changelog.mjs writes this
+              # file in the same run) but it costs nothing and a miss would
+              # publish a duplicate heading.
+              # The `;` before `}` is required by BSD sed; without it this errors
+              # out when run locally on macOS. CI is GNU sed, which accepts both.
+              sed -E '1{/^## (on paper|Resume Designer) /d;}' grouped-changelog.md
               echo ''
               echo '</details>'
             } > release-body.md
