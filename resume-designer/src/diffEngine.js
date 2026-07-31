@@ -347,8 +347,21 @@ export function createChangeSet(currentData, proposedChanges) {
  * @param {string} path - Dot-notation path (e.g., "experience[0].title")
  * @param {*} value - Value to set
  */
-function setByPath(obj, path, value) {
+export function setByPath(obj, path, value) {
   const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+
+  // Paths come from AI model output. A __proto__/constructor/prototype segment
+  // would walk into the prototype chain and pollute Object.prototype for the
+  // whole process, so ignore the assignment entirely. Skip, don't throw — both
+  // callers loop over many proposed paths, and a throw would let one bad path
+  // break the whole change set (createChangeSet) or preview
+  // (applyPendingToData). But not silently: the model believes the change
+  // landed, so leave a trace instead of zero evidence.
+  if (parts.some(part => part === '__proto__' || part === 'constructor' || part === 'prototype')) {
+    console.warn(`[diffEngine] ignoring change to unsafe path: ${path}`);
+    return;
+  }
+
   let current = obj;
   
   for (let i = 0; i < parts.length - 1; i++) {

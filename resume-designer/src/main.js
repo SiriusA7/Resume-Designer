@@ -16,7 +16,9 @@ import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from '
 import { initVariants } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
-import { initInlineChanges } from './inlineChanges.js';
+import { initInlineChanges, decorateRenderedResume } from './inlineChanges.js';
+import { applyPendingToData } from './changePreview.js';
+import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
 import { initZoomControls } from './zoomControls.js';
 import { initWindowDrag } from './tauriDrag.js';
@@ -455,7 +457,7 @@ export async function init() {
   // the diff/inline-change hosts it drives and wires them with the resume
   // re-render callback (both apply through the store, which re-renders anyway).
   initDiffView(handleChatApply);
-  initInlineChanges();
+  initInlineChanges(renderCurrentResume);
   
   // Initialize zoom controls
   initZoomControls();
@@ -1392,9 +1394,19 @@ function renderCurrentResume() {
     return;
   }
   
+  // Project still-pending AI proposals onto a COPY of the data so the preview
+  // renders through the normal pipeline (markdown, pagination, every layout);
+  // the store itself is untouched until a change is applied. With no session
+  // in flight this is a plain render of the store data.
+  const changeSet = changeSession.getChangeSet();
+  const viewData = changeSet
+    ? applyPendingToData(data, changeSet, changeSession.statusMap())
+    : data;
+
   // Render based on current layout
-  container.innerHTML = renderResumeForLayout(data, currentLayout);
-  
+  container.innerHTML = renderResumeForLayout(viewData, currentLayout);
+  decorateRenderedResume(container);
+
   // Add layout class to resume for CSS targeting
   const resume = container.querySelector('.resume');
   if (resume) {

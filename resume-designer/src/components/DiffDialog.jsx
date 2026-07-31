@@ -9,7 +9,12 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 import { DIFF_TYPES, getPathLabel } from '../diffEngine.js';
-import { store } from '../store.js';
+import { applyChangeToStore } from '../changeApply.js';
+import * as changeSession from '../changeSession.js';
+import { isSupersededSession } from '../changeSessionGuard.js';
+import {
+  applyAllInlineChanges, applyInlineChange, hideInlineChanges, rejectInlineChange,
+} from '../inlineChanges.js';
 
 // Diff review dialog — the React/shadcn rebuild of the former vanilla diffView.js
 // overlay (§5.9). Always mounted; opens on the `rd:open-diff` window event that
@@ -19,8 +24,17 @@ import { store } from '../store.js';
 // ScrollArea):
 //   • inline / side-by-side modes (default side-by-side), word-level del/ins diff
 //     reusing change.wordDiff from diffEngine (untouched);
-//   • per-change Apply (store.update / store.removeFromArray for `path[idx]`),
+//   • per-change Apply via the shared applyChangeToStore helper (changeApply.js),
 //     Reject (drops the card; closes when none remain), Applied badge swap;
+//   • pending/applied/rejected state lives in changeSession whenever the open
+//     change set is the one the session is reviewing (the chat / inline-preview
+//     flow) — decisions here delegate to inlineChanges' shared actions, so the
+//     inline highlights and the chat message's buttons stand down in lockstep.
+//     If a follow-up proposal replaces the session's change set while the
+//     dialog is open, the dialog closes rather than act on a set it never
+//     displayed (isSupersededSession). Jobs "Tailor" and History "Compare"
+//     open change sets that never entered the session; those keep per-open
+//     local state exactly as before;
 //   • A apply-next · R reject-next · Enter apply-all · Esc close (ignored while
 //     typing in an input/textarea), click-outside close, body scroll lock,
 //     empty state, and auto-close 500ms after every change is handled;
@@ -199,12 +213,70 @@ export default function DiffDialog() {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState('side-by-side'); // 'inline' | 'side-by-side'
   const [changeSet, setChangeSet] = useState(null);
-  // Paths the user has applied, and paths they've rejected (hidden from the list).
-  const [applied, setApplied] = useState(() => new Set());
-  const [rejected, setRejected] = useState(() => new Set());
+  // Standalone decisions, used ONLY when the dialog is opened for a change set
+  // the shared session does not own (Jobs "Tailor Resume", History "Compare").
+  // The chat / inline flow's decisions live in changeSession instead — writing
+  // them into the session there is what setStatus would silently no-op on here.
+  const [localApplied, setLocalApplied] = useState(() => new Set());
+  const [localRejected, setLocalRejected] = useState(() => new Set());
   // The boot-time onApply callback (main.js: initDiffView(handleChatApply)),
   // carried on the open event so it survives across opens without re-render churn.
   const onApplyRef = useRef(null);
+
+  // The session is the source of truth; this counter exists only to force a
+  // re-render when another surface (inline preview, chat message) decides a path.
+  const [, setSessionRev] = useState(0);
+  // Whether the shared session owns this dialog's change set — latched at open
+  // (true for the chat / inline-preview entry points, false for Jobs and
+  // History) rather than re-derived, because deciding the last path ends the
+  // session out from under the still-open dialog. A session *replaced* by a
+  // different set is detected separately — see superseded() below.
+  const ownedRef = useRef(false);
+  const csRef = useRef(null);
+  // Statuses last seen while the session owned our change set. While the
+  // session is alive this mirrors it exactly (reseeded at open, resynced on
+  // every notify below); once endSession fires it keeps the final frame — so
+  // "everything decided" renders consistently through the 500ms auto-close
+  // grace instead of every card flashing back to pending.
+  const statusesRef = useRef(new Map());
+
+  // Liveness guard: a follow-up proposal can replace the session's change set
+  // behind this open dialog — nothing ends session A when the user sends
+  // another request; the stream-completion path just startSession(B)s over it.
+  // The inline delegates below resolve paths against the LIVE session, so
+  // acting then would apply a set the dialog never displayed. The subscribe
+  // callback closes the dialog the moment this trips; the decision handlers
+  // also re-check at action time because setOpen(false) is async and Radix
+  // keeps the content clickable through its exit animation. A null live
+  // session is NOT supersession — after endSession the delegates are safe
+  // no-ops and the dialog keeps its final frame through the auto-close grace.
+  const superseded = useCallback(
+    () => isSupersededSession(csRef.current, changeSession.getChangeSet(), ownedRef.current),
+    [],
+  );
+
+  useEffect(() => changeSession.subscribe(() => {
+    if (superseded()) {
+      setOpen(false);
+      return;
+    }
+    if (csRef.current && changeSession.getChangeSet() === csRef.current) {
+      statusesRef.current = changeSession.statusMap();
+    }
+    setSessionRev((n) => n + 1);
+  }), [superseded]);
+
+  // Derived with plain `const`, not useMemo: the statuses live outside React
+  // where a memo's dependency list cannot see them, and the Sets are tiny —
+  // rebuilding per render is cheaper than justifying a lint suppression.
+  const pathsWithStatus = (status) =>
+    new Set((changeSet?.changes || [])
+      .filter((c) => (statusesRef.current.get(c.path) || 'pending') === status)
+      .map((c) => c.path));
+
+  // Paths the user has applied, and paths they've rejected (hidden from the list).
+  const applied = ownedRef.current ? pathsWithStatus('applied') : localApplied;
+  const rejected = ownedRef.current ? pathsWithStatus('rejected') : localRejected;
 
   const close = useCallback(() => {
     setOpen(false);
@@ -212,13 +284,18 @@ export default function DiffDialog() {
 
   // Open on showDiffView() -> rd:open-diff. Reset per-open state; keep the chosen
   // view mode sticky across opens (matches the vanilla module-level default).
+  // A change set the session is already reviewing seeds from the session, so
+  // decisions made from the résumé's inline controls show as decided here.
   useEffect(() => {
     const onOpen = (e) => {
       const cs = e.detail?.changeSet || null;
       onApplyRef.current = e.detail?.onApply || null;
+      csRef.current = cs;
+      ownedRef.current = !!cs && changeSession.getChangeSet() === cs;
+      statusesRef.current = ownedRef.current ? changeSession.statusMap() : new Map();
       setChangeSet(cs);
-      setApplied(new Set());
-      setRejected(new Set());
+      setLocalApplied(new Set());
+      setLocalRejected(new Set());
       setOpen(true);
     };
     const onClose = () => setOpen(false);
@@ -253,51 +330,43 @@ export default function DiffDialog() {
     return () => clearTimeout(t);
   }, [open, changeSet, applied, rejected]);
 
-  // Apply one change to the store, mark it applied, and fire the callback. The
-  // close-when-everything-is-handled effect above dismisses the dialog.
+  // Apply one change, mark it applied, and (standalone) fire the callback. The
+  // close-when-everything-is-handled effect above dismisses the dialog. Session
+  // mode delegates to the shared inline action: it writes the store through the
+  // same applyChangeToStore, records 'applied' in the session (converging the
+  // inline preview and the chat buttons), re-renders the résumé's marks, and
+  // dismisses the whole preview once nothing is pending — which also covers
+  // everything the standalone onApply callback (a re-render request) does.
   const applyChange = useCallback(
     (path) => {
-      const cs = changeSet;
-      if (!cs) return;
-      setApplied((prevApplied) => {
-        if (prevApplied.has(path)) return prevApplied;
-        const change = cs.changes.find((c) => c.path === path);
-        if (!change) return prevApplied;
-
-        if (change.type === DIFF_TYPES.REMOVE) {
-          const arrayMatch = path.match(/^(.+)\[(\d+)\]$/);
-          if (arrayMatch) {
-            store.removeFromArray(arrayMatch[1], parseInt(arrayMatch[2], 10));
-          } else {
-            store.update(path, undefined);
-          }
-        } else {
-          store.update(path, change.newValue);
-        }
-
-        onApplyRef.current?.();
-
-        const next = new Set(prevApplied);
-        next.add(path);
-        return next;
-      });
+      if (!changeSet || applied.has(path) || rejected.has(path)) return;
+      const change = changeSet.changes.find((c) => c.path === path);
+      if (!change) return;
+      if (ownedRef.current) {
+        if (!superseded()) applyInlineChange(path);
+        return;
+      }
+      applyChangeToStore(change);
+      onApplyRef.current?.();
+      setLocalApplied((prev) => new Set(prev).add(path));
     },
-    [changeSet],
+    [changeSet, applied, rejected, superseded],
   );
 
   // Reject = hide the card from the list. The close-when-everything-is-handled
-  // effect above dismisses the dialog once nothing is left to review.
+  // effect above dismisses the dialog once nothing is left to review. Session
+  // mode records the decision in the session, which also re-renders the résumé
+  // so the proposed value stops being previewed for that path.
   const rejectChange = useCallback(
     (path) => {
-      if (!changeSet) return;
-      setRejected((prevRejected) => {
-        if (prevRejected.has(path)) return prevRejected;
-        const next = new Set(prevRejected);
-        next.add(path);
-        return next;
-      });
+      if (!changeSet || applied.has(path) || rejected.has(path)) return;
+      if (ownedRef.current) {
+        if (!superseded()) rejectInlineChange(path);
+        return;
+      }
+      setLocalRejected((prev) => new Set(prev).add(path));
     },
-    [changeSet],
+    [changeSet, applied, rejected, superseded],
   );
 
   // The next still-actionable change (not applied, not rejected) for A / R.
@@ -308,14 +377,30 @@ export default function DiffDialog() {
 
   // Apply every change the user hasn't already applied or rejected. Skipping
   // rejected paths is what makes "reject one, apply the rest" safe — a rejected
-  // card is never written to the resume by Apply All.
+  // card is never written to the resume by Apply All (both branches skip them:
+  // applyAllInlineChanges only decides paths still pending in the session).
   const applyAll = useCallback(() => {
     const cs = changeSet;
     if (!cs) return;
+    if (ownedRef.current) {
+      if (!superseded()) applyAllInlineChanges();
+      return;
+    }
     for (const change of cs.changes) {
       if (!applied.has(change.path) && !rejected.has(change.path)) applyChange(change.path);
     }
-  }, [changeSet, applied, rejected, applyChange]);
+  }, [changeSet, applied, rejected, applyChange, superseded]);
+
+  // "Reject All" — in session mode this is the bulk dismiss the inline preview
+  // otherwise lacks: end the session (the chat button and the résumé highlights
+  // stand down together) and restore the résumé view to the stored data.
+  // Changes already applied stay applied. Standalone opens just close, as before.
+  // A superseded dialog only closes — ending the live session here would
+  // dismiss a preview it never displayed.
+  const rejectAll = useCallback(() => {
+    if (ownedRef.current && !superseded()) hideInlineChanges();
+    close();
+  }, [close, superseded]);
 
   // Keyboard shortcuts: A apply-next · R reject-next · Enter apply-all · Esc
   // close. Ignored while typing in an input/textarea. Esc is handled here (the
@@ -449,7 +534,7 @@ export default function DiffDialog() {
             </span>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" onClick={close}>
+            <Button variant="outline" onClick={rejectAll}>
               <X className="h-4 w-4" /> Reject All
             </Button>
             <Button onClick={applyAll}>

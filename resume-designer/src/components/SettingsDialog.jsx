@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils';
 
 import { getSettings, saveSettings } from '../persistence.js';
 import { refreshChatPanel } from '../chatPanel.js';
+import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
 import {
   isTauri, getAppInfo, getUpdateChannel, setUpdateChannel,
@@ -363,6 +364,7 @@ export default function SettingsDialog() {
                       placeholder="sk-or-v1-..."
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
+                      spellCheck={shouldSpellcheck('identifier')}
                     />
                     <Button
                       type="button"
@@ -494,6 +496,7 @@ export default function SettingsDialog() {
                         value={getBridgeToken()}
                         className="font-mono text-xs"
                         aria-label="Bridge pairing token"
+                        spellCheck={shouldSpellcheck('identifier')}
                       />
                       <Button
                         type="button"

@@ -9,12 +9,32 @@ import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
 import { appStorage } from './appStorage.js';
+import {
+  toCatalogEntry, CATALOG_SCHEMA_VERSION, deriveFeatured, stripGroupPrefix, CATALOG_SOFT_TTL_MS,
+} from './modelCatalog.js';
 
 // OpenRouter — a single OpenAI-compatible endpoint fronting every provider.
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 // Optional attribution headers (OpenRouter app leaderboard); harmless if unused.
 const OPENROUTER_REFERER = 'https://github.com/ashproto/Resume-Designer';
 const OPENROUTER_TITLE = 'Resume Designer';
+
+// The single anti-fabrication contract, injected into every prompt that writes
+// or rewrites résumé content. Users reported the assistant inventing employers,
+// metrics and achievements; the prompts previously contained no constraint
+// against it while actively asking for "the BEST possible resume".
+const GROUNDING_RULES_TEXT = `TRUTHFULNESS — these rules override every other instruction, including any request to make the resume stronger or more competitive.
+
+SOURCE MATERIAL means everything the user has supplied about themselves: their profile, the current resume you are given, and any other background they provide. Any of these is valid evidence, and they are equally authoritative — if the profile is empty or thinner than the resume, the resume's own contents are still legitimate source material. The TARGET JOB DESCRIPTION is NOT source material: it says what the employer wants, never what the user has done.
+
+- Use ONLY facts present in the source material. Never invent employers, job titles, dates, degrees, certifications, tools, projects, or achievements.
+- Never introduce a number, percentage, duration, team size, or currency figure that does not appear in the source material. If a metric would strengthen a bullet but the source material does not supply it, write the bullet WITHOUT the metric. Do not estimate, do not approximate, and do not emit placeholders such as "[X]%" or "N+".
+- Rephrasing, reframing, reordering, condensing and emphasis are allowed. Adding new claims is not.
+- Aligning with the job description means describing genuinely-held experience in the job's vocabulary. It NEVER means claiming skills, tools or domains the source material does not evidence.
+- Never inflate scope or seniority. If the source material says "contributed to" or "assisted with", the resume may not say "led", "owned" or "drove".
+- If the source material is too thin to fill a section well, leave it short. A shorter truthful resume is the correct output. Never refuse the task over thin material — write what the source supports.`;
+
+export const GROUNDING_RULES = GROUNDING_RULES_TEXT;
 
 // Curated model catalog, keyed by OpenRouter slug. The slug is the SINGLE
 // canonical identifier: it is the storage key, the dropdown value, AND the
@@ -53,23 +73,25 @@ const FALLBACK_CHAIN = ['anthropic/claude-sonnet-4.6', 'openai/gpt-5.5', 'google
 // System prompt for resume assistant
 const SYSTEM_PROMPT = `You are an expert resume consultant and career coach. You help users improve their resumes by:
 
-1. Writing impactful bullet points that highlight achievements and quantifiable results
+1. Writing impactful bullet points that surface the achievements and results already in their material
 2. Improving summaries to be compelling and targeted
 3. Suggesting better word choices and phrasing
 4. Providing feedback on resume structure and content
-5. Generating new content based on job descriptions or user requirements
+5. Reframing their existing experience against a job description or a stated requirement
 
 When suggesting changes:
 - Be specific and actionable
 - Use strong action verbs
-- Quantify achievements when possible
+- Quantify an achievement only where the resume or profile supplies the number
 - Keep the professional tone appropriate for the industry
 - Match the writing style already present in the resume
 
 When asked to rewrite or improve text, provide the improved version directly.
 When asked for feedback, be constructive and specific.
 
-Current resume context will be provided with each message.`;
+Current resume context will be provided with each message.
+
+${GROUNDING_RULES_TEXT}`;
 
 // Résumé text fields are rendered with light markdown — the renderer converts
 // **text** → bold and _text_ → italic before display AND before PDF capture, so no
@@ -107,7 +129,9 @@ Rules:
 4. Keep unchanged fields out of the response
 5. The explanation field should be inside the JSON
 
-${EMPHASIS_GUIDANCE}`;
+${EMPHASIS_GUIDANCE}
+
+${GROUNDING_RULES_TEXT}`;
 
 // System prompt for job description analysis
 const JOB_ANALYSIS_PROMPT = `You are an expert resume consultant and ATS (Applicant Tracking System) specialist. Analyze resumes against job descriptions to help candidates improve their match rate.
@@ -153,7 +177,9 @@ Respond in the following JSON format:
       "impactReason": "Addresses critical keyword gap for required skill"
     }
   ]
-}`;
+}
+
+${GROUNDING_RULES_TEXT}`;
 
 // System prompt for profile interview
 const PROFILE_INTERVIEW_PROMPT = `You are a friendly career coach conducting an interview to learn about someone's professional background. Your goal is to gather detailed information that will help create better resumes.
@@ -290,6 +316,7 @@ export function getAvailableModelIds() {
 const MODELS_ENDPOINT = 'https://openrouter.ai/api/v1/models';
 const CATALOG_STORAGE_KEY = 'resume-designer-model-catalog';
 const CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+export const CATALOG_UPDATED_EVENT = 'resume-designer-catalog-updated';
 let catalogMemo = null;
 let catalogInflight = null;
 
@@ -297,7 +324,8 @@ function readCatalogCache() {
   if (catalogMemo) return catalogMemo;
   try {
     const parsed = JSON.parse(appStorage.getItem(CATALOG_STORAGE_KEY) || 'null');
-    if (parsed && parsed.models && typeof parsed.fetchedAt === 'number') {
+    if (parsed && parsed.models && typeof parsed.fetchedAt === 'number'
+        && parsed.version === CATALOG_SCHEMA_VERSION) {
       catalogMemo = parsed;
       return parsed;
     }
@@ -322,12 +350,14 @@ export async function fetchModelCatalog(force = false) {
       const models = {};
       for (const m of (data && data.data) || []) {
         if (!m || typeof m.id !== 'string') continue;
-        const params = Array.isArray(m.supported_parameters) ? m.supported_parameters : [];
-        models[m.id] = { reasoning: params.includes('reasoning') };
+        models[m.id] = toCatalogEntry(m);
       }
-      const fresh = { fetchedAt: Date.now(), models };
+      const fresh = { version: CATALOG_SCHEMA_VERSION, fetchedAt: Date.now(), models };
       catalogMemo = fresh;
       try { appStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(fresh)); } catch (_) { /* quota */ }
+      try {
+        window.dispatchEvent(new CustomEvent(CATALOG_UPDATED_EVENT, { detail: { fetchedAt: fresh.fetchedAt } }));
+      } catch (_) { /* non-DOM context */ }
       return fresh;
     } catch (e) {
       console.warn('[aiService] model catalog fetch failed:', (e && e.message) || e);
@@ -426,12 +456,139 @@ export function checkProfileHasData() {
 }
 
 /**
+ * Build the generate-a-resume-for-this-job prompt. Extracted from
+ * generateResumeFromProfileForJob so the wording is unit-testable without a
+ * network call — the grounding rules are a correctness requirement, not styling.
+ */
+export function buildGenerateResumePrompt(profileContext, jobDescription) {
+  return `You are an expert resume consultant and ATS optimization specialist. Create the strongest resume the user's profile truthfully supports, targeted at the job below.
+
+${GROUNDING_RULES_TEXT}
+
+${profileContext}
+
+## Target Job
+
+**Position:** ${jobDescription.title || 'Not specified'}
+**Company:** ${jobDescription.company || 'Not specified'}
+
+**Job Description:**
+${jobDescription.description}
+
+## Your Task
+
+Create an ATS-optimized resume that:
+1. Surfaces the experience and skills from the profile most relevant to this job
+2. Uses the job description's vocabulary for experience the profile actually evidences
+3. Orders experience by relevance (most relevant first), and ALSO provides
+   machine-readable startDate/endDate per role so the app can re-sort chronologically
+4. Writes a professional summary grounded in the profile and targeted at this position
+5. Writes bullets that quantify results ONLY where the profile supplies the number
+6. Includes 3-4 highlights that are DISTINCT, career-level achievements — not
+   restatements of the experience bullets
+7. Separates concrete tools/software from competency skills (see the fields below)
+8. Reports, in "gaps", what this job asks for that the profile does not support
+
+Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in this exact format:
+{
+  "name": "Full Name from profile",
+  "tagline": "Professional title supported by the profile",
+  "email": "email from profile if available",
+  "phone": "phone from profile if available",
+  "location": "location from profile if available",
+  "linkedin": "linkedin url if available",
+  "portfolio": "portfolio url if available",
+  "summary": "2-3 sentence summary, every claim traceable to the profile",
+  "highlights": [
+    "Career-level achievement, distinct from the experience bullets below",
+    "Another high-level qualification matching the job (not repeated below)",
+    "Summary-level achievement relevant to the role"
+  ],
+  "skills": ["competency1", "competency2", "... (at most 12, most relevant only)"],
+  "tools": ["Concrete tool/software/platform e.g. Figma", "Git", "Docker"],
+  "experience": [
+    {
+      "title": "Job Title",
+      "company": "Company Name",
+      "location": "City, State",
+      "startDate": "YYYY-MM (machine-readable; YYYY ok if month unknown)",
+      "endDate": "YYYY-MM or Present (machine-readable)",
+      "dates": "Human-readable range shown on the resume, e.g. Jan 2022 - Jun 2024",
+      "bullets": [
+        "Achievement bullet drawn from the profile, relevant to the target job",
+        "Another bullet highlighting relevant, evidenced skills"
+      ]
+    }
+  ],
+  "education": [
+    { "degree": "Degree Name", "school": "School Name", "year": "Year" }
+  ],
+  "certifications": ["Certification present in the profile"],
+  "gaps": [
+    {
+      "requirement": "What the job asks for that the profile does not support",
+      "severity": "high | medium | low",
+      "note": "One sentence on what the user would need to add to close it"
+    }
+  ]
+}
+
+IMPORTANT:
+- Only include sections that have relevant content from the profile
+- Order experience by relevance (most relevant first); ALWAYS include
+  machine-readable startDate/endDate so the app can offer a chronological view
+- Put concrete tools/software/platforms (e.g. Figma, Git, Docker, Excel) in
+  "tools"; keep "skills" for competencies. Do NOT duplicate an item across both.
+- Limit "highlights" to 3-4 entries, each a DISTINCT career-level achievement
+- Select at most 12 of the most relevant skills (quality over quantity)
+- Use action verbs, but never ones that overstate the profile's scope
+- "gaps" must be honest and may be empty. Do NOT close a gap by inventing
+  experience — reporting it is the correct behaviour.
+
+${EMPHASIS_GUIDANCE}`;
+}
+
+/**
+ * Parse a generate-resume response into résumé data plus the gap report.
+ * `gaps` is stripped from the résumé object — it is advice about the résumé,
+ * not a field of it, and would otherwise be persisted as résumé content.
+ */
+export function parseGeneratedResume(responseText) {
+  let jsonStr = String(responseText || '').trim();
+  const fenced = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) jsonStr = fenced[1].trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonStr);
+    // JSON.parse happily returns null, strings, numbers and arrays; only an
+    // object can be a résumé. Anything else would either throw a raw TypeError
+    // on the destructure below ('null') or yield a nonsense résumé ('"text"',
+    // '[…]'), so route it through the same friendly error.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('not a JSON object');
+    }
+  } catch {
+    console.error('Failed to parse AI response as JSON:', responseText);
+    throw new Error('AI response was not valid JSON. Please try again.');
+  }
+
+  const { gaps, ...resume } = parsed;
+  return {
+    resume,
+    gaps: Array.isArray(gaps)
+      ? gaps.filter((g) => g && typeof g.requirement === 'string')
+      : [],
+  };
+}
+
+/**
  * Generate a complete resume from user profile, tailored for a specific job
  * @param {string} modelId - The AI model to use
  * @param {Object} jobDescription - The job description object { title, company, description }
  * @param {Object} options - Additional options
  * @param {string} options.reasoningEffort - Reasoning effort level: 'none', 'low', 'medium', 'high'
- * @returns {Object} Generated resume data
+ * @returns {Promise<{resume: Object, gaps: Array<{requirement: string, severity: string, note: string}>}>} Generated resume data plus the gap report
  */
 export async function generateResumeFromProfileForJob(modelId, jobDescription, options = {}) {
   const profile = getUserProfile();
@@ -543,88 +700,7 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
   }
   
   // Build the prompt
-  const prompt = `You are an expert resume consultant and ATS optimization specialist. Your task is to create the BEST possible resume from the user's profile data, specifically tailored for a target job.
-
-${profileContext}
-
-## Target Job
-
-**Position:** ${jobDescription.title || 'Not specified'}
-**Company:** ${jobDescription.company || 'Not specified'}
-
-**Job Description:**
-${jobDescription.description}
-
-## Your Task
-
-Create a complete, ATS-optimized resume that:
-1. Highlights the most relevant experience and skills for this specific job
-2. Uses keywords and phrases from the job description naturally
-3. Orders experience by relevance to the target role (most relevant first), and
-   ALSO provides machine-readable startDate/endDate per role so the app can
-   re-sort chronologically
-4. Writes a compelling professional summary tailored to this position
-5. Creates impactful bullet points with quantifiable achievements where possible
-6. Includes 3-4 highlights that are DISTINCT, career-level achievements — not
-   restatements of the experience bullets
-7. Separates concrete tools/software from competency skills (see the fields below)
-
-Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in this exact format:
-{
-  "name": "Full Name from profile",
-  "tagline": "Professional title tailored to target job",
-  "email": "email from profile if available",
-  "phone": "phone from profile if available",
-  "location": "location from profile if available",
-  "linkedin": "linkedin url if available",
-  "portfolio": "portfolio url if available",
-  "summary": "2-3 sentence compelling summary tailored for this specific job",
-  "highlights": [
-    "Career-level achievement, distinct from the experience bullets below",
-    "Another high-level qualification matching the job (not repeated below)",
-    "Quantifiable, summary-level achievement relevant to the role"
-  ],
-  "skills": ["competency1", "competency2", "... (at most 12, most relevant only)"],
-  "tools": ["Concrete tool/software/platform e.g. Figma", "Git", "Docker"],
-  "experience": [
-    {
-      "title": "Job Title",
-      "company": "Company Name",
-      "location": "City, State",
-      "startDate": "YYYY-MM (machine-readable; YYYY ok if month unknown)",
-      "endDate": "YYYY-MM or "Present" (machine-readable)",
-      "dates": "Human-readable range shown on the resume, e.g. Jan 2022 - Jun 2024",
-      "bullets": [
-        "Achievement bullet with quantifiable results relevant to target job",
-        "Another impactful bullet highlighting relevant skills",
-        "More achievements tailored to the job requirements"
-      ]
-    }
-  ],
-  "education": [
-    {
-      "degree": "Degree Name",
-      "school": "School Name",
-      "year": "Year"
-    }
-  ],
-  "certifications": ["Relevant certification 1", "Relevant certification 2"]
-}
-
-IMPORTANT:
-- Only include sections that have relevant content from the profile
-- Order experience by relevance (most relevant first); ALWAYS include
-  machine-readable startDate/endDate so the app can offer a chronological view
-- Put concrete tools/software/platforms (e.g. Figma, Git, Docker, Excel) in
-  "tools"; keep "skills" for competencies. Do NOT duplicate an item across both.
-- Limit "highlights" to 3-4 entries, each a DISTINCT career-level achievement,
-  not a copy of an experience bullet
-- Select at most 12 of the most relevant skills (quality over quantity)
-- Use action verbs and quantify achievements where possible
-- Include keywords from the job description naturally
-- Make the summary compelling and specific to this role
-
-${EMPHASIS_GUIDANCE}`;
+  const prompt = buildGenerateResumePrompt(profileContext, jobDescription);
 
   const messages = [{ role: 'user', content: prompt }];
   
@@ -635,22 +711,9 @@ ${EMPHASIS_GUIDANCE}`;
     signal: options.signal,
   });
   
-  // Parse the JSON response
-  try {
-    let jsonStr = response.trim();
-    // Remove markdown code blocks if present
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-    
-    const resume = JSON.parse(jsonStr);
-    console.log('[AI Service] Generated resume from profile:', resume);
-    return resume;
-  } catch {
-    console.error('Failed to parse AI response as JSON:', response);
-    throw new Error('AI response was not valid JSON. Please try again.');
-  }
+  const { resume, gaps } = parseGeneratedResume(response);
+  console.log('[AI Service] Generated resume from profile:', resume, 'gaps:', gaps);
+  return { resume, gaps };
 }
 
 // Get user profile context for AI
@@ -900,12 +963,14 @@ async function streamOpenRouter(modelId, messages, options = {}, hooks = {}) {
     apiMessages.push(msg);
   }
 
+  const catalogEntry = readCatalogCache()?.models?.[modelId];
+  const modelMaxTokens = cfg?.maxTokens || catalogEntry?.maxTokens || 8192;
   const requestBody = {
     model: modelId,
     messages: apiMessages,
     // Reasoning competes with the completion budget; give the answer headroom
     // when thinking is on (OpenRouter clamps to the model's real max).
-    max_tokens: reasoningOn ? Math.max(cfg?.maxTokens || 8192, 16000) : (cfg?.maxTokens || 8192),
+    max_tokens: reasoningOn ? Math.max(modelMaxTokens, 16000) : modelMaxTokens,
     stream: true,
     usage: { include: true },
   };
@@ -1299,21 +1364,42 @@ export function getModelsForProvider(group) {
 }
 
 /**
- * Get all curated models grouped by display group (Anthropic / OpenAI / Google).
- * The slug IS the id and the wire `model`. Custom slugs aren't listed here.
- * @returns {Object} Models grouped by group label
+ * Models grouped for the picker's "Featured" section. Derived live from the
+ * cached OpenRouter catalog; falls back to the built-in MODELS shortlist when
+ * the catalog has never loaded (first run, offline).
  */
 export function getAllModels() {
-  const grouped = {};
+  const cached = readCatalogCache();
+  const entries = cached ? Object.values(cached.models) : [];
+  if (entries.length) {
+    const grouped = {};
+    for (const [group, models] of Object.entries(deriveFeatured(entries))) {
+      grouped[group] = models.map((m) => ({ id: m.id, model: m.id, label: stripGroupPrefix(m.name, group), group }));
+    }
+    if (Object.keys(grouped).length) return grouped;
+  }
+  // Offline / first run — the hardcoded shortlist is the backstop.
+  const fallback = {};
   for (const [id, config] of Object.entries(MODELS)) {
-    (grouped[config.group] = grouped[config.group] || []).push({
-      id,
-      model: id,
-      label: config.label,
-      group: config.group
+    (fallback[config.group] = fallback[config.group] || []).push({
+      id, model: id, label: config.label, group: config.group,
     });
   }
-  return grouped;
+  return fallback;
+}
+
+/** Every catalog model, newest first — backs the picker's searchable list. */
+export function getAllCatalogModels() {
+  const cached = readCatalogCache();
+  if (!cached) return [];
+  return Object.values(cached.models).sort((a, b) => b.created - a.created);
+}
+
+/** Stale-while-revalidate: refresh in the background if the soft TTL lapsed. */
+export function refreshCatalogIfStale() {
+  const cached = readCatalogCache();
+  if (cached && (Date.now() - cached.fetchedAt) < CATALOG_SOFT_TTL_MS) return;
+  fetchModelCatalog(true);
 }
 
 /**

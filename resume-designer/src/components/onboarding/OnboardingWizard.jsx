@@ -73,6 +73,7 @@ export default function OnboardingWizard() {
   const [parsedResume, setParsedResume] = useState(null);
   const [jobDescriptions, setJobDescriptions] = useState([]);
   const [targetJob, setTargetJob] = useState(null);
+  const [jobGaps, setJobGaps] = useState([]);
   const [answers, setAnswers] = useState({});
   const [question, setQuestion] = useState(0);
   const [importText, setImportText] = useState('');
@@ -112,6 +113,7 @@ export default function OnboardingWizard() {
     setParsedResume(null);
     setJobDescriptions([]);
     setTargetJob(null);
+    setJobGaps([]);
     setAnswers({});
     setQuestion(0);
     setImportText('');
@@ -251,8 +253,9 @@ export default function OnboardingWizard() {
     saveSettings({ onboardingModel: model, onboardingReasoning: reasoning });
     // No setStep here: JobInputStep settles into its own 'done' screen (reasoning +
     // token usage) and advances to review only when the user clicks through.
-    const resume = await generateResumeForJob(model, job, reasoning, { hooks, signal });
+    const { resume, gaps } = await generateResumeForJob(model, job, reasoning, { hooks, signal });
     setParsedResume(resume);
+    setJobGaps(gaps);
   }, []);
 
   const addJob = useCallback((jd) => setJobDescriptions((prev) => [...prev, jd]), []);
@@ -363,6 +366,7 @@ export default function OnboardingWizard() {
             <JobInputStep
               hasProfileData={checkProfileHasData()}
               targetJob={targetJob}
+              jobGaps={jobGaps}
               availableModels={availableModels}
               defaultModel={jobGenModelRef.current || getSettings().defaultModel || getDefaultModelId()}
               defaultReasoning={jobGenReasoningRef.current}

@@ -4,6 +4,12 @@
  */
 
 import { appStorage } from './appStorage.js';
+// The ONE guarded path-write primitive. store.update is reachable with
+// AI-supplied paths (applyChangeToStore routes every accepted change here), so
+// the __proto__/constructor/prototype segment guard must hold at this layer
+// too — not only in createChangeSet's pre-filter. diffEngine imports nothing
+// from this module (only the npm `diff` package), so sharing creates no cycle.
+import { setByPath } from './diffEngine.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -70,34 +76,6 @@ function getByPath(obj, path) {
   }, obj);
 }
 
-// Set nested value by path
-function setByPath(obj, path, value) {
-  const keys = path.split('.');
-  const lastKey = keys.pop();
-  
-  let current = obj;
-  for (const key of keys) {
-    // Handle array index notation
-    const match = key.match(/^(\w+)\[(\d+)\]$/);
-    if (match) {
-      current = current[match[1]][parseInt(match[2])];
-    } else {
-      if (current[key] === undefined) {
-        current[key] = {};
-      }
-      current = current[key];
-    }
-  }
-  
-  // Handle array index in last key
-  const lastMatch = lastKey.match(/^(\w+)\[(\d+)\]$/);
-  if (lastMatch) {
-    current[lastMatch[1]][parseInt(lastMatch[2])] = value;
-  } else {
-    current[lastKey] = value;
-  }
-}
-
 // History persistence key prefix
 const HISTORY_KEY_PREFIX = 'resume-designer-history-';
 
@@ -111,6 +89,24 @@ export const CHANGE_TYPES = {
   ADD: 'add',
   REMOVE: 'remove'
 };
+
+// Sections gained an `area` in 2026-07. Every pre-existing section is a sidebar
+// section by definition, so stamping 'sidebar' keeps rendered output identical.
+// Additive on purpose: the array, its indices and every sections[i].content[j]
+// path are untouched, so AI change paths, data-editable attributes, saved
+// variants and backups keep working without their own migration.
+const SECTION_AREAS = new Set(['main', 'sidebar']);
+
+export function migrateSectionAreas(data) {
+  if (!data || !Array.isArray(data.sections)) return data;
+  return {
+    ...data,
+    sections: data.sections.map((section) => ({
+      ...section,
+      area: SECTION_AREAS.has(section && section.area) ? section.area : 'sidebar',
+    })),
+  };
+}
 
 // Create the store
 function createStore() {
@@ -151,7 +147,7 @@ function createStore() {
 
     // Set entire data object
     setData(newData, skipSave = false, variantId = null) {
-      data = deepClone(newData);
+      data = deepClone(migrateSectionAreas(newData));
       isDirty = false;
       
       // Track current variant for history persistence
@@ -569,6 +565,7 @@ export const EMPTY_RESUME = {
       id: generateId('section'),
       title: 'Skills',
       type: 'list',
+      area: 'sidebar',
       content: ['Skill 1', 'Skill 2', 'Skill 3']
     }
   ],

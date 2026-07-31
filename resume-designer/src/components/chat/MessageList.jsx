@@ -1,8 +1,10 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { ArrowRightLeft, Check, KeyRound, Loader2, MessageCircle, Pencil, Settings2, Square } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+
+import * as changeSession from '../../changeSession.js';
 
 import { Markdown, StreamingMarkdown } from './Markdown.jsx';
 import { LiveReasoning } from './LiveReasoning.jsx';
@@ -80,6 +82,12 @@ function StreamingBubble({ msg, onStop, onRender }) {
 }
 
 function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants, currentVariantId }) {
+  // Re-render on any change-session transition so the action buttons below
+  // stand down the moment this message's changes are decided from ANY surface
+  // (inline preview, diff dialog) — msg.pendingChanges alone cannot know that.
+  const [, setSessionRev] = useState(0);
+  useEffect(() => changeSession.subscribe(() => setSessionRev((n) => n + 1)), []);
+
   // Context-switch divider: a "Now discussing «Name»" row whose button makes that
   // résumé active WITHOUT leaving this thread (onJumpVariant pins it). The name is
   // resolved live from the variant list so it tracks renames and so older markers
@@ -115,7 +123,14 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
   }
 
   const isUser = msg.role === 'user';
-  const hasActions = msg.applyData || msg.pendingChanges;
+  // This message's changes are reviewable only while they are the change set
+  // the shared session is still deciding. Identity-scoped on purpose: a later
+  // proposal's pending session must not resurrect an older message's buttons
+  // over its stale diff.
+  const changesStillPending = msg.pendingChanges
+    ? changeSession.getChangeSet() === msg.pendingChanges && changeSession.hasPending()
+    : false;
+  const hasActions = msg.applyData || changesStillPending;
   // Apply/Review mutate or diff the ACTIVE résumé (store-wide), but in a
   // cross-résumé thread this message may have been generated against another
   // one. When the stamps disagree, offer the switch instead of the actions —
@@ -174,7 +189,7 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
                   Apply to Resume
                 </Button>
               )}
-              {msg.pendingChanges && (
+              {changesStillPending && (
                 <Button
                   variant="outline"
                   size="sm"

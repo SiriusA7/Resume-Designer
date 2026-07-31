@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { LiveReasoning } from '../chat/LiveReasoning.jsx';
+import { GapReport } from './GapReport.jsx';
 import { formatTokenCount } from '../../tokenTrackingService.js';
 
 /**
@@ -541,7 +542,7 @@ function GenStat({ label, value }) {
  * (the now-hidden inputs), the live reasoning stream, and — on completion ('done')
  * — a prominent token-usage strip plus a Review button. Cancel aborts mid-flight.
  */
-export function JobGeneratingView({ job, modelLabel, reasoningLabel, reasoning, run, elapsed, phase, onCancel, onReview, onEdit }) {
+export function JobGeneratingView({ job, modelLabel, reasoningLabel, reasoning, run, elapsed, phase, gaps, onCancel, onReview, onEdit }) {
   const done = phase === 'done';
   const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
   const totalTokens = run ? (run.promptTokens || 0) + (run.completionTokens || 0) : 0;
@@ -584,6 +585,10 @@ export function JobGeneratingView({ job, modelLabel, reasoningLabel, reasoning, 
             <GenStat label="Time" value={clock} />
           </div>
         )}
+
+        {/* Gap report — what the job asks for that the profile doesn't support.
+            Renders nothing when there are no gaps. */}
+        {done && <GapReport gaps={gaps} />}
       </StepBody>
       <StepFooter>
         {done ? (
@@ -614,6 +619,7 @@ export function JobGeneratingView({ job, modelLabel, reasoningLabel, reasoning, 
 export function JobInputStep({
   hasProfileData,
   targetJob,
+  jobGaps,
   availableModels,
   defaultModel,
   defaultReasoning,
@@ -762,6 +768,7 @@ export function JobInputStep({
         run={run}
         elapsed={elapsed}
         phase={phase}
+        gaps={jobGaps}
         onCancel={handleCancel}
         onReview={onReview}
         onEdit={() => setPhase('form')}

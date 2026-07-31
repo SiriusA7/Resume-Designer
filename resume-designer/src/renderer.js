@@ -11,8 +11,10 @@
 // each separator (it adds no width; the gap comes from .skill-sep's margin).
 const SKILL_SEPARATOR = '<span class="skill-sep">•</span><wbr>';
 
-function normalizeSectionType(type) {
-  return type === 'skills' ? 'skills' : 'list';
+export function normalizeSectionType(type) {
+  if (type === 'skills') return 'skills';
+  if (type === 'paragraph') return 'paragraph';
+  return 'list';
 }
 
 function splitByBulletSeparators(line) {
@@ -64,7 +66,12 @@ function formatSkillsLineStacked(line) {
 }
 
 function renderSectionLine(line, mode, variant = 'sidebar') {
-  if (normalizeSectionType(mode) === 'list') {
+  const normalized = normalizeSectionType(mode);
+  if (normalized === 'paragraph') {
+    // Prose: inline markdown only — no bullet-splitting, no wrapper spans.
+    return formatInlineMarkdown(line);
+  }
+  if (normalized === 'list') {
     return formatListLine(line);
   }
   return variant === 'stacked' ? formatSkillsLineStacked(line) : formatSkillsLine(line);
@@ -72,6 +79,14 @@ function renderSectionLine(line, mode, variant = 'sidebar') {
 
 function renderSectionContent(section, sIdx, variant = 'sidebar') {
   const mode = normalizeSectionType(section?.type);
+
+  if (mode === 'paragraph') {
+    return (section.content || [])
+      .map((line, i) =>
+        `<p class="section-paragraph" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode, variant)}</p>`)
+      .join('');
+  }
+
   if (mode === 'skills') {
     // Skills render as individual, separately-editable tags that flow inline and
     // wrap — NOT one block <p> per item (which would stack them vertically once
@@ -95,6 +110,12 @@ function renderSectionContent(section, sIdx, variant = 'sidebar') {
 
 function renderClassicSectionContent(section, sIdx) {
   const mode = normalizeSectionType(section?.type);
+  if (mode === 'paragraph') {
+    return (section.content || [])
+      .map((line, i) =>
+        `<p class="section-paragraph" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
+      .join('');
+  }
   if (mode === 'list') {
     return (section.content || [])
       .map((line, i) => `<p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
@@ -107,6 +128,12 @@ function renderClassicSectionContent(section, sIdx) {
 
 function renderCreativeSectionContent(section, sIdx) {
   const mode = normalizeSectionType(section?.type);
+  if (mode === 'paragraph') {
+    return (section.content || [])
+      .map((line, i) =>
+        `<p class="section-paragraph" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
+      .join('');
+  }
   if (mode === 'list') {
     return (section.content || [])
       .map((line, i) => `<p class="highlight-item" data-editable="sections[${sIdx}].content[${i}]">${renderSectionLine(line, mode)}</p>`)
@@ -130,6 +157,49 @@ function splitSectionsByMode(sections = []) {
   });
 
   return { lists, skills };
+}
+
+// Layouts with no sidebar — their renderers ignore `area` and render every
+// section in one column (see partitionSectionsByArea below). Exported so the
+// structure panel can explain that Area has no visible effect on them.
+export const SINGLE_COLUMN_LAYOUTS = new Set([
+  'stacked', 'stacked-vertical', 'classic', 'classic-featured', 'creative',
+]);
+
+/**
+ * Split sections by column. Indices are preserved because every data-editable
+ * path and every AI change path is `sections[<original index>]…`.
+ *
+ * Only the six layouts that actually have a sidebar call this. The five
+ * sidebar-less layouts (SINGLE_COLUMN_LAYOUTS above) deliberately ignore
+ * `area` and render every section in their single column — forcing the
+ * distinction there would change existing résumés' output for no benefit.
+ */
+export function partitionSectionsByArea(sections = []) {
+  const main = [];
+  const sidebar = [];
+  sections.forEach((section, sIdx) => {
+    (section && section.area === 'main' ? main : sidebar).push({ section, sIdx });
+  });
+  return { main, sidebar };
+}
+
+/**
+ * Render the main-column custom sections, in array order.
+ *
+ * The wrapper carries `section` because the margin-spaced main columns
+ * (`.compact-main .section`, `.executive-main .section + .section`) drive
+ * inter-section spacing off that class — without it, consecutive main
+ * sections render flush in those layouts. The gap-spaced columns ignore it.
+ */
+export function renderMainSections(data) {
+  const { main } = partitionSectionsByArea(data.sections || []);
+  if (main.length === 0) return '';
+  return main.map(({ section, sIdx }) => `
+      <section class="section resume-section main-custom-section">
+        <h2 class="section-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h2>
+        ${renderSectionContent(section, sIdx, 'main')}
+      </section>`).join('');
 }
 
 function normalizeTools(tools) {
@@ -218,7 +288,7 @@ export function renderResume(data) {
               `).join('')}
             </div>
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </section>
     </div>
   `;
@@ -470,12 +540,12 @@ function renderSidebar(data) {
   
   // Render sidebar sections
   if (data.sections) {
-    for (let sIdx = 0; sIdx < data.sections.length; sIdx++) {
-      const section = data.sections[sIdx];
+    const { sidebar } = partitionSectionsByArea(data.sections);
+    for (const { section, sIdx } of sidebar) {
       const mode = normalizeSectionType(section?.type);
 
-      if (mode === 'list') {
-        // Render as block-level bullets
+      if (mode !== 'skills') {
+        // Render as block-level content (bullets or paragraphs)
         html += `
           <div class="sidebar-section" data-section-id="${section.id || sIdx}">
             <h3 class="sidebar-title" data-editable="sections[${sIdx}].title">${escapeHtml(section.title)}</h3>
@@ -614,7 +684,7 @@ export function renderResumeRightSidebar(data) {
               `).join('')}
             </div>
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </section>
       
       <aside class="resume-sidebar">
@@ -652,7 +722,7 @@ export function renderResumeCompact(data) {
               <h2 class="section-title">Experience</h2>
               ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
             </div>
-          ` : ''}
+          ` : ''}${renderMainSections(data)}
         </section>
         
         <aside class="compact-sidebar">
@@ -715,7 +785,7 @@ export function renderResumeExecutive(data) {
               <h2 class="section-title">Professional Experience</h2>
               ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
             </div>
-          ` : ''}
+          ` : ''}${renderMainSections(data)}
         </div>
         
         <div class="executive-side">
@@ -937,7 +1007,7 @@ export function renderResumeModern(data) {
             <h2 class="section-title">Experience</h2>
             ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </main>
     </div>
   `;
@@ -996,7 +1066,7 @@ export function renderResumeTimeline(data) {
               `).join('')}
             </div>
           </div>
-        ` : ''}
+        ` : ''}${renderMainSections(data)}
       </main>
       
       <aside class="resume-sidebar timeline-sidebar">
