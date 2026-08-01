@@ -41,7 +41,7 @@ describe('normalizeRelease', () => {
     const r = normalizeRelease({
       tag_name: 'next',
       published_at: '2026-07-01T00:00:00Z',
-      body: '## on paper 1.2.3-next.7\n- feat: beta thing',
+      body: '## On Paper 1.2.3-next.7\n- feat: beta thing',
     });
     expect(r.version).toBe('1.2.3-next.7');
   });
@@ -49,16 +49,16 @@ describe('normalizeRelease', () => {
     const r = normalizeRelease({ tag_name: 'v1.6.0', body: 'Just some notes without our heading' });
     expect(r.version).toBe('1.6.0');
   });
-  // The rename ("Resume Designer" → "on paper") splits the published release
+  // The rename ("Resume Designer" → "On Paper") splits the published release
   // history in two, and this parser reads ALL of it off the GitHub API. Both
   // headings must keep resolving, permanently and in both directions:
   // pre-rename builds must parse new releases, and new builds must parse the
   // pre-rename back-catalogue.
-  it('reads the version from an "on paper" heading', () => {
+  it('reads the version from an "On Paper" heading', () => {
     const r = normalizeRelease({
       tag_name: 'next',
       published_at: '2026-07-01T00:00:00Z',
-      body: '## on paper 2.0.0-next.1\n- feat: renamed thing',
+      body: '## On Paper 2.0.0-next.1\n- feat: renamed thing',
     });
     expect(r.version).toBe('2.0.0-next.1');
   });
@@ -112,7 +112,7 @@ describe('mergeReleases', () => {
 });
 
 describe('splitReleaseBody', () => {
-  const digest = '## on paper 1.16.0\n\n- New: a Library for your résumés.\n';
+  const digest = '## On Paper 1.16.0\n\n- New: a Library for your résumés.\n';
   const grouped = '### ✨ New features\n**Library**\n- Add tiered library search module\n';
   const body = `${digest}\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n\n${grouped}\n</details>`;
 
@@ -146,7 +146,7 @@ describe('splitReleaseBody malformed bodies', () => {
   });
 
   it('degrades BOTH fields when the tail is empty after unwrapping', () => {
-    const body = '## on paper 1.16.0\n\n- New thing.\n\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n</details>';
+    const body = '## On Paper 1.16.0\n\n- New thing.\n\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n</details>';
     const r = splitReleaseBody(body);
     expect(r.summary).toBe(body);
     expect(r.full).toBe(body);

@@ -447,13 +447,13 @@ jobs:
               echo '<!-- full-log -->'
               echo '<details><summary>Full changelog</summary>'
               echo ''
-              # Drop the duplicate "## on paper x.y.z" heading line. Matches the
+              # Drop the duplicate "## On Paper x.y.z" heading line. Matches the
               # pre-rename name too: harmless here (gen-changelog.mjs writes this
               # file in the same run) but it costs nothing and a miss would
               # publish a duplicate heading.
               # The `;` before `}` is required by BSD sed; without it this errors
               # out when run locally on macOS. CI is GNU sed, which accepts both.
-              sed -E '1{/^## (on paper|Resume Designer) /d;}' grouped-changelog.md
+              sed -E '1{/^## (On Paper|Resume Designer) /d;}' grouped-changelog.md
               echo ''
               echo '</details>'
             } > release-body.md

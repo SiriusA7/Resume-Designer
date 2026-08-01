@@ -13,7 +13,7 @@ describe('groupChangelog', () => {
     ], '1.2.0');
 
     // Heading.
-    expect(md).toContain('## on paper 1.2.0');
+    expect(md).toContain('## On Paper 1.2.0');
     // Section order.
     const featIdx = md.indexOf('### ✨ New features');
     const fixIdx = md.indexOf('### 🐛 Fixes');
@@ -62,7 +62,7 @@ describe('groupChangelog', () => {
 
   it('handles empty input', () => {
     const md = groupChangelog([], '1.0.0');
-    expect(md).toContain('## on paper 1.0.0');
+    expect(md).toContain('## On Paper 1.0.0');
     expect(md).toContain('- Maintenance and internal improvements.');
   });
 });

@@ -58,7 +58,7 @@ export function groupChangelog(subjects, version = '') {
   // body to recover the true version (beta builds publish under the rolling
   // `next` tag), so the product name here is a contract with
   // src/changelogService.js and validate-digest.mjs — not decoration.
-  const out = [`## on paper ${String(version).trim()}`.trim(), ''];
+  const out = [`## On Paper ${String(version).trim()}`.trim(), ''];
   let any = false;
   for (const { key, title } of SECTIONS) {
     const areas = buckets[key];

@@ -36,12 +36,12 @@ function stripV(tag) {
 //
 // BOTH PRODUCT NAMES ARE PERMANENT. This reads release bodies off the GitHub
 // API, so it sees the app's whole published history — every release cut before
-// the "Resume Designer" → "on paper" rename still carries the old heading and
+// the "Resume Designer" → "On Paper" rename still carries the old heading and
 // always will. Dropping the old alternative silently regresses beta version
 // labels on historical releases to the rolling `next` tag. Match is liberal
 // (case-insensitive, flexible spacing) because this parses remote text whose
 // only failure mode is a wrong-but-plausible version label.
-const VERSION_HEADING_RE = /^##\s+(?:Resume Designer|on paper)\s+(\S+)\s*$/im;
+const VERSION_HEADING_RE = /^##\s+(?:Resume Designer|On Paper)\s+(\S+)\s*$/im;
 
 function versionFromBody(body) {
   const m = String(body || '').match(VERSION_HEADING_RE);
