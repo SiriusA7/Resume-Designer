@@ -1,5 +1,5 @@
 /**
- * on paper - Main Application
+ * On Paper - Main Application
  * Integrates all components: store, header bar, chat panel, inline editor, structure panel
  */
 

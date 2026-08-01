@@ -529,7 +529,7 @@ function rollbackImportedProfile(id) {
 export async function importProfileBackup(parsed) {
   if (!parsed || parsed.backupFormat !== 2 || parsed.kind !== 'profile'
       || !parsed.keys || typeof parsed.keys !== 'object') {
-    throw new Error('Not an on paper profile export (expected backupFormat 2, kind "profile").');
+    throw new Error('Not an On Paper profile export (expected backupFormat 2, kind "profile").');
   }
   for (const [k, v] of Object.entries(parsed.keys)) {
     if (typeof v !== 'string') throw new Error(`Invalid profile export: key "${k}" must be a string value.`);

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "on paper",
+  "productName": "On Paper",
   "version": "1.0.0",
   "identifier": "com.resumedesigner.app",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "on paper",
+        "title": "On Paper",
         "width": 1400,
         "height": 900,
         "minWidth": 750,

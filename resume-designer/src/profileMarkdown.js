@@ -27,7 +27,7 @@ export const DEFAULT_PROFILE = {
 export function profileToMarkdown(profile) {
   let md = `# User Profile\n\n`;
   md += `> This file contains your professional background information.\n`;
-  md += `> Edit the sections below and import back into on paper.\n\n`;
+  md += `> Edit the sections below and import back into On Paper.\n\n`;
 
   md += `## Personal Summary\n\n`;
   md += `${profile.personalSummary || '_Write a 2-3 sentence professional summary about yourself..._'}\n\n`;

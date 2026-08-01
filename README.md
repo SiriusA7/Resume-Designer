@@ -1,6 +1,6 @@
 <div align="center">
 
-# on paper
+# On Paper
 
 **An AI-assisted résumé builder that turns one master profile into polished, job-tailored résumés — privately, on your own machine.**
 
@@ -11,13 +11,13 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#download)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg)](https://v2.tauri.app/)
 
-![on paper — editing a résumé in the liquid-glass desktop UI](docs/screenshots/hero.png)
+![On Paper — editing a résumé in the liquid-glass desktop UI](docs/screenshots/hero.png)
 
 </div>
 
 ## What it is
 
-**on paper** is a desktop app for building résumés. You keep **one master profile** — your full work history, skills, education, and projects — and spin off as many **tailored variants** as you need, each pointed at a specific role. An optional AI assistant (powered by your own [OpenRouter](https://openrouter.ai) key) helps you draft, rewrite, and tailor content to a job description, and every AI edit is shown as an inline diff you approve or reject.
+**On Paper** is a desktop app for building résumés. You keep **one master profile** — your full work history, skills, education, and projects — and spin off as many **tailored variants** as you need, each pointed at a specific role. An optional AI assistant (powered by your own [OpenRouter](https://openrouter.ai) key) helps you draft, rewrite, and tailor content to a job description, and every AI edit is shown as an inline diff you approve or reject.
 
 Your résumé data never leaves your machine except for the AI calls you explicitly make — there's no account, no backend, and no telemetry.
 
@@ -74,7 +74,7 @@ Prefer not to install anything? You can also run it in a browser — see [Run fr
 The AI features are optional and **use your own [OpenRouter](https://openrouter.ai) API key**:
 
 1. Create a free OpenRouter account and generate an API key.
-2. Paste it into on paper when prompted (or in Settings).
+2. Paste it into On Paper when prompted (or in Settings).
 3. Pick a model and start chatting or tailoring.
 
 Your key is stored locally on your device and is sent only to OpenRouter to make the AI requests you trigger. You only pay OpenRouter for what you use; everything else in the app works without a key.
@@ -128,7 +128,7 @@ Issues and pull requests are welcome. For anything substantial, please open an i
 
 ## License
 
-**Free · source-available · noncommercial** — **on paper** is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0). See [`LICENSE`](LICENSE) for the full terms.
+**Free · source-available · noncommercial** — **On Paper** is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0). See [`LICENSE`](LICENSE) for the full terms.
 
 - **Use it for anything, including at work.** Creating resumes, profiles, exports, and other application materials — personal or commercial — is fine. The noncommercial term is about the app itself, not the work you produce with it.
 - **Your documents are yours.** Resumes, PDFs, backups, profile data, and other outputs you create with the app are not licensed by this project license.

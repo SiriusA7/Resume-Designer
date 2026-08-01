@@ -2,7 +2,7 @@
 
 > This template helps you provide detailed background information to the AI assistant.
 > Fill out the sections below with your professional details, then import this file
-> back into on paper using the "Import" button in the User Profile panel.
+> back into On Paper using the "Import" button in the User Profile panel.
 >
 > **Tips:**
 > - Be as detailed as possible - the more context you provide, the better the AI suggestions

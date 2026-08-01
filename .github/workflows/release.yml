@@ -186,7 +186,7 @@ jobs:
           set -euo pipefail
           # Tauri emits "<productName>.app.tar.gz" without arch — collides
           # between matrix builds when both arms write to the same release-flat
-          # dir. Also "on paper" has a space, which GitHub rewrites to
+          # dir. Also "On Paper" has a space, which GitHub rewrites to
           # "." in uploaded asset names, breaking latest.json's URL field.
           # Rename to a no-space arch-suffixed form; the latest.json regex
           # (aarch64.*\.app\.tar\.gz$ / x(86_)?64.*\.app\.tar\.gz$) still matches.
@@ -589,7 +589,7 @@ jobs:
         with:
           tag_name: ${{ needs.decide.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ needs.decide.outputs.channel == 'next' && 'on paper (beta)' || format('on paper {0}', needs.decide.outputs.version) }}
+          name: ${{ needs.decide.outputs.channel == 'next' && 'On Paper (beta)' || format('On Paper {0}', needs.decide.outputs.version) }}
           body_path: release-body.md
           prerelease: ${{ needs.decide.outputs.channel == 'next' }}
           make_latest: ${{ needs.decide.outputs.channel != 'next' }}

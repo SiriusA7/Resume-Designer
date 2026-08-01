@@ -744,7 +744,7 @@ export function importFullBackupFromEnvelope(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not an on paper backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
+      'Not an On Paper backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
     );
   }
   // Every value must be a string — that's what `appStorage.setItem`
@@ -944,7 +944,7 @@ export function importFullBackupMerge(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not an on paper backup envelope (missing "backupFormat: 1").'
+      'Not an On Paper backup envelope (missing "backupFormat: 1").'
     );
   }
   for (const [k, v] of Object.entries(parsed.keys)) {

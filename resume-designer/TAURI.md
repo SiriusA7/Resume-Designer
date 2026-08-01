@@ -1,6 +1,6 @@
 # Tauri Desktop App Guide
 
-This document covers building, distributing, and updating the on paper desktop app, which is built with [Tauri 2](https://v2.tauri.app/).
+This document covers building, distributing, and updating the On Paper desktop app, which is built with [Tauri 2](https://v2.tauri.app/).
 
 ## Quick Start
 
@@ -78,8 +78,8 @@ npm run tauri:build:mac:arm64
 
 Outputs live under `src-tauri/target/<arch>/release/bundle/`:
 
-- **macOS**: `bundle/dmg/on paper_<version>_<arch>.dmg`, `bundle/macos/on paper.app`, plus an `.app.tar.gz` + `.app.tar.gz.sig` pair (the updater bundle and its minisign signature).
-- **Windows**: `bundle/nsis/on paper_<version>_x64-setup.exe`, plus `.exe.sig` for the updater. (With `createUpdaterArtifacts: true` Tauri 2 produces the **v2** updater format on Windows: the `-setup.exe` *is* the updater payload and `.exe.sig` is its detached signature. No `.nsis.zip` is emitted — see the "Normalize Windows artifact filenames" step in `release.yml`.)
+- **macOS**: `bundle/dmg/On Paper_<version>_<arch>.dmg`, `bundle/macos/On Paper.app`, plus an `.app.tar.gz` + `.app.tar.gz.sig` pair (the updater bundle and its minisign signature).
+- **Windows**: `bundle/nsis/On Paper_<version>_x64-setup.exe`, plus `.exe.sig` for the updater. (With `createUpdaterArtifacts: true` Tauri 2 produces the **v2** updater format on Windows: the `-setup.exe` *is* the updater payload and `.exe.sig` is its detached signature. No `.nsis.zip` is emitted — see the "Normalize Windows artifact filenames" step in `release.yml`.)
 
 > These are **local build** names, which use `productName` verbatim and so
 > contain a space. The names attached to a GitHub Release are different: the
@@ -268,7 +268,7 @@ INSTDIR        = $LOCALAPPDATA\${PRODUCTNAME}
 shortcuts      = ${PRODUCTNAME}.lnk
 ```
 
-So renaming `productName` from "Resume Designer" to "on paper" makes the new
+So renaming `productName` from "Resume Designer" to "On Paper" makes the new
 installer invisible to the old install. **User data is unaffected** — that
 follows the bundle identifier, which is frozen — but the old Add/Remove Programs
 entry, install directory, and shortcuts all persist alongside the new ones, and
@@ -352,9 +352,9 @@ in the release notes.
 **4. macOS keeps the old folder name.** The updater unpacks onto the running
 bundle's path, so an auto-updated install stays at
 `/Applications/Resume Designer.app` while Finder, Dock, and Spotlight all show
-"on paper" (those read `CFBundleDisplayName`). Gatekeeper validates contents, not
+"On Paper" (those read `CFBundleDisplayName`). Gatekeeper validates contents, not
 the folder name, so this is cosmetic. Only a fresh DMG install produces
-`/Applications/on paper.app`. Mention it; do not try to rename the bundle from
+`/Applications/On Paper.app`. Mention it; do not try to rename the bundle from
 inside the updater — it races the running process.
 
 **5. Re-capture the screenshots.** `website/hero.jpg` and

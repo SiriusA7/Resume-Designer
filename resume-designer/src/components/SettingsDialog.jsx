@@ -345,7 +345,7 @@ export default function SettingsDialog() {
                 <section>
                   <SectionHeader title="About" />
                   <SettingRow label="Version">
-                    <Badge variant="secondary">on paper {version}</Badge>
+                    <Badge variant="secondary">On Paper {version}</Badge>
                   </SettingRow>
                 </section>
               </div>

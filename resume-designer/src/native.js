@@ -89,13 +89,13 @@ export async function showMessage(options) {
     const buttons = options.buttons || ['OK'];
     if (buttons.length <= 1) {
       await dialog.message(options.message ?? '', {
-        title: options.title ?? 'on paper',
+        title: options.title ?? 'On Paper',
         kind,
       });
       return 0;
     }
     const yes = await dialog.ask(options.message ?? '', {
-      title: options.title ?? 'on paper',
+      title: options.title ?? 'On Paper',
       kind,
       okLabel: buttons[0],
       cancelLabel: buttons[1],
@@ -128,7 +128,7 @@ export async function getAppInfo() {
   }
   return {
     version: '1.0.0',
-    name: 'on paper',
+    name: 'On Paper',
     platform: 'web',
     isPackaged: false,
   };

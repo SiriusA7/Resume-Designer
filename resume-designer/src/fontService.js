@@ -1,6 +1,6 @@
 /**
  * Font Service
- * Handles font loading, caching, and management for on paper
+ * Handles font loading, caching, and management for On Paper
  * Supports: Preset font pairings, Google Fonts, and System fonts
  */
 

@@ -230,7 +230,7 @@ export async function importBackupFromFile(file) {
     const isFormat1 = preview?.backupFormat === 1 && preview.keys;
     const isFormat2Full = preview?.backupFormat === 2 && preview.kind === 'full';
     if (!isFormat1 && !isFormat2Full) {
-      throw new Error('Not an on paper backup file.');
+      throw new Error('Not an On Paper backup file.');
     }
     const incoming = isFormat1
       ? Object.keys(preview.keys).length
