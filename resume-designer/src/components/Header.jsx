@@ -104,7 +104,7 @@ export default function Header() {
   const host = typeof document !== 'undefined' ? document.getElementById('header-bar') : null;
   if (!host) return null;
 
-  const currentName = list.find((v) => v.id === currentId)?.name || 'Select Resume';
+  const currentName = list.find((v) => v.id === currentId)?.name || 'Select resume';
 
   const newVariant = () => window.showOnboardingWizard?.({ skipApiKeyStep: true });
   const openRename = () => {
@@ -163,10 +163,10 @@ export default function Header() {
   // `short` is the visible header-button label (collapses to icon-only when
   // narrow); `label` is the full name used for the tooltip + the mobile menu.
   const toolItems = [
-    { key: 'profile', label: 'User Profile', short: 'Profile', Icon: User, run: () => window.openUserProfilePanel?.() },
-    { key: 'jobs', label: 'Job Descriptions', short: 'Jobs', Icon: Briefcase, run: () => window.openJobDescriptionPanel?.() },
-    { key: 'library', label: 'Resume Library', short: 'Library', Icon: LibraryBig, run: () => window.dispatchEvent(new CustomEvent('rd:open-library')) },
-    { key: 'history', label: 'Version History', short: 'History', Icon: History, run: () => window.openHistoryPanel?.() },
+    { key: 'profile', label: 'Profile', short: 'Profile', Icon: User, run: () => window.openUserProfilePanel?.() },
+    { key: 'jobs', label: 'Jobs', short: 'Jobs', Icon: Briefcase, run: () => window.openJobDescriptionPanel?.() },
+    { key: 'library', label: 'Resumes', short: 'Library', Icon: LibraryBig, run: () => window.dispatchEvent(new CustomEvent('rd:open-library')) },
+    { key: 'history', label: 'Version history', short: 'History', Icon: History, run: () => window.openHistoryPanel?.() },
   ];
 
   return createPortal(

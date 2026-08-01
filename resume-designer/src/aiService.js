@@ -461,7 +461,7 @@ export function checkProfileHasData() {
  * network call — the grounding rules are a correctness requirement, not styling.
  */
 export function buildGenerateResumePrompt(profileContext, jobDescription) {
-  return `You are an expert resume consultant and ATS optimization specialist. Create the strongest resume the user's profile truthfully supports, targeted at the job below.
+  return `You are an expert resume consultant. Create the strongest resume the user's profile truthfully supports, targeted at the job below.
 
 ${GROUNDING_RULES_TEXT}
 
@@ -477,7 +477,7 @@ ${jobDescription.description}
 
 ## Your Task
 
-Create an ATS-optimized resume that:
+Create a clear, well-structured resume that:
 1. Surfaces the experience and skills from the profile most relevant to this job
 2. Uses the job description's vocabulary for experience the profile actually evidences
 3. Orders experience by relevance (most relevant first), and ALSO provides

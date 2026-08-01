@@ -566,7 +566,7 @@ export function useChat() {
 
       commitToThread(startThreadId, {
         id: uid(), role: 'assistant',
-        content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''} to your resume.`}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review Changes" below for a detailed diff view.`,
+        content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''} to your resume.`}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review changes" below for a detailed diff view.`,
         reasoning: capturedReasoning || null, run: capturedRun,
         variantId: startVariantId, timestamp: new Date().toISOString(),
         pendingChanges: changeSet,

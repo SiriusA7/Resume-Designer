@@ -100,7 +100,7 @@ export function ThreadSelector({
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-[260px] p-1">
         <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium text-muted-foreground">
-          <span>Chat Threads</span>
+          <span>Chat threads</span>
           <Button
             variant="ghost"
             size="icon"

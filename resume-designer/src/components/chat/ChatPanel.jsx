@@ -154,14 +154,14 @@ export default function ChatPanel() {
       {/* Header: title row + thread row. */}
       <div className="shrink-0 border-b px-4 pb-3 pt-3.5">
         <div className="flex items-center justify-between">
-          <h2 className="text-[15px] font-semibold tracking-tight">AI Assistant</h2>
+          <h2 className="text-[15px] font-semibold tracking-tight">AI assistant</h2>
           <div className="flex items-center gap-0.5">
             <Button
               variant="ghost"
               size="icon"
               className="size-7"
-              title="API Settings"
-              aria-label="API Settings"
+              title="API settings"
+              aria-label="API settings"
               onClick={openApiSettings}
             >
               <Settings2 className="size-4" />

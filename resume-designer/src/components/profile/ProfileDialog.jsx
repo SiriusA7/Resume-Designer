@@ -183,7 +183,7 @@ export default function ProfileDialog() {
         {/* Header — mockup .dlg-head: 20px 22px 16px, title 17px, desc 13px. */}
         <div className="flex shrink-0 items-start justify-between gap-3 px-[22px] pb-4 pt-5">
           <div className="space-y-1">
-            <DialogTitle>User Profile</DialogTitle>
+            <DialogTitle>Profile</DialogTitle>
             <p className="text-[13px] text-muted-foreground">Background info for AI assistance</p>
           </div>
           <div className="flex items-center gap-1.5">
@@ -217,7 +217,7 @@ export default function ProfileDialog() {
             </Button>
             <Button type="button" size="sm" title="Fill profile via AI interview" onClick={startInterview}>
               <Sparkles className="h-4 w-4" />
-              AI Interview
+              AI interview
             </Button>
             <button
               type="button"

@@ -186,7 +186,7 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
                   onClick={() => onApply(msg.applyData.action, msg.applyData.value)}
                 >
                   <Check className="size-3.5" />
-                  Apply to Resume
+                  Apply to resume
                 </Button>
               )}
               {changesStillPending && (
@@ -197,7 +197,7 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
                   onClick={() => onReviewChanges(msg.id)}
                 >
                   <Pencil className="size-3.5" />
-                  Review Changes
+                  Review changes
                 </Button>
               )}
             </>
@@ -212,13 +212,13 @@ function ApiKeyPrompt({ onConfigure }) {
   return (
     <div className="my-auto flex flex-col items-center gap-1 px-6 py-14 text-center">
       <KeyRound className="mb-3 size-10 text-muted-foreground/40" />
-      <p className="text-sm font-medium">Setup Required</p>
+      <p className="text-sm font-medium">Setup required</p>
       <p className="text-sm text-muted-foreground">
-        To use the AI Assistant, add your OpenRouter API key — one key for Claude, GPT, Gemini &amp; 300+ models.
+        To use the AI assistant, add your OpenRouter API key — one key for Claude, GPT, Gemini &amp; 300+ models.
       </p>
       <Button className="mt-4" onClick={onConfigure}>
         <Settings2 className="size-4" />
-        Configure API Keys
+        Configure API keys
       </Button>
     </div>
   );
@@ -228,7 +228,7 @@ function Welcome() {
   return (
     <div className="my-auto flex flex-col items-center gap-1 px-6 py-14 text-center">
       <MessageCircle className="mb-3 size-10 text-muted-foreground/40" />
-      <p className="text-sm font-medium">Welcome to AI Assistant</p>
+      <p className="text-sm font-medium">Welcome to the AI assistant</p>
       <p className="text-sm text-muted-foreground">I can help you improve your resume. Try asking me to:</p>
       <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
         <li>Rewrite a bullet point to be more impactful</li>

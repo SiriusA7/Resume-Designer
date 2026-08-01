@@ -79,7 +79,7 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
 
     const valid = await onValidate(k);
     setStatus(valid
-      ? { message: 'API key validated! AI features are ready to use.', success: true }
+      ? { message: 'API key validated. AI features are ready to use.', success: true }
       : { message: 'Could not validate your key. We saved it — you can re-check it later in Settings.', success: false });
 
     setTimeout(() => goTo(1), valid ? 1000 : 1200);
@@ -93,11 +93,11 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
         </div>
         <StepHeader
           title="Welcome to On Paper"
-          description="This app uses AI to help you create professional resumes. Enter your OpenRouter API key to get started."
+          description="On Paper uses AI to help you create professional resumes. Enter your OpenRouter API key to get started."
         />
 
         <div className="space-y-2">
-          <Label htmlFor="api-openrouter">OpenRouter API Key</Label>
+          <Label htmlFor="api-openrouter">OpenRouter API key</Label>
           <Input
             type="password"
             id="api-openrouter"
@@ -138,7 +138,7 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
               <Loader2 className="size-4 animate-spin" /> Validating…
             </>
           ) : (
-            hasProviders ? 'Continue' : 'Validate & Continue'
+            hasProviders ? 'Continue' : 'Validate & continue'
           )}
         </Button>
       </StepFooter>
@@ -153,22 +153,22 @@ const PATH_OPTIONS = [
     id: 'option-import',
     mode: 'import',
     Icon: Upload,
-    title: 'Import Existing Resume',
+    title: 'Import existing resume',
     description: 'Upload a PDF or paste text — AI will parse and structure your content automatically',
   },
   {
     id: 'option-new',
     mode: 'new',
     Icon: MessageSquareText,
-    title: 'Start Fresh',
+    title: 'Start fresh',
     description: 'Answer a few questions and AI will help you craft professional content',
   },
   {
     id: 'option-job',
     mode: 'job',
     Icon: Target,
-    title: 'Create for Job',
-    description: 'Generate a tailored resume from your profile, optimized for a specific job posting',
+    title: 'Create for job',
+    description: 'Generate a resume from your profile, tailored to a specific job posting',
     featured: true,
   },
 ];
@@ -214,7 +214,7 @@ export function ChoosePathStep({ isNewResumeMode, onChoose, onBack }) {
                 <span className="pr-[74px] text-[12.5px] leading-[1.5] text-muted-foreground">{description}</span>
               </span>
               <Badge className="absolute right-3 top-3 gap-1 border-transparent bg-primary/10 text-primary">
-                <Sparkles className="size-3" /> AI-Powered
+                <Sparkles className="size-3" /> AI-powered
               </Badge>
             </button>
           ))}
@@ -271,7 +271,7 @@ export function ImportStep({ initialText, onParse, onFile, onBack }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <StepBody>
         <StepHeader
-          title="Import Your Resume"
+          title="Import your resume"
           description="Paste your existing resume text below, or upload a file."
         />
 
@@ -317,7 +317,7 @@ export function ImportStep({ initialText, onParse, onFile, onBack }) {
               <p className="text-xs">Supports TXT, PDF, DOCX</p>
               {/* No handler of its own: the click bubbles to the zone's file picker. */}
               <Button type="button" variant="outline" size="sm" className="mt-1">
-                Browse Files
+                Browse files
               </Button>
             </>
           )}
@@ -344,7 +344,7 @@ export function ImportStep({ initialText, onParse, onFile, onBack }) {
               <Loader2 className="size-4 animate-spin" /> Parsing with AI…
             </>
           ) : (
-            'Parse Resume'
+            'Parse resume'
           )}
         </Button>
       </StepFooter>
@@ -371,7 +371,7 @@ export function FilePreviewStep({ previewText, onBack, onContinue }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <StepBody>
         <StepHeader
-          title="Review Extracted Text"
+          title="Review extracted text"
           description="We've extracted the following text from your file. Please review before continuing."
         />
 
@@ -386,7 +386,7 @@ export function FilePreviewStep({ previewText, onBack, onContinue }) {
       </StepBody>
       <StepFooter>
         <Button variant="ghost" id="back-btn" onClick={onBack}>
-          <ArrowLeft className="size-4" /> Try Again
+          <ArrowLeft className="size-4" /> Try again
         </Button>
         <Button id="next-btn" disabled={busy} onClick={handleContinue}>
           {busy ? (
@@ -394,7 +394,7 @@ export function FilePreviewStep({ previewText, onBack, onContinue }) {
               <Loader2 className="size-4 animate-spin" /> Parsing with AI…
             </>
           ) : (
-            'Use This Text'
+            'Use this text'
           )}
         </Button>
       </StepFooter>
@@ -665,7 +665,7 @@ export function JobInputStep({
       <div className="flex min-h-0 flex-1 flex-col">
         <StepBody>
           <StepHeader
-            title="Profile Needed"
+            title="Profile needed"
             description="To create a tailored resume from a job description, we need your background information. Please fill out your profile first with your work experience, skills, and education."
           />
 
@@ -683,7 +683,7 @@ export function JobInputStep({
                 id="open-profile-btn"
                 onClick={onOpenProfile}
               >
-                Open My Profile
+                Open profile
               </Button>
             </div>
           </div>
@@ -780,13 +780,13 @@ export function JobInputStep({
     <div className="flex min-h-0 flex-1 flex-col">
       <StepBody>
         <StepHeader
-          title="Target Job Details"
-          description="Paste the job description below. AI will analyze it and create a resume from your profile that's perfectly tailored for this role."
+          title="Target job details"
+          description="Paste the job description below. AI will read it and draft a resume from your profile for this role."
         />
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label htmlFor="job-title-input">Job Title</Label>
+            <Label htmlFor="job-title-input">Job title</Label>
             <Input
               type="text"
               id="job-title-input"
@@ -808,7 +808,7 @@ export function JobInputStep({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="job-desc-input">Job Description</Label>
+          <Label htmlFor="job-desc-input">Job description</Label>
           <Textarea
             id="job-desc-input"
             className="min-h-40"
@@ -817,7 +817,7 @@ export function JobInputStep({
             onChange={(e) => setDescription(e.target.value)}
           />
           <Button type="button" variant="outline" size="sm" id="paste-clipboard-btn" onClick={handlePaste}>
-            <Clipboard className="size-3.5" /> Paste from Clipboard
+            <Clipboard className="size-3.5" /> Paste from clipboard
           </Button>
         </div>
 
@@ -881,7 +881,7 @@ export function JobInputStep({
           <ArrowLeft className="size-4" /> Back
         </Button>
         <Button id="generate-btn" onClick={handleGenerate}>
-          <Sparkles className="size-4" /> Generate Resume
+          <Sparkles className="size-4" /> Generate resume
         </Button>
       </StepFooter>
     </div>
@@ -929,11 +929,11 @@ export function JobDescriptionStep({ jobDescriptions, onAdd, onRemove, onBack, o
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <StepBody>
-        <StepHeader title="Target a Specific Job" />
+        <StepHeader title="Target a specific job" />
         <p className="text-sm text-muted-foreground">
           <span className="font-medium text-foreground">Why add a job description?</span>{' '}
-          AI will analyze the job requirements and tailor your resume to highlight your most relevant
-          skills and experience, making you stand out as the ideal candidate.
+          AI will read the job requirements and tailor your resume to highlight your most relevant
+          skills and experience.
         </p>
 
         <div className="space-y-1.5 rounded-md border bg-muted/50 p-3">
@@ -950,14 +950,14 @@ export function JobDescriptionStep({ jobDescriptions, onAdd, onRemove, onBack, o
             <Input
               type="text"
               id="target-job-title-input"
-              placeholder="Job Title (e.g. Senior Designer)"
+              placeholder="Job title (e.g. Senior Designer)"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
             <Input
               type="text"
               id="target-job-company-input"
-              placeholder="Company Name"
+              placeholder="Company name"
               value={company}
               onChange={(e) => setCompany(e.target.value)}
             />
@@ -978,7 +978,7 @@ export function JobDescriptionStep({ jobDescriptions, onAdd, onRemove, onBack, o
 
         {hasJobs && (
           <div className="space-y-2">
-            <p className="text-xs font-medium text-muted-foreground">Target Jobs Added</p>
+            <p className="text-xs font-medium text-muted-foreground">Target jobs added</p>
             {jobDescriptions.map((jd, i) => (
               <div className="flex items-center justify-between rounded-md border p-3" key={i}>
                 <div className="min-w-0">
@@ -1018,11 +1018,11 @@ export function JobDescriptionStep({ jobDescriptions, onAdd, onRemove, onBack, o
               </>
             ) : (
               <>
-                <Sparkles className="size-4" /> Tailor My Resume
+                <Sparkles className="size-4" /> Tailor my resume
               </>
             )
           ) : (
-            'Skip for Now'
+            'Skip for now'
           )}
         </Button>
       </StepFooter>
@@ -1049,7 +1049,7 @@ export function ReviewStep({ resume, isTailored, onBack, onCreate }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <StepBody>
         <StepHeader
-          title={isTailored ? 'Your Tailored Resume' : 'Review Your Resume'}
+          title={isTailored ? 'Your tailored resume' : 'Review your resume'}
           description={isTailored
             ? "AI has customized your resume for your target role. Here's what we created:"
             : "Here's what we extracted. You can edit everything in the main app."}
@@ -1109,7 +1109,7 @@ export function ReviewStep({ resume, isTailored, onBack, onCreate }) {
 
           {hasSkills && (
             <div className="space-y-1.5">
-              <ReviewSectionLabel>Key Skills</ReviewSectionLabel>
+              <ReviewSectionLabel>Key skills</ReviewSectionLabel>
               <div className="flex flex-wrap gap-1.5">
                 {resume.skills.map((s, i) => (
                   <Badge variant="secondary" key={i}>{s}</Badge>
@@ -1159,7 +1159,7 @@ export function ReviewStep({ resume, isTailored, onBack, onCreate }) {
         <Button variant="ghost" id="back-btn" onClick={onBack}>
           <ArrowLeft className="size-4" /> Back
         </Button>
-        <Button id="next-btn" onClick={onCreate}>Create Resume</Button>
+        <Button id="next-btn" onClick={onCreate}>Create resume</Button>
       </StepFooter>
     </div>
   );
@@ -1175,14 +1175,14 @@ export function FinalStep({ onFinish, onOpenProfile }) {
           <div className="flex size-12 items-center justify-center rounded-full bg-success-bg text-success">
             <Check className="size-6" />
           </div>
-          <h2 className="text-lg font-semibold">Your Resume is Ready!</h2>
+          <h2 className="text-lg font-semibold">Your resume is ready</h2>
           <p className="text-sm text-muted-foreground">
             You can now edit, style, and export your resume. Click any text to edit it directly,
-            or use the AI Assistant to improve your content.
+            or use the AI assistant to improve your content.
           </p>
           <div className="flex items-center gap-2 pt-2">
-            <Button variant="outline" onClick={onOpenProfile}>Set Up Profile</Button>
-            <Button id="finish-btn" onClick={onFinish}>Start Editing</Button>
+            <Button variant="outline" onClick={onOpenProfile}>Set up profile</Button>
+            <Button id="finish-btn" onClick={onFinish}>Start editing</Button>
           </div>
         </div>
       </StepBody>

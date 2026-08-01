@@ -27,7 +27,7 @@ import { showDiffView } from '../diffView.js';
 const TYPE_LABELS = {
   initial: 'Created',
   edit: 'Edit',
-  ai: 'AI Change',
+  ai: 'AI change',
   import: 'Import',
   reorder: 'Reordered',
   add: 'Added',
@@ -132,7 +132,7 @@ export default function HistoryDialog() {
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between border-b p-6">
           <div className="space-y-1">
-            <DialogTitle>Version History</DialogTitle>
+            <DialogTitle>Version history</DialogTitle>
             <p className="text-sm text-muted-foreground">Restore or compare earlier versions.</p>
           </div>
           <button

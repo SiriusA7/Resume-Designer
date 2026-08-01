@@ -458,7 +458,7 @@ export default function DiffDialog() {
 
         {/* Header — mockup .dlg-head.bordered: 20px 22px 16px, stat badges + mode seg. */}
         <div className="flex shrink-0 flex-wrap items-center gap-3 border-b px-[22px] pb-4 pt-5">
-          <DialogTitle>Review Changes</DialogTitle>
+          <DialogTitle>Review changes</DialogTitle>
 
           <div className="flex items-center gap-1.5">
             <Badge className="border-transparent bg-success-bg text-success tabular-nums">+{stats.added}</Badge>
@@ -527,7 +527,7 @@ export default function DiffDialog() {
               <Kbd>R</Kbd> Reject
             </span>
             <span className="flex items-center gap-1.5">
-              <Kbd>↵</Kbd> Apply All
+              <Kbd>↵</Kbd> Apply all
             </span>
             <span className="flex items-center gap-1.5">
               <Kbd>Esc</Kbd> Close
@@ -535,10 +535,10 @@ export default function DiffDialog() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Button variant="outline" onClick={rejectAll}>
-              <X className="h-4 w-4" /> Reject All
+              <X className="h-4 w-4" /> Reject all
             </Button>
             <Button onClick={applyAll}>
-              <CheckCheck className="h-4 w-4" /> Apply All
+              <CheckCheck className="h-4 w-4" /> Apply all
             </Button>
           </div>
         </div>

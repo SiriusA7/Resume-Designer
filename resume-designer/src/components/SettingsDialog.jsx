@@ -200,7 +200,7 @@ export default function SettingsDialog() {
     const ok = await confirmDestructive({
       title: 'Clear all API keys?',
       description: 'Are you sure you want to clear all API keys?',
-      actionLabel: 'Clear All Keys',
+      actionLabel: 'Clear all keys',
     });
     if (!ok) return;
     saveSettings({ openrouterKey: '' });
@@ -224,7 +224,7 @@ export default function SettingsDialog() {
     const ok = await confirmDestructive({
       title: 'Clear usage data?',
       description: 'Are you sure you want to clear all usage data? This cannot be undone.',
-      actionLabel: 'Clear Data',
+      actionLabel: 'Clear data',
     });
     if (!ok) return;
     clearUsageData();
@@ -355,7 +355,7 @@ export default function SettingsDialog() {
             {tab === 'api-keys' && (
               <div className="space-y-6">
                 <section className="space-y-2">
-                  <Label htmlFor="settings-openrouter-key">OpenRouter API Key</Label>
+                  <Label htmlFor="settings-openrouter-key">OpenRouter API key</Label>
                   <div className="flex gap-2">
                     <Input
                       id="settings-openrouter-key"
@@ -396,8 +396,8 @@ export default function SettingsDialog() {
 
                 <Separator />
                 <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={handleClearKeys}>Clear All Keys</Button>
-                  <Button type="button" onClick={handleSaveKeys}>Save Settings</Button>
+                  <Button type="button" variant="outline" onClick={handleClearKeys}>Clear all keys</Button>
+                  <Button type="button" onClick={handleSaveKeys}>Save settings</Button>
                 </div>
               </div>
             )}
@@ -429,7 +429,7 @@ export default function SettingsDialog() {
                 <section>
                   <SectionHeader title="Check now" description={`Current version: ${version}`} />
                   <Button type="button" variant="outline" onClick={triggerManualUpdateCheck} disabled={updateBusy}>
-                    {updateBusy ? 'Checking…' : 'Check for Updates'}
+                    {updateBusy ? 'Checking…' : 'Check for updates'}
                   </Button>
                 </section>
 
@@ -449,10 +449,10 @@ export default function SettingsDialog() {
                   description="Save or restore all resumes, settings, job descriptions, and history as a single JSON file."
                 />
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" onClick={exportFullBackupWithFeedback}>Export Full Backup</Button>
+                  <Button type="button" variant="outline" onClick={exportFullBackupWithFeedback}>Export full backup</Button>
                   <Button asChild variant="outline">
                     <label className="cursor-pointer">
-                      Import Backup…
+                      Import backup…
                       <input
                         type="file"
                         accept="application/json,.json"
@@ -534,14 +534,14 @@ export default function SettingsDialog() {
             {tab === 'usage' && (
               <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-3">
-                  <StatCard label="Total Input" value={summary ? formatTokenCount(summary.totalInputTokens) : '0'} />
-                  <StatCard label="Total Output" value={summary ? formatTokenCount(summary.totalOutputTokens) : '0'} />
-                  <StatCard label="Est. Cost" value={summary ? formatCost(summary.totalCost) : '$0.00'} accent />
-                  <StatCard label="API Calls" value={String(totalCalls)} />
+                  <StatCard label="Total input" value={summary ? formatTokenCount(summary.totalInputTokens) : '0'} />
+                  <StatCard label="Total output" value={summary ? formatTokenCount(summary.totalOutputTokens) : '0'} />
+                  <StatCard label="Est. cost" value={summary ? formatCost(summary.totalCost) : '$0.00'} accent />
+                  <StatCard label="API calls" value={String(totalCalls)} />
                 </div>
 
                 <section>
-                  <SectionHeader title="Usage by Model" />
+                  <SectionHeader title="Usage by model" />
                   <UsageTable
                     headers={['Model', 'Calls', 'Input', 'Output', 'Cost']}
                     rows={summary ? Object.values(summary.byModel).sort((a, b) => b.cost - a.cost).map((d) => [d.model, d.calls, formatTokenCount(d.inputTokens), formatTokenCount(d.outputTokens), formatCost(d.cost)]) : []}
@@ -549,7 +549,7 @@ export default function SettingsDialog() {
                 </section>
 
                 <section>
-                  <SectionHeader title="Usage by Feature" />
+                  <SectionHeader title="Usage by feature" />
                   <UsageTable
                     headers={['Feature', 'Calls', 'Input', 'Output', 'Cost']}
                     rows={summary ? Object.entries(summary.byFeature).sort((a, b) => b[1].cost - a[1].cost).map(([feature, d]) => [feature, d.calls, formatTokenCount(d.inputTokens), formatTokenCount(d.outputTokens), formatCost(d.cost)]) : []}
@@ -557,8 +557,8 @@ export default function SettingsDialog() {
                 </section>
 
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" onClick={handleExportUsage}>Export Data</Button>
-                  <Button type="button" variant="outline" onClick={handleClearUsage}>Clear Data</Button>
+                  <Button type="button" variant="outline" onClick={handleExportUsage}>Export data</Button>
+                  <Button type="button" variant="outline" onClick={handleClearUsage}>Clear data</Button>
                   <Button type="button" onClick={refreshUsage}>Refresh</Button>
                 </div>
               </div>

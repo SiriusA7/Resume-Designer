@@ -34,7 +34,7 @@ function save() {
   } catch (e) {
     console.error('Failed to save learned answers:', e);
     storageErrorToast(
-      'Could not save your learned answers — storage is full. Free up '
+      'Could not save your reusable answers — storage is full. Free up '
       + 'space (delete resumes you no longer need) and try again.',
       { once: true },
     );

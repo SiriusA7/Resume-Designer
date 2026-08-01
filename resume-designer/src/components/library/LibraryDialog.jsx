@@ -110,7 +110,7 @@ export default function LibraryDialog() {
 
         <div className="flex shrink-0 items-start justify-between gap-3 border-b px-[22px] pb-4 pt-5">
           <div className="space-y-1">
-            <DialogTitle>Resume Library</DialogTitle>
+            <DialogTitle>Resumes</DialogTitle>
             <p className="text-[13px] text-muted-foreground">
               Search your resumes, see what each was tailored for, and track outcomes.
             </p>

@@ -173,10 +173,10 @@ export function ChatComposer({
 
       <div className="flex flex-wrap gap-1.5 max-[1024px]:hidden">
         <Button variant="outline" size="sm" className="h-7 rounded-full text-xs" disabled={loading} onClick={() => onSend('/feedback')}>
-          Get Feedback
+          Get feedback
         </Button>
         <Button variant="outline" size="sm" className="h-7 rounded-full text-xs" disabled={loading} onClick={() => onSend('/improve summary')}>
-          Improve Summary
+          Improve summary
         </Button>
       </div>
 
@@ -270,7 +270,7 @@ export function ChatComposer({
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" sideOffset={8} className="w-[200px] p-1">
-              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Reasoning Effort</div>
+              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Reasoning effort</div>
               {REASONING_OPTIONS.map((o) => (
                 <button
                   key={o.level}
