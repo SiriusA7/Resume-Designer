@@ -310,7 +310,7 @@ export default function StructurePanel() {
   // saved data on open + kept in sync via the store subscription below.
   const [sortMode, setSortMode] = useState(() => store.getData()?.experienceSortMode || 'date');
   // Active template, for the single-column note on section items. The layout is
-  // a design SETTING (getSettings().layout), not résumé data, and switching it
+  // a design SETTING (getSettings().layout), not resume data, and switching it
   // emits no store event — so track it via the settings-updated window event.
   const [activeLayout, setActiveLayout] = useState(() => getSettings().layout || 'sidebar');
   const tabContentRef = useRef(null);
@@ -429,7 +429,7 @@ export default function StructurePanel() {
       {/* Fixed top zone: 4-tab segmented switcher (content scrolls). Text
           formatting (bold/italic/underline/…) for the panel's markdown fields is
           handled by the shared bottom toolbar, which formats the focused field
-          the same way it formats the résumé inline. */}
+          the same way it formats the resume inline. */}
       <div className="shrink-0 border-b px-4 pb-3 pt-3.5">
         <Segmented className="flex w-full">
           {Object.entries(TAB_OPTIONS).map(([key, { tabLabel, label }]) => (

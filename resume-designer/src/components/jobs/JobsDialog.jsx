@@ -289,7 +289,7 @@ export default function JobsDialog() {
         },
       );
       // The pinned variant may have been DELETED during the long generation
-      // await (the dialog can be dismissed and the résumé deleted from the
+      // await (the dialog can be dismissed and the resume deleted from the
       // Library). Bail before recording drafts — otherwise recordTailorDrafts
       // creates application records for a variant that no longer exists, leaving
       // orphan timeline lanes that can't be opened. The loadVariant guard below
@@ -306,7 +306,7 @@ export default function JobsDialog() {
         // The changes were generated for the pinned variant. If the user
         // switched resumes mid-generation (the dialog can be dismissed while
         // the request runs), switch back before diffing — otherwise the diff
-        // is computed and applied against the wrong resume. Same cross-résumé
+        // is computed and applied against the wrong resume. Same cross-resume
         // guard as the chat apply flow.
         if (variantId && getCurrentId() !== variantId) {
           if (!loadVariant(variantId)) {

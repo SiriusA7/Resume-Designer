@@ -13,7 +13,7 @@ const SEVERITY_STYLES = {
 
 /**
  * What the target job asks for that the profile does not support. Shown after
- * generation so a thin résumé reads as an actionable gap rather than a
+ * generation so a thin resume reads as an actionable gap rather than a
  * disappointment — the assistant is no longer allowed to close these by
  * inventing experience.
  */

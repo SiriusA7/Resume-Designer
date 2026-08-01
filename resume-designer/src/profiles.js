@@ -256,7 +256,7 @@ async function resolveActiveProfile() {
       // mapping INACTIVE so this session reads/writes the still-intact
       // unprefixed sources (pre-profile behavior); the marker persists so a
       // later boot resumes once space/disk allows. Activating mapping here would
-      // point reads at an incomplete namespace and hide the user's résumés.
+      // point reads at an incomplete namespace and hide the user's resumes.
       console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
       return id;
     }

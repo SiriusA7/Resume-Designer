@@ -285,7 +285,7 @@ export default function DiffDialog() {
   // Open on showDiffView() -> rd:open-diff. Reset per-open state; keep the chosen
   // view mode sticky across opens (matches the vanilla module-level default).
   // A change set the session is already reviewing seeds from the session, so
-  // decisions made from the résumé's inline controls show as decided here.
+  // decisions made from the resume's inline controls show as decided here.
   useEffect(() => {
     const onOpen = (e) => {
       const cs = e.detail?.changeSet || null;
@@ -334,7 +334,7 @@ export default function DiffDialog() {
   // close-when-everything-is-handled effect above dismisses the dialog. Session
   // mode delegates to the shared inline action: it writes the store through the
   // same applyChangeToStore, records 'applied' in the session (converging the
-  // inline preview and the chat buttons), re-renders the résumé's marks, and
+  // inline preview and the chat buttons), re-renders the resume's marks, and
   // dismisses the whole preview once nothing is pending — which also covers
   // everything the standalone onApply callback (a re-render request) does.
   const applyChange = useCallback(
@@ -355,7 +355,7 @@ export default function DiffDialog() {
 
   // Reject = hide the card from the list. The close-when-everything-is-handled
   // effect above dismisses the dialog once nothing is left to review. Session
-  // mode records the decision in the session, which also re-renders the résumé
+  // mode records the decision in the session, which also re-renders the resume
   // so the proposed value stops being previewed for that path.
   const rejectChange = useCallback(
     (path) => {
@@ -392,8 +392,8 @@ export default function DiffDialog() {
   }, [changeSet, applied, rejected, applyChange, superseded]);
 
   // "Reject All" — in session mode this is the bulk dismiss the inline preview
-  // otherwise lacks: end the session (the chat button and the résumé highlights
-  // stand down together) and restore the résumé view to the stored data.
+  // otherwise lacks: end the session (the chat button and the resume highlights
+  // stand down together) and restore the resume view to the stored data.
   // Changes already applied stay applied. Standalone opens just close, as before.
   // A superseded dialog only closes — ending the live session here would
   // dismiss a preview it never displayed.

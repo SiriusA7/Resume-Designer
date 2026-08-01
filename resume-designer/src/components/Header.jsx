@@ -132,7 +132,7 @@ export default function Header() {
       toast.info("You can't delete your only resume.");
       return;
     }
-    // If the résumé has chat threads, ask whether to keep (→General) or delete
+    // If the resume has chat threads, ask whether to keep (→General) or delete
     // them, and reassign BEFORE deleteCurrentVariant() so the id still exists.
     // After delete, loadVariant(newId) fires dataLoaded and useChat's follow
     // effect reloads threads, so the change is reflected automatically.

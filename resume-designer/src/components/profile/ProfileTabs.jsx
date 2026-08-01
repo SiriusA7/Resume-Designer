@@ -36,7 +36,7 @@ function BrandIcon({ children }) {
 
 // Profile fields are plain-text inputs, but AI-extracted content can carry markdown
 // emphasis markers (**bold**, _italic_). Strip them on display so the Profile shows
-// clean text instead of raw symbols — emphasis belongs in the generated résumé (the
+// clean text instead of raw symbols — emphasis belongs in the generated resume (the
 // renderer applies it there), not in this input surface. Mirrors the renderer's bold
 // + italic patterns so only genuine emphasis is removed (mid-word underscores like
 // my_var stay intact).

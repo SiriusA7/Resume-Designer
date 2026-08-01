@@ -173,7 +173,7 @@ export const SINGLE_COLUMN_LAYOUTS = new Set([
  * Only the six layouts that actually have a sidebar call this. The five
  * sidebar-less layouts (SINGLE_COLUMN_LAYOUTS above) deliberately ignore
  * `area` and render every section in their single column — forcing the
- * distinction there would change existing résumés' output for no benefit.
+ * distinction there would change existing resumes' output for no benefit.
  */
 export function partitionSectionsByArea(sections = []) {
   const main = [];

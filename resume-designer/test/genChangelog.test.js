@@ -5,7 +5,7 @@ import { groupChangelog } from '../scripts/ci/gen-changelog.mjs';
 describe('groupChangelog', () => {
   it('groups by type (features → fixes → improvements) then by app area', () => {
     const md = groupChangelog([
-      'feat(chat): add per-résumé threads',
+      'feat(chat): add per-resume threads',
       'fix(pdf): keep fonts when merging sheets',
       'feat(update): show release notes',
       'fix(chat): abort on thread delete',
@@ -25,9 +25,9 @@ describe('groupChangelog', () => {
     expect(md).toContain('**AI Chat**');
     expect(md).toContain('**PDF Export**');
     expect(md).toContain('**Updates & Changelog**');
-    expect(md).toContain('**Résumé Rendering**');
+    expect(md).toContain('**Resume Rendering**');
     // Prefix stripped + capitalized.
-    expect(md).toContain('- Add per-résumé threads');
+    expect(md).toContain('- Add per-resume threads');
     expect(md).toContain('- Keep fonts when merging sheets');
   });
 

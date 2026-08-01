@@ -1,7 +1,7 @@
 <!-- project-stack-start -->
 
 This repo is **On Paper, formerly Resume Designer**, a Tauri 2 desktop app
-(macOS + Windows) for designing résumés, with AI chat assistance and vector PDF
+(macOS + Windows) for designing resumes, with AI chat assistance and vector PDF
 export. The app code lives in `resume-designer/`; the repo root also holds
 `website/` (GitHub Pages marketing site) and `docs/`.
 
@@ -77,7 +77,7 @@ Transition phrasing, where existing users could be confused, is exactly
 These are **frozen and must never be renamed**, however tempting a sweep looks:
 
 - **Bundle identifier `com.resumedesigner.app`** — Tauri derives the app-data
-  directory from it, so it is the on-disk address of every user's résumés.
+  directory from it, so it is the on-disk address of every user's resumes.
   Changing it ships via the auto-updater and factory-resets the app.
 - **Every `resume-designer-*` / `resume-*` storage key** — desktop storage is
   one file per key, so these are filenames. Renaming them also turns the

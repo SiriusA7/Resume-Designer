@@ -91,7 +91,7 @@ describe('format-2 export/restore', () => {
   it('captures unprefixed live data (incomplete-adoption recovery) under the active profile', () => {
     // Recovery state: adoption left mapping OFF, so the live workspace is still
     // at unprefixed keys. A backup taken here (per the storage-failure guidance)
-    // must still contain the résumé data, not just registry + shared settings.
+    // must still contain the resume data, not just registry + shared settings.
     localStorage.setItem(PROFILES_KEY, JSON.stringify([{ id: 'prec', name: 'Ash', emoji: '🙂', createdAt: 'x' }]));
     localStorage.setItem(ACTIVE_PROFILE_KEY, 'prec');
     localStorage.setItem('resume-designer-data', '{"variants":{"LIVE":{}}}');

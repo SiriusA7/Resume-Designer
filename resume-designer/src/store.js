@@ -120,7 +120,7 @@ function createStore() {
   let saveTimeout = null;
   // Latched off before a destructive restore reloads the window. Between the
   // restore writing appStorage and the reload booting from it, the in-memory
-  // `data` is the STALE pre-import résumé; a save in that window (the
+  // `data` is the STALE pre-import resume; a save in that window (the
   // visibilitychange/close handlers call saveNow) would write it back into the
   // freshly-restored profile — corrupting the backup. Once suspended it stays
   // suspended: the only path forward from a restore is the reload.
@@ -476,7 +476,7 @@ function createStore() {
     },
 
     // Latch saving off ahead of a destructive import (see savesSuspended).
-    // Called BEFORE the import runs, so the store can't write its stale résumé
+    // Called BEFORE the import runs, so the store can't write its stale resume
     // over the imported data during the import's own async flush. Cancels any
     // pending debounce so it can't fire either.
     //

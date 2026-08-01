@@ -565,7 +565,7 @@ export async function init() {
   renderCurrentResume();
 
   // Pagination measures block heights; on a cold start the first render can run
-  // before the résumé's webfonts finish loading, so it splits pages against
+  // before the resume's webfonts finish loading, so it splits pages against
   // fallback metrics and the live view stays mis-paginated until the next
   // re-render. Re-paginate once the real fonts are ready so the on-screen sheets
   // match the exported PDF (the print window already does this).
@@ -1338,7 +1338,7 @@ const EMPTY_STATE_BTN =
   'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-xs font-medium transition-colors ' +
   'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring h-8 px-3';
 
-// Empty canvas state: no variant loaded (fresh profile, or every résumé
+// Empty canvas state: no variant loaded (fresh profile, or every resume
 // deleted). Tailwind's content glob covers src/**/*.js, so these utilities
 // all resolve even though the markup is an innerHTML string. The template is
 // fully static — nothing user-provided is interpolated (EMPTY_STATE_BTN is a
@@ -1353,10 +1353,10 @@ function renderEmptyState(container) {
         <path d="M16 13H8"/>
         <path d="M16 17H8"/>
       </svg>
-      <p class="text-[15px] font-semibold text-foreground">No r&eacute;sum&eacute; loaded</p>
-      <p class="mt-1 max-w-[36ch] text-[13px] leading-relaxed text-muted-foreground">Create a new r&eacute;sum&eacute; from scratch, or open one from your library.</p>
+      <p class="text-[15px] font-semibold text-foreground">No resume loaded</p>
+      <p class="mt-1 max-w-[36ch] text-[13px] leading-relaxed text-muted-foreground">Create a new resume from scratch, or open one from your library.</p>
       <div class="mt-5 flex items-center gap-2">
-        <button type="button" id="empty-state-create" class="${EMPTY_STATE_BTN} bg-primary text-primary-foreground shadow hover:bg-primary/90">Create r&eacute;sum&eacute;</button>
+        <button type="button" id="empty-state-create" class="${EMPTY_STATE_BTN} bg-primary text-primary-foreground shadow hover:bg-primary/90">Create resume</button>
         <button type="button" id="empty-state-library" class="${EMPTY_STATE_BTN} border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground">Open library</button>
       </div>
     </div>
@@ -1380,7 +1380,7 @@ function renderCurrentResume() {
   // renderCurrentResume() replaces #resume's innerHTML and paginate() then
   // replaceChildren()s the sheets — a destructive rebuild of the scrolled
   // subtree of #resume-scroller. Chromium retains scrollTop through this, but
-  // WebKit/WKWebView (the macOS Tauri build) drops it to 0, so the résumé
+  // WebKit/WKWebView (the macOS Tauri build) drops it to 0, so the resume
   // snaps to the top on every re-render — most noticeably when toggling the
   // Tools bulleted/inline view. Capture now; restore after paginate().
   const scroller = document.getElementById('resume-scroller');
@@ -1425,7 +1425,7 @@ function renderCurrentResume() {
   // Re-apply photo settings after render
   initPhotoService();
   
-  // Paginate the just-rendered résumé into page "sheets". Screen and PDF share
+  // Paginate the just-rendered resume into page "sheets". Screen and PDF share
   // this path (continuous = one open-height sheet); the print window calls the
   // same renderCurrentResume(), so the exported PDF matches what's on screen.
   paginate(container, getPageSetup(), currentLayout);

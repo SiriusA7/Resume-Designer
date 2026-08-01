@@ -112,7 +112,7 @@ describe('mergeReleases', () => {
 });
 
 describe('splitReleaseBody', () => {
-  const digest = '## On Paper 1.16.0\n\n- New: a Library for your résumés.\n';
+  const digest = '## On Paper 1.16.0\n\n- New: a Library for your resumes.\n';
   const grouped = '### ✨ New features\n**Library**\n- Add tiered library search module\n';
   const body = `${digest}\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n\n${grouped}\n</details>`;
 

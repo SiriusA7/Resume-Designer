@@ -7,7 +7,7 @@
  * for restore was itself a textContent snapshot — permanently destroyed the
  * original's emphasis when a change was rejected.
  *
- * Instead: project pending changes onto a COPY of the résumé data, re-render
+ * Instead: project pending changes onto a COPY of the resume data, re-render
  * through the normal renderer (so markdown, pagination and every layout work by
  * construction), then mark the changed nodes by path with a data attribute.
  * Nothing here ever writes text into the DOM.
@@ -16,7 +16,7 @@
 import { DIFF_TYPES, setByPath } from './diffEngine.js';
 
 /**
- * Résumé data with still-pending changes projected in.
+ * Resume data with still-pending changes projected in.
  *
  * Projects from `changeSet.changes` — the LEAF paths the diff decomposes each
  * proposal into — because that is the key space the status map, markChangedNodes

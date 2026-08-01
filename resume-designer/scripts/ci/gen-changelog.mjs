@@ -19,7 +19,7 @@ const AREA_NAMES = {
   ui: 'Interface',
   update: 'Updates & Changelog',
   changelog: 'Updates & Changelog',
-  render: 'Résumé Rendering',
+  render: 'Resume Rendering',
   pagination: 'Pagination',
   store: 'Data & Storage',
   data: 'Data & Storage',

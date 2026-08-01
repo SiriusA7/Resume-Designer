@@ -20,7 +20,7 @@ const OPENROUTER_REFERER = 'https://github.com/ashproto/Resume-Designer';
 const OPENROUTER_TITLE = 'On Paper';
 
 // The single anti-fabrication contract, injected into every prompt that writes
-// or rewrites résumé content. Users reported the assistant inventing employers,
+// or rewrites resume content. Users reported the assistant inventing employers,
 // metrics and achievements; the prompts previously contained no constraint
 // against it while actively asking for "the BEST possible resume".
 const GROUNDING_RULES_TEXT = `TRUTHFULNESS — these rules override every other instruction, including any request to make the resume stronger or more competitive.
@@ -93,7 +93,7 @@ Current resume context will be provided with each message.
 
 ${GROUNDING_RULES_TEXT}`;
 
-// Résumé text fields are rendered with light markdown — the renderer converts
+// Resume text fields are rendered with light markdown — the renderer converts
 // **text** → bold and _text_ → italic before display AND before PDF capture, so no
 // literal markers ever reach the output (ATS sees clean bold text, not asterisks).
 // Generators share this guidance so they can spotlight high-signal phrases without
@@ -549,9 +549,9 @@ ${EMPHASIS_GUIDANCE}`;
 }
 
 /**
- * Parse a generate-resume response into résumé data plus the gap report.
- * `gaps` is stripped from the résumé object — it is advice about the résumé,
- * not a field of it, and would otherwise be persisted as résumé content.
+ * Parse a generate-resume response into resume data plus the gap report.
+ * `gaps` is stripped from the resume object — it is advice about the resume,
+ * not a field of it, and would otherwise be persisted as resume content.
  */
 export function parseGeneratedResume(responseText) {
   let jsonStr = String(responseText || '').trim();
@@ -562,8 +562,8 @@ export function parseGeneratedResume(responseText) {
   try {
     parsed = JSON.parse(jsonStr);
     // JSON.parse happily returns null, strings, numbers and arrays; only an
-    // object can be a résumé. Anything else would either throw a raw TypeError
-    // on the destructure below ('null') or yield a nonsense résumé ('"text"',
+    // object can be a resume. Anything else would either throw a raw TypeError
+    // on the destructure below ('null') or yield a nonsense resume ('"text"',
     // '[…]'), so route it through the same friendly error.
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('not a JSON object');
@@ -1151,13 +1151,13 @@ export async function chat(modelId, messages, includeContext = true, options = {
   }
 
   const { hooks, ...rest } = options;
-  // Always tell the model which résumé is active, so a thread continued under a
-  // different résumé isn't reasoned about against the old one. getResumeContext()
-  // already attaches the résumé's data; this is the explicit one-line cue.
+  // Always tell the model which resume is active, so a thread continued under a
+  // different resume isn't reasoned about against the old one. getResumeContext()
+  // already attaches the resume's data; this is the explicit one-line cue.
   const baseSystem = rest.systemPrompt || SYSTEM_PROMPT;
   const activeName = store.getData()?.name;
   const systemPrompt = activeName
-    ? `${baseSystem}\n\nThe user is currently working on the résumé "${activeName}".`
+    ? `${baseSystem}\n\nThe user is currently working on the resume "${activeName}".`
     : baseSystem;
   const res = await streamOpenRouter(validModelId, processedMessages, { ...rest, systemPrompt }, hooks || {});
   if (options.structured) {

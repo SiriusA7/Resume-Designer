@@ -88,9 +88,9 @@ export function pickCurrentThreadId(threads, currentVariantId) {
 
 /**
  * Decide the thread list + selection after the CURRENT thread is deleted.
- * Keeps selection within the active résumé: opens its most-recent remaining thread,
+ * Keeps selection within the active resume: opens its most-recent remaining thread,
  * or creates a fresh homed one when it has none — never an unrelated General/other-
- * résumé thread, and never an empty selection.
+ * resume thread, and never an empty selection.
  * @returns {{ threads: Thread[], currentThreadId: string, created: Thread|null }}
  */
 export function chooseThreadAfterDelete(threads, deletedId, activeVariantId) {

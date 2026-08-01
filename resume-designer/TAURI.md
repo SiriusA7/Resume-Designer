@@ -363,8 +363,8 @@ is no scriptable capture path in this repo, so these need a manual native
 capture after the rename build is installed.
 
 **6. The one test that actually matters.** A fresh install proves nothing about
-data continuity. Install the **pre-rename** build, create a résumé, then let the
-**real updater** deliver the rename build, and confirm the résumé, both
+data continuity. Install the **pre-rename** build, create a resume, then let the
+**real updater** deliver the rename build, and confirm the resume, both
 profiles, the OpenRouter key, the update channel, and the onboarding-complete
 flag all survive — and that onboarding does not re-run and no Electron
 re-import is triggered. This works because `identifier` is unchanged; that field

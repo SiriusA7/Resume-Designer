@@ -123,8 +123,8 @@ export default function ChatPanel() {
 
   const openApiSettings = () => openSettings('api-keys');
 
-  // Cross-résumé state: is the open thread homed to a DIFFERENT résumé than the
-  // active one? If so, surface a slim banner with a Jump to its home résumé.
+  // Cross-resume state: is the open thread homed to a DIFFERENT resume than the
+  // active one? If so, surface a slim banner with a Jump to its home resume.
   const openThread = chat.threads.find((t) => t.id === chat.currentThreadId);
   const openHome = openThread?.homeVariantId ?? null;
   const crossResume = openHome !== null && openHome !== chat.currentVariantId;
@@ -194,8 +194,8 @@ export default function ChatPanel() {
         )}
       </div>
 
-      {/* Cross-résumé banner: pinned slim row when the open thread belongs to a
-          different résumé than the active one, with a Jump to its home. */}
+      {/* Cross-resume banner: pinned slim row when the open thread belongs to a
+          different resume than the active one, with a Jump to its home. */}
       {chat.configured && crossResume && homeName && (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-muted/40 px-4 py-1.5 text-[11px] text-muted-foreground">
           <span className="flex min-w-0 items-center" title={`Thread from «${homeName}»`}>
@@ -207,9 +207,9 @@ export default function ChatPanel() {
             type="button"
             className="shrink-0 font-medium text-foreground hover:underline"
             onClick={() => chat.jumpToVariant(openHome)}
-            title={`Make «${homeName}» the active résumé — this thread stays open`}
+            title={`Make «${homeName}» the active resume — this thread stays open`}
           >
-            Switch résumé
+            Switch resume
           </button>
         </div>
       )}

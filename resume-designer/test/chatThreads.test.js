@@ -68,16 +68,16 @@ describe('chooseThreadAfterDelete', () => {
     expect(r.created).toBe(null);
     expect(r.threads.map((t) => t.id)).toEqual(['a', 'c']); // 'b' removed, 'c' kept
   });
-  it('creates a thread homed to the active variant — never jumps to General/another résumé', () => {
+  it('creates a thread homed to the active variant — never jumps to General/another resume', () => {
     const threads = [T('a', 'v1', '2026-01-03'), T('c', null, '2026-01-09'), T('d', 'v2', '2026-01-08')];
     const r = chooseThreadAfterDelete(threads, 'a', 'v1'); // delete v1's only thread
     const cur = r.threads.find((t) => t.id === r.currentThreadId);
     expect(cur.homeVariantId).toBe('v1'); // new thread homed to the active variant
     expect(r.created).not.toBe(null);
     expect(r.currentThreadId).not.toBe('c'); // did NOT select the General thread
-    expect(r.currentThreadId).not.toBe('d'); // did NOT select the other résumé's thread
+    expect(r.currentThreadId).not.toBe('d'); // did NOT select the other resume's thread
     expect(r.threads.some((t) => t.id === 'c')).toBe(true); // General preserved
-    expect(r.threads.some((t) => t.id === 'd')).toBe(true); // other résumé preserved
+    expect(r.threads.some((t) => t.id === 'd')).toBe(true); // other resume preserved
   });
   it('creates a homed thread when no threads remain', () => {
     const r = chooseThreadAfterDelete([T('a', 'v1', '2026-01-03')], 'a', 'v1');

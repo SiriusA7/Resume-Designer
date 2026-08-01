@@ -1,7 +1,7 @@
 # Bridge API reference
 
 The **companion bridge** is a loopback HTTP server the On Paper desktop
-app runs so a browser companion extension can read your résumés, ask the app's
+app runs so a browser companion extension can read your resumes, ask the app's
 AI to draft answers, export PDFs, and record job applications — all against the
 one running app instance, with no separate account or cloud service.
 
@@ -113,7 +113,7 @@ curl -s http://127.0.0.1:17872/health
 
 ### `GET /resumes`
 
-List every résumé variant, newest first (sorted by `updatedAt` descending).
+List every resume variant, newest first (sorted by `updatedAt` descending).
 
 **Response** `200`
 
@@ -140,7 +140,7 @@ curl -s http://127.0.0.1:17872/resumes \
 
 ### `GET /resumes/:id`
 
-Full detail for one résumé variant, plus the user's shared profile and learned
+Full detail for one resume variant, plus the user's shared profile and learned
 answers (returned alongside so the extension can fill forms in one round-trip).
 
 **Response** `200`
@@ -156,7 +156,7 @@ answers (returned alongside so the extension can fill forms in one round-trip).
 }
 ```
 
-- `data` — the full résumé document for this variant.
+- `data` — the full resume document for this variant.
 - `profile` — the user's shared profile (`getUserProfile()`), independent of the
   variant.
 - `learnedAnswers` — every saved question/answer pair (see
@@ -208,7 +208,7 @@ fails, including when another export is already running —
 ### `POST /ai/complete`
 
 Run a one-shot completion through the app's configured AI (OpenRouter model set
-in Settings). No résumé context is injected — the caller supplies the full
+in Settings). No resume context is injected — the caller supplies the full
 message list.
 
 **Request**
@@ -263,7 +263,7 @@ tracker (Library) immediately.
 }
 ```
 
-- `variantId` (required) — must be a known résumé id.
+- `variantId` (required) — must be a known resume id.
 - `company`, `title`, `notes` (optional) — strings; default to `""`.
 
 **Response** `201`
@@ -363,7 +363,7 @@ HTTP 404
 The Rust loopback server is deliberately a **dumb pipe**. It reads the request,
 forwards it to the main webview as a `bridge:request` event, and blocks on a
 per-request channel until the app's JavaScript answers via the `bridge_respond`
-command. All reads and writes — résumés, profile, applications, learned answers,
+command. All reads and writes — resumes, profile, applications, learned answers,
 PDF export — go through the running app's own JS modules (`persistence.js`,
 `applications.js`, `learnedAnswers.js`, `aiService.js`, `pdf.js`).
 

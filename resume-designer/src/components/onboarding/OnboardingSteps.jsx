@@ -537,7 +537,7 @@ function GenStat({ label, value }) {
 }
 
 /**
- * The "generating résumé" screen — replaces the JobInputStep form once generation
+ * The "generating resume" screen — replaces the JobInputStep form once generation
  * starts. Shows a read-only summary of the target job + the model/reasoning used
  * (the now-hidden inputs), the live reasoning stream, and — on completion ('done')
  * — a prominent token-usage strip plus a Review button. Cancel aborts mid-flight.
@@ -550,7 +550,7 @@ export function JobGeneratingView({ job, modelLabel, reasoningLabel, reasoning, 
     <div className="flex min-h-0 flex-1 flex-col">
       <StepBody>
         <StepHeader
-          title={done ? 'Résumé ready' : 'Generating your résumé'}
+          title={done ? 'Resume ready' : 'Generating your resume'}
           description={done
             ? 'Tailored to the role below — review and fine-tune it next.'
             : 'Tailoring your profile to this role. This usually takes 20–40 seconds.'}
@@ -597,13 +597,13 @@ export function JobGeneratingView({ job, modelLabel, reasoningLabel, reasoning, 
               <ArrowLeft className="size-4" /> Back to edit
             </Button>
             <Button onClick={onReview}>
-              Review your résumé <ArrowRight className="size-4" />
+              Review your resume <ArrowRight className="size-4" />
             </Button>
           </>
         ) : (
           <>
             <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Writing your résumé…
+              <Loader2 className="size-4 animate-spin" /> Writing your resume…
               <span className="tabular-nums text-xs text-muted-foreground/70">{clock}</span>
             </span>
             <Button variant="ghost" onClick={onCancel}>

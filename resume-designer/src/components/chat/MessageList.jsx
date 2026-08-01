@@ -89,12 +89,12 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
   useEffect(() => changeSession.subscribe(() => setSessionRev((n) => n + 1)), []);
 
   // Context-switch divider: a "Now discussing «Name»" row whose button makes that
-  // résumé active WITHOUT leaving this thread (onJumpVariant pins it). The name is
+  // resume active WITHOUT leaving this thread (onJumpVariant pins it). The name is
   // resolved live from the variant list so it tracks renames and so older markers
-  // — which mis-stamped the person's name instead of the résumé label — read right.
+  // — which mis-stamped the person's name instead of the resume label — read right.
   if (msg.role === 'context') {
     const name =
-      variants?.find((v) => v.id === msg.variantId)?.name || msg.variantName || 'this résumé';
+      variants?.find((v) => v.id === msg.variantId)?.name || msg.variantName || 'this resume';
     return (
       <div className="my-2 flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span className="h-px flex-1 bg-border" />
@@ -131,10 +131,10 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
     ? changeSession.getChangeSet() === msg.pendingChanges && changeSession.hasPending()
     : false;
   const hasActions = msg.applyData || changesStillPending;
-  // Apply/Review mutate or diff the ACTIVE résumé (store-wide), but in a
-  // cross-résumé thread this message may have been generated against another
+  // Apply/Review mutate or diff the ACTIVE resume (store-wide), but in a
+  // cross-resume thread this message may have been generated against another
   // one. When the stamps disagree, offer the switch instead of the actions —
-  // jumpToVariant keeps this thread open, and once the origin résumé is active
+  // jumpToVariant keeps this thread open, and once the origin resume is active
   // the real buttons render. Messages predating variant stamping (no
   // msg.variantId) keep the old behavior; we can't know their origin.
   const actionsForeign =
@@ -174,7 +174,7 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
               </Button>
             ) : (
               <span className="text-[11px] text-muted-foreground">
-                These edits were for a résumé that no longer exists.
+                These edits were for a resume that no longer exists.
               </span>
             )
           ) : (

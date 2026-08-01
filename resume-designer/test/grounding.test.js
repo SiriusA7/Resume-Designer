@@ -78,9 +78,9 @@ describe('parseGeneratedResume', () => {
     }
   });
 
-  // JSON.parse succeeds on these, but only an object can be a résumé: 'null'
+  // JSON.parse succeeds on these, but only an object can be a resume: 'null'
   // used to escape as a raw destructure TypeError, a string/array as a
-  // nonsense résumé. All must take the same friendly error path.
+  // nonsense resume. All must take the same friendly error path.
   it.each(['null', '"a plain string"', '[1, 2, 3]', 'true'])(
     'treats non-object JSON %s as invalid',
     (payload) => {
