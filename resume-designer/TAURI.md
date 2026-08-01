@@ -346,8 +346,39 @@ the tag *is* the version. For the transitional **beta** it shows `next`, because
 betas publish under the rolling `next` tag. It self-corrects as soon as the user
 updates, since this release's parser accepts both names permanently.
 
+> Both the app-side parser and `validate-digest.mjs` match the product name
+> **case-insensitively**, so a third heading spelling costs nothing and a model
+> that title-cases or lowercases the brand cannot break a release. The one
+> case-**sensitive** matcher is the `sed` in `release.yml` that strips the
+> duplicate heading — it is why the emitter and that line must move together.
+
 **3. Windows users must reinstall.** See "Windows upgrade identity" above. Say so
 in the release notes.
+
+**3a. Lead the release notes with the rename.** The brand guide (§14) asks that
+the change be announced, explained, and reassured — users who hit the Windows
+reinstall or the macOS folder-name behaviour otherwise have nothing telling them
+the app was renamed at all. Paste this above the generated digest, once, for this
+release only. Do **not** add it to the release-notes template in `release.yml`;
+it would then appear on every future release.
+
+> **Resume Designer is becoming On Paper.**
+>
+> What began as a focused resume editor has grown into a private workspace for
+> the whole application: your career profile, tailored resumes, and a history of
+> where you applied.
+>
+> The new name reflects that broader purpose. The principles are unchanged: your
+> information stays yours, AI is optional, and nothing consequential happens
+> without your review. Your resumes, profiles, and settings carry over — nothing
+> to migrate.
+>
+> Windows: please download and run the new installer. Because the app's name
+> changed, Windows treats it as a separate program, so the update will not
+> replace your existing install. Your data is untouched.
+
+Use "On Paper, formerly Resume Designer" in copy for a short transition period,
+then retire it (§10).
 
 **4. macOS keeps the old folder name.** The updater unpacks onto the running
 bundle's path, so an auto-updated install stays at
