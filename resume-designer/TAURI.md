@@ -86,7 +86,7 @@ Outputs live under `src-tauri/target/<arch>/release/bundle/`:
 > two "Normalize … artifact filenames" steps in `release.yml` replace spaces
 > with hyphens first, because GitHub rewrites spaces in asset names to `.` and
 > that would break `latest.json`'s URL field. The README's download table
-> therefore lists the hyphenated forms (`on-paper_<version>_aarch64.dmg`).
+> therefore lists the hyphenated forms (`On-Paper_<version>_aarch64.dmg`).
 
 ## Code Signing & Notarization (macOS)
 
