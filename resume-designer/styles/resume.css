@@ -940,7 +940,7 @@
 /* Executive's main column is a plain block (no flex gap, no per-section
    margin) because it historically held a single section (experience). Main-area
    custom sections render after it, so space every section that follows another
-   — the existing single-section résumé matches nothing here and is unchanged. */
+   — the existing single-section resume matches nothing here and is unchanged. */
 .executive-main .section + .section {
   margin-top: var(--section-spacing, 0.8rem);
 }

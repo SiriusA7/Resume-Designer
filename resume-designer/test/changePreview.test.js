@@ -76,7 +76,7 @@ describe('applyPendingToData with container-keyed proposals', () => {
 
     // Rejecting skills[1] while skills[0] is still pending: the rejected leaf
     // must show its original value — a rejected leaf gets no highlight, so a
-    // re-applied proposal there would read as accepted résumé text.
+    // re-applied proposal there would read as accepted resume text.
     const next = applyPendingToData(data, cs, new Map([['skills[1]', 'rejected']]));
     expect(next.skills[0]).toBe('TypeScript');
     expect(next.skills[1]).toBe('CSS');

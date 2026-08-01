@@ -36,7 +36,7 @@ function BrandIcon({ children }) {
 
 // Profile fields are plain-text inputs, but AI-extracted content can carry markdown
 // emphasis markers (**bold**, _italic_). Strip them on display so the Profile shows
-// clean text instead of raw symbols — emphasis belongs in the generated résumé (the
+// clean text instead of raw symbols — emphasis belongs in the generated resume (the
 // renderer applies it there), not in this input surface. Mirrors the renderer's bold
 // + italic patterns so only genuine emphasis is removed (mid-word underscores like
 // my_var stay intact).
@@ -128,9 +128,9 @@ function ContactTab({ profile, scheduleSave }) {
   return (
     <div className="space-y-6">
       <section>
-        <SectionHeader title="Basic Information" description="Your name and contact details for resumes" />
+        <SectionHeader title="Basic information" description="Your name and contact details for resumes" />
         <div className="grid grid-cols-2 gap-4">
-          <Field id="profile-fullName" label="Full Name" value={c.fullName} placeholder="e.g. John Smith" onCommit={set('fullName')} />
+          <Field id="profile-fullName" label="Full name" value={c.fullName} placeholder="e.g. John Smith" onCommit={set('fullName')} />
           <Field id="profile-email" label="Email" type="email" value={c.email} placeholder="e.g. john@example.com" onCommit={set('email')} />
           <Field id="profile-phone" label="Phone" type="tel" value={c.phone} placeholder="e.g. (555) 123-4567" onCommit={set('phone')} />
           <Field id="profile-location" label="Location" value={c.location} placeholder="e.g. San Francisco, CA" onCommit={set('location')} />
@@ -138,7 +138,7 @@ function ContactTab({ profile, scheduleSave }) {
       </section>
 
       <section>
-        <SectionHeader title="Online Presence" description="Links to your professional profiles and portfolio" />
+        <SectionHeader title="Online presence" description="Links to your professional profiles and portfolio" />
         <div className="grid grid-cols-2 gap-4">
           <Field
             id="profile-linkedin"
@@ -152,7 +152,7 @@ function ContactTab({ profile, scheduleSave }) {
           <Field
             id="profile-portfolio"
             type="url"
-            label="Portfolio / Website"
+            label="Portfolio / website"
             value={c.portfolio}
             placeholder="e.g. johnsmith.com"
             onCommit={set('portfolio')}
@@ -197,7 +197,7 @@ function SummaryTab({ profile, scheduleSave }) {
     <div className="space-y-6">
       <Area
         id="profile-personalSummary"
-        label="Personal Summary"
+        label="Personal summary"
         hint="Tell the AI who you are professionally. What makes you unique?"
         rows={6}
         value={profile.personalSummary}
@@ -206,7 +206,7 @@ function SummaryTab({ profile, scheduleSave }) {
       />
       <Area
         id="profile-careerGoals"
-        label="Career Goals"
+        label="Career goals"
         hint="What are you looking for? What roles interest you?"
         value={profile.careerGoals}
         onCommit={set('careerGoals')}
@@ -272,18 +272,18 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
   return (
     <section>
       <SectionHeader
-        title="Detailed Work Experience"
+        title="Detailed work experience"
         description="Add details beyond what's on your resume - challenges faced, technologies used, team size, impact metrics, lessons learned."
       />
       <ItemList
         items={items}
         emptyTitle="No experience entries yet"
         emptySubtitle="Add detailed information about your work history"
-        addLabel="Add Experience Entry"
+        addLabel="Add experience entry"
         onAdd={() => { items.push({ title: '', company: '', dates: '', details: '' }); refresh(); }}
         onDelete={(i) => { items.splice(i, 1); refresh(); }}
         renderTitle={(exp, i) => (
-          <Input className="font-medium" placeholder="Job Title" defaultValue={exp.title || ''} onChange={(e) => set(i, 'title')(e.target.value)} />
+          <Input className="font-medium" placeholder="Job title" defaultValue={exp.title || ''} onChange={(e) => set(i, 'title')(e.target.value)} />
         )}
         renderBody={(exp, i) => (
           <>
@@ -316,7 +316,7 @@ function SkillsTab({ profile, scheduleSave, refresh }) {
     <div className="space-y-6">
       <section>
         <SectionHeader
-          title="Skills Inventory"
+          title="Skills inventory"
           description="List all your skills with proficiency levels and years of experience."
         />
         <div className="space-y-2">
@@ -351,13 +351,13 @@ function SkillsTab({ profile, scheduleSave, refresh }) {
               </div>
             ))
           )}
-          <AddButton onClick={() => { skills.push({ name: '', proficiency: '', years: '' }); refresh(); }}>Add Skill</AddButton>
+          <AddButton onClick={() => { skills.push({ name: '', proficiency: '', years: '' }); refresh(); }}>Add skill</AddButton>
         </div>
       </section>
 
       <Area
         id="profile-industryKnowledge"
-        label="Industry Knowledge"
+        label="Industry knowledge"
         hint="Domains you've worked in, tools mastered, methodologies you follow."
         value={profile.industryKnowledge}
         onCommit={(v) => { profile.industryKnowledge = v; scheduleSave(); }}
@@ -373,23 +373,23 @@ function EducationTab({ profile, scheduleSave, refresh }) {
   return (
     <section>
       <SectionHeader
-        title="Education Details"
+        title="Education details"
         description="Include courses, projects, thesis topics, honors, extracurriculars - details beyond a typical resume."
       />
       <ItemList
         items={items}
         emptyTitle="No education entries yet"
         emptySubtitle="Add detailed information about your education"
-        addLabel="Add Education Entry"
+        addLabel="Add education entry"
         onAdd={() => { items.push({ degree: '', institution: '', dates: '', details: '' }); refresh(); }}
         onDelete={(i) => { items.splice(i, 1); refresh(); }}
         renderTitle={(edu, i) => (
-          <Input className="font-medium" placeholder="Degree / Program" defaultValue={edu.degree || ''} onChange={(e) => set(i, 'degree')(e.target.value)} />
+          <Input className="font-medium" placeholder="Degree / program" defaultValue={edu.degree || ''} onChange={(e) => set(i, 'degree')(e.target.value)} />
         )}
         renderBody={(edu, i) => (
           <>
             <Input placeholder="Institution" defaultValue={edu.institution || ''} onChange={(e) => set(i, 'institution')(e.target.value)} />
-            <Input placeholder="Dates / Year" defaultValue={edu.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
+            <Input placeholder="Dates / year" defaultValue={edu.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
             <Textarea
               rows={3}
               placeholder="Notable courses, projects, thesis, honors, activities, GPA if relevant..."
@@ -409,18 +409,18 @@ function ProjectsTab({ profile, scheduleSave, refresh }) {
   return (
     <section>
       <SectionHeader
-        title="Portfolio & Projects"
+        title="Portfolio & projects"
         description="Personal projects, open source contributions, side work, freelance projects - anything that showcases your abilities."
       />
       <ItemList
         items={items}
         emptyTitle="No projects added yet"
         emptySubtitle="Add projects that showcase your work"
-        addLabel="Add Project"
+        addLabel="Add project"
         onAdd={() => { items.push({ name: '', url: '', description: '' }); refresh(); }}
         onDelete={(i) => { items.splice(i, 1); refresh(); }}
         renderTitle={(proj, i) => (
-          <Input className="font-medium" placeholder="Project Name" defaultValue={proj.name || ''} onChange={(e) => set(i, 'name')(e.target.value)} />
+          <Input className="font-medium" placeholder="Project name" defaultValue={proj.name || ''} onChange={(e) => set(i, 'name')(e.target.value)} />
         )}
         renderBody={(proj, i) => (
           <>
@@ -465,7 +465,7 @@ function MoreTab({ profile, scheduleSave, refresh }) {
   return (
     <div className="space-y-6">
       <section>
-        <SectionHeader title="Certifications & Training" description="Professional certifications, courses, training programs." />
+        <SectionHeader title="Certifications & training" description="Professional certifications, courses, training programs." />
         <div className="space-y-2">
           {certs.length === 0 ? (
             <Empty title="No certifications added" />
@@ -475,12 +475,12 @@ function MoreTab({ profile, scheduleSave, refresh }) {
               <Input className="w-24" placeholder="Year" defaultValue={cert.year || ''} onChange={(e) => { certs[i].year = e.target.value; scheduleSave(); }} />
             </CompactRow>
           ))}
-          <AddButton onClick={() => { certs.push({ name: '', year: '' }); refresh(); }}>Add Certification</AddButton>
+          <AddButton onClick={() => { certs.push({ name: '', year: '' }); refresh(); }}>Add certification</AddButton>
         </div>
       </section>
 
       <section>
-        <SectionHeader title="Achievements & Awards" description="Notable accomplishments, recognition, awards." />
+        <SectionHeader title="Achievements & awards" description="Notable accomplishments, recognition, awards." />
         <div className="space-y-2">
           {achs.length === 0 ? (
             <Empty title="No achievements added" />
@@ -489,25 +489,25 @@ function MoreTab({ profile, scheduleSave, refresh }) {
               <Input className="flex-1" placeholder="Achievement description" defaultValue={ach.description || ''} onChange={(e) => { achs[i].description = e.target.value; scheduleSave(); }} />
             </CompactRow>
           ))}
-          <AddButton onClick={() => { achs.push({ description: '' }); refresh(); }}>Add Achievement</AddButton>
+          <AddButton onClick={() => { achs.push({ description: '' }); refresh(); }}>Add achievement</AddButton>
         </div>
       </section>
 
       <section>
-        <SectionHeader title="Custom Sections" description="Add any other information you want the AI to know about." />
+        <SectionHeader title="Custom sections" description="Add any other information you want the AI to know about." />
         <div className="space-y-3">
           {customs.length === 0 ? (
             <Empty title="No custom sections added" />
           ) : customs.map((sec, i) => (
             <EntryCard
               key={i}
-              titleInput={<Input className="font-medium" placeholder="Section Title" defaultValue={sec.title || ''} onChange={(e) => { customs[i].title = e.target.value; scheduleSave(); }} />}
+              titleInput={<Input className="font-medium" placeholder="Section title" defaultValue={sec.title || ''} onChange={(e) => { customs[i].title = e.target.value; scheduleSave(); }} />}
               onDelete={() => { customs.splice(i, 1); refresh(); }}
             >
               <Textarea rows={3} placeholder="Content..." defaultValue={stripEmphasis(sec.content)} onChange={(e) => { customs[i].content = e.target.value; scheduleSave(); }} />
             </EntryCard>
           ))}
-          <AddButton onClick={() => { customs.push({ title: '', content: '' }); refresh(); }}>Add Custom Section</AddButton>
+          <AddButton onClick={() => { customs.push({ title: '', content: '' }); refresh(); }}>Add custom section</AddButton>
         </div>
       </section>
     </div>

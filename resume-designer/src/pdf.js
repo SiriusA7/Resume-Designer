@@ -274,7 +274,7 @@ async function generatePdfNative(_resumeEl, _filename, variantId = null) {
       // since createPDF is rect-driven (macOS) or paginated (Windows).
       width: 820,
       height: 1200,
-      title: 'Resume Designer — PDF Export',
+      title: 'On Paper — PDF Export',
     });
 
     // Tauri emits `tauri://created` on the window itself when the OS

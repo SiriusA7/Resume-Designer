@@ -449,7 +449,7 @@ function collectActiveOwnedKeys() {
  * (mapping left off after a quota/disk failure) the live workspace still lives
  * under UNPREFIXED owned keys — those are captured under the active profile
  * below, so a backup taken on the storage-failure guidance still contains the
- * user's résumés, not just registry/settings.
+ * user's resumes, not just registry/settings.
  * Returns { keysExported, filename } for the caller to surface in UI.
  */
 export function exportFullBackup(filename) {
@@ -481,7 +481,7 @@ export function exportFullBackup(filename) {
   // state (the very first marker write failed: no registry, no pointer,
   // activeId null) they are captured under a synthesized recovery id instead —
   // otherwise the escape-hatch backup the storage-failure guidance tells the
-  // user to take would contain an empty registry and NO résumés, and the
+  // user to take would contain an empty registry and NO resumes, and the
   // importer would reject the file outright. The orphan reconciliation below
   // then synthesizes the matching registry entry.
   const unprefixedOwned = appStorage.keys().filter(
@@ -525,7 +525,7 @@ export function exportFullBackup(filename) {
     profiles,
   };
   const stamp = new Date().toISOString().slice(0, 10);
-  const name = filename || `resume-designer-backup-${stamp}.json`;
+  const name = filename || `on-paper-backup-${stamp}.json`;
   downloadFile(JSON.stringify(backup, null, 2), name, 'application/json');
   const keysExported = Object.values(profiles)
     .reduce((n, p) => n + Object.keys(p.keys).length, Object.keys(shared).length);
@@ -744,7 +744,7 @@ export function importFullBackupFromEnvelope(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
+      'Not an On Paper backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
     );
   }
   // Every value must be a string — that's what `appStorage.setItem`
@@ -944,7 +944,7 @@ export function importFullBackupMerge(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1").'
+      'Not an On Paper backup envelope (missing "backupFormat: 1").'
     );
   }
   for (const [k, v] of Object.entries(parsed.keys)) {

@@ -171,7 +171,7 @@ fn handle_request(app: AppHandle, mut request: tiny_http::Request) {
             respond_json(
                 request,
                 504,
-                r#"{"error":"the app did not answer in time — is Resume Designer running and unlocked?"}"#,
+                r#"{"error":"the app did not answer in time — is On Paper running and unlocked?"}"#,
             );
         }
     }

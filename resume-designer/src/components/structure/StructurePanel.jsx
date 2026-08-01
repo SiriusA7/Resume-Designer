@@ -43,7 +43,7 @@ import { cn } from '@/lib/utils';
 const TAB_OPTIONS = {
   header: { tabLabel: 'Header', label: 'Header' },
   sidebar: { tabLabel: 'Sidebar', label: 'Sidebar' },
-  main: { tabLabel: 'Main', label: 'Main Content' },
+  main: { tabLabel: 'Main', label: 'Main content' },
   design: { tabLabel: 'Design', label: 'Design' },
 };
 
@@ -198,7 +198,7 @@ function SectionItem({ section, index, activeLayout }) {
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Display</span>
           <Segmented size="xs">
-            {[['list', 'Bulleted'], ['skills', 'Inline Tags'], ['paragraph', 'Paragraph']].map(([t, label]) => (
+            {[['list', 'Bulleted'], ['skills', 'Inline tags'], ['paragraph', 'Paragraph']].map(([t, label]) => (
               <SegmentedItem
                 key={t} size="xs"
                 active={type === t}
@@ -243,7 +243,7 @@ function ExperienceItem({ exp, index }) {
       <div className="flex cursor-pointer items-center gap-2 px-2.5 py-2" onClick={toggle}>
         <DragHandle />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-semibold">{exp.title || 'Untitled Position'}</span>
+          <span className="block truncate text-[13px] font-semibold">{exp.title || 'Untitled position'}</span>
           <span className="block truncate text-[11.5px] text-muted-foreground">{exp.company || ''}</span>
         </span>
         <ChevronDown
@@ -254,7 +254,7 @@ function ExperienceItem({ exp, index }) {
           CSS expand/collapse — its uncontrolled inputs must keep their DOM
           values across toggles without a remount. */}
       <div className={cn('space-y-3 border-t bg-muted/40 p-2.5', !expanded && 'hidden')}>
-        {[['title', 'Job Title'], ['company', 'Company'], ['dates', 'Dates']].map(([f, label]) => (
+        {[['title', 'Job title'], ['company', 'Company'], ['dates', 'Dates']].map(([f, label]) => (
           <Field
             key={f} label={label}
             path={`experience[${index}].${f}`}
@@ -287,7 +287,7 @@ function ExperienceItem({ exp, index }) {
           className="text-destructive hover:text-destructive"
           onClick={removeExperience}
         >
-          <Trash2 className="size-3.5" /> Delete Experience
+          <Trash2 className="size-3.5" /> Delete experience
         </Button>
       </div>
     </SortableItem>
@@ -310,7 +310,7 @@ export default function StructurePanel() {
   // saved data on open + kept in sync via the store subscription below.
   const [sortMode, setSortMode] = useState(() => store.getData()?.experienceSortMode || 'date');
   // Active template, for the single-column note on section items. The layout is
-  // a design SETTING (getSettings().layout), not résumé data, and switching it
+  // a design SETTING (getSettings().layout), not resume data, and switching it
   // emits no store event — so track it via the settings-updated window event.
   const [activeLayout, setActiveLayout] = useState(() => getSettings().layout || 'sidebar');
   const tabContentRef = useRef(null);
@@ -429,7 +429,7 @@ export default function StructurePanel() {
       {/* Fixed top zone: 4-tab segmented switcher (content scrolls). Text
           formatting (bold/italic/underline/…) for the panel's markdown fields is
           handled by the shared bottom toolbar, which formats the focused field
-          the same way it formats the résumé inline. */}
+          the same way it formats the resume inline. */}
       <div className="shrink-0 border-b px-4 pb-3 pt-3.5">
         <Segmented className="flex w-full">
           {Object.entries(TAB_OPTIONS).map(([key, { tabLabel, label }]) => (
@@ -457,11 +457,11 @@ export default function StructurePanel() {
       >
         {tab === 'header' && (
           <>
-            <PanelSection title="Name & Title" {...sectionProps('name-title')}>
+            <PanelSection title="Name & title" {...sectionProps('name-title')}>
               <Field label="Name" path="name" defaultValue={data.name || ''} />
-              <Field label="Professional Title" path="tagline" defaultValue={data.tagline || ''} />
+              <Field label="Professional title" path="tagline" defaultValue={data.tagline || ''} />
             </PanelSection>
-            <PanelSection title="Contact Information" {...sectionProps('contact-info')}>
+            <PanelSection title="Contact information" {...sectionProps('contact-info')}>
               {[['location', 'Location', 'text'], ['email', 'Email', 'email'], ['phone', 'Phone', 'tel'], ['portfolio', 'Portfolio URL', 'text'], ['instagram', 'Instagram', 'text']].map(([f, label, type]) => (
                 <Field key={f} label={label} type={type} path={`contact.${f}`} defaultValue={data.contact?.[f] || ''} />
               ))}
@@ -482,7 +482,7 @@ export default function StructurePanel() {
                   {Object.entries(SECTION_TEMPLATES).map(([key, t]) => (
                     <DropdownMenuItem key={key} onSelect={() => addSection(key)}>{t.title}</DropdownMenuItem>
                   ))}
-                  <DropdownMenuItem onSelect={() => { setCustomTitle(''); setRenameOpen(true); }}>Custom Section…</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { setCustomTitle(''); setRenameOpen(true); }}>Custom section…</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             }>
@@ -497,7 +497,7 @@ export default function StructurePanel() {
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Display</span>
                   <Segmented size="xs">
-                    {[['list', 'Bulleted'], ['skills', 'Inline Tags']].map(([t, label]) => (
+                    {[['list', 'Bulleted'], ['skills', 'Inline tags']].map(([t, label]) => (
                       <SegmentedItem
                         key={t} size="xs"
                         active={toolsDisplay === t}

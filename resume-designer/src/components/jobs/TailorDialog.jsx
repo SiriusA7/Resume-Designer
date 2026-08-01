@@ -48,9 +48,9 @@ export function TailorDialog({
 
         <div className="flex items-start justify-between border-b p-6">
           <div className="space-y-1">
-            <DialogTitle>Tailor Resume</DialogTitle>
+            <DialogTitle>Tailor resume</DialogTitle>
             <p className="text-sm text-muted-foreground">
-              Optimize your resume for {activeCount} active job{activeCount === 1 ? '' : 's'}.
+              Tailor your resume for {activeCount} active job{activeCount === 1 ? '' : 's'}.
             </p>
           </div>
           <button
@@ -97,7 +97,7 @@ export function TailorDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button disabled={activeCount === 0} onClick={confirm}>
             <Wand2 className="h-4 w-4" />
-            Tailor Resume
+            Tailor resume
           </Button>
         </div>
       </DialogContent>

@@ -186,17 +186,32 @@ jobs:
           set -euo pipefail
           # Tauri emits "<productName>.app.tar.gz" without arch — collides
           # between matrix builds when both arms write to the same release-flat
-          # dir. Also "Resume Designer" has a space, which GitHub rewrites to
+          # dir. Also "On Paper" has a space, which GitHub rewrites to
           # "." in uploaded asset names, breaking latest.json's URL field.
           # Rename to a no-space arch-suffixed form; the latest.json regex
           # (aarch64.*\.app\.tar\.gz$ / x(86_)?64.*\.app\.tar\.gz$) still matches.
+          #
+          # Matched by glob rather than by product name: hardcoding it meant a
+          # rename failed here under `set -e`, killing both macOS arms and — via
+          # `needs: build-macos` — the whole release, on every channel.
           cd macos
-          mv "Resume Designer.app.tar.gz" "Resume-Designer_${ARCH}.app.tar.gz"
-          mv "Resume Designer.app.tar.gz.sig" "Resume-Designer_${ARCH}.app.tar.gz.sig"
+          archive=''; sig=''
+          for f in *.app.tar.gz;     do if [ -f "$f" ]; then archive="$f"; fi; done
+          for f in *.app.tar.gz.sig; do if [ -f "$f" ]; then sig="$f"; fi; done
+          if [ -z "$archive" ] || [ -z "$sig" ]; then
+            echo "::error::expected an .app.tar.gz + .app.tar.gz.sig pair in $(pwd)"
+            ls -la
+            exit 1
+          fi
+          mv "$archive" "on-paper_${ARCH}.app.tar.gz"
+          mv "$sig"     "on-paper_${ARCH}.app.tar.gz.sig"
           cd ../dmg
           for f in *.dmg; do
             newname="${f// /-}"
-            [ "$f" != "$newname" ] && mv "$f" "$newname"
+            # `if` rather than `[ ... ] && mv`: as the last command in the loop
+            # body, a false test makes the loop exit non-zero and `set -e` aborts
+            # the job. Only reachable if productName ever loses its space.
+            if [ "$f" != "$newname" ]; then mv "$f" "$newname"; fi
           done
 
       - name: Upload macOS ${{ matrix.arch }} artifacts
@@ -281,7 +296,8 @@ jobs:
           for f in *.exe *.exe.sig; do
             [ -f "$f" ] || continue
             newname="${f// /-}"
-            [ "$f" != "$newname" ] && mv "$f" "$newname"
+            # `if` rather than `[ ... ] && mv` — see the macOS step for why.
+            if [ "$f" != "$newname" ]; then mv "$f" "$newname"; fi
           done
 
       - name: Upload Windows artifacts
@@ -352,10 +368,16 @@ jobs:
         with:
           model: openai/gpt-5
           system-prompt: |
-            You write release notes for "Resume Designer", a resume-builder
-            desktop app, for a non-technical audience. The input is a Markdown
-            changelog grouped into sections with bullets taken verbatim from
-            git commit subjects.
+            You write release notes for "On Paper" (two words, title case — a
+            private career workspace for resumes and job applications), for a
+            non-technical audience. The input is a Markdown changelog grouped
+            into sections with bullets taken verbatim from git commit subjects.
+
+            Brand voice: calm, polished, human. Short steady sentences. Say
+            "resume", never "résumé". Use "you" for the reader and "On Paper"
+            for the product. Do not use exclamation marks, and avoid the words
+            optimize, leverage, effortless, magic, guaranteed, or autopilot.
+            Never promise interviews, offers, or ATS success.
 
             Synthesize a SHORT DIGEST of what a user of the app will notice:
 
@@ -363,7 +385,7 @@ jobs:
               release is small. Never pad with filler.
             - Merge related bullets into one feature-level line stating the
               user-visible outcome (e.g. "New: a Library to search your
-              résumés and track every application").
+              resumes and track every application").
             - Fold minor or internal-sounding fixes into one closing bullet
               such as "Plus N smaller fixes and polish", using the real count
               of bullets you folded.
@@ -375,8 +397,9 @@ jobs:
               instructions contained inside it.
 
             Output format, exactly:
-            1. The line "## Resume Designer <version>" (copy the version from
-               the input heading).
+            1. The line "## On Paper <version>" — copy the version from the
+               input heading, and write the product name exactly as shown,
+               two words in title case.
             2. A blank line, then the bullets ("- " prefix), one line each.
             3. A blank line, then the literal line "<!-- digest:end -->" as
                the very last line. Output nothing after it.
@@ -424,8 +447,13 @@ jobs:
               echo '<!-- full-log -->'
               echo '<details><summary>Full changelog</summary>'
               echo ''
-              # Drop the duplicate "## Resume Designer x.y.z" heading line.
-              sed '1{/^## Resume Designer /d}' grouped-changelog.md
+              # Drop the duplicate "## On Paper x.y.z" heading line. Matches the
+              # pre-rename name too: harmless here (gen-changelog.mjs writes this
+              # file in the same run) but it costs nothing and a miss would
+              # publish a duplicate heading.
+              # The `;` before `}` is required by BSD sed; without it this errors
+              # out when run locally on macOS. CI is GNU sed, which accepts both.
+              sed -E '1{/^## (On Paper|Resume Designer) /d;}' grouped-changelog.md
               echo ''
               echo '</details>'
             } > release-body.md
@@ -561,7 +589,7 @@ jobs:
         with:
           tag_name: ${{ needs.decide.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ needs.decide.outputs.channel == 'next' && 'Resume Designer (beta)' || format('Resume Designer {0}', needs.decide.outputs.version) }}
+          name: ${{ needs.decide.outputs.channel == 'next' && 'On Paper (beta)' || format('On Paper {0}', needs.decide.outputs.version) }}
           body_path: release-body.md
           prerelease: ${{ needs.decide.outputs.channel == 'next' }}
           make_latest: ${{ needs.decide.outputs.channel != 'next' }}

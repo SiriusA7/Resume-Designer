@@ -89,13 +89,13 @@ export async function showMessage(options) {
     const buttons = options.buttons || ['OK'];
     if (buttons.length <= 1) {
       await dialog.message(options.message ?? '', {
-        title: options.title ?? 'Resume Designer',
+        title: options.title ?? 'On Paper',
         kind,
       });
       return 0;
     }
     const yes = await dialog.ask(options.message ?? '', {
-      title: options.title ?? 'Resume Designer',
+      title: options.title ?? 'On Paper',
       kind,
       okLabel: buttons[0],
       cancelLabel: buttons[1],
@@ -128,7 +128,7 @@ export async function getAppInfo() {
   }
   return {
     version: '1.0.0',
-    name: 'Resume Designer',
+    name: 'On Paper',
     platform: 'web',
     isPackaged: false,
   };
@@ -358,7 +358,7 @@ export async function checkForUpdates(source = 'manual', { notifyOnly = false } 
 
     const wantsRestart = await dialog.ask(
       `Version ${update.version} has been downloaded. Restart the app to apply the update.`,
-      { title: 'Update Ready', okLabel: 'Restart Now', cancelLabel: 'Later' }
+      { title: 'Update ready', okLabel: 'Restart now', cancelLabel: 'Later' }
     );
     if (wantsRestart) {
       // Relaunch is an in-app process exit, but unlike a plain quit the updated

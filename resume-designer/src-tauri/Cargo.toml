@@ -1,14 +1,18 @@
 [package]
 name = "resume-designer"
 version = "1.0.0"
-description = "Creative resume designer and generator."
+description = "A private career workspace for resumes and job applications."
 authors = ["Ash Shah"]
 license = "CC-BY-NC-SA-4.0"
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "resume_designer_lib"
+# NB: `package.name` above stays `resume-designer` on purpose — with no
+# `bundle.mainBinaryName` set it becomes CFBundleExecutable / the installed
+# Windows .exe name, and renaming it would add a second moving part to the
+# Windows upgrade path. Only the lib name is branded.
+name = "on_paper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

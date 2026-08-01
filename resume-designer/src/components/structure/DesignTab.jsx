@@ -147,7 +147,7 @@ const LAYOUT_OPTIONS = [
   },
   {
     value: 'right-sidebar',
-    label: 'Right Side',
+    label: 'Right side',
     preview: (
       <span className="flex h-12 w-full gap-1">
         <span className="flex-1 rounded-sm bg-muted-foreground/15" />
@@ -293,15 +293,15 @@ const PHOTO_FOCUS_POSITIONS = [
   'right bottom',
 ];
 const PHOTO_FOCUS_TITLES = {
-  'left top': 'Top Left',
-  'center top': 'Top Center',
-  'right top': 'Top Right',
-  'left center': 'Middle Left',
+  'left top': 'Top left',
+  'center top': 'Top center',
+  'right top': 'Top right',
+  'left center': 'Middle left',
   'center center': 'Center',
-  'right center': 'Middle Right',
-  'left bottom': 'Bottom Left',
-  'center bottom': 'Bottom Center',
-  'right bottom': 'Bottom Right',
+  'right center': 'Middle right',
+  'left bottom': 'Bottom left',
+  'center bottom': 'Bottom center',
+  'right bottom': 'Bottom right',
 };
 
 // ---------------------------------------------------------------------------
@@ -883,8 +883,8 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
   return (
     <>
       {/* ===== Page Setup ===== */}
-      <PanelSection title="Page Setup" {...sectionProps('page-setup')}>
-        <ControlGroup label="Page Size">
+      <PanelSection title="Page setup" {...sectionProps('page-setup')}>
+        <ControlGroup label="Page size">
           <Select value={pageSize} onValueChange={handleSetPageSize}>
             <SelectTrigger>
               <SelectValue />
@@ -900,7 +900,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         </ControlGroup>
 
         {pageSize === 'continuous' ? (
-          <ControlGroup label="Page Width (inches)">
+          <ControlGroup label="Page width (inches)">
             <Input
               type="number"
               step="0.1"
@@ -927,7 +927,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
       </PanelSection>
 
       {/* ===== Color Theme ===== */}
-      <PanelSection title="Color Theme" {...sectionProps('color-theme')}>
+      <PanelSection title="Color theme" {...sectionProps('color-theme')}>
         {/* Palette swatches — mockup `.sw`: 34px, rounded-8, three-tone fill,
             selected = double-ring (inner bg ring + outer primary ring). */}
         <div className="grid grid-cols-6 gap-2">
@@ -951,7 +951,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
 
         {/* Custom Color */}
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[12.5px] font-medium">Custom Color</span>
+          <span className="text-[12.5px] font-medium">Custom color</span>
           <button
             type="button"
             aria-pressed={palette === 'custom'}
@@ -988,12 +988,12 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
       </PanelSection>
 
       {/* ===== Header Style ===== */}
-      <PanelSection title="Header Style" {...sectionProps('header-style')}>
+      <PanelSection title="Header style" {...sectionProps('header-style')}>
         {/* Solid vs styled mode */}
         <Segmented
           stretch
           options={[
-            { value: 'solid', label: 'Solid Color', title: 'Use color theme only' },
+            { value: 'solid', label: 'Solid color', title: 'Use color theme only' },
             { value: 'styled', label: 'Styled', title: 'Add visual effects' },
           ]}
           value={isSolidHeader ? 'solid' : 'styled'}
@@ -1085,7 +1085,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
                   className="w-full"
                   onClick={() => handleSelectHeaderStyle('gradient', 'linear-135')}
                 >
-                  Reset to Gradient
+                  Reset to gradient
                 </Button>
               </div>
             )}
@@ -1179,13 +1179,13 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
             {/* Current selection */}
             <div className="space-y-1 rounded-md border p-2">
               <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-muted-foreground">Display Font</span>
+                <span className="text-muted-foreground">Display font</span>
                 <span className="truncate">
                   {(fontSettings.mode === 'google' ? fontSettings.displayFont?.family : null) || 'Not set'}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-muted-foreground">Body Font</span>
+                <span className="text-muted-foreground">Body font</span>
                 <span className="truncate">
                   {(fontSettings.mode === 'google' ? fontSettings.bodyFont?.family : null) || 'Not set'}
                 </span>
@@ -1243,7 +1243,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
             {/* Current selection */}
             <div className="space-y-1 rounded-md border p-2">
               <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-muted-foreground">Display Font</span>
+                <span className="text-muted-foreground">Display font</span>
                 <span className="truncate">
                   {fontSettings.mode === 'system' && fontSettings.displayFont
                     ? SYSTEM_FONT_STACKS[fontSettings.displayFont]?.name || fontSettings.displayFont
@@ -1251,7 +1251,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-muted-foreground">Body Font</span>
+                <span className="text-muted-foreground">Body font</span>
                 <span className="truncate">
                   {fontSettings.mode === 'system' && fontSettings.bodyFont
                     ? SYSTEM_FONT_STACKS[fontSettings.bodyFont]?.name || fontSettings.bodyFont
@@ -1331,7 +1331,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
       </PanelSection>
 
       {/* ===== Spacing & Sizing ===== */}
-      <PanelSection title="Spacing & Sizing" headerExtra={spacingResetButton} {...sectionProps('spacing')}>
+      <PanelSection title="Spacing & sizing" headerExtra={spacingResetButton} {...sectionProps('spacing')}>
         {/* Spacing presets */}
         <Segmented
           stretch
@@ -1347,12 +1347,12 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
 
         <div className="flex items-center gap-2">
           <Separator className="flex-1" />
-          <span className="text-xs text-muted-foreground">Fine Tune</span>
+          <span className="text-xs text-muted-foreground">Fine tune</span>
           <Separator className="flex-1" />
         </div>
 
         <ControlSlider
-          label="Font Size"
+          label="Font size"
           readout={`${Math.round(spacing.fontScale * 100)}%`}
           min={70}
           max={130}
@@ -1362,7 +1362,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         />
 
         <ControlSlider
-          label="Line Height"
+          label="Line height"
           readout={spacing.lineHeight.toFixed(2)}
           min={120}
           max={180}
@@ -1372,7 +1372,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         />
 
         <ControlSlider
-          label="Section Gap"
+          label="Section gap"
           readout={`${spacing.sectionSpacing.toFixed(1)} rem`}
           min={4}
           max={16}
@@ -1382,7 +1382,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         />
 
         <ControlSlider
-          label="Sidebar Width"
+          label="Sidebar width"
           readout={`${spacing.sidebarWidth.toFixed(1)} in`}
           min={18}
           max={32}
@@ -1392,7 +1392,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         />
 
         {/* Page margins */}
-        <ControlGroup label="Page Margins (inches)">
+        <ControlGroup label="Page margins (inches)">
           <div className="grid grid-cols-4 gap-1.5">
             {['top', 'right', 'bottom', 'left'].map((side) => (
               <div key={side} className="space-y-1">
@@ -1454,7 +1454,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         </div>
 
         {/* Section title underline */}
-        <ControlGroup label="Title Underline">
+        <ControlGroup label="Title underline">
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(UNDERLINE_STYLES).map(([id, style]) => (
               <button
@@ -1475,7 +1475,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         </ControlGroup>
 
         <ControlSlider
-          label="Underline Width"
+          label="Underline width"
           readout={`${accent.underlineWidth}px`}
           min={1}
           max={4}
@@ -1485,7 +1485,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         />
 
         {/* Bullet style */}
-        <ControlGroup label="Bullet Points">
+        <ControlGroup label="Bullet points">
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(BULLET_STYLES).map(([id, style]) => (
               <button
@@ -1510,7 +1510,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         </ControlGroup>
 
         {/* Border radius */}
-        <ControlGroup label="Corner Rounding">
+        <ControlGroup label="Corner rounding">
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(BORDER_RADIUS_PRESETS).map(([id, preset]) => (
               <button
@@ -1531,7 +1531,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         </ControlGroup>
 
         {/* Skill tag style */}
-        <ControlGroup label="Skill Tags">
+        <ControlGroup label="Skill tags">
           <div className="grid grid-cols-4 gap-1.5">
             <button
               type="button"
@@ -1590,7 +1590,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
 
         {/* Decorative elements */}
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Decorative Elements</Label>
+          <Label className="text-xs text-muted-foreground">Decorative elements</Label>
           <div className="flex items-center justify-between gap-3">
             <Label className="text-sm font-normal">Header corner accent</Label>
             <Switch
@@ -1609,7 +1609,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
       </PanelSection>
 
       {/* ===== Profile Photo ===== */}
-      <PanelSection title="Profile Photo" {...sectionProps('photo')}>
+      <PanelSection title="Profile photo" {...sectionProps('photo')}>
         {photo.enabled && photo.imageData ? (
           <>
             {/* Photo preview + remove */}
@@ -1627,7 +1627,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
                 title="Remove photo"
                 onClick={handleRemovePhoto}
               >
-                <Trash2 className="size-3.5" /> Remove Photo
+                <Trash2 className="size-3.5" /> Remove photo
               </Button>
             </div>
 
@@ -1692,7 +1692,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
             </ControlGroup>
 
             {/* Image position (crop focus) */}
-            <ControlGroup label="Image Focus">
+            <ControlGroup label="Image focus">
               <div className="grid w-fit grid-cols-3 gap-1">
                 {PHOTO_FOCUS_POSITIONS.map((pos) => {
                   const selected = (photo.objectPosition || 'center center') === pos;
@@ -1735,7 +1735,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
           /* Upload dropzone */
           <UploadDropzone onFile={handlePhotoFile}>
             <User className="size-6" />
-            <span className="text-sm font-medium text-foreground">Add Profile Photo</span>
+            <span className="text-sm font-medium text-foreground">Add profile photo</span>
             <span className="text-xs">Click or drag image here</span>
           </UploadDropzone>
         )}

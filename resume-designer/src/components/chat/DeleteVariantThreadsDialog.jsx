@@ -5,7 +5,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 
-// Imperative 3-outcome prompt for deleting a résumé that still has chat threads.
+// Imperative 3-outcome prompt for deleting a resume that still has chat threads.
 // Mirrors the confirmDestructive singleton pattern (rd:confirm), but resolves to
 // 'cancel' | 'keep' | 'delete' instead of a boolean. The host is mounted once in
 // App, next to <ConfirmHost />.
@@ -16,7 +16,7 @@ let resolver = null;
  * Resolve with the user's choice:
  *  - 'cancel' — abort the variant delete entirely
  *  - 'keep'   — keep the threads (move them to General)
- *  - 'delete' — delete the threads along with the résumé
+ *  - 'delete' — delete the threads along with the resume
  */
 export function askDeleteVariantThreads({ name, count }) {
   return new Promise((resolve) => {
@@ -49,7 +49,7 @@ export function DeleteVariantThreadsHost() {
         <AlertDialogHeader>
           <AlertDialogTitle>Delete “{state?.name}”?</AlertDialogTitle>
           <AlertDialogDescription>
-            This résumé has {count} chat thread{count === 1 ? '' : 's'}.
+            This resume has {count} chat thread{count === 1 ? '' : 's'}.
             Keep them (moved to General) or delete them too?
           </AlertDialogDescription>
         </AlertDialogHeader>

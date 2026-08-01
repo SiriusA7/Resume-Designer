@@ -701,7 +701,7 @@ html[data-theme="dark"] .editable-ai-menu-preview.compact.original .preview-labe
 }
 
 .structure-panel-title {
-  /* Chrome font (Geist) — the serif --font-display belongs to the résumé
+  /* Chrome font (Geist) — the serif --font-display belongs to the resume
      document, not panel chrome. */
   font-size: 0.875rem;
   font-weight: 600;

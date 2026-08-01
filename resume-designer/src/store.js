@@ -10,6 +10,7 @@ import { appStorage } from './appStorage.js';
 // too — not only in createChangeSet's pre-filter. diffEngine imports nothing
 // from this module (only the npm `diff` package), so sharing creates no cycle.
 import { setByPath } from './diffEngine.js';
+import { BACKUP_HISTORY_PREFIX } from './profileKeys.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -76,8 +77,10 @@ function getByPath(obj, path) {
   }, obj);
 }
 
-// History persistence key prefix
-const HISTORY_KEY_PREFIX = 'resume-designer-history-';
+// History persistence key prefix. Re-exported from profileKeys.js rather than
+// re-declared: isOwnedKey() keys off the same constant, so a second literal
+// here would have to stay byte-identical with nothing enforcing it.
+const HISTORY_KEY_PREFIX = BACKUP_HISTORY_PREFIX;
 
 // Change type constants
 export const CHANGE_TYPES = {
@@ -117,7 +120,7 @@ function createStore() {
   let saveTimeout = null;
   // Latched off before a destructive restore reloads the window. Between the
   // restore writing appStorage and the reload booting from it, the in-memory
-  // `data` is the STALE pre-import résumé; a save in that window (the
+  // `data` is the STALE pre-import resume; a save in that window (the
   // visibilitychange/close handlers call saveNow) would write it back into the
   // freshly-restored profile — corrupting the backup. Once suspended it stays
   // suspended: the only path forward from a restore is the reload.
@@ -473,7 +476,7 @@ function createStore() {
     },
 
     // Latch saving off ahead of a destructive import (see savesSuspended).
-    // Called BEFORE the import runs, so the store can't write its stale résumé
+    // Called BEFORE the import runs, so the store can't write its stale resume
     // over the imported data during the import's own async flush. Cancels any
     // pending debounce so it can't fire either.
     //

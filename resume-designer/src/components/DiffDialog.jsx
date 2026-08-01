@@ -285,7 +285,7 @@ export default function DiffDialog() {
   // Open on showDiffView() -> rd:open-diff. Reset per-open state; keep the chosen
   // view mode sticky across opens (matches the vanilla module-level default).
   // A change set the session is already reviewing seeds from the session, so
-  // decisions made from the résumé's inline controls show as decided here.
+  // decisions made from the resume's inline controls show as decided here.
   useEffect(() => {
     const onOpen = (e) => {
       const cs = e.detail?.changeSet || null;
@@ -334,7 +334,7 @@ export default function DiffDialog() {
   // close-when-everything-is-handled effect above dismisses the dialog. Session
   // mode delegates to the shared inline action: it writes the store through the
   // same applyChangeToStore, records 'applied' in the session (converging the
-  // inline preview and the chat buttons), re-renders the résumé's marks, and
+  // inline preview and the chat buttons), re-renders the resume's marks, and
   // dismisses the whole preview once nothing is pending — which also covers
   // everything the standalone onApply callback (a re-render request) does.
   const applyChange = useCallback(
@@ -355,7 +355,7 @@ export default function DiffDialog() {
 
   // Reject = hide the card from the list. The close-when-everything-is-handled
   // effect above dismisses the dialog once nothing is left to review. Session
-  // mode records the decision in the session, which also re-renders the résumé
+  // mode records the decision in the session, which also re-renders the resume
   // so the proposed value stops being previewed for that path.
   const rejectChange = useCallback(
     (path) => {
@@ -392,8 +392,8 @@ export default function DiffDialog() {
   }, [changeSet, applied, rejected, applyChange, superseded]);
 
   // "Reject All" — in session mode this is the bulk dismiss the inline preview
-  // otherwise lacks: end the session (the chat button and the résumé highlights
-  // stand down together) and restore the résumé view to the stored data.
+  // otherwise lacks: end the session (the chat button and the resume highlights
+  // stand down together) and restore the resume view to the stored data.
   // Changes already applied stay applied. Standalone opens just close, as before.
   // A superseded dialog only closes — ending the live session here would
   // dismiss a preview it never displayed.
@@ -458,7 +458,7 @@ export default function DiffDialog() {
 
         {/* Header — mockup .dlg-head.bordered: 20px 22px 16px, stat badges + mode seg. */}
         <div className="flex shrink-0 flex-wrap items-center gap-3 border-b px-[22px] pb-4 pt-5">
-          <DialogTitle>Review Changes</DialogTitle>
+          <DialogTitle>Review changes</DialogTitle>
 
           <div className="flex items-center gap-1.5">
             <Badge className="border-transparent bg-success-bg text-success tabular-nums">+{stats.added}</Badge>
@@ -527,7 +527,7 @@ export default function DiffDialog() {
               <Kbd>R</Kbd> Reject
             </span>
             <span className="flex items-center gap-1.5">
-              <Kbd>↵</Kbd> Apply All
+              <Kbd>↵</Kbd> Apply all
             </span>
             <span className="flex items-center gap-1.5">
               <Kbd>Esc</Kbd> Close
@@ -535,10 +535,10 @@ export default function DiffDialog() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Button variant="outline" onClick={rejectAll}>
-              <X className="h-4 w-4" /> Reject All
+              <X className="h-4 w-4" /> Reject all
             </Button>
             <Button onClick={applyAll}>
-              <CheckCheck className="h-4 w-4" /> Apply All
+              <CheckCheck className="h-4 w-4" /> Apply all
             </Button>
           </div>
         </div>

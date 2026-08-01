@@ -1,7 +1,7 @@
 /**
  * The ONE implementation of "apply a proposed change to the store".
  *
- * Both review surfaces — the inline on-résumé preview (inlineChanges.js) and
+ * Both review surfaces — the inline on-resume preview (inlineChanges.js) and
  * the diff dialog (DiffDialog.jsx) — route every apply through here. They
  * previously carried separate copies of these semantics and diverged: the
  * inline copy wrote `proposedChanges[path]`, which is undefined for the leaf

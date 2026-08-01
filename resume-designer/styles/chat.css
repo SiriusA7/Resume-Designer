@@ -189,7 +189,7 @@
 }
 
 /* Headings inherit the chrome font (Geist) — the old serif --font-display
-   belongs to the résumé document, not chat chrome. */
+   belongs to the resume document, not chat chrome. */
 .chat-markdown h1,
 .chat-markdown h2,
 .chat-markdown h3,

@@ -1,5 +1,5 @@
 /**
- * On-screen pagination: turn the just-rendered résumé into true page "sheets".
+ * On-screen pagination: turn the just-rendered resume into true page "sheets".
  *
  * The PURE core is assignBlocksToPages() — fully unit-tested. The DOM glue
  * (paginate + adapters, added in later tasks) MEASURES the rendered blocks and
@@ -208,7 +208,7 @@ export function buildColumnRecursive(targetEl, units) {
     for (let d = common; d < u.chain.length; d++) {
       const group = u.chain[d];
       const clone = group.el.cloneNode(false);
-      // Don't let a rebuilt section grow to fill the sheet. The résumé uses
+      // Don't let a rebuilt section grow to fill the sheet. The resume uses
       // `.experience-section { flex: 1 }` to bottom-anchor education on a single
       // page; across paginated sheets that growth would shove trailing content
       // (e.g. Education) to the bottom of the last page. Paginated content flows
@@ -243,7 +243,7 @@ function makeSheet(widthPx, heightPx) {
 function grow(el) { el.style.flex = '1 1 auto'; el.style.minHeight = '0'; return el; }
 
 // Remove the paginated state from the long-lived containers — used when the
-// preview falls back to the non-paginated empty state (no résumé loaded).
+// preview falls back to the non-paginated empty state (no resume loaded).
 export function resetPaginatedState(resumeEl) {
   if (!resumeEl) return;
   resumeEl.classList.remove('is-paginated');
@@ -252,7 +252,7 @@ export function resetPaginatedState(resumeEl) {
 }
 
 /**
- * Paginate the just-rendered résumé in place.
+ * Paginate the just-rendered resume in place.
  * @param {HTMLElement} resumeEl - the #resume element (its children are header + body).
  * @param {{pageSize,orientation,pageWidthIn}} setup - from the store accessors.
  * @param {string} layoutId - the active layout (passed in; not read from the DOM).

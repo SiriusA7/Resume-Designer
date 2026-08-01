@@ -8,9 +8,9 @@ beforeEach(() => { store.resumeSaves(); });
 
 // Regression (PR #92 Codex P1 — "Prevent stale saves after a full restore"):
 // a format-2 restore rewrites appStorage, but the in-memory store still holds
-// the STALE pre-import résumé until the reload. In that window the
+// the STALE pre-import resume until the reload. In that window the
 // visibilitychange / window-close handlers call store.saveNow(), which would
-// write the stale résumé back into the just-restored profile and corrupt the
+// write the stale resume back into the just-restored profile and corrupt the
 // backup. store.suspendSaves() latches saving off so those handlers no-op.
 //
 // Own test file: suspendSaves is intentionally one-way (the only path forward
@@ -26,7 +26,7 @@ describe('store.suspendSaves', () => {
     const result = store.saveNow();
 
     // Shutdown callers (close/visibilitychange) must not read the no-op as a
-    // failure, and the stale résumé must NOT be written back.
+    // failure, and the stale resume must NOT be written back.
     expect(result).toBe(true);
     expect(writes).toBe(0);
   });

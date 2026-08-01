@@ -104,7 +104,7 @@ export default function Header() {
   const host = typeof document !== 'undefined' ? document.getElementById('header-bar') : null;
   if (!host) return null;
 
-  const currentName = list.find((v) => v.id === currentId)?.name || 'Select Resume';
+  const currentName = list.find((v) => v.id === currentId)?.name || 'Select resume';
 
   const newVariant = () => window.showOnboardingWizard?.({ skipApiKeyStep: true });
   const openRename = () => {
@@ -132,7 +132,7 @@ export default function Header() {
       toast.info("You can't delete your only resume.");
       return;
     }
-    // If the résumé has chat threads, ask whether to keep (→General) or delete
+    // If the resume has chat threads, ask whether to keep (→General) or delete
     // them, and reassign BEFORE deleteCurrentVariant() so the id still exists.
     // After delete, loadVariant(newId) fires dataLoaded and useChat's follow
     // effect reloads threads, so the change is reflected automatically.
@@ -163,10 +163,10 @@ export default function Header() {
   // `short` is the visible header-button label (collapses to icon-only when
   // narrow); `label` is the full name used for the tooltip + the mobile menu.
   const toolItems = [
-    { key: 'profile', label: 'User Profile', short: 'Profile', Icon: User, run: () => window.openUserProfilePanel?.() },
-    { key: 'jobs', label: 'Job Descriptions', short: 'Jobs', Icon: Briefcase, run: () => window.openJobDescriptionPanel?.() },
-    { key: 'library', label: 'Resume Library', short: 'Library', Icon: LibraryBig, run: () => window.dispatchEvent(new CustomEvent('rd:open-library')) },
-    { key: 'history', label: 'Version History', short: 'History', Icon: History, run: () => window.openHistoryPanel?.() },
+    { key: 'profile', label: 'Profile', short: 'Profile', Icon: User, run: () => window.openUserProfilePanel?.() },
+    { key: 'jobs', label: 'Jobs', short: 'Jobs', Icon: Briefcase, run: () => window.openJobDescriptionPanel?.() },
+    { key: 'library', label: 'Resumes', short: 'Library', Icon: LibraryBig, run: () => window.dispatchEvent(new CustomEvent('rd:open-library')) },
+    { key: 'history', label: 'Version history', short: 'History', Icon: History, run: () => window.openHistoryPanel?.() },
   ];
 
   return createPortal(
@@ -180,10 +180,10 @@ export default function Header() {
             Geometry pinned to mockup: 24px mark, rounded-[7px], 14.5px wordmark. */}
         <div className="flex shrink-0 items-center gap-2.5">
           <span className="flex size-6 items-center justify-center rounded-[7px] bg-primary text-[13px] font-bold text-primary-foreground">
-            R
+            O
           </span>
           <span className="whitespace-nowrap text-[14.5px] font-semibold tracking-[-0.01em]">
-            Resume Designer
+            On Paper
           </span>
         </div>
         {/* Workspace identity: compact initials avatar opening Settings →

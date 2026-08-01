@@ -61,7 +61,7 @@ describe('inlineChanges → changeSession', () => {
 });
 
 describe('apply semantics — what applying actually writes to the store', () => {
-  // Résumé with id-bearing experience entries so createChangeSet's diff can
+  // Resume with id-bearing experience entries so createChangeSet's diff can
   // match array items the way production data does.
   const baseData = () => ({
     summary: 'Old summary',
@@ -146,7 +146,7 @@ describe('apply semantics — what applying actually writes to the store', () =>
   });
 
   it('loading a different document ends the in-flight session', () => {
-    // A proposal made against résumé A must not survive into résumé B:
+    // A proposal made against resume A must not survive into resume B:
     // renderCurrentResume would project A's pending changes onto B's data, and
     // an apply (inline hover, or a still-open DiffDialog delegating here)
     // would write A's proposed value into B. initInlineChanges hooks the
@@ -158,7 +158,7 @@ describe('apply semantics — what applying actually writes to the store', () =>
     ]));
     expect(isInlineChangesActive()).toBe(true);
 
-    // Switch to résumé B (variant switch / import / restore all land here).
+    // Switch to resume B (variant switch / import / restore all land here).
     store.setData({ summary: 'Resume B summary', name: 'B' }, true, null);
 
     expect(isInlineChangesActive()).toBe(false);

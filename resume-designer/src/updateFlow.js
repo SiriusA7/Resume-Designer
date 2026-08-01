@@ -200,7 +200,7 @@ function handleUpdateStatus(payload) {
 
     case 'downloaded':
       showUpdateToast(
-        payload.message || `Update${version} downloaded. Choose Restart Now in the dialog to install.`,
+        payload.message || `Update${version} downloaded. Choose Restart now in the dialog to install.`,
         'success'
       );
       manualUpdateCheckActive = false;

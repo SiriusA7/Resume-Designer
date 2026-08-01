@@ -93,7 +93,7 @@ function reloadWithOverlay(message = 'Reloading…') {
 // profile — so a replace stays suspended (the user reloads/retries).
 function showImportSuccessAndReload(message) {
   // Saving is already suspended by the caller (before the durable import ran), so
-  // the stale in-memory résumé can't be written back while this modal waits on the
+  // the stale in-memory resume can't be written back while this modal waits on the
   // user or during the reload. The durable import keeps its restore guard armed on
   // success (continuous ownership — no unguarded microtask gap), so only ARM here
   // if it isn't already: the legacy Merge path is synchronous and never armed one.
@@ -230,7 +230,7 @@ export async function importBackupFromFile(file) {
     const isFormat1 = preview?.backupFormat === 1 && preview.keys;
     const isFormat2Full = preview?.backupFormat === 2 && preview.kind === 'full';
     if (!isFormat1 && !isFormat2Full) {
-      throw new Error('Not a Resume Designer backup file.');
+      throw new Error('Not an On Paper backup file.');
     }
     const incoming = isFormat1
       ? Object.keys(preview.keys).length
@@ -265,7 +265,7 @@ export async function importBackupFromFile(file) {
     // Suspend saves BEFORE the import — importFullBackupDurably writes
     // appStorage synchronously and then AWAITS the disk flush; without this, a
     // visibilitychange/close during that await would fire store.saveNow() and
-    // write the stale in-memory résumé over the just-imported data. Resumed in
+    // write the stale in-memory resume over the just-imported data. Resumed in
     // the catch below if the import throws (it rolls appStorage back, so the
     // store is consistent again and the app keeps running without a reload).
     // suspendSaves() returns TRUE only if it flipped the latch on — false if a
@@ -304,7 +304,7 @@ export async function importBackupFromFile(file) {
 }
 
 /**
- * Import résumés / settings / history from a previous (Electron) installation's
+ * Import resumes / settings / history from a previous (Electron) installation's
  * LevelDB into this build. `mode` is 'replace' (overwrite current data — mirrors
  * the one-time auto-migration in main.js) or 'merge' (union; current data wins
  * on conflicts). Tauri-only — the probe/import calls no-op or throw in the
@@ -329,8 +329,8 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       `Import data from your previous desktop app?\n\n` +
         `Found ${incoming} keys from the legacy (Electron) installation.\n\n` +
         (merging
-          ? `They will be MERGED into your current data (your current résumés win on any conflict).`
-          : `Your current résumés, job descriptions, history, and settings will be REPLACED.`) +
+          ? `They will be MERGED into your current data (your current resumes win on any conflict).`
+          : `Your current resumes, job descriptions, history, and settings will be REPLACED.`) +
         `\n\nThe app will reload after import.`
     );
     if (!ok) return;
@@ -353,10 +353,10 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     const skipped = result.historySkipped > 0
       ? `\n\nNote: ${result.historySkipped} oversize undo/redo `
         + `${result.historySkipped === 1 ? 'entry was' : 'entries were'} skipped; `
-        + `your résumés are intact.`
+        + `your resumes are intact.`
       : '';
     const summary = merging
-      ? `Merged your previous app's résumés and settings into this one.`
+      ? `Merged your previous app's resumes and settings into this one.`
       : `Imported ${result.keysImported} keys from your previous app `
         + `(removed ${result.removedExistingKeys} existing keys).`;
     showImportSuccessAndReload(summary + skipped);

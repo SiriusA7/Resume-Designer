@@ -192,7 +192,7 @@ pub async fn capture_pdf_from_window(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let temp_path = std::env::temp_dir().join(format!(
-        "resume-designer-preview-{}-{}.pdf",
+        "on-paper-preview-{}-{}.pdf",
         std::process::id(),
         nanos
     ));

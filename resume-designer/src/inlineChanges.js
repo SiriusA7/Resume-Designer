@@ -4,7 +4,7 @@
  * Previews proposed AI changes directly on the resume. All state lives in
  * changeSession (the shared source of truth also driving DiffDialog and the
  * chat message actions), and the preview itself is produced by re-rendering
- * the résumé from data with the pending changes projected in (changePreview's
+ * the resume from data with the pending changes projected in (changePreview's
  * applyPendingToData) — never by writing text into the DOM. The old
  * textContent-snapshot approach flattened the renderer's <strong>/<em> markup
  * and permanently destroyed it on reject; re-rendering from data makes
@@ -23,7 +23,7 @@ let requestRerender = () => {};
 // A 'dataLoaded' means a DIFFERENT document now backs the render: variant
 // switch, import, backup restore. A session started against the previous
 // document must not survive it — renderCurrentResume would project the old
-// résumé's pending changes onto the new one, and accepting (inline or from a
+// resume's pending changes onto the new one, and accepting (inline or from a
 // still-open DiffDialog, which delegates here) would write the old proposal
 // into the new document. store.setData is the one entry point every document
 // load goes through, so this hook covers every loadVariant caller centrally.
@@ -65,7 +65,7 @@ export function getCurrentChangeSet() {
   return session.getChangeSet();
 }
 
-/** Tag the freshly-rendered résumé nodes with their change status. */
+/** Tag the freshly-rendered resume nodes with their change status. */
 export function decorateRenderedResume(rootEl) {
   const changeSet = session.getChangeSet();
   if (!changeSet) { clearChangeMarks(rootEl); return; }

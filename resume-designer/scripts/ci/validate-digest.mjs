@@ -35,9 +35,15 @@ export function validateDigest(text, version) {
     return { ok: false, reason: 'digest must not contain HTML comments/markers' };
   }
 
-  const headingRe = new RegExp(`^##\\s+Resume Designer\\s+${escapeRe(String(version))}$`);
+  // Case-insensitive on the product name only. The heading is authored by the
+  // model, whose casing drifts ("on paper", "ON PAPER") however plainly the
+  // prompt states it. Rejecting on casing alone would silently throw away a good
+  // digest and publish the raw grouped commit log instead — a worse outcome than
+  // a miscased word. Everything else about the format stays strict, because that
+  // strictness is what makes prompt-injected output unpublishable.
+  const headingRe = new RegExp(`^##\\s+On Paper\\s+${escapeRe(String(version))}$`, 'i');
   if (!headingRe.test(body[0] || '')) {
-    return { ok: false, reason: `first line must be "## Resume Designer ${version}"` };
+    return { ok: false, reason: `first line must be "## On Paper ${version}"` };
   }
   // Every line after the heading MUST be a "- "/"* " bullet. The digest is a
   // flat bullet list by contract; anything else (a stray paragraph, a leaked
