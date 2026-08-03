@@ -7,6 +7,7 @@
  * the necessary store/persistence/AI side effects); no document access.
  */
 import { generateId, experienceSortValue } from './store.js';
+import { sortRunAware, assignGroupIds } from './experienceGroups.js';
 import { getDefaultModelId, chat, generateResumeFromProfileForJob, getAllModels, getCustomModels, isConfigured, GROUNDING_RULES } from './aiService.js';
 import { generateUniqueVariantName, saveVariant } from './persistence.js';
 import { parseResumeText } from './resumeParser.js';
@@ -298,12 +299,22 @@ export function buildResumeData(resume) {
 
   // Normalize + order experience: stable id, capture AI relevance order in
   // _relevanceRank, then default to chronological (newest first).
-  const experience = (r.experience || []).map((exp, i) => ({
+  let experience = (r.experience || []).map((exp, i) => ({
     ...exp,
     id: exp.id || generateId('exp'),
     _relevanceRank: i,
   }));
-  experience.sort((a, b) => experienceSortValue(b) - experienceSortValue(a));
+  // Mint one group id per run of consecutive entries at the same employer BEFORE
+  // sorting: sortRunAware only respects an EXISTING _groupId, and this fresh AI
+  // output has none yet, so assignGroupIds must read the run off the AI's own raw
+  // adjacency first. Only then can sortRunAware reorder chronologically without
+  // shredding that run apart — without this nothing the AI produces is ever grouped.
+  const grouped = assignGroupIds(experience);
+  experience = sortRunAware(
+    grouped,
+    (run) => Math.max(...run.map(experienceSortValue)),
+    (a, b) => b - a,
+  );
 
   return {
     name: r.name || 'Your Name',

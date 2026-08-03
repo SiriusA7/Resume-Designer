@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
 
 import { store, generateId, experienceSortValue } from '../../store.js';
+import { sortRunAware } from '../../experienceGroups.js';
 import { SINGLE_COLUMN_LAYOUTS } from '../../renderer.js';
 import { getSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { SortableList, SortableItem, DragHandle } from '../Sortable.jsx';
@@ -400,13 +401,21 @@ export default function StructurePanel() {
     if (mode === 'custom') return;
     const experience = store.get('experience');
     if (!Array.isArray(experience) || experience.length < 2) return;
-    const sorted = [...experience];
-    if (mode === 'relevance') {
-      const rank = (e) => (Number.isFinite(e?._relevanceRank) ? e._relevanceRank : Number.MAX_SAFE_INTEGER);
-      sorted.sort((a, b) => rank(a) - rank(b));
-    } else {
-      sorted.sort((a, b) => experienceSortValue(b) - experienceSortValue(a));
-    }
+    // Ordering is RUN-AWARE: a naive sort interleaves a foreign employer between
+    // two roles at one company, which silently drops the company header from the
+    // preview and the PDF. Because applySort('custom') is a no-op, that shredded
+    // order would become the saved data with no way back.
+    const sorted = mode === 'relevance'
+      ? sortRunAware(
+        experience,
+        (run) => Math.min(...run.map((e) => (Number.isFinite(e?._relevanceRank) ? e._relevanceRank : Number.MAX_SAFE_INTEGER))),
+        (a, b) => a - b,
+      )
+      : sortRunAware(
+        experience,
+        (run) => Math.max(...run.map(experienceSortValue)),
+        (a, b) => b - a,
+      );
     store.update('experience', sorted);
   };
 

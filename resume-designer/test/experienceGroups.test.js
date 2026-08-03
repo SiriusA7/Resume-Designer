@@ -153,3 +153,25 @@ describe('sortRunAware', () => {
     expect(sorted.map((x) => x.company)).toEqual(['Acme', 'Acme', 'Initech']);
   });
 });
+
+describe('generation ordering + grouping (buildResumeData contract)', () => {
+  it('mints ids from raw adjacency, then sorts run-aware without shredding the run', () => {
+    // sortRunAware only respects an EXISTING _groupId. Fresh AI output has none, so
+    // assignGroupIds must run first, against the AI's own raw order, to detect the
+    // Acme run from adjacency — only then can sortRunAware reorder chronologically
+    // without splitting it apart.
+    const raw = [
+      { title: 'Consultant', company: 'Initech', dates: '2021 – 2022', bullets: [], _relevanceRank: 0 },
+      { title: 'Senior Dev', company: 'Acme', dates: 'Mar 2022 – Jun 2024', bullets: [], _relevanceRank: 1 },
+      { title: 'Dev', company: 'Acme', dates: 'Jan 2019 – Mar 2022', bullets: [], _relevanceRank: 2 },
+    ];
+    let n = 0;
+    const grouped = assignGroupIds(raw, () => `g${++n}`);
+    const sorted = sortRunAware(grouped, (run) => Math.max(...run.map(experienceSortValue)), (a, b) => b - a);
+
+    expect(sorted.map((x) => x.title)).toEqual(['Senior Dev', 'Dev', 'Consultant']);
+    expect(sorted[0]._groupId).toBe('g1');
+    expect(sorted[1]._groupId).toBe('g1');
+    expect(sorted[2]._groupId).toBeUndefined();
+  });
+});
