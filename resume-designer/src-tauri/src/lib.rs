@@ -90,6 +90,9 @@ pub fn run() {
             commands::storage::storage_write,
             commands::storage::storage_delete,
             commands::storage::storage_clear,
+            commands::secret::secret_get,
+            commands::secret::secret_set,
+            commands::secret::secret_delete,
             commands::bridge::bridge_respond,
             #[cfg(desktop)]
             commands::updater::check_update_on_channel,

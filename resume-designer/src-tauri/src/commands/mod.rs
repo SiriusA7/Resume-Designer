@@ -43,6 +43,11 @@ pub mod migration;
 // webview localStorage). Not platform-gated: every build needs it.
 pub mod storage;
 
+// OS keychain for credentials, which must NOT live in `storage`'s plaintext
+// files (that directory ends up in backups). Not platform-gated: the commands
+// compile everywhere, and keyring itself cfg-selects the native backend.
+pub mod secret;
+
 /// Loopback HTTP bridge for the companion browser extension.
 pub mod bridge;
 
