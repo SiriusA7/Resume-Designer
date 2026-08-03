@@ -110,7 +110,11 @@ function splittableConfig(el) {
              itemSel: tl ? ':scope > .timeline-item' : ':scope > .experience-item' };
   }
   if (el.classList.contains('experience-item')) {
-    return { head: [':scope > .experience-header', ':scope > .experience-dates'],
+    // The group header rides FIRST in the head list so a rebuilt page reproduces
+    // it above the role it introduces. `head` is also a whitelist — a direct child
+    // that is neither a head nor an itemSel match is dropped by
+    // buildColumnRecursive and lost at resumeEl.replaceChildren.
+    return { head: [':scope > .experience-group-header', ':scope > .experience-header', ':scope > .experience-dates'],
              itemWrap: ':scope > .experience-bullets', itemSel: ':scope > li' };
   }
   if (el.classList.contains('education-section')) {

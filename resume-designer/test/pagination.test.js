@@ -108,3 +108,74 @@ describe('buildColumnRecursive — sidebar wrapper preservation', () => {
     expect(target.querySelector('.sidebar-section > .tools-bulleted')).toBeNull();
   });
 });
+
+describe('buildColumnRecursive — grouped experience survives pagination', () => {
+  const el = (tag, className, text) => {
+    const n = document.createElement(tag);
+    if (className) n.className = className;
+    if (text) n.textContent = text;
+    return n;
+  };
+
+  // One solo entry plus a two-role run — the mix is the point: a whitelist bug
+  // drops only the grouped members, so a run-only fixture can pass while real
+  // resumes lose jobs.
+  const buildExperienceSection = () => {
+    const section = el('div', 'experience-section');
+    section.appendChild(el('div', 'section-title', 'Experience'));
+
+    const makeItem = (id, cls, withHeader) => {
+      const item = el('article', cls);
+      item.dataset.experienceId = id;
+      if (withHeader) item.appendChild(el('div', 'experience-group-header', 'Acme Corporation'));
+      const header = el('div', 'experience-header');
+      header.appendChild(el('h3', 'experience-title', id));
+      item.appendChild(header);
+      item.appendChild(el('time', 'experience-dates', '2020 – 2024'));
+      const ul = el('ul', 'experience-bullets');
+      ul.appendChild(el('li', null, 'a bullet'));
+      item.appendChild(ul);
+      return item;
+    };
+
+    section.appendChild(makeItem('exp-lead', 'experience-item is-grouped is-group-lead', true));
+    section.appendChild(makeItem('exp-second', 'experience-item is-grouped', false));
+    section.appendChild(makeItem('exp-solo', 'experience-item', false));
+    return section;
+  };
+
+  const rebuild = (section) => {
+    const node = makeNode(section);
+    const units = [];
+    flatten(node, [], units);
+    const seen = new Set();
+    for (const u of units) {
+      u.firstOf = [];
+      for (const g of u.chain) if (!seen.has(g)) { seen.add(g); u.firstOf.push(g); }
+    }
+    const target = document.createElement('div');
+    buildColumnRecursive(target, units);
+    return target;
+  };
+
+  it('keeps every experience entry after a rebuild', () => {
+    const target = rebuild(buildExperienceSection());
+    const ids = [...target.querySelectorAll('[data-experience-id]')].map((n) => n.dataset.experienceId);
+    expect(ids).toEqual(['exp-lead', 'exp-second', 'exp-solo']);
+  });
+
+  it('keeps the company header, above the lead role', () => {
+    const target = rebuild(buildExperienceSection());
+    const header = target.querySelector('.experience-group-header');
+    expect(header).not.toBeNull();
+    expect(header.textContent).toBe('Acme Corporation');
+    const lead = target.querySelector('[data-experience-id="exp-lead"]');
+    expect(lead.contains(header)).toBe(true);
+    expect(lead.firstElementChild.className).toBe('experience-group-header');
+  });
+
+  it('keeps every bullet', () => {
+    const target = rebuild(buildExperienceSection());
+    expect(target.querySelectorAll('.experience-bullets li')).toHaveLength(3);
+  });
+});
