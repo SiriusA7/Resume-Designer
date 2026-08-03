@@ -31,7 +31,7 @@ describe('preview suppression during export', () => {
     hideInlineChanges();
   });
 
-  it('is off by default and passes through with no session', async () => {
+  it('suppresses even when no session exists at the start', async () => {
     expect(isPreviewSuppressed()).toBe(false);
     const seen = [];
     const out = await withPreviewSuppressed(async () => {
@@ -39,8 +39,40 @@ describe('preview suppression during export', () => {
       return 'result';
     });
     expect(out).toBe('result');
-    // No session means nothing to suppress — the flag is never touched.
-    expect(seen).toEqual([false]);
+    // The guard must cover the whole capture: the export is async, and a
+    // session can appear mid-flight. Skipping the flag here would reopen the
+    // very hole this closes.
+    expect(seen).toEqual([true]);
+    expect(isPreviewSuppressed()).toBe(false);
+  });
+
+  // The race: an AI request lands during the async import + capture.
+  it('stays suppressed when a session starts mid-capture', async () => {
+    const inside = [];
+    await withPreviewSuppressed(async () => {
+      inside.push(isPreviewSuppressed());
+      // Proposal arrives while html2pdf is working.
+      showInlineChanges(changeSet());
+      inside.push(isPreviewSuppressed());
+    });
+    // Suppressed throughout, so the re-render showInlineChanges triggers cannot
+    // project the proposal into the DOM being captured.
+    expect(inside).toEqual([true, true]);
+    expect(isPreviewSuppressed()).toBe(false);
+  });
+
+  it('restores the preview when the session appeared mid-capture', async () => {
+    const rerender = vi.fn();
+    initInlineChanges(rerender);
+    rerender.mockClear();
+
+    await withPreviewSuppressed(async () => {
+      showInlineChanges(changeSet()); // renders once, suppressed
+    });
+
+    // The exit render must happen even though there was no session on entry,
+    // or the user is left looking at stored data with a live review invisible.
+    expect(rerender.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(isPreviewSuppressed()).toBe(false);
   });
 

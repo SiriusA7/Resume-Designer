@@ -98,14 +98,24 @@ export function isPreviewSuppressed() {
  * looking at their resume with the pending review invisible.
  */
 export async function withPreviewSuppressed(fn) {
-  if (!session.getChangeSet()) return fn();
+  // Guard the WHOLE capture, even with no session open right now. The export is
+  // async — a dynamic import of html2pdf plus the capture itself — and an AI
+  // request can land inside that window: showInlineChanges would start a
+  // session and re-render #resume with the proposal, and the capture would pick
+  // it up. Skipping the flag when no session exists yet reopens exactly the
+  // hole this function closes.
+  const hadSession = !!session.getChangeSet();
   previewSuppressed = true;
-  requestRerender();
+  // Only worth a render if there is a projection on screen to clear; a session
+  // arriving later renders itself, and will do so with the flag already set.
+  if (hadSession) requestRerender();
   try {
     return await fn();
   } finally {
     previewSuppressed = false;
-    requestRerender();
+    // Re-check rather than reuse hadSession: a session may have appeared during
+    // the capture and now needs its preview shown.
+    if (session.getChangeSet()) requestRerender();
   }
 }
 
