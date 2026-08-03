@@ -1,0 +1,49 @@
+version: 2
+
+# Without this file Dependabot raises security PRs against the DEFAULT branch,
+# which is `main` — and guard-main-source rejects anything reaching main from a
+# branch other than this repo's `next`. Every such PR is therefore born
+# unmergeable (see the five failed only-next-into-main runs on #98). Pointing
+# `target-branch` at `next` puts the fix on the beta channel, where it rides the
+# normal promotion PR into main with everything else.
+#
+# `next` here is the BRANCH. A git tag of the same name marks the beta release
+# and must never be deleted; Dependabot resolves refs/heads, so the two do not
+# collide, but keep the distinction in mind when editing this file.
+#
+# open-pull-requests-limit: 0 disables routine version-bump PRs. Security
+# updates are explicitly exempt from this limit, so vulnerability fixes still
+# arrive — this repo gets security traffic only, which is the behaviour it had
+# before this file existed, minus the wrong base branch.
+
+updates:
+  - package-ecosystem: npm
+    directory: /resume-designer
+    target-branch: next
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore
+
+  # src-tauri: the Rust side ships in the signed binary, so an advisory here
+  # reaches users directly rather than only the build.
+  - package-ecosystem: cargo
+    directory: /resume-designer/src-tauri
+    target-branch: next
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore
+
+  # Workflow actions run with repository write scope and handle the minisign
+  # signing key during release, so they are worth patching promptly.
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: next
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: ci
