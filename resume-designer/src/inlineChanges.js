@@ -106,12 +106,19 @@ export async function withPreviewSuppressed(fn) {
   // hole this function closes.
   const hadSession = !!session.getChangeSet();
   previewSuppressed = true;
-  // Only worth a render if there is a projection on screen to clear; a session
-  // arriving later renders itself, and will do so with the flag already set.
-  if (hadSession) requestRerender();
   try {
+    // INSIDE the try: rendering or paginating can throw, and outside it the
+    // finally never runs — stranding the flag true and hiding every pending
+    // preview for the rest of the session. The export error itself is caught by
+    // the caller, so nothing else would reveal it.
+    //
+    // Only worth a render if there is a projection on screen to clear; a session
+    // arriving later renders itself, and will do so with the flag already set.
+    if (hadSession) requestRerender();
     return await fn();
   } finally {
+    // Reset BEFORE re-rendering, so a throw from this render cannot strand the
+    // flag either.
     previewSuppressed = false;
     // Re-check rather than reuse hadSession: a session may have appeared during
     // the capture and now needs its preview shown.

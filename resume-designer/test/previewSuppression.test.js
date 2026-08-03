@@ -28,6 +28,10 @@ const changeSet = () => ({
 
 describe('preview suppression during export', () => {
   beforeEach(() => {
+    // requestRerender is module-level state that survives between tests, and
+    // some cases below install a throwing one. Reset first, or hideInlineChanges
+    // re-throws it into the next test's setup.
+    initInlineChanges(() => {});
     hideInlineChanges();
   });
 
@@ -81,6 +85,35 @@ describe('preview suppression during export', () => {
     const seen = [];
     await withPreviewSuppressed(async () => { seen.push(isPreviewSuppressed()); });
     expect(seen).toEqual([true]);
+    expect(isPreviewSuppressed()).toBe(false);
+  });
+
+  // The entry re-render can throw — renderCurrentResume and paginate both run
+  // real layout. Outside the try, the finally never runs and the flag is
+  // stranded true, hiding every preview for the rest of the session. The export
+  // error is swallowed by handleDownloadPdf, so nothing else would surface it.
+  it('restores when the ENTRY re-render throws', async () => {
+    // Start the session with a safe renderer — showInlineChanges re-renders too
+    // — then arm the throwing one for the entry render under test.
+    showInlineChanges(changeSet());
+    initInlineChanges(() => { throw new Error('paginate blew up'); });
+
+    await expect(withPreviewSuppressed(async () => 'never runs'))
+      .rejects.toThrow('paginate blew up');
+
+    expect(isPreviewSuppressed()).toBe(false);
+  });
+
+  it('restores when the EXIT re-render throws', async () => {
+    let calls = 0;
+    initInlineChanges(() => { calls += 1; if (calls > 1) throw new Error('exit render blew up'); });
+    showInlineChanges(changeSet());
+    calls = 0;
+
+    await expect(withPreviewSuppressed(async () => 'ok'))
+      .rejects.toThrow('exit render blew up');
+
+    // The flag is reset before that render runs, so it cannot be stranded.
     expect(isPreviewSuppressed()).toBe(false);
   });
 
