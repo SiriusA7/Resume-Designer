@@ -93,16 +93,45 @@ export function isDescendantPath(path, ancestorPath) {
 }
 
 /**
+ * Where each change's path actually ends up in the PROJECTED data, keyed by the
+ * change's original path.
+ *
+ * The two differ whenever an anchor resolves: pending removals deliberately stay
+ * visible in the preview, so an item can sit at a different index there than the
+ * proposed array gave it. The projection writes to the resolved position and the
+ * renderer emits `data-editable` from that, so anything that looks a change up
+ * in the DOM — the status markers, the hover menu — has to use the same
+ * resolution or it addresses the wrong element.
+ *
+ * Status stays keyed by the ORIGINAL path throughout: that is the session's key
+ * space, and it must not move when the projection shifts.
+ */
+export function resolvePreviewPaths(changeSet, viewData) {
+  const map = new Map();
+  if (!changeSet || !viewData) return map;
+  for (const change of changeSet.changes || []) {
+    map.set(change.path, resolveAnchoredPath(change, (p) => getByPath(viewData, p)));
+  }
+  return map;
+}
+
+/**
  * Tag every node belonging to a changed path with its status, for CSS styling.
  * Marks ALL matches deliberately: pagination clones nodes across pages, so one
  * path legitimately maps to several elements and marking only the first left
  * visible changes unhighlighted.
+ *
+ * `resolved` maps original paths to where they landed in the projected data —
+ * pass the map from resolvePreviewPaths whenever the render came from a preview
+ * projection, or omit it for a plain render.
  */
-export function markChangedNodes(rootEl, changeSet, statuses) {
+export function markChangedNodes(rootEl, changeSet, statuses, resolved) {
   if (!rootEl || !changeSet) return;
   for (const change of changeSet.changes) {
+    // Status by ORIGINAL path (the session's key space); DOM lookup by RESOLVED.
     const status = statuses.get(change.path) || 'pending';
-    let nodes = rootEl.querySelectorAll(`[data-editable="${escapeAttr(change.path)}"]`);
+    const domPath = resolved?.get(change.path) || change.path;
+    let nodes = rootEl.querySelectorAll(`[data-editable="${escapeAttr(domPath)}"]`);
     if (nodes.length === 0) {
       // Whole-item fallback: for container paths like `experience[1]` or
       // `sections[0]` (whole-item add/remove) the renderer emits no exact
@@ -116,7 +145,7 @@ export function markChangedNodes(rootEl, changeSet, statuses) {
       // `experience[10].title`), and it marks every matching descendant
       // instead of picking one. Keep all three properties.
       nodes = Array.from(rootEl.querySelectorAll('[data-editable]'))
-        .filter((el) => isDescendantPath(el.dataset.editable, change.path));
+        .filter((el) => isDescendantPath(el.dataset.editable, domPath));
     }
     for (const node of nodes) {
       node.dataset.changeStatus = status;

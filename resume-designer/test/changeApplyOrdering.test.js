@@ -3,7 +3,9 @@ import {
   applyChangeToStore, applyChangesToStore, resolveAnchoredPath, selectUndecided,
 } from '../src/changeApply.js';
 import { diffResumeData } from '../src/diffEngine.js';
-import { applyPendingToData } from '../src/changePreview.js';
+import {
+  applyPendingToData, resolvePreviewPaths, markChangedNodes,
+} from '../src/changePreview.js';
 import { store } from '../src/store.js';
 
 // Leaf paths are indexed against the PROPOSED array but applied to the LIVE
@@ -45,10 +47,10 @@ describe('anchored change application', () => {
     );
     const nested = changes.find((c) => c.path === 'experience[2].company');
     expect(nested).toBeDefined();
-    expect(nested.anchor).toEqual({ arrayPath: 'experience', id: 'b', index: 2 });
+    expect(nested.anchors).toEqual([{ arrayPath: 'experience', id: 'b', index: 2 }]);
 
     // The insertion itself has no anchor — it is not inside an existing item.
-    expect(changes.find((c) => c.type === 'add').anchor).toBeUndefined();
+    expect(changes.find((c) => c.type === 'add').anchors).toBeUndefined();
   });
 
   // The property that matters: the user can click Apply on these in any order.
@@ -116,6 +118,98 @@ describe('anchored change application', () => {
 // them to applyChangesToStore. The component itself is out of vitest's reach
 // (no React Testing Library), so the decision is extracted here and pinned —
 // leaving only trivial glue in the component.
+// An id-bearing array nested inside an id-matched item stamps its own anchor
+// during the recursion. Assigning the outer anchor over it would correct the
+// outer index while writing through a stale inner one.
+describe('nested anchors', () => {
+  const S1 = { id: 's1', title: 'One', items: [{ id: 'i1', text: 'a' }] };
+  const S2 = { id: 's2', title: 'Two', items: [{ id: 'i2', text: 'b' }, { id: 'i3', text: 'c' }] };
+  const SN = { id: 'sn', title: 'New', items: [] };
+  const INEW = { id: 'inew', text: 'new' };
+  const S2p = { ...S2, items: [INEW, { id: 'i2', text: 'b' }, { id: 'i3', text: 'c CHANGED' }] };
+
+  const changes = () => diffResumeData({ sections: [S1, S2] }, { sections: [S1, SN, S2p] });
+
+  it('keeps both the inner and the outer anchor, outermost first', () => {
+    const nested = changes().find((c) => c.path === 'sections[2].items[2].text');
+    expect(nested).toBeDefined();
+    expect(nested.anchors).toEqual([
+      { arrayPath: 'sections', id: 's2', index: 2 },
+      { arrayPath: 'sections[2].items', id: 'i3', index: 2 },
+    ]);
+  });
+
+  it('resolves every level against the live document', () => {
+    // Neither insertion has happened: S2 is still at 1, i3 still at 1.
+    const live = { sections: [clone(S1), clone(S2)] };
+    const read = (p) => p.replace(/\[(\d+)\]/g, '.$1').split('.')
+      .reduce((acc, k) => (acc == null ? acc : acc[k]), live);
+
+    const nested = changes().find((c) => c.path === 'sections[2].items[2].text');
+    expect(resolveAnchoredPath(nested, read)).toBe('sections[1].items[1].text');
+
+    // The inner insertion carries the outer anchor and re-points too.
+    const innerAdd = changes().find((c) => c.path === 'sections[2].items[0]');
+    expect(resolveAnchoredPath(innerAdd, read)).toBe('sections[1].items[0]');
+  });
+});
+
+// The preview projects at the RESOLVED path — pending removals stay visible, so
+// items sit further down than the proposed array put them — and the renderer
+// emits data-editable from that. Anything looking a change up in the DOM has to
+// use the same resolution or it decorates the wrong element.
+describe('preview path resolution for DOM lookups', () => {
+  const A = { id: 'a', company: 'Acme' };
+  const B = { id: 'b', company: 'Beta' };
+  const C = { id: 'c', company: 'Ceta' };
+
+  it('maps a change to where the projection actually put it', () => {
+    const changes = diffResumeData(
+      { experience: [A, B, C] },
+      { experience: [A, { ...C, company: 'Ceta Ltd' }] },
+    );
+    const data = { experience: [clone(A), clone(B), clone(C)] };
+    const viewData = applyPendingToData(data, { changes }, new Map());
+
+    // C's edit is proposed at index 1 but lands at 2, because the pending
+    // removal of B is deliberately still visible.
+    expect(viewData.experience.map((e) => e.company)).toEqual(['Acme', 'Beta', 'Ceta Ltd']);
+
+    const resolved = resolvePreviewPaths({ changes }, viewData);
+    expect(resolved.get('experience[1].company')).toBe('experience[2].company');
+  });
+
+  it('decorates the resolved node, not the proposed one', () => {
+    const changes = diffResumeData(
+      { experience: [A, B, C] },
+      { experience: [A, { ...C, company: 'Ceta Ltd' }] },
+    );
+    const data = { experience: [clone(A), clone(B), clone(C)] };
+    const viewData = applyPendingToData(data, { changes }, new Map());
+    const resolved = resolvePreviewPaths({ changes }, viewData);
+
+    // Minimal stand-in for the renderer's data-editable output.
+    const root = document.createElement('div');
+    root.innerHTML = viewData.experience
+      .map((_, i) => `<span data-editable="experience[${i}].company"></span>`)
+      .join('');
+
+    markChangedNodes(root, { changes }, new Map(), resolved);
+
+    const typeAt = (i) =>
+      root.querySelector(`[data-editable="experience[${i}].company"]`)?.dataset.changeType;
+
+    // The modify must land on index 2 (Ceta Ltd), where the projection put it.
+    // Index 1 is B — still visible because its removal is pending — and must be
+    // marked as the REMOVAL, not as C's edit. Before the paths were resolved for
+    // DOM lookup, the modify decorated index 1 and the hover menu offered C's
+    // Apply on B.
+    expect(typeAt(2)).toBe('modify');
+    expect(typeAt(1)).toBe('remove');
+    expect(typeAt(0)).toBeUndefined();
+  });
+});
+
 describe('selectUndecided', () => {
   const changes = [
     { path: 'a', type: 'modify' },
@@ -154,7 +248,7 @@ describe('resolveAnchoredPath', () => {
   it('re-points the index at the item’s live position', () => {
     const change = {
       path: 'experience[2].company',
-      anchor: { arrayPath: 'experience', id: 'b', index: 2 },
+      anchors: [{ arrayPath: 'experience', id: 'b', index: 2 }],
     };
     // B currently sits at index 1, not the proposed 2.
     expect(resolveAnchoredPath(change, read([{ id: 'a' }, { id: 'b' }])))
@@ -164,7 +258,7 @@ describe('resolveAnchoredPath', () => {
   it('leaves the path alone when the index is already right', () => {
     const change = {
       path: 'experience[1].company',
-      anchor: { arrayPath: 'experience', id: 'b', index: 1 },
+      anchors: [{ arrayPath: 'experience', id: 'b', index: 1 }],
     };
     expect(resolveAnchoredPath(change, read([{ id: 'a' }, { id: 'b' }])))
       .toBe('experience[1].company');
@@ -177,11 +271,11 @@ describe('resolveAnchoredPath', () => {
     expect(resolveAnchoredPath({ path: 'experience[2].company' }, read(arr)))
       .toBe('experience[2].company');
     expect(resolveAnchoredPath(
-      { path: 'experience[2].company', anchor: { arrayPath: 'experience', id: 'gone', index: 2 } },
+      { path: 'experience[2].company', anchors: [{ arrayPath: 'experience', id: 'gone', index: 2 }] },
       read(arr),
     )).toBe('experience[2].company');
     expect(resolveAnchoredPath(
-      { path: 'experience[2].company', anchor: { arrayPath: 'experience', id: 'b', index: 2 } },
+      { path: 'experience[2].company', anchors: [{ arrayPath: 'experience', id: 'b', index: 2 }] },
       () => undefined,
     )).toBe('experience[2].company');
   });
@@ -189,7 +283,7 @@ describe('resolveAnchoredPath', () => {
   it('does not rewrite a path that does not sit under the anchor', () => {
     const change = {
       path: 'education[0].school',
-      anchor: { arrayPath: 'experience', id: 'b', index: 2 },
+      anchors: [{ arrayPath: 'experience', id: 'b', index: 2 }],
     };
     expect(resolveAnchoredPath(change, read([{ id: 'b' }])))
       .toBe('education[0].school');

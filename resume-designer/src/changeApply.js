@@ -100,16 +100,34 @@ function alreadyApplied(arr, index, item) {
  * longer present — which is exactly the previous behaviour.
  */
 export function resolveAnchoredPath(change, readArray) {
-  const a = change && change.anchor;
-  if (!a || typeof a.arrayPath !== 'string' || a.id == null) return change.path;
-  const prefix = `${a.arrayPath}[${a.index}]`;
-  if (!change.path.startsWith(prefix)) return change.path;
+  const anchors = change && change.anchors;
+  if (!Array.isArray(anchors) || anchors.length === 0) return change.path;
 
-  const arr = readArray(a.arrayPath);
-  if (!Array.isArray(arr)) return change.path;
-  const live = arr.findIndex((el) => el && typeof el === 'object' && el.id === a.id);
-  if (live === -1 || live === a.index) return change.path;
-  return `${a.arrayPath}[${live}]${change.path.slice(prefix.length)}`;
+  let path = change.path;
+  // Outermost first. Resolving an outer index shifts the array paths of every
+  // anchor beneath it (`experience[2].items` becomes `experience[1].items`), so
+  // carry the correction down as we go.
+  let pending = anchors;
+  for (let i = 0; i < pending.length; i++) {
+    const a = pending[i];
+    if (!a || typeof a.arrayPath !== 'string' || a.id == null) continue;
+    const prefix = `${a.arrayPath}[${a.index}]`;
+    if (!path.startsWith(prefix)) continue;
+
+    const arr = readArray(a.arrayPath);
+    if (!Array.isArray(arr)) continue;
+    const live = arr.findIndex((el) => el && typeof el === 'object' && el.id === a.id);
+    if (live === -1 || live === a.index) continue;
+
+    const resolvedPrefix = `${a.arrayPath}[${live}]`;
+    path = `${resolvedPrefix}${path.slice(prefix.length)}`;
+    // Rewrite the remaining anchors' array paths through the same correction.
+    pending = pending.map((other, j) =>
+      j > i && typeof other?.arrayPath === 'string' && other.arrayPath.startsWith(prefix)
+        ? { ...other, arrayPath: `${resolvedPrefix}${other.arrayPath.slice(prefix.length)}` }
+        : other);
+  }
+  return path;
 }
 
 /** Apply one change object (from a changeSet's `changes[]`) to the store. */

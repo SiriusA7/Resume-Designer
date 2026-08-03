@@ -13,7 +13,9 @@
 
 import * as session from './changeSession.js';
 import { applyChangeToStore, applyChangesToStore } from './changeApply.js';
-import { markChangedNodes, clearChangeMarks, isDescendantPath } from './changePreview.js';
+import {
+  markChangedNodes, clearChangeMarks, isDescendantPath, resolvePreviewPaths,
+} from './changePreview.js';
 import { store } from './store.js';
 
 // Re-render is owned by main.js (it holds the render pipeline); inlineChanges
@@ -65,11 +67,26 @@ export function getCurrentChangeSet() {
   return session.getChangeSet();
 }
 
+// Where each pending change landed in the data the resume was last rendered
+// from, keyed by the change's original path. Anchored changes can project to a
+// different index than their path records — pending removals stay visible in
+// the preview, so items sit further down than the proposed array put them — and
+// the renderer emits `data-editable` from the projected data. Everything that
+// looks a change up in the DOM has to go through this, or it addresses the
+// wrong element. Refreshed on every decorate, i.e. on every render.
+let resolvedPaths = new Map();
+
 /** Tag the freshly-rendered resume nodes with their change status. */
-export function decorateRenderedResume(rootEl) {
+export function decorateRenderedResume(rootEl, viewData) {
   const changeSet = session.getChangeSet();
-  if (!changeSet) { clearChangeMarks(rootEl); return; }
-  markChangedNodes(rootEl, changeSet, session.statusMap());
+  if (!changeSet) { resolvedPaths = new Map(); clearChangeMarks(rootEl); return; }
+  resolvedPaths = resolvePreviewPaths(changeSet, viewData);
+  markChangedNodes(rootEl, changeSet, session.statusMap(), resolvedPaths);
+}
+
+/** The DOM path a change currently occupies (identity to its own path). */
+function domPathOf(change) {
+  return resolvedPaths.get(change.path) || change.path;
 }
 
 /**
@@ -89,12 +106,15 @@ export function decorateRenderedResume(rootEl) {
 export function getPendingChange(path) {
   const changeSet = session.getChangeSet();
   if (!changeSet) return null;
-  const exact = changeSet.changes.find((c) => c.path === path);
-  if (exact) return session.getStatus(path) === 'pending' ? exact : null;
+  // `path` comes from the rendered DOM, so it is where the change LANDED. Match
+  // on that, then report status under the change's own path — the key the
+  // session tracks and every caller acts on.
+  const exact = changeSet.changes.find((c) => domPathOf(c) === path);
+  if (exact) return session.getStatus(exact.path) === 'pending' ? exact : null;
   let ancestor = null;
   for (const change of changeSet.changes) {
-    if (!isDescendantPath(path, change.path)) continue;
-    if (!ancestor || change.path.length > ancestor.path.length) ancestor = change;
+    if (!isDescendantPath(path, domPathOf(change))) continue;
+    if (!ancestor || domPathOf(change).length > domPathOf(ancestor).length) ancestor = change;
   }
   if (!ancestor || session.getStatus(ancestor.path) !== 'pending') return null;
   return ancestor;

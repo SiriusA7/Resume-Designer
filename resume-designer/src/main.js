@@ -1405,7 +1405,9 @@ function renderCurrentResume() {
 
   // Render based on current layout
   container.innerHTML = renderResumeForLayout(viewData, currentLayout);
-  decorateRenderedResume(container);
+  // viewData, not the store data: anchored changes can land at a different
+  // index in the projection, and the markers must follow the render.
+  decorateRenderedResume(container, viewData);
 
   // Add layout class to resume for CSS targeting
   const resume = container.querySelector('.resume');
