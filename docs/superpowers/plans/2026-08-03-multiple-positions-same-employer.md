@@ -656,7 +656,8 @@ In `resume-designer/styles/resume.css`, immediately after the `.experience-item:
 ```css
 /* --- Grouped roles (one employer, several positions) ---------------------- */
 
-/* The employer name, shown once above the run. */
+/* The employer name, shown once above the run. The page-break rules live in
+   print.css (Task 4) — screen layout has no page breaks to avoid. */
 .experience-group-header {
   font-weight: 600;
   color: var(--resume-heading, inherit);
@@ -686,12 +687,6 @@ In `resume-designer/styles/resume.css`, immediately after the `.experience-item:
   margin-bottom: 0.3rem;
   padding-bottom: 0;
   border-bottom: none;
-}
-
-/* The header must not be separated from the role it introduces. */
-.experience-group-header {
-  break-after: avoid;
-  page-break-after: avoid;
 }
 ```
 
@@ -1951,6 +1946,12 @@ describe('markdownToProfile — work experience', () => {
     expect(p.workExperience[0]._groupId).toBe(p.workExperience[1]._groupId);
   });
 
+  it('gives every parsed entry a stable id', () => {
+    const p = markdownToProfile(md('### Dev at Acme\n**Dates:** 2019 - 2022\n\nA.\n'));
+    expect(typeof p.workExperience[0].id).toBe('string');
+    expect(p.workExperience[0].id.length).toBeGreaterThan(0);
+  });
+
   it('does not group different companies', () => {
     const p = markdownToProfile(md(
       '### Dev at Acme\n**Dates:** 2019 - 2022\n\nA.\n\n### Intern at Initech\n**Dates:** 2018\n\nB.\n',
@@ -2013,6 +2014,12 @@ Then group at `:148`:
 
 ```js
       profile.workExperience = assignGroupIds(parseWorkExperience(sectionContent));
+```
+
+And give parsed entries an identity, so an imported profile gets the same stable React keys a newly-added entry gets. In `parseWorkExperience` (`:174`), add the import of `generateId` from `./store.js` and change the push at `:196`:
+
+```js
+    if (title || company || details) experiences.push({ id: generateId('exp'), title, company, dates, details });
 ```
 
 - [ ] **Step 4: Serialize grouped runs into both prompts**
@@ -2108,15 +2115,31 @@ import { groupExperience } from '../../experienceGroups.js';
 import { generateId } from '../../store.js';
 ```
 
-`ItemList` (`:252`) keys entries by array index while their inputs are uncontrolled `defaultValue` fields, so deleting a middle entry already leaves stale text in the wrong card. Give entries a stable key. Replace the `items.map` inside `ItemList`:
+`ItemList` (`:252`) keys entries by array index while their inputs are uncontrolled `defaultValue` fields, so deleting a middle entry already leaves stale text in the wrong card. Fix it by giving entries a real identity at creation — never by assigning one during render, which both mutates state in a render pass and would persist the field into the saved profile.
+
+Replace the `items.map` inside `ItemList`:
 
 ```js
         items.map((item, i) => (
-          <EntryCard key={item._key || (item._key = generateId('row'))} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
+          <EntryCard key={item.id || `row-${i}`} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
             {renderBody(item, i)}
           </EntryCard>
         ))
 ```
+
+Then mint an id wherever a work-experience entry is created. In `ExperienceTab`'s `onAdd` (`:283`), change:
+
+```js
+        onAdd={() => { items.push({ title: '', company: '', dates: '', details: '' }); refresh(); }}
+```
+
+to:
+
+```js
+        onAdd={() => { items.push({ id: generateId('exp'), title: '', company: '', dates: '', details: '' }); refresh(); }}
+```
+
+Entries that predate this change have no `id` and fall back to the positional key, which is exactly today's behaviour — no migration, and no regression for anyone.
 
 Then in `ExperienceTab` (`:269`), add the grouping actions and pass a rail indicator. Replace the `renderBody` prop with one that appends the controls:
 
@@ -2182,7 +2205,7 @@ Run: `grep -n "^import.*Button" src/components/profile/ProfileTabs.jsx`
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `npx vitest run test/profileMarkdown.test.js`
-Expected: PASS, 5 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 7: Run the full suite and the build**
 
