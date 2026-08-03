@@ -411,6 +411,25 @@ function createStore() {
       }
     },
 
+    // Insert an item at a specific index. addToArray only appends, so applying
+    // a proposed insertion (`[A,B]` -> `[A,X,B]`) had to go through the generic
+    // path-write, which ASSIGNS `arr[1] = X` and destroys B. Index is clamped
+    // rather than rejected: a change set numbers its additions against the
+    // proposed array, so an index can legitimately sit one past the current end.
+    insertIntoArray(path, index, item) {
+      if (!data) return;
+
+      const arr = getByPath(data, path);
+      if (!Array.isArray(arr)) return;
+      const at = Math.max(0, Math.min(index, arr.length));
+      arr.splice(at, 0, item);
+      isDirty = true;
+      if (!isUndoRedoAction) this.pushHistory();
+      this.emit('arrayItemAdded', { path, item, index: at });
+      this.emit('change', data);
+      this.scheduleSave();
+    },
+
     // Remove item from array by index
     removeFromArray(path, index) {
       if (!data) return;
