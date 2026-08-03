@@ -191,13 +191,21 @@ describe('sortRunAware', () => {
     sortRunAware(entries, (run) => Math.max(...run.map(experienceSortValue)), (a, b) => b - a);
 
   it('keeps a run intact instead of interleaving a foreign employer', () => {
-    // Without run-awareness the Initech entry (2021) sorts between the two Acme roles.
-    const sorted = byDateDesc([
-      e('Dev', 'Acme', 'Jan 2019 – Mar 2022', { _groupId: 'g1' }),
-      e('Consultant', 'Initech', '2021 – 2022'),
+    // The two Acme roles must be ADJACENT so they form a real run — otherwise the
+    // run rule makes them three separate runs of one and this asserts nothing but
+    // an ordinary date sort. Initech's 2023 falls strictly between the run's two
+    // end dates, so a naive sort would produce Acme, Initech, Acme.
+    const input = [
       e('Senior Dev', 'Acme', 'Mar 2022 – Jun 2024', { _groupId: 'g1' }),
-    ]);
-    expect(sorted.map((x) => x.company)).toEqual(['Acme', 'Acme', 'Initech']);
+      e('Dev', 'Acme', 'Jan 2019 – Mar 2022', { _groupId: 'g1' }),
+      e('Consultant', 'Initech', 'Jan 2023 – Dec 2023'),
+    ];
+    // Guard the guard: prove the naive sort really does interleave, so this test
+    // cannot silently degrade into a tautology again.
+    const naive = [...input].sort((a, b) => experienceSortValue(b) - experienceSortValue(a));
+    expect(naive.map((x) => x.company)).toEqual(['Acme', 'Initech', 'Acme']);
+
+    expect(byDateDesc(input).map((x) => x.company)).toEqual(['Acme', 'Acme', 'Initech']);
   });
 
   it('preserves member order inside a run', () => {
