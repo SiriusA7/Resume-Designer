@@ -577,7 +577,20 @@ export function parseGeneratedResume(responseText) {
   return {
     resume,
     gaps: Array.isArray(gaps)
-      ? gaps.filter((g) => g && typeof g.requirement === 'string')
+      ? gaps
+          .filter((g) => g && typeof g.requirement === 'string')
+          // `severity` and `note` are rendered straight into JSX by GapReport.
+          // A non-string (the model returning an object or array for either)
+          // throws "Objects are not valid as a React child", and the app has no
+          // error boundary — so one malformed optional field would blank the
+          // completed-generation screen and cost the user a resume that
+          // generated fine. Drop anything non-string; GapReport already falls
+          // back to 'low' for a missing severity and skips a missing note.
+          .map((g) => ({
+            ...g,
+            severity: typeof g.severity === 'string' ? g.severity : undefined,
+            note: typeof g.note === 'string' ? g.note : undefined,
+          }))
       : [],
   };
 }
