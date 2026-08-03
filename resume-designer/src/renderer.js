@@ -3,6 +3,8 @@
  * Converts parsed resume data into styled HTML with inline editing support
  */
 
+import { groupExperience } from './experienceGroups.js';
+
 // Separator between inline skill/tool tokens. The trailing <wbr> is a zero-width
 // soft-wrap opportunity: the tag spans are joined with no surrounding whitespace,
 // so without it a bullet-separated run has no break point at the separators and a
@@ -275,7 +277,7 @@ export function renderResume(data) {
         ${data.experience && data.experience.length > 0 ? `
           <div class="section experience-section">
             <h2 class="section-title">Experience</h2>
-            ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+            ${renderExperienceEntries(data.experience)}
           </div>
         ` : ''}
         
@@ -320,7 +322,7 @@ export function renderResumeStacked(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Experience</h2>
-          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+          ${renderExperienceEntries(data.experience)}
         </div>
       ` : ''}
       
@@ -364,7 +366,7 @@ export function renderResumeStackedVertical(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Experience</h2>
-          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+          ${renderExperienceEntries(data.experience)}
         </div>
       ` : ''}
       
@@ -595,12 +597,56 @@ function renderSidebar(data) {
   return html;
 }
 
-function renderExperience(exp, index) {
+/**
+ * Render every experience entry, grouping consecutive roles at one employer.
+ *
+ * There is deliberately NO wrapper element around a run. Run members stay sibling
+ * .experience-item nodes so that pagination's direct-child itemSel keeps matching
+ * them, :last-child still finds the real last entry, the timeline marker gutter
+ * keeps its geometry, and the Structure panel's drag indices stay 1:1 with the
+ * array. The nesting the reader sees is CSS indentation on .is-grouped.
+ *
+ * @param {Array<object>} experience
+ * @param {'default'|'timeline'} variant
+ * @returns {string} HTML
+ */
+export function renderExperienceEntries(experience, variant = 'default') {
+  return groupExperience(experience)
+    .map((group) => group.roles
+      .map((role, position) => (variant === 'timeline'
+        ? renderTimelineExperience(role.entry, role.index, group, position === 0)
+        : renderExperience(role.entry, role.index, group, position === 0)))
+      .join(''))
+    .join('');
+}
+
+// The company header for a run. Placed as the FIRST child of the lead
+// .experience-item so pagination treats it as part of that entry's head, and so
+// print CSS can keep it with the role that follows.
+//
+// data-editable points at a real leaf (the lead's company string) — never a
+// container path, which startEditing would stringify into '[object Object]'.
+// data-editable-group is DOM metadata listing the run's indices; finishEditing
+// uses it to fan a rename out across the run in ONE store write. It is not a
+// store path, so the AI-addressable path grammar is unchanged.
+function renderGroupHeader(group) {
+  const indices = group.roles.map((role) => role.index);
+  return `<div class="experience-group-header" data-editable="experience[${indices[0]}].company" data-editable-group="${indices.join(',')}">${escapeHtml(group.company)}</div>`;
+}
+
+function renderExperience(exp, index, group = null, isLead = false) {
+  const grouped = !!group && group.roles.length > 1;
+  const classes = ['experience-item'];
+  if (grouped) {
+    classes.push('is-grouped');
+    if (isLead) classes.push('is-group-lead');
+  }
   return `
-    <article class="experience-item" data-experience-id="${exp.id || index}">
+    <article class="${classes.join(' ')}" data-experience-id="${exp.id || index}">
+      ${grouped && isLead ? renderGroupHeader(group) : ''}
       <div class="experience-header">
         <h3 class="experience-title" data-editable="experience[${index}].title">${escapeHtml(exp.title)}</h3>
-        ${exp.company ? `<span class="experience-company" data-editable="experience[${index}].company">${escapeHtml(exp.company)}</span>` : ''}
+        ${exp.company ? `<span class="experience-company"${grouped ? '' : ` data-editable="experience[${index}].company"`}>${escapeHtml(exp.company)}</span>` : ''}
       </div>
       <time class="experience-dates" data-editable="experience[${index}].dates">${escapeHtml(exp.dates)}</time>
       ${exp.bullets && exp.bullets.length > 0 ? `
@@ -671,7 +717,7 @@ export function renderResumeRightSidebar(data) {
         ${data.experience && data.experience.length > 0 ? `
           <div class="section experience-section">
             <h2 class="section-title">Experience</h2>
-            ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+            ${renderExperienceEntries(data.experience)}
           </div>
         ` : ''}
         
@@ -720,7 +766,7 @@ export function renderResumeCompact(data) {
           ${data.experience && data.experience.length > 0 ? `
             <div class="section experience-section">
               <h2 class="section-title">Experience</h2>
-              ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+              ${renderExperienceEntries(data.experience)}
             </div>
           ` : ''}${renderMainSections(data)}
         </section>
@@ -783,7 +829,7 @@ export function renderResumeExecutive(data) {
           ${data.experience && data.experience.length > 0 ? `
             <div class="section experience-section">
               <h2 class="section-title">Professional Experience</h2>
-              ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+              ${renderExperienceEntries(data.experience)}
             </div>
           ` : ''}${renderMainSections(data)}
         </div>
@@ -831,7 +877,7 @@ export function renderResumeClassic(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Professional Experience</h2>
-          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+          ${renderExperienceEntries(data.experience)}
         </div>
       ` : ''}
       
@@ -907,7 +953,7 @@ export function renderResumeClassicFeatured(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Professional Experience</h2>
-          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+          ${renderExperienceEntries(data.experience)}
         </div>
       ` : ''}
       
@@ -1005,7 +1051,7 @@ export function renderResumeModern(data) {
         ${data.experience && data.experience.length > 0 ? `
           <div class="section experience-section">
             <h2 class="section-title">Experience</h2>
-            ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+            ${renderExperienceEntries(data.experience)}
           </div>
         ` : ''}${renderMainSections(data)}
       </main>
@@ -1052,7 +1098,7 @@ export function renderResumeTimeline(data) {
           <div class="section experience-section timeline-experience">
             <h2 class="section-title">Experience</h2>
             <div class="timeline-container">
-              ${data.experience.map((exp, i) => renderTimelineExperience(exp, i)).join('')}
+              ${renderExperienceEntries(data.experience, 'timeline')}
             </div>
           </div>
         ` : ''}
@@ -1077,18 +1123,25 @@ export function renderResumeTimeline(data) {
 }
 
 // Timeline experience renderer with visual timeline
-function renderTimelineExperience(exp, index) {
+function renderTimelineExperience(exp, index, group = null, isLead = false) {
+  const grouped = !!group && group.roles.length > 1;
+  const classes = ['timeline-item'];
+  if (grouped) {
+    classes.push('is-grouped');
+    if (isLead) classes.push('is-group-lead');
+  }
   return `
-    <div class="timeline-item">
+    <div class="${classes.join(' ')}" data-experience-id="${exp.id || index}">
       <div class="timeline-marker">
         <span class="timeline-dot"></span>
         <span class="timeline-line"></span>
       </div>
       <div class="timeline-content">
+        ${grouped && isLead ? renderGroupHeader(group) : ''}
         <div class="experience-header">
           <div class="experience-title-row">
             <span class="experience-title" data-editable="experience[${index}].title">${escapeHtml(exp.title)}</span>
-            ${exp.company ? `<span class="experience-company" data-editable="experience[${index}].company">${escapeHtml(exp.company)}</span>` : ''}
+            ${exp.company ? `<span class="experience-company"${grouped ? '' : ` data-editable="experience[${index}].company"`}>${escapeHtml(exp.company)}</span>` : ''}
           </div>
           <span class="experience-dates" data-editable="experience[${index}].dates">${escapeHtml(exp.dates)}</span>
         </div>
@@ -1146,7 +1199,7 @@ export function renderResumeCreative(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section creative-experience">
           <h2 class="section-title">Experience</h2>
-          ${data.experience.map((exp, i) => renderExperience(exp, i)).join('')}
+          ${renderExperienceEntries(data.experience)}
         </div>
       ` : ''}
       

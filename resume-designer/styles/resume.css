@@ -418,6 +418,41 @@
   border-bottom: none;
 }
 
+/* --- Grouped roles (one employer, several positions) ---------------------- */
+
+/* The employer name, shown once above the run. The page-break rules live in
+   print.css (Task 4) — screen layout has no page breaks to avoid. */
+.experience-group-header {
+  font-weight: 600;
+  color: var(--resume-heading, inherit);
+  margin-bottom: 0.3rem;
+}
+
+/* Run members indent under the header so the progression reads as one job. */
+.is-grouped .experience-header,
+.is-grouped .experience-dates,
+.is-grouped .experience-bullets {
+  margin-left: 0.85rem;
+}
+
+/* The per-role company stays in the DOM for the continuation-page reveal
+   (see src/pagination.js revealGroupContinuations) but is hidden in normal flow. */
+.is-grouped .experience-company {
+  display: none;
+}
+.is-grouped .experience-company.is-continuation {
+  display: inline;
+}
+
+/* A divider between two roles at the SAME employer is exactly the visual this
+   feature exists to remove: the run should read as one job. Only the last member
+   of a run keeps the entry separator. */
+.experience-item.is-grouped:not(:last-child) {
+  margin-bottom: 0.3rem;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 .experience-header {
   display: flex;
   flex-wrap: wrap;
