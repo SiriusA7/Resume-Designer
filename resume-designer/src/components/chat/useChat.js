@@ -181,10 +181,21 @@ export function useChat() {
   // with the new list. Mirrors the SETTINGS_UPDATED_EVENT pattern.
   const [catalogRev, setCatalogRev] = useState(0);
   useEffect(() => {
-    const onCatalog = () => setCatalogRev((n) => n + 1);
+    const onCatalog = () => {
+      setCatalogRev((n) => n + 1);
+      // Recompute reasoning support too. modelSupportsReasoning() reads the
+      // catalog cache, and callOpenRouter re-reads it at send time — so if a
+      // revalidation changes the selected model's supported_parameters and this
+      // state stays stale, the two disagree silently: the composer keeps
+      // offering reasoning that the request then omits, or keeps the control
+      // disabled after support was added. The initial fetch and the
+      // model-selection paths already do this; only later revalidations (the
+      // picker's 5-minute stale-while-revalidate) reached here without it.
+      setReasoningSupported(modelSupportsReasoning(modelRef.current));
+    };
     window.addEventListener(CATALOG_UPDATED_EVENT, onCatalog);
     return () => window.removeEventListener(CATALOG_UPDATED_EVENT, onCatalog);
-  }, []);
+  }, [modelRef]);
 
   const refreshCustomModels = () => setCustomModels(isConfigured() ? getCustomModels() : []);
 
