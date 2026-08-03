@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { applyChangeToStore } from '../src/changeApply.js';
+import { applyChangeToStore, applyChangesToStore } from '../src/changeApply.js';
 import { diffResumeData } from '../src/diffEngine.js';
 import { store } from '../src/store.js';
 
@@ -45,7 +45,7 @@ describe('applyChangeToStore — ADD on an array index', () => {
     expect(companies()).toEqual(['Acme', 'Beta', 'Xeno']);
   });
 
-  it('is a no-op when the item is already present (re-apply)', () => {
+  it('is a no-op when an item with the same id is already present (re-apply)', () => {
     const add = { type: 'add', path: 'experience[1]', oldValue: null, newValue: { ...X } };
     applyChangeToStore(add);
     applyChangeToStore(add);
@@ -62,6 +62,16 @@ describe('applyChangeToStore — ADD on an array index', () => {
     expect(companies()).toEqual(['Acme', 'Xeno', 'Beta']);
   });
 
+  // The guard is by id ONLY. Equal values are content, not evidence that a
+  // change was already applied — a value check silently drops real additions.
+  it('preserves a legitimate duplicate value in an id-less array', () => {
+    store.setData({ name: 'Ada', skills: ['JS', 'CSS'] }, true, null);
+    applyChangesToStore(
+      diffResumeData({ skills: ['JS', 'CSS'] }, { skills: ['JS', 'CSS', 'JS'] }),
+    );
+    expect(store.get('skills')).toEqual(['JS', 'CSS', 'JS']);
+  });
+
   it('applies several insertions in order without losing entries', () => {
     const Y = { id: 'y', company: 'Yotta', title: 'Staff' };
     const changes = diffResumeData(
@@ -76,6 +86,42 @@ describe('applyChangeToStore — ADD on an array index', () => {
     store.setData({ name: 'Ada' }, true, null);
     applyChangeToStore({ type: 'add', path: 'summary', oldValue: null, newValue: 'Hello' });
     expect(store.get('summary')).toBe('Hello');
+  });
+
+  // Leaf paths are indexed against the PROPOSED array but written to the LIVE
+  // one, and diffArray emits id-matched content edits (first pass) BEFORE
+  // additions (last loop). Applied in emitted order, the modify writes past the
+  // end of a two-item array — setByPath creates a third entry to hold it — and
+  // the insert then makes four, with B never modified.
+  it('applies an insertion before an edit to an item the insertion shifts', () => {
+    const Bmod = { ...B, title: 'Senior Developer' };
+    const changes = diffResumeData(
+      { experience: [A, B] },
+      { experience: [A, X, Bmod] },
+    );
+    // Pin the hazard itself: the modify really does come first.
+    expect(changes.map((c) => c.type)).toEqual(['modify', 'add']);
+
+    applyChangesToStore(changes);
+
+    const exp = store.get('experience');
+    expect(exp).toHaveLength(3);
+    expect(exp.map((e) => e.company)).toEqual(['Acme', 'Xeno', 'Beta']);
+    expect(exp[2].title).toBe('Senior Developer');
+  });
+
+  // Same root cause, mirrored: a removal shifts later items down, so a modify
+  // indexed against the proposed array must not run first.
+  it('applies a removal before an edit to an item the removal shifts', () => {
+    const C = { id: 'c', company: 'Ceta', title: 'Architect' };
+    store.setData({ name: 'Ada', experience: [{ ...A }, { ...B }, { ...C }] }, true, null);
+    applyChangesToStore(diffResumeData(
+      { experience: [A, B, C] },
+      { experience: [A, { ...C, title: 'Principal' }] },
+    ));
+    const exp = store.get('experience');
+    expect(exp.map((e) => e.company)).toEqual(['Acme', 'Ceta']);
+    expect(exp[1].title).toBe('Principal');
   });
 
   // The id-less path was never broken; pin it so a future refactor of the ADD
