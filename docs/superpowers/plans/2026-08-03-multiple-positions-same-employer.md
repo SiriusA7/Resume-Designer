@@ -477,6 +477,18 @@ describe('renderExperienceEntries — grouped', () => {
     expect(items[1].querySelector('li').dataset.editable).toBe('experience[1].bullets[0]');
   });
 
+  it('marks the last role of a run so the divider to the next employer survives', () => {
+    // The run is NOT the last thing in the list — the case where a :last-child
+    // rule would silently strip the boundary between Acme and Initech.
+    const host = parse(renderExperienceEntries([...twoRoles, e('Intern', 'Initech', '2018')]));
+    const items = host.querySelectorAll('.experience-item');
+    expect(items[0].classList.contains('is-group-last')).toBe(false);
+    expect(items[1].classList.contains('is-group-last')).toBe(true);
+    // Only the non-final run member may have its separator suppressed.
+    const suppressed = host.querySelectorAll('.experience-item.is-grouped:not(.is-group-last)');
+    expect([...suppressed].map((n) => n.dataset.experienceId)).toEqual([items[0].dataset.experienceId]);
+  });
+
   it('renders a solo entry that follows a run without marker classes', () => {
     const host = parse(renderExperienceEntries([...twoRoles, e('Intern', 'Initech', '2018')]));
     const items = host.querySelectorAll('.experience-item');
@@ -535,9 +547,13 @@ Then replace the whole of `renderExperience` (currently `:598-615`) with:
 export function renderExperienceEntries(experience, variant = 'default') {
   return groupExperience(experience)
     .map((group) => group.roles
-      .map((role, position) => (variant === 'timeline'
-        ? renderTimelineExperience(role.entry, role.index, group, position === 0)
-        : renderExperience(role.entry, role.index, group, position === 0)))
+      .map((role, position) => {
+        const isLead = position === 0;
+        const isLast = position === group.roles.length - 1;
+        return variant === 'timeline'
+          ? renderTimelineExperience(role.entry, role.index, group, isLead, isLast)
+          : renderExperience(role.entry, role.index, group, isLead, isLast);
+      })
       .join(''))
     .join('');
 }
@@ -556,12 +572,17 @@ function renderGroupHeader(group) {
   return `<div class="experience-group-header" data-editable="experience[${indices[0]}].company" data-editable-group="${indices.join(',')}">${escapeHtml(group.company)}</div>`;
 }
 
-function renderExperience(exp, index, group = null, isLead = false) {
+function renderExperience(exp, index, group = null, isLead = false, isLast = false) {
   const grouped = !!group && group.roles.length > 1;
   const classes = ['experience-item'];
   if (grouped) {
     classes.push('is-grouped');
     if (isLead) classes.push('is-group-lead');
+    // `is-group-last` marks the run's final role. CSS cannot express "last of the
+    // run" on its own: there is deliberately no wrapper, so :last-child would mean
+    // "last entry in the whole section" and would strip the divider between this
+    // employer and the next one whenever the run isn't at the end of the list.
+    if (isLast) classes.push('is-group-last');
   }
   return `
     <article class="${classes.join(' ')}" data-experience-id="${exp.id || index}">
@@ -589,12 +610,13 @@ Replace the whole of `renderTimelineExperience` (currently `:1080-1105`) with:
 
 ```js
 // Timeline experience renderer with visual timeline
-function renderTimelineExperience(exp, index, group = null, isLead = false) {
+function renderTimelineExperience(exp, index, group = null, isLead = false, isLast = false) {
   const grouped = !!group && group.roles.length > 1;
   const classes = ['timeline-item'];
   if (grouped) {
     classes.push('is-grouped');
     if (isLead) classes.push('is-group-lead');
+    if (isLast) classes.push('is-group-last');
   }
   return `
     <div class="${classes.join(' ')}" data-experience-id="${exp.id || index}">
@@ -690,8 +712,11 @@ In `resume-designer/styles/resume.css`, immediately after the `.experience-item:
 
 /* A divider between two roles at the SAME employer is exactly the visual this
    feature exists to remove: the run should read as one job. Only the last member
-   of a run keeps the entry separator. */
-.experience-item.is-grouped:not(:last-child) {
+   of a run keeps the entry separator, so the boundary to the NEXT employer stays.
+   Keyed on .is-group-last rather than :last-child — with no wrapper element,
+   :last-child would mean "last entry in the section", which would also strip the
+   divider after any run that isn't at the very end of the list. */
+.experience-item.is-grouped:not(.is-group-last) {
   margin-bottom: 0.3rem;
   padding-bottom: 0;
   border-bottom: none;
