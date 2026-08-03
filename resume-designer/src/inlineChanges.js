@@ -76,9 +76,42 @@ export function getCurrentChangeSet() {
 // wrong element. Refreshed on every decorate, i.e. on every render.
 let resolvedPaths = new Map();
 
+// While true, renders ignore the pending preview entirely — no projection, no
+// markers — even though the session is still live. The browser PDF fallback
+// captures the LIVE DOM (html2pdf on #resume), so without this an export taken
+// mid-review silently bakes proposed, never-applied content into the file. The
+// `.pdf-export-mode` CSS only strips the highlight styling; the text underneath
+// is still the projection.
+let previewSuppressed = false;
+
+/** True while a render must show stored data rather than the pending preview. */
+export function isPreviewSuppressed() {
+  return previewSuppressed;
+}
+
+/**
+ * Run `fn` with the preview projection turned off, then restore it.
+ *
+ * Re-renders on both edges. renderCurrentResume + paginate are synchronous, so
+ * by the time this returns the DOM is fully laid out from stored data and safe
+ * to capture. Restores in a `finally` so a failed export cannot strand the user
+ * looking at their resume with the pending review invisible.
+ */
+export async function withPreviewSuppressed(fn) {
+  if (!session.getChangeSet()) return fn();
+  previewSuppressed = true;
+  requestRerender();
+  try {
+    return await fn();
+  } finally {
+    previewSuppressed = false;
+    requestRerender();
+  }
+}
+
 /** Tag the freshly-rendered resume nodes with their change status. */
 export function decorateRenderedResume(rootEl, viewData) {
-  const changeSet = session.getChangeSet();
+  const changeSet = previewSuppressed ? null : session.getChangeSet();
   if (!changeSet) { resolvedPaths = new Map(); clearChangeMarks(rootEl); return; }
   resolvedPaths = resolvePreviewPaths(changeSet, viewData);
   markChangedNodes(rootEl, changeSet, session.statusMap(), resolvedPaths);

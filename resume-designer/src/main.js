@@ -16,7 +16,7 @@ import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from '
 import { initVariants } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
-import { initInlineChanges, decorateRenderedResume } from './inlineChanges.js';
+import { initInlineChanges, decorateRenderedResume, isPreviewSuppressed } from './inlineChanges.js';
 import { applyPendingToData } from './changePreview.js';
 import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
@@ -1398,7 +1398,10 @@ function renderCurrentResume() {
   // renders through the normal pipeline (markdown, pagination, every layout);
   // the store itself is untouched until a change is applied. With no session
   // in flight this is a plain render of the store data.
-  const changeSet = changeSession.getChangeSet();
+  // Suppressed during a browser PDF export: that path captures the live DOM, so
+  // a render carrying the projection would bake never-applied content into the
+  // file (see withPreviewSuppressed).
+  const changeSet = isPreviewSuppressed() ? null : changeSession.getChangeSet();
   const viewData = changeSet
     ? applyPendingToData(data, changeSet, changeSession.statusMap())
     : data;
