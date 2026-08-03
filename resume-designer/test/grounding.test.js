@@ -62,6 +62,47 @@ describe('parseGeneratedResume', () => {
     expect(gaps).toEqual([]);
   });
 
+  it('keeps well-formed optional gap fields', () => {
+    const { gaps } = parseGeneratedResume(JSON.stringify({
+      name: 'Ada',
+      gaps: [{ requirement: 'Kubernetes', severity: 'high', note: 'Not in profile.' }],
+    }));
+    expect(gaps[0]).toMatchObject({ requirement: 'Kubernetes', severity: 'high', note: 'Not in profile.' });
+  });
+
+  // GapReport renders `severity` and `note` straight into JSX. A non-string
+  // throws "Objects are not valid as a React child", and with no error boundary
+  // in the app that blanks the completed-generation screen — losing a resume
+  // that generated fine because of a cosmetic field.
+  it('drops non-string severity and note so they can never reach JSX', () => {
+    const { gaps } = parseGeneratedResume(JSON.stringify({
+      name: 'Ada',
+      gaps: [
+        { requirement: 'Kubernetes', severity: { level: 'high' }, note: ['a', 'b'] },
+        { requirement: 'Terraform', severity: 3, note: null },
+      ],
+    }));
+    expect(gaps).toHaveLength(2);
+    for (const g of gaps) {
+      expect(typeof g.requirement).toBe('string');
+      // undefined is what GapReport's `|| 'low'` and `note &&` fallbacks expect.
+      for (const field of ['severity', 'note']) {
+        expect(g[field] === undefined || typeof g[field] === 'string').toBe(true);
+      }
+    }
+    expect(gaps[0].severity).toBeUndefined();
+    expect(gaps[0].note).toBeUndefined();
+    expect(gaps[1].severity).toBeUndefined();
+  });
+
+  it('still drops gaps whose requirement is not a string', () => {
+    const { gaps } = parseGeneratedResume(JSON.stringify({
+      name: 'Ada',
+      gaps: [{ requirement: { text: 'Kubernetes' }, severity: 'high' }, null, { severity: 'low' }],
+    }));
+    expect(gaps).toEqual([]);
+  });
+
   it('strips code fences', () => {
     const { resume } = parseGeneratedResume('```json\n{"name":"Ada"}\n```');
     expect(resume.name).toBe('Ada');
