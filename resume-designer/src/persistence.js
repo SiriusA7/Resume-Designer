@@ -8,6 +8,8 @@ import { parseResume } from './parser.js';
 import { isTauri } from './native.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
+// The API key lives in the OS keychain, not beside the resume data on disk.
+import { getSecret, setSecret } from './secretStore.js';
 
 const STORAGE_KEY = 'resume-designer-data';
 export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
@@ -224,12 +226,18 @@ export function clearVariantAnalysis(variantId) {
   }
 }
 
-// Save settings. openrouterKey is machine-level (shared across profiles) and
-// routes to its own key; everything else merges into the per-profile blob.
+// Save settings. The credential does NOT come through here — it lives in the
+// OS keychain and its write is async, so it has its own entry point
+// (saveApiKey). Everything else merges into the per-profile blob.
+//
+// Throwing rather than silently delegating: this function is synchronous, so a
+// delegated keychain write could only be fire-and-forget, and a failed one
+// would leave the user believing a key was saved that never reached the
+// keychain. A loud error at the call site is the correct signal.
 export function saveSettings(settings) {
   const { openrouterKey, ...rest } = settings;
   if (openrouterKey !== undefined) {
-    appStorage.setItem(OPENROUTER_KEY_KEY, openrouterKey);
+    throw new Error('saveSettings cannot write openrouterKey — use saveApiKey()');
   }
   const storage = loadFromStorage();
   storage.settings = { ...storage.settings, ...rest };
@@ -249,14 +257,37 @@ export function saveSettings(settings) {
   }
 }
 
-// Get settings. The shared machine-level key is authoritative when PRESENT
+/**
+ * Persist the API key. Async because it goes to the OS keychain rather than
+ * to disk beside the resume data.
+ *
+ * Rejects if the keychain refuses the write, so the caller can tell the user
+ * their key was NOT saved. Callers must await this — a dropped promise here is
+ * a silently lost credential.
+ */
+export async function saveApiKey(value) {
+  await setSecret(value);
+  if (typeof window !== 'undefined') {
+    const storage = loadFromStorage();
+    window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
+      detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
+    }));
+  }
+}
+
+// Get settings. The machine-level key is authoritative when PRESENT
 // (null-check, not truthiness: an existing empty value means the user cleared
 // the key and must mask any stale blob value); the blob is only a fallback
 // for pre-extraction installs (adoption strips it on the next boot).
+//
+// The credential now comes from the keychain via secretStore's synchronous
+// in-memory copy, hydrated at boot. Before initSecretStore() has run — and in
+// the browser build, which has no keychain — getSecret() falls back to the
+// appStorage value, so this keeps working unchanged during boot.
 export function getSettings() {
   const storage = loadFromStorage();
   const s = storage.settings || DEFAULT_STORAGE.settings;
-  const shared = appStorage.getItem(OPENROUTER_KEY_KEY);
+  const shared = getSecret();
   // Legacy OpenRouter-era guarantees preserved (see original comment).
   return {
     autoFallback: false,

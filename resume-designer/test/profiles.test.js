@@ -9,7 +9,7 @@ import {
   activateProfileMappingForPrint,
 } from '../src/profiles.js';
 import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
-import { getSettings, saveSettings } from '../src/persistence.js';
+import { getSettings, saveSettings, saveApiKey } from '../src/persistence.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
@@ -572,8 +572,9 @@ describe('adoption migration', () => {
 });
 
 describe('shared api key overlay', () => {
-  it('saveSettings routes openrouterKey to the shared key and strips it from the blob', () => {
-    saveSettings({ openrouterKey: 'sk-new', defaultModel: 'm' });
+  it('saveApiKey routes the credential to the shared key, not the blob', async () => {
+    await saveApiKey('sk-new');
+    saveSettings({ defaultModel: 'm' });
     expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-new');
     const blob = JSON.parse(appStorage.getItem('resume-designer-data'));
     expect(blob.settings.openrouterKey).toBeUndefined();
@@ -617,12 +618,13 @@ describe('hasProfileNamespaces', () => {
 // mode flushes the two files independently) — the same loss window the
 // extraction path fixed, reopened through every ordinary settings save.
 describe('saveSettings blob-credential fallback', () => {
-  it('never strips a pre-extraction blob credential', () => {
+  it('never strips a pre-extraction blob credential', async () => {
     localStorage.setItem('resume-designer-data', JSON.stringify({
       variants: {}, settings: { openrouterKey: 'sk-legacy', theme: 'light' },
     }));
 
-    saveSettings({ openrouterKey: 'sk-new', autoUpdateCheck: true });
+    await saveApiKey('sk-new');
+    saveSettings({ autoUpdateCheck: true });
 
     // Shared key holds the new value; the blob FALLBACK survives untouched.
     expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-new');

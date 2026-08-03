@@ -21,7 +21,8 @@ import {
 import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
-import { getSettings, saveSettings } from '../persistence.js';
+import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
+import { isKeychainAvailable } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
@@ -141,6 +142,9 @@ export default function SettingsDialog() {
 
   // Form/display state, seeded from the services each time the dialog opens.
   const [apiKey, setApiKey] = useState('');
+  // Set when the OS keychain refuses a write, so the dialog can stay open and
+  // explain rather than closing on a save that did not happen.
+  const [keyError, setKeyError] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [showBridgeToken, setShowBridgeToken] = useState(false);
   const [copiedBridgeToken, setCopiedBridgeToken] = useState(false);
@@ -190,8 +194,23 @@ export default function SettingsDialog() {
 
   const pickTheme = (value) => { setTheme(value); setThemeState(value); };
 
-  const handleSaveKeys = () => {
-    saveSettings({ openrouterKey: apiKey, autoFallback });
+  // Describe where the key actually lands, rather than claiming a keychain the
+  // browser build does not have. Deliberately platform-neutral: this reads the
+  // same whether the backend is the macOS Keychain or Windows Credential Manager.
+  const keychainName = isKeychainAvailable() ? 'system keychain' : 'app data folder';
+
+  const handleSaveKeys = async () => {
+    // The key goes to the OS keychain, so this can genuinely fail (locked or
+    // access denied). Keep the dialog open and say so rather than closing on a
+    // save that did not happen.
+    try {
+      await saveApiKey(apiKey);
+    } catch (err) {
+      setKeyError(err?.message || 'Could not save your key to the system keychain.');
+      return;
+    }
+    setKeyError('');
+    saveSettings({ autoFallback });
     refreshChatPanel();
     setOpen(false);
   };
@@ -203,7 +222,14 @@ export default function SettingsDialog() {
       actionLabel: 'Clear all keys',
     });
     if (!ok) return;
-    saveSettings({ openrouterKey: '' });
+    // Writes an empty value rather than deleting the entry — see secretStore.
+    try {
+      await saveApiKey('');
+    } catch (err) {
+      setKeyError(err?.message || 'Could not clear your key from the system keychain.');
+      return;
+    }
+    setKeyError('');
     refreshChatPanel();
     setApiKey('');
   };
@@ -377,9 +403,14 @@ export default function SettingsDialog() {
                       {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
                   </div>
+                  {keyError && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {keyError}
+                    </p>
+                  )}
                   <p className="text-sm text-muted-foreground">
-                    Your key is stored locally and is sent only to OpenRouter — never share it. One key covers Claude,
-                    GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
+                    Your key is kept in your {keychainName} and is sent only to OpenRouter — never share it. One key
+                    covers Claude, GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
                   </p>
                 </section>
 

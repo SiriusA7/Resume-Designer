@@ -3,7 +3,7 @@ import {
   GROUNDING_RULES, buildGenerateResumePrompt, parseGeneratedResume,
   chat, generateResumeChanges, analyzeAgainstJobs,
 } from '../src/aiService.js';
-import { saveSettings } from '../src/persistence.js';
+import { saveApiKey } from '../src/persistence.js';
 import { store } from '../src/store.js';
 
 // onboardingLogic statically imports resumeParser, whose pdfjs-dist import
@@ -148,12 +148,14 @@ describe('grounding rules reach every AI entry point', () => {
   const JOB = { title: 'Designer', company: 'Acme', description: 'Do design.' };
   let fetchSpy;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear();
     // aiService logs profile/context chatter via console.log on these paths;
     // keep the run output clean without hiding errors.
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    saveSettings({ openrouterKey: 'test-key' });
+    // The credential has its own async entry point now — saveSettings
+    // refuses it outright so a keychain write can never be fire-and-forget.
+    await saveApiKey('test-key');
     fetchSpy = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }));
     vi.stubGlobal('fetch', fetchSpy);
   });

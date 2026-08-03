@@ -5,6 +5,7 @@
 
 import { store } from './store.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
+import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, loadRegistry, isAdoptionPending, hasProfileNamespaces,
 } from './profiles.js';
@@ -316,6 +317,11 @@ export async function init() {
     await initAppStorage();
     await maybeAutoMigrateLegacyData();
     await ensureProfilesInitialized();   // profiles resolve BEFORE the React gate opens
+    // AFTER profiles (ensureProfilesInitialized runs extractSharedApiKey, which
+    // consolidates the credential into one key) and BEFORE the gate opens, so
+    // React never renders a settings state missing a key the user does have.
+    // Swallows its own failures — a keychain problem must not block boot.
+    await initSecretStore();
   } finally {
     markStorageReady();
   }

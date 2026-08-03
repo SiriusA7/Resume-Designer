@@ -28,7 +28,7 @@ import {
   fetchModelCatalog,
   checkProfileHasData,
 } from '../../aiService.js';
-import { getSettings, saveSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
+import { getSettings, saveSettings, saveApiKey, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { refreshChatPanel } from '../../chatPanel.js';
 import { initWindowDrag } from '../../tauriDrag.js';
 import {
@@ -198,7 +198,17 @@ export default function OnboardingWizard() {
 
   const validateKey = useCallback(async (key) => {
     // Persist immediately so every AI entry point can use it, then validate.
-    saveSettings({ openrouterKey: key });
+    // A keychain refusal must not trap the user inside onboarding, so this
+    // logs and continues to the validation step. Note the key is then NOT
+    // persisted — setSecret updates its in-memory copy only after a confirmed
+    // write — so AI calls keep failing until it is saved again from Settings,
+    // which reports the error properly. Revisit alongside
+    // secretStore#handleUnavailableKeychain.
+    try {
+      await saveApiKey(key);
+    } catch (err) {
+      console.error('[onboarding] could not persist the API key', err);
+    }
     refreshChatPanel();
     return validateOpenRouterKey(key);
   }, []);

@@ -76,15 +76,12 @@ pub fn secret_set(name: String, value: String) -> Result<(), String> {
         .map_err(|e| format!("keychain write {name}: {e}"))
 }
 
-/// Remove a secret. Idempotent — deleting an absent entry succeeds, so a
-/// retried "clear my key" is not an error the user has to see.
-#[tauri::command(async)]
-pub fn secret_delete(name: String) -> Result<(), String> {
-    match entry(&name)?.delete_credential() {
-        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-        Err(e) => Err(format!("keychain delete {name}: {e}")),
-    }
-}
+// No delete command on purpose. "Clear all API keys" writes an EMPTY value
+// rather than removing the entry, which both erases the credential and
+// preserves an existing guarantee in persistence.js#getSettings: a stored
+// empty string masks a stale key left in the per-profile blob by a
+// pre-extraction install, whereas an absent entry would let that stale key
+// resurface as though the user had never cleared it.
 
 #[cfg(test)]
 mod tests {
