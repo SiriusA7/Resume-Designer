@@ -79,6 +79,18 @@ describe('renderExperienceEntries — grouped', () => {
     expect(items[1].querySelector('li').dataset.editable).toBe('experience[1].bullets[0]');
   });
 
+  it('marks the last role of a run so the divider to the next employer survives', () => {
+    // The run is NOT the last thing in the list — the case where a :last-child
+    // rule would silently strip the boundary between Acme and Initech.
+    const host = parse(renderExperienceEntries([...twoRoles, e('Intern', 'Initech', '2018')]));
+    const items = host.querySelectorAll('.experience-item');
+    expect(items[0].classList.contains('is-group-last')).toBe(false);
+    expect(items[1].classList.contains('is-group-last')).toBe(true);
+    // Only the non-final run member may have its separator suppressed.
+    const suppressed = host.querySelectorAll('.experience-item.is-grouped:not(.is-group-last)');
+    expect([...suppressed].map((n) => n.dataset.experienceId)).toEqual([items[0].dataset.experienceId]);
+  });
+
   it('renders a solo entry that follows a run without marker classes', () => {
     const host = parse(renderExperienceEntries([...twoRoles, e('Intern', 'Initech', '2018')]));
     const items = host.querySelectorAll('.experience-item');

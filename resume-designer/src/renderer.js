@@ -613,9 +613,13 @@ function renderSidebar(data) {
 export function renderExperienceEntries(experience, variant = 'default') {
   return groupExperience(experience)
     .map((group) => group.roles
-      .map((role, position) => (variant === 'timeline'
-        ? renderTimelineExperience(role.entry, role.index, group, position === 0)
-        : renderExperience(role.entry, role.index, group, position === 0)))
+      .map((role, position) => {
+        const isLead = position === 0;
+        const isLast = position === group.roles.length - 1;
+        return variant === 'timeline'
+          ? renderTimelineExperience(role.entry, role.index, group, isLead, isLast)
+          : renderExperience(role.entry, role.index, group, isLead, isLast);
+      })
       .join(''))
     .join('');
 }
@@ -634,12 +638,17 @@ function renderGroupHeader(group) {
   return `<div class="experience-group-header" data-editable="experience[${indices[0]}].company" data-editable-group="${indices.join(',')}">${escapeHtml(group.company)}</div>`;
 }
 
-function renderExperience(exp, index, group = null, isLead = false) {
+function renderExperience(exp, index, group = null, isLead = false, isLast = false) {
   const grouped = !!group && group.roles.length > 1;
   const classes = ['experience-item'];
   if (grouped) {
     classes.push('is-grouped');
     if (isLead) classes.push('is-group-lead');
+    // `is-group-last` marks the run's final role. CSS cannot express "last of the
+    // run" on its own: there is deliberately no wrapper, so :last-child would mean
+    // "last entry in the whole section" and would strip the divider between this
+    // employer and the next one whenever the run isn't at the end of the list.
+    if (isLast) classes.push('is-group-last');
   }
   return `
     <article class="${classes.join(' ')}" data-experience-id="${exp.id || index}">
@@ -1123,12 +1132,13 @@ export function renderResumeTimeline(data) {
 }
 
 // Timeline experience renderer with visual timeline
-function renderTimelineExperience(exp, index, group = null, isLead = false) {
+function renderTimelineExperience(exp, index, group = null, isLead = false, isLast = false) {
   const grouped = !!group && group.roles.length > 1;
   const classes = ['timeline-item'];
   if (grouped) {
     classes.push('is-grouped');
     if (isLead) classes.push('is-group-lead');
+    if (isLast) classes.push('is-group-last');
   }
   return `
     <div class="${classes.join(' ')}" data-experience-id="${exp.id || index}">

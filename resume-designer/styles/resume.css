@@ -446,8 +446,11 @@
 
 /* A divider between two roles at the SAME employer is exactly the visual this
    feature exists to remove: the run should read as one job. Only the last member
-   of a run keeps the entry separator. */
-.experience-item.is-grouped:not(:last-child) {
+   of a run keeps the entry separator, so the boundary to the NEXT employer stays.
+   Keyed on .is-group-last rather than :last-child — with no wrapper element,
+   :last-child would mean "last entry in the section", which would also strip the
+   divider after any run that isn't at the very end of the list. */
+.experience-item.is-grouped:not(.is-group-last) {
   margin-bottom: 0.3rem;
   padding-bottom: 0;
   border-bottom: none;
