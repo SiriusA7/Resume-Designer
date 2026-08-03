@@ -237,8 +237,8 @@ a{color:inherit;text-decoration:none;}
 
 /* ===== NAV ===== */
 .nav{display:flex;align-items:center;justify-content:space-between;padding:22px 28px;max-width:1040px;margin:0 auto;}
-/* nowrap: the wordmark is two lowercase words, so a line break renders it as
-   "on" / "paper" — two unrelated words with no capital to signal it's one name.
+/* nowrap: the wordmark is two words, so a line break splits it into "On" /
+   "Paper" — two ordinary words with nothing left to signal they're one name.
    Broke at <=360px (a very common Android width). Text is only ~53px wide, so
    this can't overflow. Matches the app header's own whitespace-nowrap. */
 .brand{display:flex;align-items:center;gap:11px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:19px;letter-spacing:-0.01em;white-space:nowrap;}
@@ -744,6 +744,10 @@ a{color:inherit;text-decoration:none;}
           <div class="a">No. The AI assistant is entirely optional. Every other feature — layouts, import, export, variants — works fully without a key.</div>
         </div>
         <div class="faq">
+          <div class="q">Wasn't this called Resume Designer?</div>
+          <div class="a">Yes — this is On Paper, formerly Resume Designer. Same app, same local-first data, same workflow. The new name reflects that it now reaches beyond resumes into the whole application. Your existing profiles and resumes carry over untouched.</div>
+        </div>
+        <div class="faq">
           <div class="q">Which platforms?</div>
           <div class="a">A native desktop app for macOS and Windows, plus a browser build you can run anywhere without installing.</div>
         </div>
@@ -787,8 +791,8 @@ a{color:inherit;text-decoration:none;}
     <footer class="foot">
       <div class="foot-top">
         <div>
-          <div class="display">Resume<br><span class="em">Designer</span></div>
-          <p class="foot-tagline">Turn one master profile into polished, job-tailored resumes — privately, on your own machine.</p>
+          <div class="display">On<br><span class="em">Paper</span></div>
+          <p class="foot-tagline">A private career workspace for resumes and job applications — one profile, shaped for each role, on your own machine.</p>
         </div>
         <div class="foot-links">
           <a href="https://github.com/ashproto/Resume-Designer">
