@@ -12,7 +12,7 @@
  */
 
 import * as session from './changeSession.js';
-import { applyChangeToStore } from './changeApply.js';
+import { applyChangeToStore, applyChangesToStore } from './changeApply.js';
 import { markChangedNodes, clearChangeMarks, isDescendantPath } from './changePreview.js';
 import { store } from './store.js';
 
@@ -175,10 +175,12 @@ export function applyAllInlineChanges() {
   // Iterate the change objects (not just paths): applying needs each change's
   // type and newValue — `proposedChanges[path]` is NOT equivalent, since the
   // diff decomposes container proposals into leaf paths absent from that map.
+  // applyChangesToStore, not a loop over applyChangeToStore: leaf paths are
+  // indexed against the proposed array, so insertions and removals have to land
+  // before them or a modify writes against the wrong (or a not-yet-existing)
+  // element. diffArray does not emit in that order.
   const pending = new Set(session.pendingPaths());
-  for (const change of changeSet.changes) {
-    if (pending.has(change.path)) applyChangeToStore(change);
-  }
+  applyChangesToStore(changeSet.changes.filter((c) => pending.has(c.path)));
   session.setAllPending('applied');
   hideInlineChanges();
 }

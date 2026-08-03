@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 import { DIFF_TYPES, getPathLabel } from '../diffEngine.js';
-import { applyChangeToStore } from '../changeApply.js';
+import { applyChangeToStore, applyChangesToStore } from '../changeApply.js';
 import * as changeSession from '../changeSession.js';
 import { isSupersededSession } from '../changeSessionGuard.js';
 import {
@@ -386,10 +386,24 @@ export default function DiffDialog() {
       if (!superseded()) applyAllInlineChanges();
       return;
     }
-    for (const change of cs.changes) {
-      if (!applied.has(change.path) && !rejected.has(change.path)) applyChange(change.path);
-    }
-  }, [changeSet, applied, rejected, applyChange, superseded]);
+    // Standalone (History Compare, Jobs Tailor): batch through the ordered
+    // helper rather than looping applyChange per path. Leaf paths are indexed
+    // against the PROPOSED array, so applying in the diff engine's emitted
+    // order corrupts arrays — `[A,B] -> [A,X,B']` writes experience[2] before
+    // the insert creates it. Session mode routes around this via
+    // applyAllInlineChanges; this branch has to do the same.
+    const pending = cs.changes.filter(
+      (c) => !applied.has(c.path) && !rejected.has(c.path),
+    );
+    if (pending.length === 0) return;
+    applyChangesToStore(pending);
+    onApplyRef.current?.();
+    setLocalApplied((prev) => {
+      const next = new Set(prev);
+      for (const c of pending) next.add(c.path);
+      return next;
+    });
+  }, [changeSet, applied, rejected, superseded]);
 
   // "Reject All" — in session mode this is the bulk dismiss the inline preview
   // otherwise lacks: end the session (the chat button and the resume highlights
