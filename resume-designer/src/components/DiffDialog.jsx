@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 import { DIFF_TYPES, getPathLabel } from '../diffEngine.js';
-import { applyChangeToStore, applyChangesToStore } from '../changeApply.js';
+import { applyChangeToStore, applyChangesToStore, selectUndecided } from '../changeApply.js';
 import * as changeSession from '../changeSession.js';
 import { isSupersededSession } from '../changeSessionGuard.js';
 import {
@@ -392,9 +392,7 @@ export default function DiffDialog() {
     // order corrupts arrays — `[A,B] -> [A,X,B']` writes experience[2] before
     // the insert creates it. Session mode routes around this via
     // applyAllInlineChanges; this branch has to do the same.
-    const pending = cs.changes.filter(
-      (c) => !applied.has(c.path) && !rejected.has(c.path),
-    );
+    const pending = selectUndecided(cs.changes, applied, rejected);
     if (pending.length === 0) return;
     applyChangesToStore(pending);
     onApplyRef.current?.();

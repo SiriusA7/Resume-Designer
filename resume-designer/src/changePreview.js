@@ -16,7 +16,7 @@
 import { DIFF_TYPES, setByPath, getByPath } from './diffEngine.js';
 // The preview and the apply path must agree on ordering and on what an ADD
 // means, or the user reviews something other than what accepting produces.
-import { orderChanges } from './changeApply.js';
+import { orderChanges, resolveAnchoredPath } from './changeApply.js';
 
 /**
  * Resume data with still-pending changes projected in.
@@ -41,10 +41,15 @@ export function applyPendingToData(data, changeSet, statuses) {
   // Same ordering as the apply path, for the same reason: leaf paths are
   // indexed against the PROPOSED array, so an insertion has to land before
   // anything addressing a path inside the item it shifts.
-  for (const change of orderChanges(changeSet.changes || [])) {
-    const status = statuses.get(change.path) || 'pending';
+  for (const raw of orderChanges(changeSet.changes || [])) {
+    // Status is keyed by the change's ORIGINAL path — that is the key space the
+    // session, markChangedNodes and the hover menu all share — so look it up
+    // before resolving the anchor against this projection.
+    const status = statuses.get(raw.path) || 'pending';
     if (status !== 'pending') continue;
-    if (change.type === DIFF_TYPES.REMOVE) continue;
+    if (raw.type === DIFF_TYPES.REMOVE) continue;
+    const resolvedPath = resolveAnchoredPath(raw, (p) => getByPath(next, p));
+    const change = resolvedPath === raw.path ? raw : { ...raw, path: resolvedPath };
     if (change.type === DIFF_TYPES.ADD) {
       // INSERT, matching applyChangeToStore. Writing the path would overwrite
       // whatever currently sits at that index, so `[A,B] -> [A,X,B]` previewed

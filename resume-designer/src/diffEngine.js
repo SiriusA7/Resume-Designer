@@ -168,7 +168,16 @@ function diffArray(oldArray, newArray, basePath) {
         // Check if content changed
         if (JSON.stringify(oldEntry.item) !== JSON.stringify(matchingNew.item)) {
           const itemChanges = diffResumeData(oldEntry.item, matchingNew.item, `${basePath}[${matchingNew.index}]`);
-          changes.push(...itemChanges);
+          // Stamp the item's IDENTITY onto every change inside it. The path
+          // carries `matchingNew.index` — a position in the PROPOSED array —
+          // but changes are applied to the LIVE one, where an insertion or
+          // removal elsewhere in the same set may have moved this item. The
+          // anchor lets the apply path re-resolve the index by id, so applying
+          // in any order (or one change at a time from the hover menu) targets
+          // the right item. Purely additive: a change without an anchor, from
+          // an older persisted change set, behaves exactly as before.
+          const anchor = { arrayPath: basePath, id: oldEntry.item.id, index: matchingNew.index };
+          changes.push(...itemChanges.map((c) => ({ ...c, anchor })));
         }
       }
     }

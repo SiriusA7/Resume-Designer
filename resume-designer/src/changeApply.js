@@ -81,8 +81,43 @@ function alreadyApplied(arr, index, item) {
   return index >= 0 && index < arr.length && sameValue(arr[index], item);
 }
 
+/**
+ * Re-point a change's path at where its item actually lives right now.
+ *
+ * diffArray stamps an `anchor` on every change nested inside an id-matched
+ * array item: the array's path, the item's `id`, and the index the path was
+ * written against (a position in the PROPOSED array). If an insertion or
+ * removal elsewhere in the same set has since moved that item, the recorded
+ * index addresses the wrong element — so resolve the id against the LIVE array
+ * and rewrite just that segment.
+ *
+ * This is what makes application order-independent: the hover menu and the
+ * dialog's per-change Apply act on one change at a time in whatever order the
+ * user clicks, and ordering the batch cannot help them.
+ *
+ * Falls back to the literal path whenever the anchor cannot be trusted — no
+ * anchor (an older persisted change set), the array is gone, or the id is no
+ * longer present — which is exactly the previous behaviour.
+ */
+export function resolveAnchoredPath(change, readArray) {
+  const a = change && change.anchor;
+  if (!a || typeof a.arrayPath !== 'string' || a.id == null) return change.path;
+  const prefix = `${a.arrayPath}[${a.index}]`;
+  if (!change.path.startsWith(prefix)) return change.path;
+
+  const arr = readArray(a.arrayPath);
+  if (!Array.isArray(arr)) return change.path;
+  const live = arr.findIndex((el) => el && typeof el === 'object' && el.id === a.id);
+  if (live === -1 || live === a.index) return change.path;
+  return `${a.arrayPath}[${live}]${change.path.slice(prefix.length)}`;
+}
+
 /** Apply one change object (from a changeSet's `changes[]`) to the store. */
-export function applyChangeToStore(change) {
+export function applyChangeToStore(rawChange) {
+  // Everything below works on the resolved path, so a stale proposed-array
+  // index can never address the wrong item.
+  const resolved = resolveAnchoredPath(rawChange, (p) => store.get(p));
+  const change = resolved === rawChange.path ? rawChange : { ...rawChange, path: resolved };
   if (change.type === DIFF_TYPES.ADD) {
     // An ADD on an array-index path is an INSERTION, not an assignment.
     // diffArray numbers additions against the PROPOSED array, so `[A,B]` ->
@@ -190,4 +225,23 @@ export function orderChanges(changes) {
 
 export function applyChangesToStore(changes) {
   orderChanges(changes).forEach(applyChangeToStore);
+}
+
+/**
+ * The changes an "Apply all" should act on: everything the user has not already
+ * applied or rejected.
+ *
+ * Extracted from DiffDialog's standalone branch so it is reachable from tests —
+ * the component itself is not, since the project has no React Testing Library
+ * and `npm run test` covers service modules only. Skipping rejected paths is
+ * what makes "reject one, apply the rest" safe, and skipping applied ones keeps
+ * Apply-all after a one-off apply from doing the work twice.
+ *
+ * `applied` and `rejected` are anything with a `.has(path)` — a Set in the
+ * dialog's standalone mode, and the session's status lookup in owned mode.
+ */
+export function selectUndecided(changes, applied, rejected) {
+  return (changes || []).filter(
+    (c) => c && !applied.has(c.path) && !rejected.has(c.path),
+  );
 }
