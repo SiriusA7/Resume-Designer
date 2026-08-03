@@ -325,6 +325,13 @@ function paginateContinuous(resumeEl, widthPx) {
   const page = makeSheet(widthPx, null);
   kids.forEach((k) => page.appendChild(k));
   pages.appendChild(page);
+  // No revealGroupContinuations() here: continuous mode builds exactly ONE sheet,
+  // so there is no continuation page to reveal an employer name on. Every shipped
+  // export path (native rect-based and the html2pdf browser fallback) produces a
+  // single page from that sheet. Raw browser print (Cmd+P) is the one case where
+  // the browser slices this sheet with no DOM boundary for a JS pass to find; the
+  // `break-after: avoid` rules in print.css keep a header with its first role, but
+  // a run split further down would show a role with no employer. Accepted.
   resumeEl.replaceChildren(pages);
 }
 
