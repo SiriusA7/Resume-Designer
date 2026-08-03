@@ -124,6 +124,16 @@ function indexOf(change) {
 }
 
 /**
+ * How deeply nested a path's array index is: `experience[1]` is 1,
+ * `experience[2].bullets[1]` is 2. Structural ops must run outermost-first,
+ * because a nested path addresses an element INSIDE a parent that an outer
+ * insertion has not created yet.
+ */
+function arrayDepth(change) {
+  return (change.path.match(/\[\d+\]/g) || []).length;
+}
+
+/**
  * Apply a batch of changes, structural ones first.
  *
  * Every leaf path a change set carries is indexed against the PROPOSED array,
@@ -135,23 +145,40 @@ function indexOf(change) {
  * two-item array, setByPath creates a third entry to hold it, and the insert
  * then makes four — with B never modified.
  *
- * Removals run before insertions: both bring the array toward its proposed
- * shape, and removals resolve by identity so they are safe at any point, while
- * insertion indices assume the shrink has already happened. Insertions then run
- * in ascending index order, each one landing against the prefix the previous
- * ones completed.
+ * Ordering is by DEPENDENCY, not by type: outermost array index first, so a
+ * parent insertion lands before anything addressing a path inside the item it
+ * shifts. Within one level, removals precede insertions (removals resolve by
+ * identity and are safe anywhere; insertion indices assume the shrink has
+ * happened), and insertions run in ascending index order.
+ *
+ * `orderChanges` is exported because the inline PREVIEW has to project changes
+ * in the same order for the same reason — see changePreview.applyPendingToData.
  *
  * Single-change application (the hover menu, per-change Apply in the dialog)
  * stays index-ordered by whatever the user clicks. Making that fully safe needs
  * leaf changes to carry their item's identity rather than an index, which is a
  * larger change to the diff format.
  */
-export function applyChangesToStore(changes) {
+export function orderChanges(changes) {
   const list = Array.isArray(changes) ? changes : [];
-  const removals = list.filter((c) => isStructural(c) && c.type === DIFF_TYPES.REMOVE);
-  const additions = list.filter((c) => isStructural(c) && c.type === DIFF_TYPES.ADD)
-    .sort((a, b) => indexOf(a) - indexOf(b));
-  const rest = list.filter((c) => !isStructural(c));
+  const structural = list.filter(isStructural).sort((a, b) => {
+    // Outermost first. A nested op addresses an element inside a parent that an
+    // outer insertion has not created yet: `[A,B] -> [A,X,B']` where B' also
+    // drops a bullet emits `remove experience[2].bullets[1]` alongside
+    // `add experience[1]`, and running the removal first targets an
+    // experience[2] that does not exist — a silent no-op that leaves the
+    // rejected bullet in place.
+    if (arrayDepth(a) !== arrayDepth(b)) return arrayDepth(a) - arrayDepth(b);
+    // Within a level, shrink before growing: removals resolve by identity and
+    // are safe anywhere, while insertion indices assume the shrink has already
+    // happened. Then insert in ascending index order, each landing against the
+    // prefix its predecessors completed.
+    if (a.type !== b.type) return a.type === DIFF_TYPES.REMOVE ? -1 : 1;
+    return indexOf(a) - indexOf(b);
+  });
+  return [...structural, ...list.filter((c) => !isStructural(c))];
+}
 
-  [...removals, ...additions, ...rest].forEach(applyChangeToStore);
+export function applyChangesToStore(changes) {
+  orderChanges(changes).forEach(applyChangeToStore);
 }

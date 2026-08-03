@@ -13,7 +13,10 @@
  * Nothing here ever writes text into the DOM.
  */
 
-import { DIFF_TYPES, setByPath } from './diffEngine.js';
+import { DIFF_TYPES, setByPath, getByPath } from './diffEngine.js';
+// The preview and the apply path must agree on ordering and on what an ADD
+// means, or the user reviews something other than what accepting produces.
+import { orderChanges } from './changeApply.js';
 
 /**
  * Resume data with still-pending changes projected in.
@@ -35,10 +38,28 @@ import { DIFF_TYPES, setByPath } from './diffEngine.js';
 export function applyPendingToData(data, changeSet, statuses) {
   const next = JSON.parse(JSON.stringify(data));
   if (!changeSet) return next;
-  for (const change of changeSet.changes || []) {
+  // Same ordering as the apply path, for the same reason: leaf paths are
+  // indexed against the PROPOSED array, so an insertion has to land before
+  // anything addressing a path inside the item it shifts.
+  for (const change of orderChanges(changeSet.changes || [])) {
     const status = statuses.get(change.path) || 'pending';
     if (status !== 'pending') continue;
     if (change.type === DIFF_TYPES.REMOVE) continue;
+    if (change.type === DIFF_TYPES.ADD) {
+      // INSERT, matching applyChangeToStore. Writing the path would overwrite
+      // whatever currently sits at that index, so `[A,B] -> [A,X,B]` previewed
+      // as [A,X] — the user watched B disappear and only saw it return after
+      // accepting. The preview must show what accepting actually produces.
+      const arrayMatch = change.path.match(/^(.+)\[(\d+)\]$/);
+      if (arrayMatch) {
+        const arr = getByPath(next, arrayMatch[1]);
+        if (Array.isArray(arr)) {
+          const at = Math.max(0, Math.min(parseInt(arrayMatch[2], 10), arr.length));
+          arr.splice(at, 0, change.newValue);
+          continue;
+        }
+      }
+    }
     setByPath(next, change.path, change.newValue);
   }
   return next;

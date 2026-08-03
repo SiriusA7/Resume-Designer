@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { applyChangeToStore, applyChangesToStore } from '../src/changeApply.js';
 import { diffResumeData } from '../src/diffEngine.js';
+import { applyPendingToData } from '../src/changePreview.js';
 import { store } from '../src/store.js';
 
 // Applying an ADD on an array-index path used to go through the generic
@@ -122,6 +123,48 @@ describe('applyChangeToStore — ADD on an array index', () => {
     const exp = store.get('experience');
     expect(exp.map((e) => e.company)).toEqual(['Acme', 'Ceta']);
     expect(exp[1].title).toBe('Principal');
+  });
+
+  // Ordering is by DEPENDENCY, not type. A nested structural op addresses an
+  // element inside a parent the outer insertion has not created yet, so
+  // "all removals, then all additions" runs the nested removal against an
+  // experience[2] that does not exist — a silent no-op leaving the bullet in.
+  it('applies a parent insertion before a nested structural edit', () => {
+    const withBullets = (o, b) => ({ ...o, bullets: b });
+    const a = withBullets(A, ['a1']);
+    const b = withBullets(B, ['b1', 'b2']);
+    const x = withBullets(X, ['x1']);
+    store.setData({ name: 'Ada', experience: [{ ...a }, { ...b }] }, true, null);
+
+    const changes = diffResumeData(
+      { experience: [a, b] },
+      { experience: [a, x, withBullets(B, ['b1'])] },
+    );
+    // Pin the hazard: the nested removal really is emitted before the insertion.
+    expect(changes.map((c) => c.path)).toContain('experience[2].bullets[1]');
+
+    applyChangesToStore(changes);
+
+    const exp = store.get('experience');
+    expect(exp.map((e) => e.company)).toEqual(['Acme', 'Xeno', 'Beta']);
+    expect(exp[2].bullets).toEqual(['b1']);
+  });
+
+  // The preview and the apply path must agree, or the user reviews something
+  // other than what accepting produces. Previously the preview projected an ADD
+  // with setByPath, so [A,B] -> [A,X,B] previewed as [A,X]: B vanished during
+  // review and only came back after accepting.
+  it('previews an insertion exactly as applying it will resolve', () => {
+    const data = { name: 'Ada', experience: [{ ...A }, { ...B }] };
+    const changes = diffResumeData({ experience: [A, B] }, { experience: [A, X, B] });
+
+    const previewed = applyPendingToData(data, { changes }, new Map());
+
+    store.setData(JSON.parse(JSON.stringify(data)), true, null);
+    applyChangesToStore(changes);
+
+    expect(previewed.experience.map((e) => e.company)).toEqual(['Acme', 'Xeno', 'Beta']);
+    expect(previewed.experience.map((e) => e.company)).toEqual(companies());
   });
 
   // The id-less path was never broken; pin it so a future refactor of the ADD
