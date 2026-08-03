@@ -937,10 +937,22 @@ describe('revealGroupContinuations', () => {
     expect(p2.querySelector('.experience-company').classList.contains('is-continuation')).toBe(true);
   });
 
-  it('does not reveal anything on the page that already has the header', () => {
-    const p1 = page(groupedRole('r1', true), groupedRole('r2', false));
-    revealGroupContinuations([p1]);
-    expect(p1.querySelectorAll('.experience-company.is-continuation')).toHaveLength(0);
+  it('does not reveal anything on a later page that carries its own header', () => {
+    // The page must be at index >= 1, or the page-0 skip fires first and the
+    // firstHeader guard — the subtlest branch in the function — is never reached.
+    const p2 = page(groupedRole('r1', true), groupedRole('r2', false));
+    revealGroupContinuations([page(), p2]);
+    expect(p2.querySelectorAll('.experience-company.is-continuation')).toHaveLength(0);
+  });
+
+  it('reveals a continuation role but not a fresh run starting later on the same page', () => {
+    const cont = groupedRole('r2', false);     // tail of the run that began on page 1
+    const freshLead = groupedRole('r3', true); // a brand-new run starts here
+    const p2 = page(cont, freshLead);
+    revealGroupContinuations([page(groupedRole('r1', true)), p2]);
+    const revealed = [...p2.querySelectorAll('.experience-company.is-continuation')];
+    expect(revealed).toHaveLength(1);
+    expect(revealed[0].closest('[data-experience-id]').dataset.experienceId).toBe('r2');
   });
 
   it('reveals only the FIRST grouped role on a continuation page', () => {
