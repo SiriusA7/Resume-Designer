@@ -6,7 +6,7 @@
 
 **A private career workspace for resumes and job applications — on your own machine.**
 
-[![Website](https://img.shields.io/badge/website-ashproto.github.io-c45c3e.svg)](https://ashproto.github.io/Resume-Designer/)
+[![Website](https://img.shields.io/badge/website-onpaper.pro-c45c3e.svg)](https://onpaper.pro)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-lightgrey.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/ashproto/Resume-Designer?label=download)](https://github.com/ashproto/Resume-Designer/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/ashproto/Resume-Designer/total?label=downloads&color=c45c3e)](https://github.com/ashproto/Resume-Designer/releases)

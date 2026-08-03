@@ -388,10 +388,17 @@ the folder name, so this is cosmetic. Only a fresh DMG install produces
 `/Applications/On Paper.app`. Mention it; do not try to rename the bundle from
 inside the updater — it races the running process.
 
-**5. Re-capture the screenshots.** `website/hero.jpg` and
-`docs/screenshots/hero.png` both show the old wordmark in the app header. There
-is no scriptable capture path in this repo, so these need a manual native
-capture after the rename build is installed.
+**5. Re-capture the screenshots.** `website/hero.jpg`, `docs/screenshots/hero.png`,
+**and the GitHub repo social-preview image** (Settings → Social preview — a
+separate upload that no file in this repo tracks) all show the old wordmark in
+the app header. There is no scriptable capture path in this repo, so all three
+need a manual native capture after the rename build is installed.
+
+The social preview is the highest-reach of the three: it renders every time the
+repo URL is pasted into Slack, X, LinkedIn, Discord or iMessage. It is also the
+easiest to forget, because nothing in the repo references it. Note the alt text
+in `README.md:16` and `website/index.html:512` already says "On Paper", so the
+markup currently misdescribes the images until they are replaced.
 
 **6. The one test that actually matters.** A fresh install proves nothing about
 data continuity. Install the **pre-rename** build, create a resume, then let the
@@ -402,10 +409,23 @@ re-import is triggered. This works because `identifier` is unchanged; that field
 is the address of the app-data directory, so it must stay
 `com.resumedesigner.app` forever.
 
-**7. Out of repo.** Point DNS for `onpaper.pro` at GitHub Pages and set it as the
-custom domain in repo Settings → Pages (the `CNAME` file is already committed);
-redirect `on-paper.app` and `useonpaper.com` to it. Leave the repo name, the
-`next` tag, and all eight release secrets alone.
+**7. Out of repo.** DNS and Pages are **done**: `onpaper.pro` is the custom
+domain, HTTPS is enforced, and the certificate covers `onpaper.pro` plus
+`www.onpaper.pro`.
+
+Still outstanding:
+
+- Redirect `on-paper.app` and `useonpaper.com` to `https://onpaper.pro` — both
+  currently return 404 with no `Location` header.
+- Point the repo's **homepage** field at `https://onpaper.pro` (it still holds
+  the old `ashproto.github.io` Pages URL) and refresh the repo **description**,
+  which predates the rename.
+
+Note the site only republishes on a push to `main` (see `deploy-pages.yml`), so
+`onpaper.pro` serves the pre-rename page until the promotion PR merges. The
+domain being live is not the same as the rename being public.
+
+Leave the repo name, the `next` tag, and all eight release secrets alone.
 
 ## System requirements
 
