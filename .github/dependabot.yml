@@ -1,25 +1,28 @@
 version: 2
 
-# Without this file Dependabot raises security PRs against the DEFAULT branch,
-# which is `main` — and guard-main-source rejects anything reaching main from a
-# branch other than this repo's `next`. Every such PR is therefore born
-# unmergeable (see the five failed only-next-into-main runs on #98). Pointing
-# `target-branch` at `next` puts the fix on the beta channel, where it rides the
-# normal promotion PR into main with everything else.
+# Deliberately NO `target-branch` in these entries.
 #
-# `next` here is the BRANCH. A git tag of the same name marks the beta release
-# and must never be deleted; Dependabot resolves refs/heads, so the two do not
-# collide, but keep the distinction in mind when editing this file.
+# Security updates always target the repository's default branch, and setting
+# `target-branch` does not redirect them — it makes the entry apply to VERSION
+# updates only. GitHub's security-updates documentation is explicit: "In order
+# for Dependabot to use this configuration for security updates ... you should
+# not specify a target-branch". Omitting it is what keeps `commit-message`
+# below applying to the security PRs, which are the only kind this repo raises.
+#
+# So the base-branch problem cannot be solved from this file. Security PRs land
+# on `main`, where guard-main-source rejects anything that is not a promotion
+# from `next` — see the five failed only-next-into-main runs on #98.
+# .github/workflows/dependabot-retarget.yml moves them onto `next` after they
+# open, which is the only place that fix can live.
 #
 # open-pull-requests-limit: 0 disables routine version-bump PRs. Security
-# updates are explicitly exempt from this limit, so vulnerability fixes still
-# arrive — this repo gets security traffic only, which is the behaviour it had
-# before this file existed, minus the wrong base branch.
+# updates are exempt from this limit, so vulnerability fixes still arrive —
+# this repo gets security traffic only, matching the behaviour it had before
+# this file existed.
 
 updates:
   - package-ecosystem: npm
     directory: /resume-designer
-    target-branch: next
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
@@ -30,7 +33,6 @@ updates:
   # reaches users directly rather than only the build.
   - package-ecosystem: cargo
     directory: /resume-designer/src-tauri
-    target-branch: next
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
@@ -41,7 +43,6 @@ updates:
   # signing key during release, so they are worth patching promptly.
   - package-ecosystem: github-actions
     directory: /
-    target-branch: next
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
