@@ -1105,20 +1105,24 @@ Create or append to `resume-designer/test/experienceGroups.test.js` a block prov
 
 ```js
 describe('generation ordering + grouping (buildResumeData contract)', () => {
-  it('sorts run-aware and then mints ids for same-company runs', () => {
+  it('mints ids from raw adjacency, then sorts run-aware without shredding the run', () => {
+    // sortRunAware only respects an EXISTING _groupId. Fresh AI output has none, so
+    // assignGroupIds must run first, against the AI's own raw order, to detect the
+    // Acme run from adjacency — only then can sortRunAware reorder chronologically
+    // without splitting it apart.
     const raw = [
       { title: 'Consultant', company: 'Initech', dates: '2021 – 2022', bullets: [], _relevanceRank: 0 },
       { title: 'Senior Dev', company: 'Acme', dates: 'Mar 2022 – Jun 2024', bullets: [], _relevanceRank: 1 },
       { title: 'Dev', company: 'Acme', dates: 'Jan 2019 – Mar 2022', bullets: [], _relevanceRank: 2 },
     ];
     let n = 0;
-    const sorted = sortRunAware(raw, (run) => Math.max(...run.map(experienceSortValue)), (a, b) => b - a);
-    const grouped = assignGroupIds(sorted, () => `g${++n}`);
+    const grouped = assignGroupIds(raw, () => `g${++n}`);
+    const sorted = sortRunAware(grouped, (run) => Math.max(...run.map(experienceSortValue)), (a, b) => b - a);
 
-    expect(grouped.map((x) => x.title)).toEqual(['Senior Dev', 'Dev', 'Consultant']);
-    expect(grouped[0]._groupId).toBe('g1');
-    expect(grouped[1]._groupId).toBe('g1');
-    expect(grouped[2]._groupId).toBeUndefined();
+    expect(sorted.map((x) => x.title)).toEqual(['Senior Dev', 'Dev', 'Consultant']);
+    expect(sorted[0]._groupId).toBe('g1');
+    expect(sorted[1]._groupId).toBe('g1');
+    expect(sorted[2]._groupId).toBeUndefined();
   });
 });
 ```
@@ -1183,16 +1187,20 @@ Find the sort at `:306`:
 Replace it with:
 
 ```js
-  // Run-aware ordering, then mint one group id per run of consecutive entries at
-  // the same employer. Without this nothing the AI produces is ever grouped, and
-  // the naive sort would interleave a foreign employer into a run anyway.
-  const ordered = sortRunAware(
-    experience,
+  // Mint one group id per run of consecutive entries at the same employer BEFORE
+  // sorting: sortRunAware only respects an EXISTING _groupId, and this fresh AI
+  // output has none yet, so assignGroupIds must read the run off the AI's own raw
+  // adjacency first. Only then can sortRunAware reorder chronologically without
+  // shredding that run apart — without this nothing the AI produces is ever grouped.
+  const grouped = assignGroupIds(experience);
+  experience = sortRunAware(
+    grouped,
     (run) => Math.max(...run.map(experienceSortValue)),
     (a, b) => b - a,
   );
-  experience = assignGroupIds(ordered);
 ```
+
+**Order matters and is easy to get backwards.** Sorting first leaves every entry a run of one, so `sortRunAware` degrades to a plain date sort; `assignGroupIds` afterwards can then only group whatever the sort happened to leave adjacent. A contract-to-FTE conversion — where a third employer's dates fall between two roles at one company — is precisely the case that ends up non-adjacent, so the shape this feature exists to support would be the one it failed to group.
 
 If `experience` is declared with `const`, change that declaration to `let`. Verify with:
 
