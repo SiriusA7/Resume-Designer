@@ -55,22 +55,30 @@ function findRemovalIndex(arr, oldValue, recordedIndex) {
 }
 
 /**
- * Whether an ADD's item is already in the array, by `id` ONLY.
+ * Whether this ADD has already been applied, so re-applying is a no-op rather
+ * than a duplicate. Both review surfaces route through here, apply-all can
+ * follow a one-off apply, and a reopened standalone dialog starts with empty
+ * applied-state — so the same change genuinely does arrive twice.
  *
- * Deliberately not a value comparison. Duplicate values are legitimate content
- * — `skills: ['JS','CSS'] -> ['JS','CSS','JS']` emits `add skills[2]`, and a
- * value check finds the first 'JS' and drops the requested addition. Ids are
- * unique, so an id match really is the same entry arriving twice; equal values
- * are not evidence of anything.
+ * Two different questions, because the evidence differs:
  *
- * The cost is that re-applying an ADD for an id-less item duplicates it. That
- * is inherent: without an id there is nothing to distinguish "this change was
- * already applied" from "the user wants two of these", and silently discarding
- * real content is the worse failure.
+ *  - With an `id`, search the whole array. Ids are unique, so a match anywhere
+ *    means this entry is already present however it has since been reordered.
+ *  - Without one, ask only whether this change's OWN recorded slot already
+ *    holds its value. A global value search cannot tell a re-application from
+ *    a legitimate duplicate and drops real content: `['JS','CSS'] ->
+ *    ['JS','CSS','JS']` emits `add skills[2]`, and a global search finds the
+ *    first 'JS' and discards the addition. The slot check gets both right —
+ *    on the first apply `skills[2]` is empty so the insert happens, and on the
+ *    second it already holds 'JS' so it does not. Two intentional duplicates
+ *    (`add skills[2]` and `add skills[3]`) each own a distinct slot and both
+ *    land.
  */
-function hasSameId(arr, item) {
-  if (!item || typeof item !== 'object' || item.id == null) return false;
-  return arr.some((el) => el && typeof el === 'object' && el.id === item.id);
+function alreadyApplied(arr, index, item) {
+  if (item && typeof item === 'object' && item.id != null) {
+    return arr.some((el) => el && typeof el === 'object' && el.id === item.id);
+  }
+  return index >= 0 && index < arr.length && sameValue(arr[index], item);
 }
 
 /** Apply one change object (from a changeSet's `changes[]`) to the store. */
@@ -86,8 +94,9 @@ export function applyChangeToStore(change) {
     if (arrayMatch) {
       const arr = store.get(arrayMatch[1]);
       if (Array.isArray(arr)) {
-        if (!hasSameId(arr, change.newValue)) {
-          store.insertIntoArray(arrayMatch[1], parseInt(arrayMatch[2], 10), change.newValue);
+        const index = parseInt(arrayMatch[2], 10);
+        if (!alreadyApplied(arr, index, change.newValue)) {
+          store.insertIntoArray(arrayMatch[1], index, change.newValue);
         }
         return;
       }

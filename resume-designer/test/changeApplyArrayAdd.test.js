@@ -63,14 +63,39 @@ describe('applyChangeToStore — ADD on an array index', () => {
     expect(companies()).toEqual(['Acme', 'Xeno', 'Beta']);
   });
 
-  // The guard is by id ONLY. Equal values are content, not evidence that a
-  // change was already applied — a value check silently drops real additions.
+  // Idempotence and legitimate duplicates are BOTH required, and a global value
+  // search can only deliver one of them. The guard asks whether this change's
+  // own recorded slot already holds its value: empty on the first apply so the
+  // insert happens, occupied on the second so it does not.
   it('preserves a legitimate duplicate value in an id-less array', () => {
     store.setData({ name: 'Ada', skills: ['JS', 'CSS'] }, true, null);
     applyChangesToStore(
       diffResumeData({ skills: ['JS', 'CSS'] }, { skills: ['JS', 'CSS', 'JS'] }),
     );
     expect(store.get('skills')).toEqual(['JS', 'CSS', 'JS']);
+  });
+
+  // Reachable for real: a reopened standalone review starts with empty
+  // applied-state, so Apply All replays every change.
+  it('is a no-op when an id-less addition is applied twice', () => {
+    store.setData({ name: 'Ada', skills: ['JS', 'CSS'] }, true, null);
+    const add = { type: 'add', path: 'skills[2]', oldValue: null, newValue: 'JS' };
+    applyChangeToStore(add);
+    applyChangeToStore(add);
+    expect(store.get('skills')).toEqual(['JS', 'CSS', 'JS']);
+  });
+
+  it('lands two intentional duplicates and stays idempotent on replay', () => {
+    store.setData({ name: 'Ada', skills: ['JS', 'CSS'] }, true, null);
+    const changes = diffResumeData(
+      { skills: ['JS', 'CSS'] },
+      { skills: ['JS', 'CSS', 'JS', 'JS'] },
+    );
+    applyChangesToStore(changes);
+    expect(store.get('skills')).toEqual(['JS', 'CSS', 'JS', 'JS']);
+    // Each addition owns a distinct slot, so replaying the whole set adds nothing.
+    applyChangesToStore(changes);
+    expect(store.get('skills')).toEqual(['JS', 'CSS', 'JS', 'JS']);
   });
 
   it('applies several insertions in order without losing entries', () => {
