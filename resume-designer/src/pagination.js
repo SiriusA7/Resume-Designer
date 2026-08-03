@@ -230,6 +230,41 @@ export function buildColumnRecursive(targetEl, units) {
   }
 }
 
+/**
+ * After pages are built, reveal the employer name on the first grouped role of any
+ * page that does not itself carry the run's company header.
+ *
+ * A run's header is emitted once, with the lead role. When a run straddles a page
+ * boundary the continuation page would otherwise show indented roles with no
+ * employer — worse than the pre-grouping behaviour, where every entry carried its
+ * own company. The per-role .experience-company element is still in the DOM (Task
+ * 2 renders it without data-editable and hides it in CSS); this only unhides it.
+ *
+ * Runs after measurement, and only adds a class to an already-laid-out element, so
+ * it cannot invalidate the heights pagination just computed.
+ *
+ * @param {Array<Element>} pages
+ */
+export function revealGroupContinuations(pages) {
+  if (!Array.isArray(pages)) return;
+  pages.forEach((page, i) => {
+    if (i === 0 || !page) return;
+    // A page that starts its own run already shows the header; nothing to reveal
+    // before it. Only roles appearing BEFORE the first header on this page are
+    // continuations of a run that began on an earlier page.
+    const firstHeader = page.querySelector('.experience-group-header');
+    const grouped = page.querySelectorAll('.is-grouped');
+    for (const role of grouped) {
+      if (firstHeader && (role.contains(firstHeader) || role.compareDocumentPosition(firstHeader) & Node.DOCUMENT_POSITION_PRECEDING)) break;
+      const company = role.querySelector('.experience-company');
+      if (company) {
+        company.classList.add('is-continuation');
+        break;
+      }
+    }
+  });
+}
+
 // --- sheet builders ---
 function makePagesContainer() {
   const el = document.createElement('div');
@@ -319,6 +354,7 @@ function paginateSingle(resumeEl, cfg, widthPx, heightPx, scale) {
     page.appendChild(bodyClone);
     pages.appendChild(page);
   }
+  revealGroupContinuations(Array.from(pages.children));
   resumeEl.replaceChildren(pages);
 }
 
@@ -381,5 +417,6 @@ function paginateTwo(resumeEl, cfg, widthPx, heightPx, scale) {
     mount.appendChild(gridClone);
     pages.appendChild(page);
   }
+  revealGroupContinuations(Array.from(pages.children));
   resumeEl.replaceChildren(pages);
 }

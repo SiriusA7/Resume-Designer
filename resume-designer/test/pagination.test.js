@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   assignBlocksToPages, overflowingPages, makeNode, flatten, buildColumnRecursive,
+  revealGroupContinuations,
 } from '../src/pagination.js';
 
 describe('assignBlocksToPages', () => {
@@ -177,5 +178,71 @@ describe('buildColumnRecursive — grouped experience survives pagination', () =
   it('keeps every bullet', () => {
     const target = rebuild(buildExperienceSection());
     expect(target.querySelectorAll('.experience-bullets li')).toHaveLength(3);
+  });
+});
+
+describe('revealGroupContinuations', () => {
+  const el = (tag, className, text) => {
+    const n = document.createElement(tag);
+    if (className) n.className = className;
+    if (text) n.textContent = text;
+    return n;
+  };
+
+  // A grouped role as it appears after Task 2's renderer: company present but hidden.
+  const groupedRole = (id, withHeader) => {
+    const item = el('article', withHeader ? 'experience-item is-grouped is-group-lead' : 'experience-item is-grouped');
+    item.dataset.experienceId = id;
+    if (withHeader) item.appendChild(el('div', 'experience-group-header', 'Acme Corporation'));
+    const header = el('div', 'experience-header');
+    header.appendChild(el('h3', 'experience-title', id));
+    header.appendChild(el('span', 'experience-company', 'Acme Corporation'));
+    item.appendChild(header);
+    return item;
+  };
+
+  const page = (...children) => {
+    const p = el('div', 'resume-page');
+    children.forEach((c) => p.appendChild(c));
+    return p;
+  };
+
+  it('reveals the company on a grouped role that starts a later page', () => {
+    const p1 = page(groupedRole('r1', true));
+    const p2 = page(groupedRole('r2', false));
+    revealGroupContinuations([p1, p2]);
+    expect(p2.querySelector('.experience-company').classList.contains('is-continuation')).toBe(true);
+  });
+
+  it('does not reveal anything on the page that already has the header', () => {
+    const p1 = page(groupedRole('r1', true), groupedRole('r2', false));
+    revealGroupContinuations([p1]);
+    expect(p1.querySelectorAll('.experience-company.is-continuation')).toHaveLength(0);
+  });
+
+  it('reveals only the FIRST grouped role on a continuation page', () => {
+    const p1 = page(groupedRole('r1', true));
+    const p2 = page(groupedRole('r2', false), groupedRole('r3', false));
+    revealGroupContinuations([p1, p2]);
+    expect(p2.querySelectorAll('.experience-company.is-continuation')).toHaveLength(1);
+    expect(p2.querySelector('.experience-company.is-continuation').closest('[data-experience-id]').dataset.experienceId)
+      .toBe('r2');
+  });
+
+  it('leaves ungrouped entries alone', () => {
+    const solo = el('article', 'experience-item');
+    solo.dataset.experienceId = 'solo';
+    const header = el('div', 'experience-header');
+    header.appendChild(el('span', 'experience-company', 'Initech'));
+    solo.appendChild(header);
+    const p2 = page(solo);
+    revealGroupContinuations([page(), p2]);
+    expect(p2.querySelectorAll('.is-continuation')).toHaveLength(0);
+  });
+
+  it('is a no-op for a single page', () => {
+    const p1 = page(groupedRole('r1', true), groupedRole('r2', false));
+    revealGroupContinuations([p1]);
+    expect(p1.querySelectorAll('.is-continuation')).toHaveLength(0);
   });
 });

@@ -133,6 +133,11 @@
     break-inside: avoid;
   }
 
+  .experience-group-header {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
   .section {
     page-break-inside: avoid;
     break-inside: avoid;
@@ -256,6 +261,11 @@ html.pdf-export-mode * {
 
 html.pdf-export-mode a {
   text-decoration: none !important;
+}
+
+html.pdf-export-mode .experience-group-header {
+  break-after: avoid;
+  page-break-after: avoid;
 }
 
 html.pdf-export-mode .btn,
