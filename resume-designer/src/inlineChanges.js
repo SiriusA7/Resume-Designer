@@ -76,9 +76,59 @@ export function getCurrentChangeSet() {
 // wrong element. Refreshed on every decorate, i.e. on every render.
 let resolvedPaths = new Map();
 
+// While true, renders ignore the pending preview entirely — no projection, no
+// markers — even though the session is still live. The browser PDF fallback
+// captures the LIVE DOM (html2pdf on #resume), so without this an export taken
+// mid-review silently bakes proposed, never-applied content into the file. The
+// `.pdf-export-mode` CSS only strips the highlight styling; the text underneath
+// is still the projection.
+let previewSuppressed = false;
+
+/** True while a render must show stored data rather than the pending preview. */
+export function isPreviewSuppressed() {
+  return previewSuppressed;
+}
+
+/**
+ * Run `fn` with the preview projection turned off, then restore it.
+ *
+ * Re-renders on both edges. renderCurrentResume + paginate are synchronous, so
+ * by the time this returns the DOM is fully laid out from stored data and safe
+ * to capture. Restores in a `finally` so a failed export cannot strand the user
+ * looking at their resume with the pending review invisible.
+ */
+export async function withPreviewSuppressed(fn) {
+  // Guard the WHOLE capture, even with no session open right now. The export is
+  // async — a dynamic import of html2pdf plus the capture itself — and an AI
+  // request can land inside that window: showInlineChanges would start a
+  // session and re-render #resume with the proposal, and the capture would pick
+  // it up. Skipping the flag when no session exists yet reopens exactly the
+  // hole this function closes.
+  const hadSession = !!session.getChangeSet();
+  previewSuppressed = true;
+  try {
+    // INSIDE the try: rendering or paginating can throw, and outside it the
+    // finally never runs — stranding the flag true and hiding every pending
+    // preview for the rest of the session. The export error itself is caught by
+    // the caller, so nothing else would reveal it.
+    //
+    // Only worth a render if there is a projection on screen to clear; a session
+    // arriving later renders itself, and will do so with the flag already set.
+    if (hadSession) requestRerender();
+    return await fn();
+  } finally {
+    // Reset BEFORE re-rendering, so a throw from this render cannot strand the
+    // flag either.
+    previewSuppressed = false;
+    // Re-check rather than reuse hadSession: a session may have appeared during
+    // the capture and now needs its preview shown.
+    if (session.getChangeSet()) requestRerender();
+  }
+}
+
 /** Tag the freshly-rendered resume nodes with their change status. */
 export function decorateRenderedResume(rootEl, viewData) {
-  const changeSet = session.getChangeSet();
+  const changeSet = previewSuppressed ? null : session.getChangeSet();
   if (!changeSet) { resolvedPaths = new Map(); clearChangeMarks(rootEl); return; }
   resolvedPaths = resolvePreviewPaths(changeSet, viewData);
   markChangedNodes(rootEl, changeSet, session.statusMap(), resolvedPaths);
