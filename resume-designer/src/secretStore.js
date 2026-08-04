@@ -30,6 +30,7 @@
 
 import { appStorage } from './appStorage.js';
 import { OPENROUTER_KEY_KEY } from './profileKeys.js';
+import { createIndexedDbBackend, readSecret, writeSecret } from './browserSecretStore.js';
 
 // Canonical Tauri sniff — same predicate as appStorage.js / native.js.
 // Duplicated rather than imported for the same reason appStorage duplicates
@@ -50,26 +51,30 @@ let cached = null;
 /**
  * Where the credential lives, decided once at boot.
  *
- *  - `session`    browser build and jsdom tests: no keychain exists, so the
- *                 credential is held in memory for this session and never
- *                 written anywhere. It used to persist through appStorage,
- *                 which in the browser IS localStorage — the precise sink
- *                 CodeQL flagged, reached by the precise path this module was
- *                 written to remove. The README offers this build to real
- *                 users ("prefer not to install anything"), so it cannot be
- *                 waved through as a dev-only path.
  *  - `keychain`   desktop, keychain answered: the mode nearly everyone is in.
  *  - `read-only`  desktop, keychain unreachable (locked, denied, broken).
  *                 Keeps serving a pre-migration plaintext key so someone who
  *                 already has one is not locked out of their own AI, but
  *                 refuses to write plaintext — though it still RETRIES the
  *                 keychain, since that fault is usually transient.
+ *  - `browser`    browser build: encrypted at rest via browserSecretStore,
+ *                 under a non-extractable key the browser will not export.
+ *                 Persists properly, so it survives the reloads the app does
+ *                 to itself on profile switch and backup restore.
+ *  - `session`    browser build WITHOUT crypto.subtle or IndexedDB — a
+ *                 non-secure context, or private browsing. Memory only. The
+ *                 fallback is deliberately memory rather than plaintext: this
+ *                 module exists because the key used to go to localStorage,
+ *                 the exact sink CodeQL flagged.
  *
- * `session` and `read-only` both mean "no keychain", and are still not
- * interchangeable: the first accepts new keys (holding them in memory), the
- * second refuses them.
+ * `session` and `read-only` both mean "nowhere durable to put it", and are
+ * still not interchangeable: the first accepts new keys (holding them in
+ * memory), the second refuses them.
  */
 let mode = 'session';
+
+// The IndexedDB-backed encrypted store, in `browser` mode only.
+let browserBackend = null;
 
 /**
  * Whether a Settings save should write the credential at all.
@@ -108,6 +113,7 @@ export function shouldWriteCredential({ edited, readOnly, value }) {
 export function __resetSecretStoreForTests() {
   mode = 'session';
   cached = null;
+  browserBackend = null;
 }
 
 async function invokeSecret(command, args) {
@@ -127,6 +133,17 @@ export function isKeychainAvailable() {
  */
 export function isReadOnly() {
   return mode === 'read-only';
+}
+
+/**
+ * True when the credential is encrypted at rest in the browser build — it
+ * persists across reloads and restarts, under a key the browser will not
+ * export. Distinguishes that from `session`, where nothing could be stored and
+ * the key really does vanish, so the UI can stop telling one set of users the
+ * other's story.
+ */
+export function isEncryptedInBrowser() {
+  return mode === 'browser';
 }
 
 /**
@@ -202,10 +219,20 @@ export const PLAINTEXT_CLEANUP_MESSAGE =
  * save never leaves the app using a key it did not persist.
  */
 export async function setSecret(value) {
-  // Browser build: hold it for this session and write it NOWHERE. Persisting
-  // here meant appStorage in passthrough, i.e. localStorage — the same sink,
-  // reached by the same path, that this module exists to get the credential out
-  // of. A key that survives the tab is a key sitting in clear text on disk.
+  // Browser build: encrypted at rest under a key the browser will not export,
+  // so it survives reloads without ever putting the credential itself on disk.
+  // Clearing stores an empty ciphertext rather than deleting the record, for
+  // the same masking reason as the keychain path.
+  if (mode === 'browser') {
+    await writeSecret(browserBackend, value);
+    cached = value;
+    return;
+  }
+
+  // No encrypted store available (non-secure context, private browsing): hold
+  // it for this session and write it NOWHERE. Falling back to appStorage here
+  // would mean localStorage — the same sink, reached by the same path, that
+  // this module exists to get the credential out of.
   if (mode === 'session') {
     cached = value;
     return;
@@ -256,18 +283,34 @@ export async function setSecret(value) {
  * markStorageReady(), so React never renders a settings state that is missing
  * a key the user does have.
  */
-export async function initSecretStore() {
+export async function initSecretStore({ backend = null } = {}) {
   if (!IS_TAURI) {
-    // Browser build and jsdom tests: no keychain exists, so the credential is
-    // held for this session only.
-    //
-    // Adopt whatever a previous version persisted, so this session keeps
-    // working, then delete it — the browser build no longer keeps the key at
-    // rest, and leaving the old localStorage entry behind would preserve the
-    // exact exposure this change removes. The user re-enters it next session;
-    // that is the price of the browser build not having a keychain to use.
-    mode = 'session';
-    cached = appStorage.getItem(OPENROUTER_KEY_KEY);
+    // Browser build. Encrypt at rest if the platform allows it, and fall back
+    // to memory-only when it does not — never back to plaintext.
+    browserBackend = backend || await createIndexedDbBackend();
+    mode = browserBackend ? 'browser' : 'session';
+
+    if (mode === 'browser') cached = await readSecret(browserBackend);
+
+    // Migrate a key an older version left in localStorage: adopt it so the
+    // session keeps working, encrypt it if we can, then delete the readable
+    // copy. Ordering matters exactly as it does for the keychain — the
+    // plaintext original is the only durable copy until the encrypted write
+    // lands, so it is stripped after, never before.
+    const legacy = appStorage.getItem(OPENROUTER_KEY_KEY);
+    if (legacy !== null && cached === null) {
+      if (mode === 'browser') {
+        try {
+          await writeSecret(browserBackend, legacy);
+        } catch {
+          // Encrypted write failed. Keep the plaintext copy — it is still the
+          // only durable one, and the next boot retries.
+          cached = legacy;
+          return;
+        }
+      }
+      cached = legacy;
+    }
     await stripPlaintextCopy();
     return;
   }

@@ -22,7 +22,9 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
-import { isKeychainAvailable, isReadOnly, shouldWriteCredential } from '../secretStore.js';
+import {
+  isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
+} from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
@@ -220,15 +222,22 @@ export default function SettingsDialog() {
     ? 'system keychain'
     : (readOnlyKeychain ? 'app data folder' : 'browser session');
 
-  // Where the key lives, per mode. The browser needs its own sentence rather
-  // than a substituted noun: "kept in your browser session… so it isn't stored
-  // at all" reads as a contradiction, because in that build there is no store
-  // to name.
-  const credentialNote = isKeychainAvailable() || readOnlyKeychain
-    ? `Your key is kept in your ${keychainName} and is sent only to OpenRouter — never share it.`
-    : 'Your key is held in memory for this browser session and is sent only to OpenRouter — never share it.'
-      + ' A browser has no keychain to put it in, so it isn’t saved anywhere: you’ll enter it again after a'
-      + ' reload, a profile switch, or reopening the tab.';
+  // Where the key lives, per mode. Each gets its own sentence rather than a
+  // substituted noun — "kept in your browser session… so it isn't stored at
+  // all" read as a contradiction, and the encrypted case needs to say what is
+  // actually protecting it.
+  let credentialNote;
+  if (isKeychainAvailable() || readOnlyKeychain) {
+    credentialNote = `Your key is kept in your ${keychainName} and is sent only to OpenRouter — never share it.`;
+  } else if (isEncryptedInBrowser()) {
+    credentialNote = 'Your key is encrypted before it’s stored in this browser, under a key the browser won’t'
+      + ' hand back to any script — so it’s still here next time, and anyone copying files off this machine'
+      + ' gets ciphertext. It’s sent only to OpenRouter — never share it.';
+  } else {
+    credentialNote = 'Your key is held in memory only and is sent only to OpenRouter — never share it.'
+      + ' This browser doesn’t allow encrypted storage (private browsing, or an insecure connection), and'
+      + ' saving it unencrypted isn’t something On Paper will do — so you’ll enter it again next time.';
+  }
 
   // What excluding the credential from backups actually means for this user.
   // The desktop wording ("it stays in your keychain") is false in the browser,
@@ -240,7 +249,9 @@ export default function SettingsDialog() {
     ? 'Your API key isn’t included — it stays in your system keychain, so you’ll enter it again on a new machine.'
     : readOnlyKeychain
       ? 'Your API key isn’t included — it stays on this machine, so you’ll enter it again on a new one.'
-      : 'Your API key isn’t included, and restoring reloads the page, so you’ll enter it again afterwards.';
+      : isEncryptedInBrowser()
+        ? 'Your API key isn’t included — it stays encrypted in this browser, so you’ll enter it again in a different one.'
+        : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
 
   const handleSaveKeys = async () => {
     // The rule itself lives in secretStore, where vitest can reach it — it has

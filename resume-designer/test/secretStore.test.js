@@ -77,6 +77,85 @@ describe('secretStore', () => {
   // exact path this module exists to remove. The README offers this build to
   // real users ("prefer not to install anything"), so it is not a dev-only path
   // that can be waved through.
+  // The browser build encrypts at rest under a non-extractable key, so the
+  // credential survives the reloads the app performs on itself — profile
+  // switch, profile create/delete, backup restore — without anything readable
+  // reaching disk.
+  describe('browser build with encrypted storage', () => {
+    const makeBackend = () => {
+      const files = new Map();
+      return {
+        files,
+        get: async (id) => (files.has(id) ? files.get(id) : null),
+        put: async (id, value) => { files.set(id, value); },
+        delete: async (id) => { files.delete(id); },
+      };
+    };
+
+    // THE regression this exists to prevent: holding the key in memory meant a
+    // profile switch or backup restore silently unconfigured the user's AI.
+    it('survives a reload', async () => {
+      const backend = makeBackend();
+
+      const first = await loadStore({ tauri: false });
+      await first.initSecretStore({ backend });
+      await first.setSecret('sk-typed-in');
+      expect(first.isEncryptedInBrowser()).toBe(true);
+
+      // Reload: a brand new module instance, same browser storage.
+      const second = await loadStore({ tauri: false });
+      await second.initSecretStore({ backend });
+
+      expect(second.getSecret()).toBe('sk-typed-in');
+      // ...and nothing readable was written to localStorage on the way.
+      expect(plaintext()).toBeNull();
+    });
+
+    it('moves a key an older version left in localStorage into encrypted storage', async () => {
+      const backend = makeBackend();
+      setPlaintext('sk-legacy');
+
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+
+      expect(store.getSecret()).toBe('sk-legacy');
+      // The readable copy is gone...
+      expect(plaintext()).toBeNull();
+      // ...and it survives the next reload from the encrypted record.
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend });
+      expect(next.getSecret()).toBe('sk-legacy');
+    });
+
+    // Same ordering rule as the keychain migration: the plaintext original is
+    // the only durable copy until the encrypted write lands.
+    it('KEEPS the plaintext copy when the encrypted write fails', async () => {
+      const backend = makeBackend();
+      backend.put = async () => { throw new Error('quota exceeded'); };
+      setPlaintext('sk-legacy');
+
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+
+      expect(plaintext()).toBe('sk-legacy');
+      expect(store.getSecret()).toBe('sk-legacy');
+    });
+
+    it('clears to an empty value that still round-trips', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      await store.setSecret('sk-real');
+
+      await store.setSecret('');
+
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend });
+      // '' not null — null would let getSettings fall back to a stale blob key.
+      expect(next.getSecret()).toBe('');
+    });
+  });
+
   describe('browser build', () => {
     it('adopts a previously persisted key, then deletes it from storage', async () => {
       const store = await loadStore({ tauri: false });
