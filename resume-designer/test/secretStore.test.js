@@ -1027,6 +1027,32 @@ describe('secretStore', () => {
       expect(store.isMemoryOnlyFallback()).toBe(true);
     });
 
+    // A stored `''` IS something durable — and what it says is "no key". So a
+    // typed key that fails to save has nothing to misrepresent, exactly as in
+    // the never-configured case, but the guard tested `cached === null` and left
+    // this user with AI unconfigured after their save failed.
+    it('retains a typed key when only the clear sentinel is stored', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend, channel: inertChannel() });
+      // A durable Clear: the sentinel is genuinely stored.
+      await store.setSecret('');
+      expect(store.getSecret()).toBe('');
+      expect(store.isMemoryOnlyFallback()).toBe(false);
+
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(store.setSecret('sk-typed')).rejects.toMatchObject({ retainedInMemory: true });
+
+      // Usable this session...
+      expect(store.getSecret()).toBe('sk-typed');
+      expect(store.isMemoryOnlyFallback()).toBe(true);
+      // ...and the durable mask is untouched, so a reload still reads the Clear
+      // rather than a key that was never saved.
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend, channel: inertChannel() });
+      expect(after.getSecret()).toBe('');
+    });
+
     // The worse half of the same guard: Clear did not clear. The tab went on
     // making paid requests with a credential the user had deleted.
     it('clears a memory-only key when the store is STILL failing', async () => {

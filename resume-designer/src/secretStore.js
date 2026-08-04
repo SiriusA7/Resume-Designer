@@ -657,15 +657,27 @@ export async function setSecret(value) {
       // past IndexedDB until reload. Only `browser` with nothing stored is an
       // established absence.
       //
-      // `memoryOnlyFallback` is that same established absence, and testing
-      // `cached === null` alone missed it: after a failed first save `cached`
-      // holds the retained value while the store STILL has nothing — the flag is
-      // only ever set when nothing was stored, and any successful write or
-      // adoption clears it. So a SECOND failure with IndexedDB still down
-      // rethrew without touching `cached`, and the tab went on using the old
-      // session-only key: an edit that appeared to replace it did not, and a
-      // Clear did not clear.
-      const hadNoCredential = mode === 'browser' && (cached === null || memoryOnlyFallback);
+      // The question is whether anything DURABLE AND USABLE is stored, which
+      // `cached === null` only approximated. Three states answer "no", and the
+      // guard has now been wrong about two of them:
+      //
+      //  - `null`  nothing stored at all. The original case.
+      //  - `''`    the Clear sentinel: something IS stored, and what it says is
+      //            "no key". Retaining a typed value misrepresents nothing, and
+      //            refusing left the user with AI unconfigured after a failed
+      //            save — the exact state the null case falls back for.
+      //  - `memoryOnlyFallback`  a value is cached but was never stored. The
+      //            flag is only ever set when nothing was stored, and any
+      //            successful write or adoption clears it.
+      //
+      // `hasUsableSecret()` already draws the first two together, which is why
+      // it is reused here rather than restated. A real stored key is the only
+      // case that must NOT fall back: dropping to memory-only there would report
+      // nothing persisted while ciphertext sits in the store.
+      //
+      // The failed write leaves the durable value untouched either way, so a
+      // Clear sentinel stays in place and goes on masking any stale blob copy.
+      const noDurableCredential = mode === 'browser' && (!hasUsableSecret() || memoryOnlyFallback);
 
       // Compare-and-set against the newest version this tab can establish.
       //
@@ -700,7 +712,7 @@ export async function setSecret(value) {
         // `undefined`, so there is no longer any path to an unordered write.
         result = await writeSecret(browserBackend, value, { expectVersion });
       } catch (err) {
-        if (hadNoCredential) {
+        if (noDurableCredential) {
           // Retryable: the mode stays `browser`, so the next save targets the
           // store again. Only the flag records that this value is unstored.
           memoryOnlyFallback = true;
