@@ -47,9 +47,23 @@ const SECRET_NAME = OPENROUTER_KEY_KEY;
 // The credential, hydrated at boot. `null` means "no key configured".
 let cached = null;
 
-// Whether the keychain answered at boot. False in the browser build, and on
-// desktop when the keychain could not be reached at all.
-let available = false;
+/**
+ * Where the credential lives, decided once at boot.
+ *
+ *  - `plaintext`  browser build and jsdom tests: no keychain exists, so
+ *                 appStorage stays the store exactly as it was. Ships to
+ *                 nobody — the product is the desktop app.
+ *  - `keychain`   desktop, keychain answered: the only mode that ships.
+ *  - `read-only`  desktop, keychain unreachable (locked, denied, broken).
+ *                 Keeps serving a pre-migration plaintext key so someone who
+ *                 already has one is not locked out of their own AI, but
+ *                 REFUSES writes — the app must never mint fresh plaintext
+ *                 behind the user's back just because the keychain faulted.
+ *
+ * `plaintext` and `read-only` both mean "no keychain", but they are not
+ * interchangeable: the first may write and the second may not.
+ */
+let mode = 'plaintext';
 
 async function invokeSecret(command, args) {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -58,19 +72,28 @@ async function invokeSecret(command, args) {
 
 /** True when the credential is being held in the OS keychain. */
 export function isKeychainAvailable() {
-  return available;
+  return mode === 'keychain';
+}
+
+/**
+ * True when the keychain faulted and the app is serving an existing plaintext
+ * key without being able to save changes. Lets the UI explain why saving is
+ * refused instead of just failing.
+ */
+export function isReadOnly() {
+  return mode === 'read-only';
 }
 
 /**
  * The credential, read synchronously — this is what lets `getSettings()` stay
  * synchronous. Returns `null` when none is configured.
  *
- * Falls through to appStorage whenever the keychain is not the live store:
- * the browser build, and every read that happens before `initSecretStore()`
- * has run. That keeps boot-time readers working unchanged.
+ * In `plaintext` mode it reads appStorage live rather than a hydrated copy,
+ * which also covers every read that happens BEFORE initSecretStore() has run
+ * (mode still holds its initial value then), so boot-time readers are unchanged.
  */
 export function getSecret() {
-  return available ? cached : appStorage.getItem(OPENROUTER_KEY_KEY);
+  return mode === 'plaintext' ? appStorage.getItem(OPENROUTER_KEY_KEY) : cached;
 }
 
 /**
@@ -87,6 +110,11 @@ async function stripPlaintextCopy() {
   return appStorage.flush();
 }
 
+/** Thrown when the keychain faulted, so the UI can explain rather than guess. */
+export const KEYCHAIN_READ_ONLY_MESSAGE =
+  'Your system keychain could not be reached, so the key was not saved. '
+  + 'Your existing key still works for now. Unlock your keychain and try again.';
+
 /**
  * Write the credential, replacing whatever is stored.
  *
@@ -96,11 +124,17 @@ async function stripPlaintextCopy() {
  * save never leaves the app using a key it did not persist.
  */
 export async function setSecret(value) {
+  // Read-only degrade: refuse. Falling back to a plaintext write here would
+  // quietly recreate the very exposure the keychain exists to remove — and it
+  // would do so at the moment the user is least likely to notice, since from
+  // their side the save would simply appear to succeed.
+  if (mode === 'read-only') throw new Error(KEYCHAIN_READ_ONLY_MESSAGE);
+
   // Clearing writes an EMPTY value rather than removing the entry. That erases
   // the credential just as well, and keeps getSettings' masking guarantee: a
   // stored empty string hides a stale key left in the per-profile blob by a
   // pre-extraction install, which an absent entry would let resurface.
-  if (!available) {
+  if (mode === 'plaintext') {
     appStorage.setItem(OPENROUTER_KEY_KEY, value);
     cached = value;
     return;
@@ -126,21 +160,21 @@ export async function initSecretStore() {
   if (!IS_TAURI) {
     // Browser build and jsdom tests: no keychain exists. The key stays in
     // appStorage exactly as before — this path ships to nobody, since the
-    // product is the desktop app. getSecret() reads appStorage directly while
-    // `available` is false, so there is nothing to hydrate here.
-    available = false;
+    // product is the desktop app. getSecret() reads appStorage directly in this
+    // mode, so there is nothing to hydrate here.
+    mode = 'plaintext';
     return;
   }
 
   let stored;
   try {
     stored = await invokeSecret('secret_get', { name: SECRET_NAME });
-    available = true;
+    mode = 'keychain';
   } catch (err) {
     // The keychain could not be reached — locked, access denied, or missing.
-    // Note this is NOT the same as "no entry stored", which arrives as a
-    // resolved `null`. See handleUnavailableKeychain below.
-    available = false;
+    // NOT the same as "no entry stored", which arrives as a resolved `null`:
+    // treating the two alike would read as a fresh install and send the
+    // migration below down the branch that deletes the plaintext original.
     handleUnavailableKeychain(err);
     return;
   }
@@ -172,20 +206,31 @@ export async function initSecretStore() {
 }
 
 /**
- * Decide what happens when the OS keychain cannot be reached on a desktop
- * build — locked, access denied, or otherwise erroring.
+ * The OS keychain could not be reached on a desktop build — locked, access
+ * denied, or otherwise erroring. Degrade to READ-ONLY.
  *
- * TODO(ash): implement. This is a security-versus-availability call, not a
- * mechanical one, so it is deliberately left for a human to make.
+ * Serving the pre-migration plaintext copy keeps someone who already has a key
+ * working: their AI does not go dark because an unrelated OS service faulted,
+ * and the file being read is one that already exists — nothing new is exposed.
  *
- * At this point `available` is already false, and `initSecretStore` returns
- * immediately after this runs. `cached` is still null, so unless this sets it
- * the app behaves as though no key is configured. The plaintext copy in
- * appStorage — if the user predates this migration — is untouched and readable
- * via `appStorage.getItem(OPENROUTER_KEY_KEY)`.
+ * Refusing writes (see setSecret) is the other half, and the more important
+ * one. The tempting fallback is to write plaintext "just this once", but that
+ * silently recreates the exposure the keychain exists to remove, at the moment
+ * the user is least able to notice: from their side the save looks like it
+ * worked. Better to fail loudly and let them unlock the keychain.
+ *
+ * The cost, accepted deliberately: a user with NO key yet cannot configure one
+ * until the keychain recovers. That is the narrower harm — a new user is
+ * already mid-setup and can act on a clear error, whereas silent plaintext
+ * would persist unnoticed for the life of the install.
  *
  * @param {unknown} err the rejection from `secret_get`
  */
 function handleUnavailableKeychain(err) {
-  void err;
+  mode = 'read-only';
+  cached = appStorage.getItem(OPENROUTER_KEY_KEY);
+  console.error(
+    '[secretStore] keychain unavailable — serving the existing key, refusing writes',
+    err,
+  );
 }

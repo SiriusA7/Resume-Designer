@@ -115,22 +115,64 @@ describe('secretStore', () => {
     });
   });
 
-  describe('unreachable keychain', () => {
+  // A keychain that cannot be reached on desktop degrades to READ-ONLY: keep
+  // serving a key the user already has, refuse to write new ones. The refusal
+  // is the load-bearing half — falling back to a plaintext write would quietly
+  // recreate the exposure the keychain exists to remove, at the moment the user
+  // is least able to notice, because from their side the save looks fine.
+  describe('unreachable keychain degrades to read-only', () => {
+    const degraded = async (existing) => {
+      const store = await loadStore();
+      if (existing !== undefined) setPlaintext(existing);
+      invokeMock.mockRejectedValue(new Error('keychain locked'));
+      await store.initSecretStore();
+      return store;
+    };
+
     // secret_get resolving to null means "no entry"; REJECTING means the
     // keychain could not be read. Collapsing the two would make a locked
     // keychain look like a fresh install and send the migration down the path
     // that deletes the plaintext original.
     it('does not mistake a read failure for an absent credential', async () => {
-      const store = await loadStore();
-      setPlaintext('sk-legacy');
-      invokeMock.mockRejectedValue(new Error('keychain locked'));
+      await degraded('sk-legacy');
 
-      await store.initSecretStore();
+      expect(plaintext()).toBe('sk-legacy');
+      // No secret_set attempted against a keychain we cannot even read.
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps serving the key the user already has', async () => {
+      const store = await degraded('sk-legacy');
 
       expect(store.isKeychainAvailable()).toBe(false);
+      expect(store.isReadOnly()).toBe(true);
+      // Their AI does not go dark because an unrelated OS service faulted, and
+      // the file being read already existed — nothing new is exposed.
+      expect(store.getSecret()).toBe('sk-legacy');
+    });
+
+    it('REFUSES to write, rather than falling back to plaintext', async () => {
+      const store = await degraded('sk-legacy');
+      invokeMock.mockClear();
+
+      await expect(store.setSecret('sk-new')).rejects.toThrow(/keychain could not be reached/i);
+
+      // The whole point: no fresh plaintext was minted behind the user's back.
       expect(plaintext()).toBe('sk-legacy');
-      // No secret_set was attempted against a keychain we cannot even read.
-      expect(invokeMock).toHaveBeenCalledTimes(1);
+      expect(store.getSecret()).toBe('sk-legacy');
+      expect(invokeMock).not.toHaveBeenCalled();
+    });
+
+    // The accepted cost of this policy, pinned so it is a decision and not a
+    // surprise: someone with no key yet cannot configure one until the keychain
+    // recovers. They get a clear error; silent plaintext would have persisted
+    // unnoticed for the life of the install.
+    it('blocks first-time setup while the keychain is down', async () => {
+      const store = await degraded();
+
+      expect(store.getSecret()).toBeNull();
+      await expect(store.setSecret('sk-first')).rejects.toThrow(/not saved/i);
+      expect(plaintext()).toBeNull();
     });
   });
 

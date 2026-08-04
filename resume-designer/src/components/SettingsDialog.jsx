@@ -22,7 +22,7 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
-import { isKeychainAvailable } from '../secretStore.js';
+import { isKeychainAvailable, isReadOnly } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
@@ -198,6 +198,9 @@ export default function SettingsDialog() {
   // browser build does not have. Deliberately platform-neutral: this reads the
   // same whether the backend is the macOS Keychain or Windows Credential Manager.
   const keychainName = isKeychainAvailable() ? 'system keychain' : 'app data folder';
+  // Say so up front when the keychain faulted. Otherwise the first the user
+  // hears of it is a failed save after they have typed a key in.
+  const readOnlyKeychain = isReadOnly();
 
   const handleSaveKeys = async () => {
     // The key goes to the OS keychain, so this can genuinely fail (locked or
@@ -406,6 +409,12 @@ export default function SettingsDialog() {
                   {keyError && (
                     <p className="text-sm text-destructive" role="alert">
                       {keyError}
+                    </p>
+                  )}
+                  {readOnlyKeychain && !keyError && (
+                    <p className="text-sm text-destructive" role="alert">
+                      Your system keychain can&rsquo;t be reached, so this key can&rsquo;t be changed right now. Any key
+                      you already had still works. Unlock your keychain and reopen On Paper to save a new one.
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground">
