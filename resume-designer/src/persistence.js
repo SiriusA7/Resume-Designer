@@ -5,7 +5,6 @@
 
 import { store, generateId } from './store.js';
 import { parseResume } from './parser.js';
-import { assignGroupIds } from './experienceGroups.js';
 import { isTauri } from './native.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
@@ -1361,9 +1360,6 @@ export async function importFromMarkdown(file) {
       try {
         const markdown = e.target.result;
         const data = parseResume(markdown);
-        // Same predicate the renderer uses, so import and render agree by
-        // construction: consecutive entries at an identical company are one tenure.
-        data.experience = assignGroupIds(data.experience);
         resolve(data);
       } catch (err) {
         reject(new Error('Failed to parse Markdown: ' + err.message));
