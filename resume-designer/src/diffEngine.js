@@ -424,6 +424,8 @@ export function getPathLabel(path) {
   const labels = {
     'name': 'Name',
     'title': 'Title',
+    'company': 'Company',
+    'dates': 'Dates',
     'email': 'Email',
     'phone': 'Phone',
     'location': 'Location',
