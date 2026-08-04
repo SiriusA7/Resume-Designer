@@ -379,6 +379,10 @@ export default function SettingsDialog() {
       // keychain: something is there, the field cannot be trusted to reflect
       // it, so only a deliberate edit may write.
       readOnly: isReadOnly() || isBrowserUnreadable(),
+      // A refused first save keeps the key in memory and the copy promises that
+      // saving again retries the store. Reopening Settings reseeds the field and
+      // clears keyDirty, so without this the promised retry did nothing at all.
+      memoryOnly: isMemoryOnlyFallback(),
       value: apiKey,
     })) {
       // The key goes to the OS keychain, so this can genuinely fail (locked or

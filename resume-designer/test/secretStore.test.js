@@ -61,31 +61,50 @@ describe('secretStore', () => {
   // from states nobody thought to check, not from bad logic in the ones they did.
   describe('shouldWriteCredential', () => {
     const cases = [
-      // edited, readOnly, value            expected  why
-      [true, false, 'sk-new', true, 'user typed a key normally'],
-      [true, false, '', true, 'user deliberately emptied the field'],
-      [true, true, 'sk-new', true, 'user typed while degraded'],
-      [false, false, 'sk-existing', false, 'untouched save of an unrelated setting'],
-      [false, false, '', false, 'untouched and empty in normal mode'],
+      // edited, readOnly, memoryOnly, value      expected  why
+      [true, false, false, 'sk-new', true, 'user typed a key normally'],
+      [true, false, false, '', true, 'user deliberately emptied the field'],
+      [true, true, false, 'sk-new', true, 'user typed while degraded'],
+      [false, false, false, 'sk-existing', false, 'untouched save of an unrelated setting'],
+      [false, false, false, '', false, 'untouched and empty in normal mode'],
       // THE round-nine bug: already migrated, secret_get failed, nothing to
       // seed from. Writing here puts '' over a live keychain credential.
-      [false, true, '', false, 'degraded with NO fallback — value is unknown, not empty'],
+      [false, true, false, '', false, 'degraded with NO fallback — value is unknown, not empty'],
       // THE round-eleven bug: degraded WITH a recovered plaintext key. The
       // banner tells the user to save again to move it back into the keychain;
       // skipping the write made that instruction a no-op.
-      [false, true, 'sk-fallback', true, 'degraded WITH a fallback — this is the recovery'],
+      [false, true, false, 'sk-fallback', true, 'degraded WITH a fallback — this is the recovery'],
+      // THE FOURTH occurrence, and the reason this table exists rather than a
+      // clause: a first save the browser refused keeps the key in memory, the
+      // copy promises saving again retries, and reopening Settings reseeds the
+      // field and clears `edited` — so the promised retry wrote nothing.
+      [false, false, true, 'sk-inmemory', true, 'memory-only fallback — saving again IS the retry'],
+      // Same disjointness as read-only. Nothing in memory means nothing to
+      // retry with, and '' here would clear a record this tab cannot see.
+      [false, false, true, '', false, 'memory-only with no value — nothing to retry'],
     ];
 
-    it.each(cases)('edited=%s readOnly=%s value=%p -> %s (%s)', (edited, readOnly, value, expected) => {
-      expect(shouldWriteCredential({ edited, readOnly, value })).toBe(expected);
-    });
+    it.each(cases)(
+      'edited=%s readOnly=%s memoryOnly=%s value=%p -> %s (%s)',
+      (edited, readOnly, memoryOnly, value, expected) => {
+        expect(shouldWriteCredential({ edited, readOnly, memoryOnly, value })).toBe(expected);
+      },
+    );
 
-    // The two clauses must stay disjoint: an empty field in read-only means
+    // The clauses must stay disjoint: an empty field in a degraded mode means
     // "unknown", a non-empty one means "recoverable". If that ever blurs, one
-    // of the two bugs above comes back.
+    // of the bugs above comes back.
     it('never writes an unknown value, and never skips a recoverable one', () => {
       expect(shouldWriteCredential({ edited: false, readOnly: true, value: '' })).toBe(false);
       expect(shouldWriteCredential({ edited: false, readOnly: true, value: 'k' })).toBe(true);
+      expect(shouldWriteCredential({ edited: false, memoryOnly: true, value: '' })).toBe(false);
+      expect(shouldWriteCredential({ edited: false, memoryOnly: true, value: 'k' })).toBe(true);
+    });
+
+    // Callers that predate `memoryOnly` must keep their meaning — an omitted
+    // flag is "not in that state", never an implicit true.
+    it('treats an omitted memoryOnly as false', () => {
+      expect(shouldWriteCredential({ edited: false, readOnly: false, value: 'sk' })).toBe(false);
     });
   });
 
@@ -991,6 +1010,56 @@ describe('secretStore', () => {
       // The adopted value IS durable, and the UI copy is derived from these.
       expect(tabA.isMemoryOnlyFallback()).toBe(false);
       expect(tabA.isEncryptedInBrowser()).toBe(true);
+    });
+
+    // The same marker, at the one path that discards `cached` WITHOUT going
+    // through adoptBrowserRead. Settings ranks the memory-only message above
+    // the unreadable one, so a stale marker told the user the key just dropped
+    // was still good for this session — and hid that a durable record needs
+    // replacing.
+    it('clears the memory-only marker when a broadcast cannot be confirmed', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      // Tab A gets its OWN view over the same store, so its reads can be broken
+      // without breaking tab B's writes — they share one backend object, and
+      // reaching in to break `get` directly took tab B down with it.
+      const aView = { ...backend };
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend: aView, channel: makeChannel() });
+
+      // Tab A's first save is refused, so it is holding a memory-only key.
+      aView.update = async () => { throw new Error('quota exceeded'); };
+      await expect(tabA.setSecret('sk-typed')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(tabA.isMemoryOnlyFallback()).toBe(true);
+      aView.update = backend.update;
+
+      // Tab B announces a change that tab A can never confirm: tab A's reads
+      // fail outright, so all three attempts come back unreadable and it fails
+      // closed rather than keep a value a broadcast contradicted.
+      //
+      // The break must land BEFORE the first announcement tab A sees. Any
+      // confirmable broadcast in between routes through adoptBrowserRead, which
+      // clears the marker itself — the test then passes without this fix.
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend, channel: makeChannel() });
+      aView.get = async () => { throw new Error('indexeddb unavailable'); };
+      await tabB.setSecret('sk-other');
+
+      expect(await waitFor(() => tabA.isBrowserUnreadable())).toBe(true);
+      expect(tabA.getSecret()).toBeNull();
+      // Nothing is being held in memory any more, so nothing may claim it is.
+      expect(tabA.isMemoryOnlyFallback()).toBe(false);
     });
 
     // "I never observed a version" is not a licence to bypass ordering: a

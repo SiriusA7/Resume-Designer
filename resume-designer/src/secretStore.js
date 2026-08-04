@@ -253,6 +253,12 @@ async function adoptRemoteChange() {
   // broadcast has already contradicted.
   mode = 'browser-unreadable';
   cached = null;
+  // The one path that discards `cached` WITHOUT going through
+  // adoptBrowserRead, which clears this at its top. Left set, Settings ranks
+  // the memory-only message above the unreadable one and tells the user the key
+  // it just dropped is still good for this session — the opposite of what
+  // happened, and it hides that a durable record needs replacing.
+  memoryOnlyFallback = false;
 }
 
 /**
@@ -278,10 +284,18 @@ async function adoptRemoteChange() {
  * A non-empty field in read-only mode is exactly the recoverable case; an empty
  * one is exactly the unknown case. They do not overlap, so both hold.
  *
- * @param {{edited: boolean, readOnly: boolean, value: string}} state
+ * `memoryOnly` is the same shape and was missed a fourth time. A first save the
+ * browser refused keeps the key in memory, and the copy says "saving again will
+ * retry" — but reopening Settings reseeds the field and clears `edited`, so the
+ * advertised retry wrote nothing and the key vanished on reload. Whether a state
+ * belongs here is not about what it is CALLED: it is whether the UI promises
+ * that Save recovers it and the field holds a value to write. The case table in
+ * the tests is the guard against a fifth one, so add a row before a clause.
+ *
+ * @param {{edited: boolean, readOnly: boolean, memoryOnly?: boolean, value: string}} state
  */
-export function shouldWriteCredential({ edited, readOnly, value }) {
-  return !!edited || (!!readOnly && value !== '');
+export function shouldWriteCredential({ edited, readOnly, memoryOnly, value }) {
+  return !!edited || ((!!readOnly || !!memoryOnly) && value !== '');
 }
 
 /**
