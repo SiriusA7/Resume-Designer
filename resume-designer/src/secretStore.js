@@ -528,6 +528,45 @@ export async function setSecret(value) {
 }
 
 /**
+ * The browser half of boot, run INSIDE the credential queue.
+ *
+ * Separated so it can be queued: the broadcast listener is attached before this
+ * runs, so a clear arriving mid-decrypt would otherwise be adopted first and
+ * then overwritten by this older read.
+ */
+async function initBrowserCredential() {
+  if (!browserBackend) {
+    // No encrypted store at all (non-secure context, private browsing). Adopt a
+    // legacy copy so this session works, then remove it — memory-only is the
+    // fallback, never plaintext.
+    mode = 'session';
+    cached = appStorage.getItem(OPENROUTER_KEY_KEY);
+    await stripPlaintextCopy();
+    return;
+  }
+
+  const read = await readSecret(browserBackend);
+  if (read.status === 'unreadable') {
+    // Something IS stored and cannot be read right now. Absence was never
+    // established, so adoption must not run: writing a legacy plaintext copy
+    // over this record would replace a newer credential, or resurrect one the
+    // user deliberately cleared. Leave it all alone.
+    //
+    // Deliberately does NOT serve a legacy plaintext copy the way the desktop
+    // read-only path does, and the asymmetry is the point. On desktop that copy
+    // IS the pre-migration credential and the keychain holds nothing newer.
+    // Here we know ciphertext exists, so any plaintext beside it is the OLDER
+    // value — serving it silently would mean a revoked or superseded key and
+    // unexplained failures. The record is left intact and the user is asked to
+    // re-enter, which also replaces it.
+    mode = 'browser-unreadable';
+    cached = null;
+    return;
+  }
+  await adoptBrowserRead(read);
+}
+
+/**
  * Boot entry point. Hydrates `cached` and performs the one-time move of an
  * existing plaintext key into the keychain.
  *
@@ -557,35 +596,13 @@ export async function initSecretStore({ backend = null, channel = null } = {}) {
       };
     }
 
-    if (!browserBackend) {
-      // No encrypted store at all (non-secure context, private browsing). Adopt
-      // a legacy copy so this session works, then remove it — memory-only is
-      // the fallback, never plaintext.
-      mode = 'session';
-      cached = appStorage.getItem(OPENROUTER_KEY_KEY);
-      await stripPlaintextCopy();
-      return;
-    }
-
-    const read = await readSecret(browserBackend);
-    if (read.status === 'unreadable') {
-      // Something IS stored and cannot be read right now. Absence was never
-      // established, so adoption must not run: writing a legacy plaintext copy
-      // over this record would replace a newer credential, or resurrect one the
-      // user deliberately cleared. Leave it all alone.
-      //
-      // Deliberately does NOT serve a legacy plaintext copy the way the desktop
-      // read-only path does, and the asymmetry is the point. On desktop that
-      // copy IS the pre-migration credential and the keychain holds nothing
-      // newer. Here we know ciphertext exists, so any plaintext beside it is
-      // the OLDER value — serving it silently would mean a revoked or
-      // superseded key and unexplained failures. The record is left intact and
-      // the user is asked to re-enter, which also replaces it.
-      mode = 'browser-unreadable';
-      cached = null;
-      return;
-    }
-    await adoptBrowserRead(read);
+    // Queued alongside remote changes. The listener above is already live by
+    // this point, so without it a clear arriving mid-decrypt would be adopted
+    // FIRST and then overwritten by this older startup read — the tab resuming
+    // with the revoked key until some later notification. Queuing also means a
+    // broadcast that lands during boot simply runs after it and re-reads,
+    // rather than being missed.
+    await serializeCredentialOp(() => initBrowserCredential());
     return;
   }
 

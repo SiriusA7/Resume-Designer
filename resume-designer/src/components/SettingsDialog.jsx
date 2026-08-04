@@ -302,7 +302,14 @@ export default function SettingsDialog() {
       ? 'Your API key isn’t included — it stays on this machine, so you’ll enter it again on a new one.'
       : isEncryptedInBrowser()
         ? 'Your API key isn’t included — it stays encrypted in this browser, so you’ll enter it again in a different one.'
-        : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
+        // Degraded is NOT memory-only: the key persists, just unencrypted. It
+        // was falling through to the "this browser can't store it" text, which
+        // got both the lifecycle and the security story backwards for the one
+        // state where a readable copy actually survives restarts.
+        : degradedBrowser
+          ? 'Your API key isn’t included. It’s currently saved unencrypted in this browser and will persist'
+            + ' between visits — save it again from the AI tab to encrypt it.'
+          : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
 
   const handleSaveKeys = async () => {
     // Guard as well as disabling the controls: a keypress can land between the

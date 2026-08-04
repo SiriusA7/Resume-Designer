@@ -388,6 +388,50 @@ describe('secretStore', () => {
       expect(await waitFor(() => tabB.getSecret() === null)).toBe(true);
     });
 
+    // The listener is attached before the initial decrypt, so a clear arriving
+    // mid-boot could be adopted FIRST and then overwritten by the older startup
+    // read — the tab resuming with the revoked key.
+    it('does not let a slow boot read overwrite a clear that arrived during it', async () => {
+      const backend = makeBackend();
+
+      const seed = await loadStore({ tauri: false });
+      await seed.initSecretStore({ backend });
+      await seed.setSecret('sk-old');
+
+      // A second tab that can write the clear.
+      const other = await loadStore({ tauri: false });
+      await other.initSecretStore({ backend });
+
+      // Booting tab: its reads are slow.
+      // Snapshot FIRST, then delay: a slow read observes the store when it
+      // starts and delivers that later. Delaying and then reading models a read
+      // that sees the future, which is what made an earlier version of this
+      // test pass against the unfixed code.
+      let slow = true;
+      const slowBackend = {
+        ...backend,
+        get: async (id) => {
+          const snapshot = await backend.get(id);
+          if (slow) await new Promise((r) => setTimeout(r, 60));
+          return snapshot;
+        },
+      };
+      const channel = { onmessage: null, postMessage: () => {} };
+      const booting = await loadStore({ tauri: false });
+      const bootPromise = booting.initSecretStore({ backend: slowBackend, channel });
+
+      // Mid-boot: the other tab clears and the broadcast lands.
+      await new Promise((r) => setTimeout(r, 10));
+      await other.setSecret('');
+      slow = false;
+      channel.onmessage?.({ data: { type: 'credential-changed' } });
+
+      await bootPromise;
+
+      // The clear is the newer fact and must win, whatever order they finished.
+      expect(await waitFor(() => booting.getSecret() === '')).toBe(true);
+    });
+
     it('picks up a key another tab saved', async () => {
       const backend = makeBackend();
       const ends = [];
