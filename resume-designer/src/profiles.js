@@ -178,6 +178,11 @@ export async function extractSharedApiKey() {
     const split = splitPhysicalKey(key);
     if (split?.logicalKey === 'resume-designer-data') {
       const left = await extractCredentialFromBlob(key);
+      // `=== null` — a genuine absence — and NOT falsiness. An active-profile
+      // result of `''` is a Clear that could not be consolidated, and it is an
+      // ANSWER: treating it as absence let an older key from a profile the user
+      // has not opened fill the gap and undo the Clear. The inactive blobs are
+      // still swept, they just cannot outvote the active profile.
       if (stranded === null) stranded = left;
     }
   }
@@ -189,10 +194,16 @@ export async function extractSharedApiKey() {
  * than per-sweep error handling, so one corrupt profile cannot stop the others
  * being sanitized.
  *
- * Returns a NON-EMPTY credential this call could not consolidate, or null. A
- * caught failure used to look identical to success from outside, so boot went
- * on to report protected storage while a readable copy sat in the blob and
- * getSettings quietly served it — see main.js.
+ * Returns the credential this call could not consolidate, or null when there is
+ * nothing to report. A caught failure used to look identical to success from
+ * outside, so boot went on to report protected storage while a readable copy sat
+ * in the blob and getSettings quietly served it — see main.js.
+ *
+ * `''` is a RESULT, not an absence. It means the user's Clear could not be
+ * consolidated, and collapsing it to null (via `inBlob || null`) let the caller
+ * carry on scanning inactive profiles and adopt an older key out of one — the
+ * Clear undone by a profile the user has not opened. Every caller must treat
+ * `null` and `''` as different answers.
  */
 async function extractCredentialFromBlob(blobKey) {
   let data;
@@ -242,14 +253,16 @@ async function extractCredentialFromBlob(blobKey) {
     // in the cache — the one durable copy gone if the retry never lands.
     // Costs nothing in steady state: once extraction has run there is no
     // `openrouterKey` in the blob and the function returns above.
-    if (!(await appStorage.flush())) return inBlob || null;
+    if (!(await appStorage.flush())) return inBlob;
     delete data.settings.openrouterKey;
     appStorage.setItem(blobKey, JSON.stringify(data));
   } catch {
     // A storage refusal, not a corrupt blob: passthrough setItem throws
     // synchronously when localStorage is full. The blob still holds a readable
-    // credential, and saying so is the whole point of this return value.
-    return inBlob || null;
+    // credential — or a readable CLEAR — and saying which is the whole point of
+    // this return value. `inBlob` verbatim, never `inBlob || null`: an
+    // unconsolidated '' is the user's Clear and must not read as absence.
+    return inBlob;
   }
   return null;
 }

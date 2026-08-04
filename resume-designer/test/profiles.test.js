@@ -710,6 +710,39 @@ describe('adoption migration', () => {
     expect(await extractSharedApiKey()).toBeNull();
   });
 
+  // `''` is a RESULT, not an absence: the user's Clear, which storage refused to
+  // consolidate. Collapsing it to null (via `inBlob || null`) let the sweep carry
+  // on into inactive profiles and adopt an older key out of one — the Clear
+  // undone by a profile the user has not opened.
+  it('extractSharedApiKey does not let an inactive key outvote a stranded clear', async () => {
+    setProfileMapping('pactive');
+    localStorage.setItem('resume-p--pactive--resume-designer-data', JSON.stringify({
+      settings: { openrouterKey: '' },              // the user cleared it
+    }));
+    localStorage.setItem('resume-p--pother--resume-designer-data', JSON.stringify({
+      settings: { openrouterKey: 'sk-paid' },       // an older profile still has it
+    }));
+
+    // THE PRECONDITION: writing the shared sentinel throws, which is the only
+    // way the active profile's clear ends up unconsolidated. Without this the
+    // sentinel lands, the sweep skips, and there is nothing to outvote.
+    const realSetItem = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function set(k, v) {
+      if (k === OPENROUTER_KEY_KEY) throw new Error('QuotaExceededError');
+      return realSetItem.call(this, k, v);
+    });
+
+    try {
+      const stranded = await extractSharedApiKey();
+
+      // The active profile's Clear is the answer — NOT the older paid key.
+      expect(stranded).toBe('');
+      expect(stranded).not.toBe('sk-paid');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // `in` on a truthy NON-object throws a TypeError, and that check sits outside
   // the parse catch since the catch was narrowed to tell a corrupt blob from a
   // storage refusal. Boot awaits this before initSecretStore, so one

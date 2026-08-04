@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { importFullBackupFromEnvelope, importFullBackupMerge } from '../src/persistence.js';
+import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 
 beforeEach(() => {
   localStorage.clear();
@@ -151,6 +152,57 @@ describe('importFullBackupFromEnvelope', () => {
       // Current settings still win everywhere else.
       expect(parsed.settings.theme).toBe('light');
       expect(parsed.variants.mine).toBeDefined();
+    });
+
+    // The credential can arrive in the SHARED key rather than the blob — the
+    // previous app stored it there once extraction had run. That key is no
+    // longer "owned" (which is how it left backups), so the replace path's
+    // owned-key filter dropped it, and the one-shot migration then reported
+    // success with no credential.
+    it('carries a shared-key credential through a REPLACE migration', () => {
+      importFullBackupFromEnvelope({
+        backupFormat: 1,
+        keys: {
+          'resume-designer-data': JSON.stringify({ variants: {}, settings: { theme: 'dark' } }),
+          [OPENROUTER_KEY_KEY]: 'sk-shared-electron',
+        },
+      }, { keepCredential: true });
+
+      // Present for extraction/initSecretStore to migrate into the keychain.
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared-electron');
+    });
+
+    it('drops a shared-key credential from a backup FILE', () => {
+      importFullBackupFromEnvelope({
+        backupFormat: 1,
+        keys: {
+          'resume-designer-data': JSON.stringify({ variants: {}, settings: {} }),
+          [OPENROUTER_KEY_KEY]: 'sk-shared-electron',
+        },
+      });
+
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
+    });
+
+    // The merge path had the same rule wrong in the OPPOSITE direction: it
+    // writes every key it is handed, so an older backup carrying the shared
+    // credential put it back in plaintext.
+    it('drops a shared-key credential from a backup FILE merge', () => {
+      importFullBackupMerge({
+        backupFormat: 1,
+        keys: { [OPENROUTER_KEY_KEY]: 'sk-shared-electron' },
+      });
+
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
+    });
+
+    it('carries a shared-key credential through a MERGE migration', () => {
+      importFullBackupMerge({
+        backupFormat: 1,
+        keys: { [OPENROUTER_KEY_KEY]: 'sk-shared-electron' },
+      }, { keepCredential: true });
+
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared-electron');
     });
 
     // Only into a GAP. An existing credential — including a deliberate '' —

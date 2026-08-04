@@ -896,7 +896,16 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
   // file is corrupt or hostile, so we skip it rather than writing arbitrary
   // storage entries for this origin.
   const allEntries = Object.entries(parsed.keys);
-  const entries = allEntries.filter(([k]) => isOwnedKey(k));
+  // `resume-designer-openrouter-key` is no longer an owned key — that is how the
+  // credential was taken out of backups — so this filter drops it. Correct for a
+  // backup FILE, and wrong for a same-machine migration: the previous app stored
+  // the credential THERE, not only inside the data blob, so an Electron envelope
+  // carrying it that way lost the key before initSecretStore could migrate it,
+  // and the one-shot flag then reported success. Same rule as the blob, applied
+  // to the other place the credential can arrive.
+  const entries = allEntries.filter(
+    ([k]) => isOwnedKey(k) || (keepCredential && k === OPENROUTER_KEY_KEY)
+  );
   if (entries.length !== allEntries.length) {
     console.warn(
       `[backup] Ignored ${allEntries.length - entries.length} unrecognized key(s) in imported backup.`
@@ -1065,7 +1074,13 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
   // reasoning as importFullBackupFromEnvelope: critical data gets
   // written while there's quota; history (the bulky stuff) goes
   // last and is allowed to fall off the end if it doesn't fit.
-  const sortedEntries = Object.entries(parsed.keys).sort(([a], [b]) => {
+  // The mirror of the replace path's filter, and it was wrong in the OPPOSITE
+  // direction: merge writes every key it is given, so an older backup carrying
+  // `resume-designer-openrouter-key` would put the credential back in plaintext.
+  // Kept only for a same-machine migration, dropped for a backup file.
+  const sortedEntries = Object.entries(parsed.keys)
+    .filter(([k]) => keepCredential || k !== OPENROUTER_KEY_KEY)
+    .sort(([a], [b]) => {
     const aHist = a.startsWith(BACKUP_HISTORY_PREFIX);
     const bHist = b.startsWith(BACKUP_HISTORY_PREFIX);
     if (aHist === bHist) return 0;
