@@ -82,6 +82,37 @@ let cached = null;
  * still not interchangeable: the first accepts new keys (holding them in
  * memory), the second refuses them.
  */
+// ## The whole state space, in one place
+//
+// Six modes were added one review finding at a time, and every recent bug was
+// the same mistake: a rule applied to the state in front of me and not to its
+// siblings. The revocation broadcast alone had to be fixed three times —
+// healthy tabs, then degraded ones, then unconfirmable reads. Anything touching
+// this module should check its change against every ROW here, not just the one
+// it came for.
+//
+//                     getSecret     setSecret            broadcast in   recover
+//   keychain          cached        keychain write       n/a            cleanup only
+//   read-only         cached (may   retries keychain,    n/a            re-read, adopt
+//                     be null)      never plaintext                     (shares boot path)
+//   browser           cached        encrypted write      re-read+adopt  n/a
+//   browser-degraded  cached        retries encrypted    re-read+adopt  retry encrypt
+//                     (plaintext)   write, promotes                      then strip
+//   browser-unreadable null         write REPLACES the   re-read+adopt  re-read, adopt
+//                                   unreadable record                    or stay
+//   session           cached        memory only          n/a            n/a
+//
+// Invariants that hold across every row:
+//
+//  1. A read that FAILED is never treated as a read that found nothing. Only an
+//     established absence licenses a migration or an overwrite.
+//  2. The old copy is stripped only after the new one is durable — never before.
+//  3. A mode never claims a stronger guarantee than the credential's actual
+//     resting place, because the UI copy is derived from the mode.
+//  4. Whatever the UI tells the user to do must be reachable from the state
+//     they are in. Guards that make the prompted action a no-op broke this
+//     three separate times.
+//  5. Failing closed beats serving a value a broadcast has contradicted.
 let mode = 'session';
 
 // The IndexedDB-backed encrypted store, in `browser` mode only.
@@ -128,15 +159,37 @@ function announceCredentialChange() {
  * from what boot would have concluded. It writes via writeSecret rather than
  * setSecret, so no broadcast is re-emitted and there is no loop.
  *
- * An `unreadable` result is ignored on purpose: this tab may have a working
- * view, and a transient read failure is no reason to throw it away. Boot is
- * where an unreadable store is diagnosed.
+ * An `unreadable` result is RETRIED and then fails closed, which is the
+ * opposite of what boot does — deliberately. At boot, unreadable means "we
+ * cannot establish what is stored", and keeping quiet is right. Here a
+ * broadcast has already told us the stored credential is no longer what this
+ * tab holds. Keeping it because the confirmation failed is the unsafe half of
+ * the choice: if that broadcast was a CLEAR, the tab goes on making paid
+ * requests with a revoked key indefinitely. So after the retries the cached
+ * value is dropped and the tab reports unreadable, which the UI explains and
+ * recovery can resolve.
  */
+const REMOTE_READ_ATTEMPTS = 3;
+const REMOTE_READ_BACKOFF_MS = 50;
+
 async function onRemoteCredentialChange() {
   if (!browserBackend) return;
-  const read = await readSecret(browserBackend);
-  if (read.status === 'unreadable') return;
-  await adoptBrowserRead(read);
+
+  for (let attempt = 0; attempt < REMOTE_READ_ATTEMPTS; attempt += 1) {
+    const read = await readSecret(browserBackend);
+    if (read.status !== 'unreadable') {
+      await adoptBrowserRead(read);
+      return;
+    }
+    if (attempt < REMOTE_READ_ATTEMPTS - 1) {
+      await new Promise((resolve) => { setTimeout(resolve, REMOTE_READ_BACKOFF_MS); });
+    }
+  }
+
+  // Could not confirm what is stored. Fail closed rather than keep a value a
+  // broadcast has already contradicted.
+  mode = 'browser-unreadable';
+  cached = null;
 }
 
 /**

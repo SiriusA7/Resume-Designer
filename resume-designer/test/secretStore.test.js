@@ -183,6 +183,86 @@ describe('secretStore', () => {
       expect(tabB.isBrowserDegraded()).toBe(false);
     });
 
+    // A broadcast has already said the stored credential is not what this tab
+    // holds. If the confirming read fails, keeping the old value is the unsafe
+    // half of the choice — a CLEAR would leave this tab spending against a
+    // revoked key indefinitely. So it retries, then fails closed.
+    it('drops a stale key when a broadcast cannot be confirmed', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+      await tabA.setSecret('sk-shared');
+
+      let readsFail = false;
+      const flaky = {
+        ...backend,
+        get: async (id) => {
+          if (readsFail) throw new Error('idb read failed');
+          return backend.get(id);
+        },
+      };
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend: flaky, channel: makeChannel() });
+      expect(tabB.getSecret()).toBe('sk-shared');
+
+      // Tab A clears; tab B's confirming read is broken throughout.
+      readsFail = true;
+      await tabA.setSecret('');
+
+      expect(await waitFor(() => tabB.getSecret() === null)).toBe(true);
+      expect(tabB.isBrowserUnreadable()).toBe(true);
+    });
+
+    // ...but a read that recovers within the retries keeps the tab working,
+    // rather than punishing one transient blip.
+    it('recovers within the retries instead of failing closed', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+      await tabA.setSecret('sk-first');
+
+      let failuresLeft = 0;
+      const flaky = {
+        ...backend,
+        get: async (id) => {
+          if (failuresLeft > 0) { failuresLeft -= 1; throw new Error('transient'); }
+          return backend.get(id);
+        },
+      };
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend: flaky, channel: makeChannel() });
+
+      failuresLeft = 1; // one blip, then fine
+      await tabA.setSecret('sk-second');
+
+      expect(await waitFor(() => tabB.getSecret() === 'sk-second')).toBe(true);
+      expect(tabB.isBrowserUnreadable()).toBe(false);
+    });
+
     it('picks up a key another tab saved', async () => {
       const backend = makeBackend();
       const ends = [];
