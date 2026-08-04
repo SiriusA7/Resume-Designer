@@ -98,6 +98,13 @@ describe('secretStore', () => {
           if (files.has(id)) throw new Error('ConstraintError');
           files.set(id, value);
         },
+        // Mirrors IndexedDB's single-transaction get+conditional-put.
+        update: async (id, decide) => {
+          const current = files.has(id) ? files.get(id) : null;
+          const next = decide(current);
+          if (next) files.set(id, next);
+          return { wrote: !!next, current };
+        },
       };
     };
 
@@ -158,9 +165,9 @@ describe('secretStore', () => {
       let allowWrites = false;
       const gated = {
         ...backend,
-        put: async (id, v) => {
+        update: async (id, decide) => {
           if (!allowWrites) throw new Error('quota exceeded');
-          return backend.put(id, v);
+          return backend.update(id, decide);
         },
         add: async (id, v) => {
           if (!allowWrites) throw new Error('quota exceeded');
@@ -329,9 +336,9 @@ describe('secretStore', () => {
       let allowWrites = false;
       const gated = {
         ...backend,
-        put: async (id, v) => {
+        update: async (id, decide) => {
           if (!allowWrites) throw new Error('quota exceeded');
-          return backend.put(id, v);
+          return backend.update(id, decide);
         },
         add: async (id, v) => {
           if (!allowWrites) throw new Error('quota exceeded');
@@ -432,6 +439,69 @@ describe('secretStore', () => {
       expect(await waitFor(() => booting.getSecret() === '')).toBe(true);
     });
 
+    // Two degraded tabs, the SETTLED half of the race: B's clear has already
+    // committed by the time A recovers, so A must defer to it rather than
+    // resurrect its legacy key.
+    //
+    // This exercises the defer branch, NOT the compare-and-set. The interleaved
+    // half — B committing between A's read and A's write — cannot be staged
+    // from outside, because making it unobservable is exactly what the CAS
+    // does. That guarantee is covered directly by the version test below.
+    it('recovery defers to a clear that already committed', async () => {
+      const backend = makeBackend();
+      setPlaintext('sk-legacy');
+
+      // Tab A boots degraded.
+      let allowWrites = false;
+      const gated = {
+        ...backend,
+        update: async (id, decide) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.update(id, decide);
+        },
+        add: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.add(id, v);
+        },
+      };
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend: gated });
+      expect(tabA.isBrowserDegraded()).toBe(true);
+
+      // Tab B clears the credential and commits it, AFTER A's recovery would
+      // have read "missing" — simulated by letting B write first, then running
+      // A's recovery with writes re-enabled.
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend });
+      await tabB.setSecret('');
+      allowWrites = true;
+
+      await tabA.recoverSecretStore();
+
+      // A must adopt the clear, not resurrect its legacy key.
+      expect(tabA.getSecret()).toBe('');
+      // ...and the stored record is still the cleared one.
+      const roundTrip = await loadStore({ tauri: false });
+      await roundTrip.initSecretStore({ backend });
+      expect(roundTrip.getSecret()).toBe('');
+    });
+
+    // The compare-and-set itself, exercised directly: a write that observed an
+    // older version is refused rather than clobbering.
+    it('refuses a write whose observed version has moved on', async () => {
+      const backend = makeBackend();
+      const { writeSecret, readSecret } = await import('../src/browserSecretStore.js');
+
+      await writeSecret(backend, 'sk-first');
+      const observed = await readSecret(backend);
+      // Someone else writes in between.
+      await writeSecret(backend, 'sk-second');
+
+      const wrote = await writeSecret(backend, 'sk-stale', { expectVersion: observed.version });
+      expect(wrote).toBe(false);
+      expect(await readSecret(backend)).toMatchObject({ value: 'sk-second' });
+    });
+
     it('picks up a key another tab saved', async () => {
       const backend = makeBackend();
       const ends = [];
@@ -495,7 +565,7 @@ describe('secretStore', () => {
     // the only durable copy until the encrypted write lands.
     it('KEEPS the plaintext copy when the encrypted write fails', async () => {
       const backend = makeBackend();
-      backend.put = async () => { throw new Error('quota exceeded'); };
+      backend.update = async () => { throw new Error('quota exceeded'); };
       setPlaintext('sk-legacy');
 
       const store = await loadStore({ tauri: false });
@@ -511,7 +581,7 @@ describe('secretStore', () => {
     // nothing would ever retry, since an untouched Save writes no credential.
     it('reports degraded, not encrypted, when the migration write fails', async () => {
       const backend = makeBackend();
-      backend.put = async () => { throw new Error('quota exceeded'); };
+      backend.update = async () => { throw new Error('quota exceeded'); };
       setPlaintext('sk-legacy');
 
       const store = await loadStore({ tauri: false });
@@ -535,6 +605,13 @@ describe('secretStore', () => {
           if (!allowWrites) throw new Error('quota exceeded');
           if (files.has(id)) throw new Error('ConstraintError');
           files.set(id, v);
+        },
+        update: async (id, decide) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          const current = files.has(id) ? files.get(id) : null;
+          const next = decide(current);
+          if (next) files.set(id, next);
+          return { wrote: !!next, current };
         },
       };
       setPlaintext('sk-legacy');

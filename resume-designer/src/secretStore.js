@@ -758,26 +758,37 @@ async function runRecovery() {
   // either — the field is untouched, so shouldWriteCredential says no.
   if (mode === 'browser-degraded' && cached !== null) {
     const pending = cached;
-    // Re-read before committing. Another tab may have written while this retry
-    // waited its turn, and a clear that committed elsewhere must not be undone
-    // by a retry that started before it — the older value would be resurrected
-    // and the clearing tab would never be told.
+    // Re-read before committing, then COMPARE-AND-SET on the write. Another tab
+    // may have written while this retry waited its turn, and a clear that
+    // committed elsewhere must not be undone by a retry that started before it.
     //
-    // Not airtight, and worth saying so: a remote write landing between this
-    // read and the write below still wins the record and leaves `cached` here
-    // stale until the next broadcast corrects it. Closing that completely needs
-    // a compare-and-set the store does not offer.
+    // The re-read alone was not enough, and this comment used to say so: a
+    // remote write landing between the read and the write still won the record.
+    // The write below now carries the version the read observed, and the check
+    // happens inside the same IndexedDB transaction as the put, so there is no
+    // longer a gap for another tab to land in.
     const current = await readSecret(browserBackend);
     if (current.status === 'found') {
       // Someone else already has a credential in place — defer to it.
       await adoptBrowserRead(current);
     } else if (current.status === 'missing') {
-      await writeSecret(browserBackend, pending);
-      mode = 'browser';
-      // Recovery writes went unannounced entirely, so other tabs kept whatever
-      // they had. It is a credential change like any other.
-      announceCredentialChange();
-      await stripPlaintextCopy();
+      // COMPARE-AND-SET against "still nothing stored" (version 0). Two
+      // degraded tabs made the read-then-write version unsafe: A reads
+      // missing, B clears and broadcasts, A overwrites B's newer empty
+      // ciphertext with its legacy key — and both tabs then converge on a
+      // credential the user explicitly cleared. The per-tab queue cannot see
+      // B, so the check has to live in the same transaction as the write.
+      const wrote = await writeSecret(browserBackend, pending, { expectVersion: 0 });
+      if (!wrote) {
+        // Someone got there first. Their value is the newer fact.
+        await adoptBrowserRead(await readSecret(browserBackend));
+      } else {
+        mode = 'browser';
+        // Recovery writes went unannounced entirely, so other tabs kept
+        // whatever they had. It is a credential change like any other.
+        announceCredentialChange();
+        await stripPlaintextCopy();
+      }
     } else {
       // Invariant 1: a failed read is not an established absence, so nothing
       // gets written over it.

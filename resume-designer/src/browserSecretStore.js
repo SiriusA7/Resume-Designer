@@ -41,9 +41,10 @@
  *
  * ## Backend injection
  *
- * The IndexedDB access is behind a small {get, put, delete} backend, mirroring
- * `initAppStorage({ backend })`, so the logic is reachable from vitest — jsdom
- * ships no IndexedDB.
+ * The IndexedDB access is behind a small {get, put, add, update} backend,
+ * mirroring `initAppStorage({ backend })`, so the logic is reachable from
+ * vitest — jsdom ships no IndexedDB. `update` is the compare-and-set: a get and
+ * a conditional put inside ONE transaction.
  */
 
 // Bumped only if the stored shape changes; a mismatch is treated as "no key",
@@ -117,6 +118,37 @@ export async function createIndexedDbBackend() {
   return {
     get: (id) => runTx(db, 'readonly', (store) => store.get(id)),
     put: (id, value) => runTx(db, 'readwrite', (store) => store.put(value, id)),
+    // Read and conditional write in ONE transaction — the compare-and-set the
+    // credential record needs. IndexedDB serializes transactions over a store,
+    // so nothing from another tab can land between the get and the put. A
+    // separate get() followed by a put() cannot offer that, which is exactly
+    // the window a degraded tab's recovery could overwrite a newer clear
+    // through.
+    update: (id, decide) => new Promise((resolve, reject) => {
+      let tx;
+      try {
+        tx = db.transaction(STORE, 'readwrite');
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      const store = tx.objectStore(STORE);
+      const req = store.get(id);
+      const outcome = { wrote: false, current: null };
+      req.onsuccess = () => {
+        outcome.current = req.result === undefined ? null : req.result;
+        // `decide` must stay SYNCHRONOUS: awaiting anything non-IDB here lets
+        // the transaction auto-close before the put is issued.
+        const next = decide(outcome.current);
+        if (next) {
+          store.put(next, id);
+          outcome.wrote = true;
+        }
+      };
+      tx.oncomplete = () => resolve(outcome);
+      tx.onabort = () => reject(tx.error || new Error('indexeddb transaction aborted'));
+      tx.onerror = () => reject(tx.error || new Error('indexeddb transaction failed'));
+    }),
     // `add` rejects when the id already exists. That is what makes the
     // wrapping-key creation below safe against a second tab racing us: the
     // loser finds out rather than silently overwriting a key that existing
@@ -218,7 +250,13 @@ export async function readSecret(backend) {
 
   try {
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv }, key, record.data);
-    return { status: 'found', value: new TextDecoder().decode(plain) };
+    // `version` lets a caller write only if nothing else has since — see
+    // writeSecret's expectVersion. Records written before versioning read as 0.
+    return {
+      status: 'found',
+      value: new TextDecoder().decode(plain),
+      version: record.version || 0,
+    };
   } catch {
     return { status: 'unreadable' };
   }
@@ -229,16 +267,35 @@ export async function readSecret(backend) {
  * the user their key was not saved, rather than silently keeping a value that
  * will be gone after the next reload.
  *
+ * Returns whether it wrote. With `expectVersion` it is a compare-and-set: the
+ * write is skipped, and `false` returned, if the stored record has moved on
+ * since the caller read it. That is how a slow recovery is stopped from
+ * overwriting a clear another tab committed in the meantime — a per-tab queue
+ * cannot see other tabs, and a read followed by a separate write leaves a
+ * window between them.
+ *
  * A fresh IV per write: AES-GCM catastrophically loses confidentiality if an IV
  * is ever reused under the same key, and this key is long-lived by design.
  */
-export async function writeSecret(backend, value) {
+export async function writeSecret(backend, value, { expectVersion } = {}) {
   const key = await ensureWrappingKey(backend);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv }, key, new TextEncoder().encode(value),
   );
-  await backend.put(SECRET_ID, { iv, data });
+
+  // Encryption happens BEFORE the transaction on purpose: awaiting a non-IDB
+  // promise inside one lets it auto-close.
+  const { wrote } = await backend.update(SECRET_ID, (current) => {
+    const currentVersion = current?.version || 0;
+    // A caller that observed a specific version writes only if nothing has
+    // landed since. Everything happens inside one transaction, and IndexedDB
+    // serializes transactions over the store, so no other tab can slip between
+    // the check and the write.
+    if (expectVersion !== undefined && currentVersion !== expectVersion) return null;
+    return { iv, data, version: currentVersion + 1 };
+  });
+  return wrote;
 }
 
 // No delete: clearing stores an EMPTY ciphertext instead, exactly as the

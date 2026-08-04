@@ -23,6 +23,13 @@ function makeBackend() {
       if (files.has(id)) throw new Error('ConstraintError');
       files.set(id, value);
     },
+    // Mirrors IndexedDB's single-transaction get+conditional-put.
+    update: async (id, decide) => {
+      const current = files.has(id) ? files.get(id) : null;
+      const next = decide(current);
+      if (next) files.set(id, next);
+      return { wrote: !!next, current };
+    },
   };
 }
 
@@ -35,7 +42,7 @@ describe('browserSecretStore', () => {
   it('round-trips a credential', async () => {
     const backend = makeBackend();
     await writeSecret(backend, 'sk-or-v1-secret');
-    expect(await readSecret(backend)).toEqual({ status: 'found', value: 'sk-or-v1-secret' });
+    expect(await readSecret(backend)).toMatchObject({ status: 'found', value: 'sk-or-v1-secret' });
   });
 
   // The point of the exercise: what lands in storage is not the credential.
@@ -73,7 +80,7 @@ describe('browserSecretStore', () => {
     const second = Array.from(new Uint8Array(backend.files.get(SECRET_ID).iv));
 
     expect(first).not.toEqual(second);
-    expect(await readSecret(backend)).toEqual({ status: 'found', value: 'sk-two' });
+    expect(await readSecret(backend)).toMatchObject({ status: 'found', value: 'sk-two' });
   });
 
   // Clearing stores an empty ciphertext rather than deleting the record: an
@@ -81,7 +88,7 @@ describe('browserSecretStore', () => {
   it('round-trips an empty value as the cleared sentinel', async () => {
     const backend = makeBackend();
     await writeSecret(backend, '');
-    expect(await readSecret(backend)).toEqual({ status: 'found', value: '' });
+    expect(await readSecret(backend)).toMatchObject({ status: 'found', value: '' });
     expect(backend.files.has(SECRET_ID)).toBe(true);
   });
 
@@ -114,7 +121,7 @@ describe('browserSecretStore', () => {
 
     // Their key survived, so their earlier ciphertext would still decrypt.
     expect(backend.files.get(WRAP_KEY_ID)).toBe(theirKey);
-    expect(await readSecret(backend)).toEqual({ status: 'found', value: 'sk-ours' });
+    expect(await readSecret(backend)).toMatchObject({ status: 'found', value: 'sk-ours' });
   });
 
   describe('unreadable records', () => {
