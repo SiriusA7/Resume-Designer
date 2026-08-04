@@ -58,7 +58,8 @@ let cachedVersion = 0;
 // memory instead. NOT a mode: switching to `session` made the failure permanent
 // for the tab — every later save took the memory-only branch and RESOLVED, so
 // Settings reported success for a save that still vanished on reload. As a flag
-// the encrypted store stays the target and the next save retries it.
+// the encrypted store stays the target and the next save retries it. Cleared by
+// any adoption, which replaces the very value the flag describes.
 let memoryOnlyFallback = false;
 
 /**
@@ -520,21 +521,28 @@ export async function setSecret(value) {
       // even a deliberate replacement of a broken record can be ordered against
       // whatever another tab last wrote.
       //
-      // Only a read that fails outright leaves nothing to compare, and that is
-      // the one case that writes unconditionally.
+      // Only a read that FAILS OUTRIGHT leaves nothing to compare — the single
+      // `unreadable` exit that carries no version, when the IndexedDB get itself
+      // throws. That used to fall through to an unconditional write, which is
+      // precisely the ordering bypass this block exists to close: a transient
+      // read failure here, another tab clearing the key while this value
+      // encrypts, and the replacement lands last and resurrects a credential the
+      // user deleted. An unorderable write is refused instead. IndexedDB read
+      // failures are transient by nature, so the retry the user is asked for is
+      // a real remedy rather than a dead end.
       let expectVersion = cachedVersion;
       if (mode !== 'browser') {
         const seen = await readSecret(browserBackend);
         expectVersion = seen.status === 'missing' ? 0 : seen.version;
+        if (expectVersion === undefined) throw new Error(VERSION_UNREADABLE_MESSAGE);
       }
 
       let result;
       try {
-        result = await writeSecret(
-          browserBackend,
-          value,
-          expectVersion === undefined ? {} : { expectVersion },
-        );
+        // Always a compare-and-set. `cachedVersion` is seeded to 0 and only ever
+        // assigned a number, and the guard above rules out the other source of
+        // `undefined`, so there is no longer any path to an unordered write.
+        result = await writeSecret(browserBackend, value, { expectVersion });
       } catch (err) {
         if (hadNoCredential) {
           // Retryable: the mode stays `browser`, so the next save targets the
@@ -733,6 +741,15 @@ export async function initSecretStore({ backend = null, channel = null } = {}) {
  * with Settings reporting encrypted storage in both cases.
  */
 async function adoptBrowserRead(read) {
+  // Every exit below overwrites `cached` — with the stored value, with the
+  // legacy plaintext one, or with null — so the unstored value the flag was
+  // describing is gone by the time any of them returns. Leaving it set outlived
+  // its subject: a tab whose first save failed, then adopting another tab's
+  // successful write, kept reporting session-only storage in Settings while
+  // isEncryptedInBrowser() stayed false, both contradicting the ciphertext it
+  // had just taken up. Cleared here, at the top, so no exit can forget it.
+  memoryOnlyFallback = false;
+
   // ENFORCED, not just documented. Every non-`found` status used to fall
   // through to the `missing` treatment, so an `unreadable` read reaching here
   // set `cached` to null — which then satisfies the legacy-migration condition
@@ -879,6 +896,10 @@ export const MEMORY_ONLY_FALLBACK_MESSAGE =
 
 export const BROWSER_UNREADABLE_MESSAGE =
   'The key stored in this browser could not be read. Enter it again to replace it.';
+
+export const VERSION_UNREADABLE_MESSAGE =
+  'Your key couldn’t be saved because this browser’s stored copy couldn’t be checked. '
+  + 'Nothing was changed — try saving again.';
 
 export async function recoverSecretStore() {
   // Joins the credential queue. Recovery mutates `cached` and `mode` exactly as

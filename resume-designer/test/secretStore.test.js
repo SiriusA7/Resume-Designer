@@ -31,6 +31,15 @@ async function loadStore({ tauri = true } = {}) {
   return import('../src/secretStore.js');
 }
 
+/**
+ * A channel wired to nothing, for a tab that must stay in the mode it booted in.
+ *
+ * jsdom's BroadcastChannel is REAL, and every `loadStore()` tab shares the one
+ * origin, so leaving the channel to its default connects tabs that a test meant
+ * to keep apart — quietly, by moving one of them out of the state under test.
+ */
+const inertChannel = () => ({ onmessage: null, postMessage: () => {} });
+
 /** Poll until `check` passes — a broadcast lands asynchronously. */
 async function waitFor(check, tries = 200) {
   for (let i = 0; i < tries; i += 1) {
@@ -945,6 +954,45 @@ describe('secretStore', () => {
       expect(after.getSecret()).toBe('sk-typed');
     });
 
+    // The flag describes a value held in memory because it could not be stored.
+    // An adoption REPLACES that value, so the flag outliving it made Settings
+    // report session-only storage for a credential sitting in IndexedDB —
+    // invariant 3, a mode claiming a weaker guarantee than the real one.
+    it('clears the memory-only marker when it adopts another tab’s save', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+
+      // Tab A's first save is refused, so its key is memory-only.
+      const realUpdate = backend.update;
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(tabA.setSecret('sk-typed')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(tabA.isMemoryOnlyFallback()).toBe(true);
+
+      // Tab B stores a key successfully and announces it.
+      backend.update = realUpdate;
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend, channel: makeChannel() });
+      await tabB.setSecret('sk-other');
+
+      expect(await waitFor(() => tabA.getSecret() === 'sk-other')).toBe(true);
+      // The adopted value IS durable, and the UI copy is derived from these.
+      expect(tabA.isMemoryOnlyFallback()).toBe(false);
+      expect(tabA.isEncryptedInBrowser()).toBe(true);
+    });
+
     // "I never observed a version" is not a licence to bypass ordering: a
     // deliberate replacement in a degraded tab could otherwise land after
     // another tab's Clear and resurrect the credential. The write now reads a
@@ -965,7 +1013,12 @@ describe('secretStore', () => {
         },
       };
       const degraded = await loadStore({ tauri: false });
-      await degraded.initSecretStore({ backend: gated });
+      // MUST be isolated. jsdom's BroadcastChannel is real and both tabs share
+      // one origin, so the default wiring delivers the other tab's announcement
+      // here, this tab adopts it and leaves `browser-degraded` — and the write
+      // below then goes down the ordinary path, testing nothing about the
+      // branch this exists for. Verified with a probe, not assumed.
+      await degraded.initSecretStore({ backend: gated, channel: inertChannel() });
       expect(degraded.isBrowserDegraded()).toBe(true);
 
       // Another tab stores a credential and then clears it. Drop the legacy
@@ -973,13 +1026,12 @@ describe('secretStore', () => {
       localStorage.removeItem(OPENROUTER_KEY_KEY);
       allowWrites = true;
       const other = await loadStore({ tauri: false });
-      await other.initSecretStore({ backend });
+      await other.initSecretStore({ backend, channel: inertChannel() });
       await other.setSecret('sk-other');
       await other.setSecret('');
       const clearedVersion = backend.files.get('openrouter-key-v1').version;
 
-      // Let any broadcast the degraded tab received settle first.
-      await new Promise((r) => setTimeout(r, 50));
+      expect(degraded.isBrowserDegraded()).toBe(true);
       await degraded.setSecret('sk-replacement');
 
       // The explicit save is genuinely newer than the clear, so it wins — but it
@@ -991,6 +1043,60 @@ describe('secretStore', () => {
       const after = await loadStore({ tauri: false });
       await after.initSecretStore({ backend });
       expect(after.getSecret()).toBe('sk-replacement');
+    });
+
+    // The hole left in the fix above. Reading a version first is only ordering
+    // if a FAILED read is refused: the one `unreadable` exit that carries no
+    // version — the IndexedDB get itself throwing — fell through to an
+    // unconditional write, restoring the very bypass that fix removed.
+    it('refuses a replacement it cannot order', async () => {
+      const backend = makeBackend();
+      setPlaintext('sk-legacy');
+      let allowWrites = false;
+      const gated = {
+        ...backend,
+        update: async (id, decide) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.update(id, decide);
+        },
+        add: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.add(id, v);
+        },
+      };
+      const degraded = await loadStore({ tauri: false });
+      // Isolated for the same reason as the test above: a delivered broadcast
+      // would move this tab to `browser` and skip the branch under test.
+      await degraded.initSecretStore({ backend: gated, channel: inertChannel() });
+      expect(degraded.isBrowserDegraded()).toBe(true);
+
+      // Another tab stores the paid key and the user then clears it. Drop the
+      // legacy entry first, or ITS boot migration writes one too.
+      localStorage.removeItem(OPENROUTER_KEY_KEY);
+      allowWrites = true;
+      const other = await loadStore({ tauri: false });
+      await other.initSecretStore({ backend, channel: inertChannel() });
+      await other.setSecret('sk-paid');
+      await other.setSecret('');
+      const cleared = backend.files.get('openrouter-key-v1');
+
+      // Now the degraded tab's version read fails transiently. Only the secret
+      // record: a broken wrapping-key read would abort the write for an
+      // unrelated reason and prove nothing about ordering.
+      expect(degraded.isBrowserDegraded()).toBe(true);
+      gated.get = async (id) => {
+        if (id === 'openrouter-key-v1') throw new Error('transient IndexedDB failure');
+        return backend.get(id);
+      };
+
+      await expect(degraded.setSecret('sk-replacement')).rejects.toThrow(/couldn’t be checked/);
+
+      // The user's Clear stands. Unordered, this write would have landed after
+      // it and handed the tab back a credential they deleted.
+      expect(backend.files.get('openrouter-key-v1')).toBe(cleared);
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend });
+      expect(after.getSecret()).toBe('');
     });
 
     // The other half: with a credential already stored, a failed overwrite must
