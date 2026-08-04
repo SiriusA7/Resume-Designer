@@ -31,6 +31,15 @@ async function loadStore({ tauri = true } = {}) {
   return import('../src/secretStore.js');
 }
 
+/** Poll until `check` passes — a broadcast lands asynchronously. */
+async function waitFor(check, tries = 200) {
+  for (let i = 0; i < tries; i += 1) {
+    if (check()) return true;
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  return false;
+}
+
 describe('secretStore', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -122,11 +131,56 @@ describe('secretStore', () => {
 
       // The user clears it in tab A.
       await tabA.setSecret('');
-      // Let tab B's re-read settle.
-      await new Promise((r) => setTimeout(r, 0));
-
       // Tab B must not go on using a credential the user deleted.
-      expect(tabB.getSecret()).toBe('');
+      expect(await waitFor(() => tabB.getSecret() === '')).toBe(true);
+    });
+
+    // The revocation hole one state over: a tab in `browser-degraded` still
+    // holds the legacy key in `cached`, so gating the broadcast handler on
+    // normal `browser` mode dropped the clear on the floor and that tab kept
+    // spending against the deleted credential.
+    it('revokes a cleared key in a DEGRADED tab too', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      // Tab B boots degraded: a legacy plaintext key it could not encrypt.
+      setPlaintext('sk-legacy');
+      let allowWrites = false;
+      const gated = {
+        ...backend,
+        put: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.put(id, v);
+        },
+        add: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.add(id, v);
+        },
+      };
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend: gated, channel: makeChannel() });
+      expect(tabB.isBrowserDegraded()).toBe(true);
+      expect(tabB.getSecret()).toBe('sk-legacy');
+
+      // Tab A can write, and the user clears the key there.
+      allowWrites = true;
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+      await tabA.setSecret('');
+
+      // The degraded tab must honour the revocation, not carry on regardless.
+      expect(await waitFor(() => tabB.getSecret() === '')).toBe(true);
+      expect(tabB.isBrowserDegraded()).toBe(false);
     });
 
     it('picks up a key another tab saved', async () => {
@@ -149,9 +203,8 @@ describe('secretStore', () => {
       await tabB.initSecretStore({ backend, channel: makeChannel() });
 
       await tabA.setSecret('sk-entered-in-a');
-      await new Promise((r) => setTimeout(r, 0));
 
-      expect(tabB.getSecret()).toBe('sk-entered-in-a');
+      expect(await waitFor(() => tabB.getSecret() === 'sk-entered-in-a')).toBe(true);
     });
 
     // THE regression this exists to prevent: holding the key in memory meant a

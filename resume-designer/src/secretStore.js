@@ -115,15 +115,28 @@ function announceCredentialChange() {
  * Another tab changed the credential. Re-read rather than trusting anything on
  * the wire.
  *
- * An `unreadable` result is ignored on purpose: this tab currently has a
- * working view, and a transient read failure elsewhere is no reason to throw it
- * away. Boot is where an unreadable store is diagnosed.
+ * Runs in EVERY browser mode, not just the healthy one. Gating on `browser`
+ * left the revocation hole this broadcast exists to close: a tab sitting in
+ * `browser-degraded` still holds the legacy key in `cached`, so a clear
+ * broadcast from another tab was dropped on the floor and it carried on
+ * spending against the credential the user had deleted. `browser-unreadable`
+ * has the same shape — another tab may have just replaced the record it could
+ * not read.
+ *
+ * Adoption goes through the shared path so a remote change promotes this tab
+ * out of the degraded state too, strips any readable copy, and cannot diverge
+ * from what boot would have concluded. It writes via writeSecret rather than
+ * setSecret, so no broadcast is re-emitted and there is no loop.
+ *
+ * An `unreadable` result is ignored on purpose: this tab may have a working
+ * view, and a transient read failure is no reason to throw it away. Boot is
+ * where an unreadable store is diagnosed.
  */
 async function onRemoteCredentialChange() {
-  if (mode !== 'browser' || !browserBackend) return;
+  if (!browserBackend) return;
   const read = await readSecret(browserBackend);
   if (read.status === 'unreadable') return;
-  cached = read.status === 'found' ? read.value : null;
+  await adoptBrowserRead(read);
 }
 
 /**
