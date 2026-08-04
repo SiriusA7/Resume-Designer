@@ -96,11 +96,19 @@ let cached = null;
 //   read-only         cached (may   retries keychain,    n/a            re-read, adopt
 //                     be null)      never plaintext                     (shares boot path)
 //   browser           cached        encrypted write      re-read+adopt  n/a
-//   browser-degraded  cached        retries encrypted    re-read+adopt  retry encrypt
-//                     (plaintext)   write, promotes                      then strip
+//                                   + announce
+//   browser-degraded  cached        retries encrypted    re-read+adopt  re-read, DEFER to
+//                     (plaintext)   write, promotes                     a newer value,
+//                                   + announce                          else write+announce
 //   browser-unreadable null         write REPLACES the   re-read+adopt  re-read, adopt
 //                                   unreadable record                    or stay
-//   session           cached        memory only          n/a            n/a
+//                                   + announce
+//   session           cached        memory only          DROP cached    n/a
+//                                   + announce           (cannot re-read)
+//
+// Every mutating cell announces, and every mode reacts to an announcement.
+// Those two columns were each filled in one row at a time across four separate
+// findings, which is the strongest argument for reading the whole table.
 //
 // Invariants that hold across every row:
 //
@@ -204,7 +212,14 @@ const REMOTE_READ_ATTEMPTS = 3;
 const REMOTE_READ_BACKOFF_MS = 50;
 
 async function onRemoteCredentialChange() {
-  if (!browserBackend) return undefined;
+  // Memory-only: nothing to re-read, so the only safe response to "something
+  // changed elsewhere" is to stop trusting what this tab holds. Without it, two
+  // session tabs sharing a key left one spending against a value the user
+  // cleared in the other, indefinitely.
+  if (!browserBackend) {
+    if (mode === 'session') cached = null;
+    return undefined;
+  }
   return serializeCredentialOp(() => adoptRemoteChange());
 }
 
@@ -468,6 +483,11 @@ export async function setSecret(value) {
   // this module exists to get the credential out of.
   if (mode === 'session') {
     cached = value;
+    // Broadcast even here. There is no shared store, so another tab cannot
+    // learn the new VALUE — but it can learn that this one is stale, and a
+    // revoked key still in use is the failure that matters. Receivers drop
+    // theirs; re-entry is already this mode's normal cost.
+    announceCredentialChange();
     return;
   }
 
@@ -694,6 +714,13 @@ export const BROWSER_UNREADABLE_MESSAGE =
   'The key stored in this browser could not be read. Enter it again to replace it.';
 
 export async function recoverSecretStore() {
+  // Joins the credential queue. Recovery mutates `cached` and `mode` exactly as
+  // a write does, so leaving it outside meant an inbound adoption could
+  // interleave with it and the last WRITER stopped being the last decision.
+  return serializeCredentialOp(() => runRecovery());
+}
+
+async function runRecovery() {
   let changed = false;
 
   // Retry the decrypt: an IndexedDB read can fail transiently. If it now says
@@ -713,9 +740,32 @@ export async function recoverSecretStore() {
   // the readable entry. Retrying is not reachable through the credential write
   // either — the field is untouched, so shouldWriteCredential says no.
   if (mode === 'browser-degraded' && cached !== null) {
-    await writeSecret(browserBackend, cached);
-    mode = 'browser';
-    await stripPlaintextCopy();
+    const pending = cached;
+    // Re-read before committing. Another tab may have written while this retry
+    // waited its turn, and a clear that committed elsewhere must not be undone
+    // by a retry that started before it — the older value would be resurrected
+    // and the clearing tab would never be told.
+    //
+    // Not airtight, and worth saying so: a remote write landing between this
+    // read and the write below still wins the record and leaves `cached` here
+    // stale until the next broadcast corrects it. Closing that completely needs
+    // a compare-and-set the store does not offer.
+    const current = await readSecret(browserBackend);
+    if (current.status === 'found') {
+      // Someone else already has a credential in place — defer to it.
+      await adoptBrowserRead(current);
+    } else if (current.status === 'missing') {
+      await writeSecret(browserBackend, pending);
+      mode = 'browser';
+      // Recovery writes went unannounced entirely, so other tabs kept whatever
+      // they had. It is a credential change like any other.
+      announceCredentialChange();
+      await stripPlaintextCopy();
+    } else {
+      // Invariant 1: a failed read is not an established absence, so nothing
+      // gets written over it.
+      throw new Error(BROWSER_UNREADABLE_MESSAGE);
+    }
     changed = true;
   }
 

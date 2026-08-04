@@ -320,6 +320,74 @@ describe('secretStore', () => {
       expect(maxConcurrent).toBe(1);
     });
 
+    // A degraded tab's recovery started before another tab's clear must not
+    // resurrect the older key. Deferring to what is already stored is what
+    // stops it.
+    it('recovery defers to a credential another tab already stored', async () => {
+      const backend = makeBackend();
+      setPlaintext('sk-legacy');
+      let allowWrites = false;
+      const gated = {
+        ...backend,
+        put: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.put(id, v);
+        },
+        add: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.add(id, v);
+        },
+      };
+
+      const degraded = await loadStore({ tauri: false });
+      await degraded.initSecretStore({ backend: gated });
+      expect(degraded.isBrowserDegraded()).toBe(true);
+
+      // Another tab writes a CLEAR into the shared store meanwhile.
+      allowWrites = true;
+      const other = await loadStore({ tauri: false });
+      await other.initSecretStore({ backend });
+      await other.setSecret('');
+
+      // The degraded tab now recovers. It must adopt the clear, not overwrite
+      // it with the legacy key it was still holding.
+      await degraded.recoverSecretStore();
+
+      expect(degraded.getSecret()).toBe('');
+      expect(degraded.isBrowserDegraded()).toBe(false);
+    });
+
+    // Memory-only tabs share no store, so a receiver cannot learn the new
+    // value — but it can learn that what it holds is stale, which is the half
+    // that matters when the change was a clear.
+    it('drops a memory-only key when another tab changes it', async () => {
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      // No backend at all: both tabs are memory-only.
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ channel: makeChannel() });
+      await tabA.setSecret('sk-session-key');
+
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ channel: makeChannel() });
+      await tabB.setSecret('sk-session-key');
+      expect(tabB.getSecret()).toBe('sk-session-key');
+
+      await tabA.setSecret('');
+
+      expect(await waitFor(() => tabB.getSecret() === null)).toBe(true);
+    });
+
     it('picks up a key another tab saved', async () => {
       const backend = makeBackend();
       const ends = [];
