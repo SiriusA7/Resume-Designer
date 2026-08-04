@@ -1006,6 +1006,76 @@ describe('secretStore', () => {
       expect(after.getSecret()).toBe('sk-typed');
     });
 
+    // `memoryOnlyFallback` is the same established absence as `cached === null`
+    // — the flag is only ever set when nothing was stored — but the guard tested
+    // `cached === null` alone. After a failed FIRST save, `cached` holds the
+    // retained value, so a SECOND failure rethrew without touching it: an edit
+    // that looked like a replacement was not one, and a Clear did not clear.
+    it('replaces a memory-only key when the store is STILL failing', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend, channel: inertChannel() });
+
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(store.setSecret('sk-first')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(store.getSecret()).toBe('sk-first');
+
+      // Same failure, second attempt: the user's new value must take effect for
+      // the session rather than the old one silently surviving.
+      await expect(store.setSecret('sk-second')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(store.getSecret()).toBe('sk-second');
+      expect(store.isMemoryOnlyFallback()).toBe(true);
+    });
+
+    // The worse half of the same guard: Clear did not clear. The tab went on
+    // making paid requests with a credential the user had deleted.
+    it('clears a memory-only key when the store is STILL failing', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend, channel: inertChannel() });
+
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(store.setSecret('sk-paid')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(store.getSecret()).toBe('sk-paid');
+
+      await expect(store.setSecret('')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(store.getSecret()).toBe('');
+    });
+
+    // PROACTIVE, not from the finding. Two tabs each holding a memory-only key
+    // had no way to revoke: nothing durable is written, so nothing announced,
+    // and a Clear in one left the other spending against the deleted key. The
+    // `session` row already solves this one mode over.
+    it('revokes a memory-only key in other tabs', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend, channel: makeChannel() });
+
+      // Both tabs end up holding the same key in memory only.
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(tabA.setSecret('sk-paid')).rejects.toMatchObject({ retainedInMemory: true });
+      await expect(tabB.setSecret('sk-paid')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(tabB.getSecret()).toBe('sk-paid');
+
+      // The user clears it in tab A. Tab B must stop using it.
+      await expect(tabA.setSecret('')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(await waitFor(() => tabB.getSecret() !== 'sk-paid')).toBe(true);
+    });
+
     // The flag describes a value held in memory because it could not be stored.
     // An adoption REPLACES that value, so the flag outliving it made Settings
     // report session-only storage for a credential sitting in IndexedDB —

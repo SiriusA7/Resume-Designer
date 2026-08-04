@@ -656,7 +656,16 @@ export async function setSecret(value) {
       // so dropping to `session` there would hide it and send every later save
       // past IndexedDB until reload. Only `browser` with nothing stored is an
       // established absence.
-      const hadNoCredential = mode === 'browser' && cached === null;
+      //
+      // `memoryOnlyFallback` is that same established absence, and testing
+      // `cached === null` alone missed it: after a failed first save `cached`
+      // holds the retained value while the store STILL has nothing — the flag is
+      // only ever set when nothing was stored, and any successful write or
+      // adoption clears it. So a SECOND failure with IndexedDB still down
+      // rethrew without touching `cached`, and the tab went on using the old
+      // session-only key: an edit that appeared to replace it did not, and a
+      // Clear did not clear.
+      const hadNoCredential = mode === 'browser' && (cached === null || memoryOnlyFallback);
 
       // Compare-and-set against the newest version this tab can establish.
       //
@@ -696,6 +705,15 @@ export async function setSecret(value) {
           // store again. Only the flag records that this value is unstored.
           memoryOnlyFallback = true;
           cached = value;
+          // PROACTIVE, not from the finding: announce here too. This is the
+          // `session` row's reasoning one mode over — no other tab can learn the
+          // new VALUE, because nothing durable was written, but it can learn
+          // that its own is stale. Without it, two tabs each holding a
+          // memory-only key had no way to revoke: the user clears in one and the
+          // other goes on making paid requests. That is the revocation hole this
+          // module has already had to close three times, in the one state whose
+          // write path always fails.
+          announceCredentialChange();
           // Still an error: it was NOT saved, and the caller has to say so.
           // Flagged so onboarding can tell "usable this session" apart from
           // "lost entirely" — the first should not block setup.
