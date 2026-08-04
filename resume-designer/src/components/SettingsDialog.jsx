@@ -413,8 +413,9 @@ export default function SettingsDialog() {
                   )}
                   {readOnlyKeychain && !keyError && (
                     <p className="text-sm text-destructive" role="alert">
-                      Your system keychain can&rsquo;t be reached, so this key can&rsquo;t be changed right now. Any key
-                      you already had still works. Unlock your keychain and reopen On Paper to save a new one.
+                      Your system keychain couldn&rsquo;t be reached when On Paper started, so saving is unavailable
+                      right now. Any key you already had still works. Unlock your keychain and save again &mdash; no
+                      need to restart.
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground">

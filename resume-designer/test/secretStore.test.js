@@ -194,7 +194,7 @@ describe('secretStore', () => {
       expect(store.getSecret()).toBe('sk-legacy');
     });
 
-    it('REFUSES to write, rather than falling back to plaintext', async () => {
+    it('REFUSES to write plaintext when the keychain is still down', async () => {
       const store = await degraded('sk-legacy');
       invokeMock.mockClear();
 
@@ -203,13 +203,38 @@ describe('secretStore', () => {
       // The whole point: no fresh plaintext was minted behind the user's back.
       expect(plaintext()).toBe('sk-legacy');
       expect(store.getSecret()).toBe('sk-legacy');
-      expect(invokeMock).not.toHaveBeenCalled();
+      // It DID try the keychain — read-only forbids plaintext, not the retry.
+      expect(invokeMock).toHaveBeenCalledWith('secret_set', {
+        name: OPENROUTER_KEY_KEY,
+        value: 'sk-new',
+      });
+    });
+
+    // A keychain fault at boot is usually transient — locked on login, a prompt
+    // dismissed. Without this the error told the user to unlock and try again
+    // while `setSecret` refused to call the keychain at all, so trying again
+    // could never work short of relaunching the app.
+    it('recovers when the keychain comes back, without a restart', async () => {
+      const store = await degraded('sk-legacy');
+      expect(store.isReadOnly()).toBe(true);
+
+      // User unlocks the keychain, then saves again.
+      invokeMock.mockReset();
+      invokeMock.mockResolvedValue(undefined);
+      await store.setSecret('sk-new');
+
+      expect(store.isReadOnly()).toBe(false);
+      expect(store.isKeychainAvailable()).toBe(true);
+      expect(store.getSecret()).toBe('sk-new');
+      // And the plaintext copy it had been serving is finally cleaned up.
+      expect(plaintext()).toBeNull();
     });
 
     // The accepted cost of this policy, pinned so it is a decision and not a
-    // surprise: someone with no key yet cannot configure one until the keychain
-    // recovers. They get a clear error; silent plaintext would have persisted
-    // unnoticed for the life of the install.
+    // surprise: someone with no key yet cannot configure one WHILE the keychain
+    // is down. They get a clear error, and the retry above means unlocking the
+    // keychain is enough to continue — no restart. Silent plaintext would
+    // instead have persisted unnoticed for the life of the install.
     it('blocks first-time setup while the keychain is down', async () => {
       const store = await degraded();
 

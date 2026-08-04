@@ -124,12 +124,6 @@ export const KEYCHAIN_READ_ONLY_MESSAGE =
  * save never leaves the app using a key it did not persist.
  */
 export async function setSecret(value) {
-  // Read-only degrade: refuse. Falling back to a plaintext write here would
-  // quietly recreate the very exposure the keychain exists to remove — and it
-  // would do so at the moment the user is least likely to notice, since from
-  // their side the save would simply appear to succeed.
-  if (mode === 'read-only') throw new Error(KEYCHAIN_READ_ONLY_MESSAGE);
-
   // Clearing writes an EMPTY value rather than removing the entry. That erases
   // the credential just as well, and keeps getSettings' masking guarantee: a
   // stored empty string hides a stale key left in the per-profile blob by a
@@ -139,11 +133,32 @@ export async function setSecret(value) {
     cached = value;
     return;
   }
-  await invokeSecret('secret_set', { name: SECRET_NAME, value });
+
+  // `read-only` reaches here too, and deliberately so. What that state forbids
+  // is writing PLAINTEXT — not trying the keychain. Refusing to even attempt it
+  // made KEYCHAIN_READ_ONLY_MESSAGE a lie: it tells the user to unlock their
+  // keychain and try again, and trying again could never succeed short of
+  // relaunching the app. A keychain fault at boot is usually transient (locked
+  // on login, a prompt dismissed), so the retry is the common case, not the
+  // exotic one.
+  try {
+    await invokeSecret('secret_set', { name: SECRET_NAME, value });
+  } catch (err) {
+    // Still down. Report it in the terms the UI explains, and stay read-only —
+    // falling back to a plaintext write would quietly recreate the very
+    // exposure the keychain exists to remove, at the moment the user is least
+    // likely to notice, since from their side the save would appear to succeed.
+    if (mode === 'read-only') throw new Error(KEYCHAIN_READ_ONLY_MESSAGE);
+    throw err;
+  }
+
+  // The write landed, which proves the keychain is usable again — leave
+  // read-only rather than making the user relaunch to escape it.
+  mode = 'keychain';
   cached = value;
   // A pre-migration plaintext copy can still exist if an earlier strip failed
-  // to flush. Now that a newer credential is durable in the keychain, the
-  // stale one is pure liability.
+  // to flush, or because this session started degraded. Now that a newer
+  // credential is durable in the keychain, the stale one is pure liability.
   await stripPlaintextCopy();
 }
 
