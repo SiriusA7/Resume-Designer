@@ -218,19 +218,41 @@ async function ensureWrappingKey(backend) {
         { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
       );
       try {
+        if (replacingUnusable) {
+          // Conditional, in ONE transaction: displace the key only while it is
+          // STILL unusable. An unconditional `put` let two tabs replacing the
+          // same bad key race — the loser's put landed AFTER the winner had
+          // already encrypted with theirs, and the loser's own ciphertext write
+          // was then rejected as stale by compare-and-set. Good ciphertext,
+          // wrong key, unreadable after reload: worse than the corruption being
+          // repaired.
+          //
+          // `decide` stays synchronous, as this backend's update requires.
+          const outcome = await backend.update(WRAP_KEY_ID, (current) => (
+            isUsableWrappingKey(current) ? null : key
+          ));
+          if (outcome.wrote) return key;
+          // Someone got a usable key in first — theirs is the one any new
+          // ciphertext must be encrypted under.
+          if (isUsableWrappingKey(outcome.current)) return outcome.current;
+          throw new Error('could not create an encryption key for this browser');
+        }
         // `add`, not `put`: if another context stored one between our read and
         // this write, we must lose rather than overwrite a key that their
-        // ciphertext depends on. `put` only when we are displacing a key that
-        // was already unusable, where "losing" would mean staying stuck.
-        if (replacingUnusable) await backend.put(WRAP_KEY_ID, key);
-        else await backend.add(WRAP_KEY_ID, key);
+        // ciphertext depends on.
+        await backend.add(WRAP_KEY_ID, key);
         return key;
-      } catch {
+      } catch (err) {
         // Deferring to a winner only makes sense if the winner is usable —
         // otherwise this returns the very key that could not encrypt.
         const winner = await loadWrappingKey(backend);
         if (isUsableWrappingKey(winner)) return winner;
-        throw new Error('could not create an encryption key for this browser');
+        // Rethrow rather than mask: this is the message the caller reports, and
+        // swallowing an IndexedDB failure here would report "no key" for a
+        // store that simply could not be written.
+        throw err instanceof Error
+          ? err
+          : new Error('could not create an encryption key for this browser');
       }
     })().finally(() => { creating = null; });
   }

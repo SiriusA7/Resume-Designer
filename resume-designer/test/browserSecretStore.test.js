@@ -219,3 +219,47 @@ describe('unusable wrapping keys', () => {
     expect(await readSecret(backend)).toMatchObject({ status: 'found', value: 'sk-second' });
   });
 });
+
+// Two tabs replacing the SAME unusable key. An unconditional put let the
+// loser's key land after the winner had already encrypted with theirs — and the
+// loser's own ciphertext write was then rejected as stale by compare-and-set.
+// Good ciphertext, wrong key: unreadable after reload, which is worse than the
+// corruption being repaired.
+describe('concurrent wrapping-key replacement', () => {
+  it('leaves the winner’s key and ciphertext readable', async () => {
+    const backend = makeBackend();
+    backend.files.set(WRAP_KEY_ID, { nope: 'unusable' });
+
+    // Tab A replaces the bad key and stores a credential under its own.
+    await writeSecret(backend, 'sk-from-tab-a');
+    const winnerKey = backend.files.get(WRAP_KEY_ID);
+    const winnerVersion = backend.files.get(SECRET_ID).version;
+
+    // Tab B started BEFORE A and still believes the key is the unusable one.
+    // Its secret write carries the version it observed then, so CAS rejects it.
+    __resetBrowserSecretStoreForTests();
+    let servedStale = false;
+    const staleView = {
+      ...backend,
+      get: async (id) => {
+        if (id === WRAP_KEY_ID && !servedStale) {
+          servedStale = true;
+          return { nope: 'unusable' };
+        }
+        return backend.get(id);
+      },
+    };
+
+    const result = await writeSecret(staleView, 'sk-from-tab-b', { expectVersion: 0 });
+
+    // B's credential is correctly refused as stale...
+    expect(result.wrote).toBe(false);
+    // ...and, the point of the fix, B did NOT displace A's key on the way.
+    expect(backend.files.get(WRAP_KEY_ID)).toBe(winnerKey);
+    expect(backend.files.get(SECRET_ID).version).toBe(winnerVersion);
+    // So A's credential is still decryptable — the state the bug destroyed.
+    expect(await readSecret(backend)).toMatchObject({
+      status: 'found', value: 'sk-from-tab-a',
+    });
+  });
+});
