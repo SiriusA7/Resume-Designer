@@ -1247,18 +1247,76 @@ describe('secretStore', () => {
     // readable there. Reporting healthy `browser` mode over it told Settings to
     // claim encrypted storage while getSettings served the plaintext blob value
     // to every AI request — and nothing retries, so indefinitely.
-    it('reports degraded storage when a blob credential could not be moved', async () => {
+    // CHANGED, and the old expectation was the worse outcome. This asserted
+    // that a stranded credential left the store DEGRADED even with a working
+    // backend — but the write that failed was to localStorage, and IndexedDB is
+    // demonstrably fine (the boot read succeeded), so the value is migratable.
+    // Encrypting it is strictly better than holding a memory copy and calling
+    // the state degraded.
+    it('encrypts a stranded blob credential when the store is working', async () => {
       const backend = makeBackend();
       const store = await loadStore({ tauri: false });
 
-      await store.initSecretStore({ backend, strandedPlaintext: 'sk-stuck' });
+      await store.initSecretStore({
+        backend, channel: inertChannel(), strandedPlaintext: 'sk-stuck',
+      });
 
-      // NOT `browser`: a readable copy exists, and the UI copy is derived from
-      // these predicates.
-      expect(store.isEncryptedInBrowser()).toBe(false);
-      expect(store.isBrowserDegraded()).toBe(true);
-      // ...and the key still works, which is why it is degraded and not broken.
+      expect(store.isEncryptedInBrowser()).toBe(true);
+      expect(store.isBrowserDegraded()).toBe(false);
       expect(store.getSecret()).toBe('sk-stuck');
+      // Durable, not just cached — a reload finds it.
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend, channel: inertChannel() });
+      expect(after.getSecret()).toBe('sk-stuck');
+    });
+
+    // The case the old test was really guarding, now stated properly: the
+    // encrypted write FAILS. Then degraded is right — and the blob must keep
+    // the credential, because the boot cleanup would otherwise strip the only
+    // durable copy while the UI claims it is in ordinary browser storage.
+    it('stays degraded and keeps the blob when it cannot encrypt a stranded key', async () => {
+      localStorage.setItem('resume-designer-data', JSON.stringify({
+        settings: { openrouterKey: 'sk-stuck', theme: 'dark' },
+      }));
+      const backend = makeBackend();
+      const gated = {
+        ...backend,
+        update: async () => { throw new Error('quota exceeded'); },
+        add: async () => { throw new Error('quota exceeded'); },
+      };
+      const store = await loadStore({ tauri: false });
+
+      await store.initSecretStore({
+        backend: gated, channel: inertChannel(), strandedPlaintext: 'sk-stuck',
+      });
+
+      expect(store.isBrowserDegraded()).toBe(true);
+      expect(store.getSecret()).toBe('sk-stuck');
+      // The blob is untouched, so a reload still has the credential.
+      expect(JSON.parse(localStorage.getItem('resume-designer-data')).settings.openrouterKey)
+        .toBe('sk-stuck');
+    });
+
+    // A record that will not DECRYPT holds `cached` null on purpose: it may be
+    // NEWER than any plaintext beside it, so serving that plaintext is the
+    // resurrection this mode exists to prevent. The stranded-value branch used
+    // to fire on any null `cached` and flip it to degraded, serving exactly
+    // that stale value.
+    it('never lets a stranded blob override an unreadable record', async () => {
+      const backend = makeBackend();
+      const first = await loadStore({ tauri: false });
+      await first.initSecretStore({ backend, channel: inertChannel() });
+      await first.setSecret('sk-current');
+      backend.files.delete('wrap-key-v1');   // now undecryptable
+
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({
+        backend, channel: inertChannel(), strandedPlaintext: 'sk-older-stale',
+      });
+
+      expect(next.isBrowserUnreadable()).toBe(true);
+      expect(next.getSecret()).toBeNull();
+      expect(next.getSecret()).not.toBe('sk-older-stale');
     });
 
     // `browser-degraded` presumes a store to retry against. With none, Save and

@@ -828,7 +828,7 @@ export async function setSecret(value) {
  * runs, so a clear arriving mid-decrypt would otherwise be adopted first and
  * then overwritten by this older read.
  */
-async function initBrowserCredential() {
+async function initBrowserCredential(strandedPlaintext = null) {
   if (!browserBackend) {
     // No encrypted store at all (non-secure context, private browsing). Adopt a
     // legacy copy so this session works, then remove it — memory-only is the
@@ -866,7 +866,7 @@ async function initBrowserCredential() {
     cached = null;
     return;
   }
-  await adoptBrowserRead(read);
+  await adoptBrowserRead(read, strandedPlaintext);
 }
 
 /**
@@ -924,7 +924,7 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
     // with the revoked key until some later notification. Queuing also means a
     // broadcast that lands during boot simply runs after it and re-reads,
     // rather than being missed.
-    await serializeCredentialOp(() => initBrowserCredential());
+    await serializeCredentialOp(() => initBrowserCredential(strandedPlaintext));
 
     // Nothing of ours stored, but a readable credential is sitting in a data
     // blob that extraction could not move — passthrough setItem throws
@@ -950,9 +950,19 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
     // drops it", which is the truth here; only the value was missing, because
     // initBrowserCredential seeds it from the shared key and extraction never
     // managed to write one.
-    if (cached === null && strandedPlaintext) {
-      if (browserBackend) mode = 'browser-degraded';
-      cached = strandedPlaintext;
+    // NO-BACKEND ONLY now. With a backend, adoptBrowserRead above owns the
+    // stranded value — it migrates it into encrypted storage when it can, and
+    // leaves it in the blob when it cannot, which is strictly better than
+    // anything decidable out here.
+    //
+    // Narrowing this also closed a hole I had not been told about: the previous
+    // form fired on ANY `cached === null`, including `browser-unreadable`, and
+    // flipped it to `browser-degraded` serving the blob value. That mode holds
+    // `cached` null precisely because a stored record exists that may be NEWER,
+    // so the plaintext beside it is the older value — serving it is the
+    // resurrection the mode exists to prevent.
+    if (!browserBackend && cached === null && strandedPlaintext) {
+      cached = strandedPlaintext;   // mode stays `session`
     }
     return;
   }
@@ -983,7 +993,7 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
  * ciphertext or stayed the only durable credential while `cached` read null —
  * with Settings reporting encrypted storage in both cases.
  */
-async function adoptBrowserRead(read) {
+async function adoptBrowserRead(read, strandedPlaintext = null) {
   // Every exit below overwrites `cached` — with the stored value, with the
   // legacy plaintext one, or with null — so the unstored value the flag was
   // describing is gone by the time any of them returns. Leaving it set outlived
@@ -1016,7 +1026,22 @@ async function adoptBrowserRead(read) {
   // exactly as it does for the keychain: the plaintext original is the only
   // durable copy until the encrypted write lands, so it is stripped after,
   // never before.
-  const legacy = appStorage.getItem(OPENROUTER_KEY_KEY);
+  // `?? strandedPlaintext`: the credential extraction could not move is a
+  // legacy copy like any other, it just happens to still be sitting in a data
+  // blob rather than in the shared key. The write that failed was to
+  // localStorage; IndexedDB is demonstrably working (the read above succeeded),
+  // so this is migratable — and migrating it is strictly better than the
+  // degraded state, which only holds a memory copy.
+  //
+  // Load-bearing for the cleanup at the end of this function. That scrub now
+  // removes the blob credential, so reaching it WITHOUT having migrated meant
+  // deleting the only durable copy and leaving `browser-degraded` claiming the
+  // key was in ordinary browser storage when it was in memory alone. The
+  // failure branch below returns before the scrub, so a failed encrypt keeps
+  // the blob.
+  //
+  // `??` not `||`: a stored '' Clear must win over any stranded value.
+  const legacy = appStorage.getItem(OPENROUTER_KEY_KEY) ?? strandedPlaintext;
   if (legacy !== null && cached === null) {
     let wrote;
     try {
