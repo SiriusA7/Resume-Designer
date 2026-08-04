@@ -240,8 +240,10 @@ export function buildColumnRecursive(targetEl, units) {
  * own company. The per-role .experience-company element is still in the DOM (Task
  * 2 renders it without data-editable and hides it in CSS); this only unhides it.
  *
- * Runs after measurement, and only adds a class to an already-laid-out element, so
- * it cannot invalidate the heights pagination just computed.
+ * Runs after measurement, and can add a line: revealing flips the company's
+ * `display: none` to `inline`, adding a flex child to `.experience-header`
+ * (which wraps), so it tags the sheet to grow (`.is-overflowing`) rather than
+ * let a fixed-height, `overflow: hidden` sheet clip its bottom-most block.
  *
  * @param {Array<Element>} pages
  */
@@ -259,6 +261,11 @@ export function revealGroupContinuations(pages) {
       const company = role.querySelector('.experience-company');
       if (company) {
         company.classList.add('is-continuation');
+        // Revealing flips display:none -> inline, adding a flex child to
+        // .experience-header, which can wrap to a new line. The sheet has a fixed
+        // height and overflow:hidden and overflowingPages has already run, so let
+        // this sheet grow instead of clipping its bottom-most block.
+        page.classList.add('is-overflowing');
         break;
       }
     }
