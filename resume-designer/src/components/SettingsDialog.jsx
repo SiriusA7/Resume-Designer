@@ -486,7 +486,7 @@ export default function SettingsDialog() {
               <section>
                 <SectionHeader
                   title="Backup & restore"
-                  description="Save or restore all resumes, settings, job descriptions, and history as a single JSON file."
+                  description="Save or restore all resumes, settings, job descriptions, and history as a single JSON file. Your API key isn't included — it stays in your system keychain, so you'll enter it again on a new machine."
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={exportFullBackupWithFeedback}>Export full backup</Button>

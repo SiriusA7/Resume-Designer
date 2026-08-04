@@ -189,8 +189,16 @@ export async function initSecretStore() {
 
   // Keychain is reachable but empty. Migrate a plaintext original if one is
   // there; otherwise the user simply has no key configured yet.
+  //
+  // `=== null`, NOT truthiness. An upgraded install that CLEARED its key holds
+  // '' here as a masking sentinel — getSettings reads a stored empty value as
+  // "the user cleared this" and hides any stale credential still sitting in the
+  // per-profile blob from a pre-extraction install. Skipping the empty value
+  // would leave the keychain with no entry, so getSecret returns null,
+  // getSettings falls through to that stale blob key, and a credential the user
+  // explicitly deleted comes back to life.
   const plaintext = appStorage.getItem(OPENROUTER_KEY_KEY);
-  if (!plaintext) return;
+  if (plaintext === null) return;
 
   try {
     await invokeSecret('secret_set', { name: SECRET_NAME, value: plaintext });

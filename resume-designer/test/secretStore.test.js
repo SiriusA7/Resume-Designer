@@ -97,6 +97,27 @@ describe('secretStore', () => {
       expect(plaintext()).toBeNull();
     });
 
+    // An install that CLEARED its key stores '' as a masking sentinel:
+    // getSettings reads a stored empty value as "cleared" and hides a stale
+    // credential still sitting in the per-profile blob. Skip the empty value
+    // and the keychain ends up with no entry, getSecret returns null,
+    // getSettings falls through to that stale blob key — and a credential the
+    // user explicitly deleted comes back to life.
+    it('migrates a CLEARED key, so it keeps masking a stale blob credential', async () => {
+      const store = await loadStore();
+      setPlaintext('');
+      invokeMock.mockImplementation(async (cmd) => (cmd === 'secret_get' ? null : undefined));
+
+      await store.initSecretStore();
+
+      expect(invokeMock).toHaveBeenCalledWith('secret_set', {
+        name: OPENROUTER_KEY_KEY,
+        value: '',
+      });
+      // '' not null — null would let getSettings fall back to the blob.
+      expect(store.getSecret()).toBe('');
+    });
+
     // THE data-loss guard. A failed keychain write with an eager strip would
     // leave zero durable copies of the credential after the next restart.
     it('KEEPS the plaintext copy when the keychain write fails', async () => {

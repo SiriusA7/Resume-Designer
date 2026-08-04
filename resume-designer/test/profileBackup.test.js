@@ -57,7 +57,11 @@ describe('format-2 export/restore', () => {
     expect(envelope).toMatchObject({ backupFormat: 2, kind: 'full', activeProfile: ashId });
     expect(Object.keys(envelope.profiles).sort()).toEqual([ashId, partnerId].sort());
     expect(envelope.shared['resume-designer-theme']).toBe('dark');
-    expect(envelope.shared[OPENROUTER_KEY_KEY]).toBe('sk-shared');
+    // The credential is deliberately NOT backup data any more: it lives in the
+    // OS keychain, and a backup JSON is clear-text storage of exactly the kind
+    // it was moved out of — a file people email and sync, so more exposed than
+    // app_data_dir, not less.
+    expect(envelope.shared[OPENROUTER_KEY_KEY]).toBeUndefined();
 
     localStorage.clear();
     __resetAppStorageForTests();
@@ -230,12 +234,46 @@ describe('format-2 export/restore', () => {
     const readDownload = captureDownload();
     exportFullBackup();
     const envelope = await readDownload();
-    const existingKeyCount = localStorage.length;
+    // Every stored key EXCEPT the credential, which the wipe deliberately
+    // spares — nothing would restore it, so wiping it would let an import
+    // silently destroy a working key.
+    const wipeable = localStorage.length - 1;
 
     const result = importFullBackupFromEnvelope(envelope);
 
-    expect(existingKeyCount).toBeGreaterThan(0);
-    expect(result.removedExistingKeys).toBe(existingKeyCount);
+    expect(wipeable).toBeGreaterThan(0);
+    expect(result.removedExistingKeys).toBe(wipeable);
+  });
+
+  it('leaves an existing credential alone across a restore', async () => {
+    await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    importFullBackupFromEnvelope(envelope);
+
+    // Restoring a backup must never cost the user their API key.
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared');
+  });
+
+  // Backups written before the keychain move still carry the credential. They
+  // have to keep importing — the validator rejects shared keys it does not
+  // recognise, so simply dropping the name would have made every backup a user
+  // already holds fail outright.
+  it('imports a pre-keychain backup without restoring its credential', async () => {
+    await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+    // Forge the older shape: shared section still carrying an API key.
+    envelope.shared[OPENROUTER_KEY_KEY] = 'sk-from-old-backup';
+
+    expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
+
+    // Accepted, but not written back into plaintext storage — and the key the
+    // install already had is untouched.
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared');
   });
 
   it('writes critical data for every profile before best-effort history', () => {

@@ -382,17 +382,31 @@ import { loadRegistry, getActiveProfileId } from './profiles.js';
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
 // Shared machine-level keys that belong in a backup (parity with the old
-// BACKUP_FIXED_KEYS entries for theme/updates, plus the shared api key and the
-// companion-bridge pairing token — one loopback server per install, so the
-// token is not per-profile. model-catalog and migration flags stay
-// cache/flag-only, never backed up).
+// BACKUP_FIXED_KEYS entries for theme/updates, plus the companion-bridge
+// pairing token — one loopback server per install, so the token is not
+// per-profile. model-catalog and migration flags stay cache/flag-only, never
+// backed up).
 const BACKUP_SHARED_KEYS = [
   'resume-designer-theme',
   'resume-designer-update-channel',
   'resume-designer-auto-update-check',
   'resume-designer-bridge-token',
-  OPENROUTER_KEY_KEY,
 ];
+
+// The API key USED to be a backed-up shared key. It lives in the OS keychain
+// now (secretStore.js), and putting it back in a backup would undo that: a
+// backup JSON is clear-text storage of exactly the kind the credential was
+// moved out of, and it is a file people deliberately email and sync — more
+// exposed than app_data_dir ever was, not less.
+//
+// So the credential is no longer backup data at all: not exported, not wiped on
+// import, not restored. Restoring onto a new machine means entering the key
+// once, from Settings.
+//
+// Listed here rather than deleted because older backup files still carry it and
+// the validator below rejects shared keys it does not recognise — dropping the
+// name outright would make every backup a user already holds fail to import.
+const BACKUP_LEGACY_SHARED_KEYS = [OPENROUTER_KEY_KEY];
 
 /**
  * Recognize a localStorage QuotaExceededError across browser engines.
@@ -685,7 +699,11 @@ function importFullBackupV2(parsed) {
     // corrupt, hand-edited, or from a newer format — and the restore loop
     // below would silently DROP it after the wipe, reporting success while
     // not restoring a setting the file plainly represents.
-    if (!BACKUP_SHARED_KEYS.includes(k)) {
+    //
+    // The legacy list is the one exception, and it is safe for the exact reason
+    // that rule exists: the credential is deliberately not restored, and the
+    // wipe below no longer removes it, so nothing the file represents is lost.
+    if (!BACKUP_SHARED_KEYS.includes(k) && !BACKUP_LEGACY_SHARED_KEYS.includes(k)) {
       throw new Error(`Invalid format-2 backup: unrecognized shared key "${k}".`);
     }
     if (typeof v !== 'string') {
@@ -703,7 +721,11 @@ function importFullBackupV2(parsed) {
   for (const k of appStorage.keys()) {
     const split = splitPhysicalKey(k);
     const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
-    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY || k === OPENROUTER_KEY_KEY) {
+    // OPENROUTER_KEY_KEY is deliberately NOT wiped. The credential is no longer
+    // backup data, so nothing would restore it — wiping it here would let an
+    // import silently destroy a working key. (Post-migration it is not in
+    // appStorage at all; this matters for an install that has not migrated yet.)
+    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY) {
       priorValues.set(k, appStorage.getItem(k));
       appStorage.removeItem(k);
     }
