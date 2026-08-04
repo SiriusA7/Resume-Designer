@@ -1378,6 +1378,44 @@ describe('secretStore', () => {
         .toBe('sk-stuck');
     });
 
+    // RECOVERY runs long after boot, when the stranded value was out of scope —
+    // it lived only as an initSecretStore parameter. So a retry that finally
+    // read `missing` found no legacy shared key, and the cleanup at the end of
+    // adoptBrowserRead scrubbed the blob: the only durable copy deleted by the
+    // act of recovering.
+    it('encrypts a stranded blob during unreadable RECOVERY', async () => {
+      localStorage.setItem('resume-designer-data', JSON.stringify({
+        settings: { openrouterKey: 'sk-stranded', theme: 'dark' },
+      }));
+      const backend = makeBackend();
+      // Boot: the read fails outright, so the tab lands in browser-unreadable
+      // and the stranded value goes unused.
+      let readable = false;
+      const gated = {
+        ...backend,
+        get: async (id) => {
+          if (!readable && id === 'openrouter-key-v1') throw new Error('indexeddb hiccup');
+          return backend.get(id);
+        },
+      };
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({
+        backend: gated, channel: inertChannel(), strandedPlaintext: 'sk-stranded',
+      });
+      expect(store.isBrowserUnreadable()).toBe(true);
+
+      // The store recovers and now reports the record genuinely absent.
+      readable = true;
+      await store.recoverSecretStore();
+
+      // Migrated, not scrubbed away.
+      expect(store.getSecret()).toBe('sk-stranded');
+      expect(store.isEncryptedInBrowser()).toBe(true);
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend, channel: inertChannel() });
+      expect(after.getSecret()).toBe('sk-stranded');
+    });
+
     // A record that will not DECRYPT holds `cached` null on purpose: it may be
     // NEWER than any plaintext beside it, so serving that plaintext is the
     // resurrection this mode exists to prevent. The stranded-value branch used
@@ -1787,6 +1825,29 @@ describe('secretStore', () => {
 
       expect(store.getSecret()).toBe('');
       expect(invokeMock).not.toHaveBeenCalledWith('secret_set', {
+        name: OPENROUTER_KEY_KEY, value: 'sk-stranded',
+      });
+    });
+
+    // The desktop twin of the browser recovery case. Boot fell back to
+    // read-only holding only the stranded value; when the keychain later
+    // answers with an empty entry, adoptKeychainRead had no fallback to migrate
+    // and set `cached` to null — losing the key the recovery was meant to save.
+    it('migrates a stranded key when the keychain recovers empty', async () => {
+      const store = await loadStore();
+      invokeMock.mockRejectedValueOnce(new Error('keychain locked'));
+      await store.initSecretStore({ strandedPlaintext: 'sk-stranded' });
+      expect(store.isReadOnly()).toBe(true);
+      expect(store.getSecret()).toBe('sk-stranded');
+
+      // Keychain unlocks and reports no entry stored.
+      invokeMock.mockReset();
+      invokeMock.mockResolvedValue(null);
+      await store.recoverSecretStore();
+
+      expect(store.isReadOnly()).toBe(false);
+      expect(store.getSecret()).toBe('sk-stranded');
+      expect(invokeMock).toHaveBeenCalledWith('secret_set', {
         name: OPENROUTER_KEY_KEY, value: 'sk-stranded',
       });
     });

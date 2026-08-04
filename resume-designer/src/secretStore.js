@@ -66,6 +66,20 @@ let cachedVersion = 0;
 // any adoption, which replaces the very value the flag describes.
 let memoryOnlyFallback = false;
 
+// The credential extractSharedApiKey could NOT move out of a data blob, held
+// for the session rather than passed down from boot. RECOVERY needs it too —
+// it runs long after init, when the boot parameter is out of scope, and the
+// value exists nowhere else. Threading it call-by-call also meant every new
+// consumer was a fresh chance to forget one, which is how the two recovery
+// paths ended up without it.
+//
+// It cannot go stale: it is only ever consulted when appStorage has no shared
+// copy AND the durable store has nothing, and in that state re-migrating it is
+// exactly right. Once anything durable holds the credential, every consulting
+// branch is unreachable — a `found` browser read and a non-null `secret_get`
+// both return before it.
+let strandedCredential = null;
+
 // Set once initSecretStore has finished, on every path including the failing
 // ones. Read by getSettings to decide whether a null credential is "not asked
 // yet" or "asked, and the answer is no". See isSecretStoreReady.
@@ -338,6 +352,7 @@ export function __resetSecretStoreForTests() {
   cachedVersion = 0;
   memoryOnlyFallback = false;
   secretStoreReady = false;
+  strandedCredential = null;
 }
 
 async function invokeSecret(command, args) {
@@ -851,7 +866,7 @@ export async function setSecret(value) {
  * runs, so a clear arriving mid-decrypt would otherwise be adopted first and
  * then overwritten by this older read.
  */
-async function initBrowserCredential(strandedPlaintext = null) {
+async function initBrowserCredential() {
   if (!browserBackend) {
     // No encrypted store at all (non-secure context, private browsing). Adopt a
     // legacy copy so this session works, then remove it — memory-only is the
@@ -889,7 +904,7 @@ async function initBrowserCredential(strandedPlaintext = null) {
     cached = null;
     return;
   }
-  await adoptBrowserRead(read, strandedPlaintext);
+  await adoptBrowserRead(read);
 }
 
 /**
@@ -921,6 +936,7 @@ export async function initSecretStore({
 }
 
 async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
+  strandedCredential = strandedPlaintext;
   if (!IS_TAURI) {
     // Browser build. Encrypt at rest if the platform allows it, and fall back
     // to memory-only when it does not — never back to plaintext.
@@ -947,7 +963,7 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
     // with the revoked key until some later notification. Queuing also means a
     // broadcast that lands during boot simply runs after it and re-reads,
     // rather than being missed.
-    await serializeCredentialOp(() => initBrowserCredential(strandedPlaintext));
+    await serializeCredentialOp(() => initBrowserCredential());
 
     // Nothing of ours stored, but a readable credential is sitting in a data
     // blob that extraction could not move — passthrough setItem throws
@@ -984,8 +1000,8 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
     // `cached` null precisely because a stored record exists that may be NEWER,
     // so the plaintext beside it is the older value — serving it is the
     // resurrection the mode exists to prevent.
-    if (!browserBackend && cached === null && strandedPlaintext) {
-      cached = strandedPlaintext;   // mode stays `session`
+    if (!browserBackend && cached === null && strandedCredential) {
+      cached = strandedCredential;   // mode stays `session`
     }
     return;
   }
@@ -999,11 +1015,11 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
     // NOT the same as "no entry stored", which arrives as a resolved `null`:
     // treating the two alike would read as a fresh install and send the
     // migration below down the branch that deletes the plaintext original.
-    handleUnavailableKeychain(err, strandedPlaintext);
+    handleUnavailableKeychain(err);
     return;
   }
 
-  await adoptKeychainRead(stored, strandedPlaintext);
+  await adoptKeychainRead(stored);
 }
 
 /**
@@ -1016,7 +1032,7 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
  * ciphertext or stayed the only durable credential while `cached` read null —
  * with Settings reporting encrypted storage in both cases.
  */
-async function adoptBrowserRead(read, strandedPlaintext = null) {
+async function adoptBrowserRead(read) {
   // Every exit below overwrites `cached` — with the stored value, with the
   // legacy plaintext one, or with null — so the unstored value the flag was
   // describing is gone by the time any of them returns. Leaving it set outlived
@@ -1049,7 +1065,7 @@ async function adoptBrowserRead(read, strandedPlaintext = null) {
   // exactly as it does for the keychain: the plaintext original is the only
   // durable copy until the encrypted write lands, so it is stripped after,
   // never before.
-  // `?? strandedPlaintext`: the credential extraction could not move is a
+  // `?? strandedCredential`: the credential extraction could not move is a
   // legacy copy like any other, it just happens to still be sitting in a data
   // blob rather than in the shared key. The write that failed was to
   // localStorage; IndexedDB is demonstrably working (the read above succeeded),
@@ -1064,7 +1080,7 @@ async function adoptBrowserRead(read, strandedPlaintext = null) {
   // the blob.
   //
   // `??` not `||`: a stored '' Clear must win over any stranded value.
-  const legacy = appStorage.getItem(OPENROUTER_KEY_KEY) ?? strandedPlaintext;
+  const legacy = appStorage.getItem(OPENROUTER_KEY_KEY) ?? strandedCredential;
   if (legacy !== null && cached === null) {
     let wrote;
     try {
@@ -1115,7 +1131,7 @@ async function adoptBrowserRead(read, strandedPlaintext = null) {
  * but EMPTY, while a plaintext original still exists, is the migration case —
  * adopting the empty read as the truth there would discard the user's only key.
  */
-async function adoptKeychainRead(stored, strandedPlaintext = null) {
+async function adoptKeychainRead(stored) {
   mode = 'keychain';
 
   if (stored !== null) {
@@ -1138,7 +1154,7 @@ async function adoptKeychainRead(stored, strandedPlaintext = null) {
   // would leave the keychain with no entry, so getSecret returns null,
   // getSettings falls through to that stale blob key, and a credential the user
   // explicitly deleted comes back to life.
-  // `?? strandedPlaintext`, for the case appStorage cannot answer for: on
+  // `?? strandedCredential`, for the case appStorage cannot answer for: on
   // desktop the disk store can fall back to PASSTHROUGH localStorage (see
   // initAppStorage), where setItem throws synchronously on quota instead of
   // queueing — so extraction's shared-key write leaves nothing behind at all.
@@ -1151,7 +1167,7 @@ async function adoptKeychainRead(stored, strandedPlaintext = null) {
   //
   // `??` and not `||`: a stored '' is the user's Clear and must win over any
   // stranded value.
-  const plaintext = appStorage.getItem(OPENROUTER_KEY_KEY) ?? strandedPlaintext;
+  const plaintext = appStorage.getItem(OPENROUTER_KEY_KEY) ?? strandedCredential;
   if (plaintext === null) { cached = null; return; }
 
   try {
@@ -1164,7 +1180,7 @@ async function adoptKeychainRead(stored, strandedPlaintext = null) {
     // isKeychainAvailable() would report true and Settings would tell the user
     // their key is held in the system keychain when it plainly is not, with no
     // warning until some later save happened to fail too.
-    handleUnavailableKeychain(err, strandedPlaintext);
+    handleUnavailableKeychain(err);
     return;
   }
   cached = plaintext;
@@ -1316,12 +1332,12 @@ async function runRecovery() {
  *
  * @param {unknown} err the rejection from `secret_get`
  */
-function handleUnavailableKeychain(err, strandedPlaintext = null) {
+function handleUnavailableKeychain(err) {
   mode = 'read-only';
   // PROACTIVE sibling of the adoptKeychainRead fix: this reads the same shared
   // key, so the same stranded write leaves it serving null while the user's
   // credential sits readable in a blob. Same `??` for the same reason.
-  cached = appStorage.getItem(OPENROUTER_KEY_KEY) ?? strandedPlaintext;
+  cached = appStorage.getItem(OPENROUTER_KEY_KEY) ?? strandedCredential;
   console.error(
     '[secretStore] keychain unavailable — serving the existing key, refusing writes',
     err,
