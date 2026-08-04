@@ -263,6 +263,63 @@ describe('secretStore', () => {
       expect(tabB.isBrowserUnreadable()).toBe(false);
     });
 
+    // Ordering, not logic: every individual step here is correct. A Clear
+    // arriving while a Save's decrypt is still in flight would cache '' first,
+    // then the older handler would cache the paid key back — the revocation
+    // undone by scheduling.
+    it('adopts closely spaced broadcasts in order', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+
+      // Instrumented rather than timing-staged. Reproducing the exact
+      // interleaving is not reliably possible here — the handler RE-READS the
+      // store, so a late finisher reads the current value rather than a stale
+      // one, and provoking a genuinely stale read needs a read that completes
+      // before the clear is written but adopts after it. What IS deterministic
+      // is the property that makes the hazard impossible: adoptions never
+      // overlap. Without the queue this reaches 2.
+      let inFlight = 0;
+      let maxConcurrent = 0;
+      const instrumented = {
+        ...backend,
+        get: async (id) => {
+          inFlight += 1;
+          maxConcurrent = Math.max(maxConcurrent, inFlight);
+          await new Promise((r) => setTimeout(r, 15));
+          const value = await backend.get(id);
+          inFlight -= 1;
+          return value;
+        },
+      };
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend: instrumented, channel: makeChannel() });
+
+      // Save then Clear, back to back — two broadcasts in quick succession.
+      await tabA.setSecret('sk-paid-key');
+      await tabA.setSecret('');
+
+      // The LAST thing that happened was the clear, so that is what must stick.
+      expect(await waitFor(() => tabB.getSecret() === '')).toBe(true);
+      // ...and still, once every queued adoption has drained.
+      await new Promise((r) => setTimeout(r, 150));
+      expect(tabB.getSecret()).toBe('');
+      // The reason it sticks: no two adoptions were ever in flight together.
+      expect(maxConcurrent).toBe(1);
+    });
+
     it('picks up a key another tab saved', async () => {
       const backend = makeBackend();
       const ends = [];

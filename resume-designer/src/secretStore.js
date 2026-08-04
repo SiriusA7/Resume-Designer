@@ -134,6 +134,28 @@ let browserBackend = null;
 const CREDENTIAL_CHANNEL = 'on-paper-credential';
 let credentialChannel = null;
 
+/**
+ * Every credential mutation runs to completion before the next one starts.
+ *
+ * Each broadcast used to launch an untracked async handler, so closely spaced
+ * updates could be adopted out of ORDER: a Clear arriving while a Save's
+ * decrypt was still in flight would cache '' first, and the older handler would
+ * then cache the paid key back. The revocation undone by scheduling rather than
+ * by any wrong decision — every individual step was correct.
+ *
+ * Local writes share the queue for the same reason: a write and an inbound
+ * adoption interleaving leaves `cached` reflecting whichever finished last
+ * rather than whichever happened last.
+ */
+let credentialQueue = Promise.resolve();
+
+function serializeCredentialOp(run) {
+  // `run` on both settlements: one failed operation must not stall the queue.
+  const result = credentialQueue.then(run, run);
+  credentialQueue = result.then(() => {}, () => {});
+  return result;
+}
+
 function announceCredentialChange() {
   try {
     credentialChannel?.postMessage({ type: 'credential-changed' });
@@ -173,8 +195,11 @@ const REMOTE_READ_ATTEMPTS = 3;
 const REMOTE_READ_BACKOFF_MS = 50;
 
 async function onRemoteCredentialChange() {
-  if (!browserBackend) return;
+  if (!browserBackend) return undefined;
+  return serializeCredentialOp(() => adoptRemoteChange());
+}
 
+async function adoptRemoteChange() {
   for (let attempt = 0; attempt < REMOTE_READ_ATTEMPTS; attempt += 1) {
     const read = await readSecret(browserBackend);
     if (read.status !== 'unreadable') {
@@ -363,9 +388,24 @@ async function stripPlaintextCopy() {
 }
 
 /** Thrown when the keychain faulted, so the UI can explain rather than guess. */
-export const KEYCHAIN_READ_ONLY_MESSAGE =
-  'Your system keychain could not be reached, so the key was not saved. '
-  + 'Your existing key still works for now. Unlock your keychain and try again.';
+/**
+ * Thrown when the keychain faulted, so the UI can explain rather than guess.
+ *
+ * Branches on whether a usable credential actually survives. Invariant 3 in the
+ * table above: never claim a stronger position than the credential's real one.
+ * On an already-migrated install there is no plaintext fallback, so `cached` is
+ * null and telling that user their "existing key still works" is false at the
+ * moment they most need an accurate account — first-time onboarding, or a save
+ * that just failed with nothing configured. The Settings banner was fixed for
+ * this; the thrown message said it anyway.
+ */
+export function keychainReadOnlyMessage() {
+  const lead = 'Your system keychain could not be reached, so the key was not saved.';
+  return cached !== null
+    ? `${lead} Your existing key still works for now. Unlock your keychain and try again.`
+    : `${lead} Your saved key can’t be read either, so AI features stay unavailable`
+      + ' until it unlocks. Unlock your keychain and try again.';
+}
 
 /**
  * Thrown when the keychain took the new value but the older plaintext copy
@@ -393,20 +433,24 @@ export async function setSecret(value) {
   // be decrypted is exactly what the UI tells the user to do, and a fresh write
   // regenerates the wrapping key if that is what went missing.
   if (mode === 'browser' || mode === 'browser-degraded' || mode === 'browser-unreadable') {
-    await writeSecret(browserBackend, value);
-    // The write landed, so encryption is working again — leave the degraded
-    // state rather than continuing to report clear-text storage.
-    mode = 'browser';
-    cached = value;
-    // Tell the other tabs BEFORE the cleanup below, which can throw: a cleared
-    // credential must be revoked everywhere even if removing an old readable
-    // copy fails.
-    announceCredentialChange();
-    // A legacy plaintext entry survives a failed migration on purpose. Now that
-    // ciphertext is durable it is pure liability, and a failed removal is
-    // reported rather than swallowed — same reasoning as the keychain path.
-    if (!(await stripPlaintextCopy())) throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
-    return;
+    // Shares the queue with inbound adoptions: a local write and a remote one
+    // interleaving would leave `cached` reflecting whichever FINISHED last
+    // rather than whichever happened last.
+    return serializeCredentialOp(async () => {
+      await writeSecret(browserBackend, value);
+      // The write landed, so encryption is working again — leave the degraded
+      // state rather than continuing to report clear-text storage.
+      mode = 'browser';
+      cached = value;
+      // Tell the other tabs BEFORE the cleanup below, which can throw: a cleared
+      // credential must be revoked everywhere even if removing an old readable
+      // copy fails.
+      announceCredentialChange();
+      // A legacy plaintext entry survives a failed migration on purpose. Now that
+      // ciphertext is durable it is pure liability, and a failed removal is
+      // reported rather than swallowed — same reasoning as the keychain path.
+      if (!(await stripPlaintextCopy())) throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
+    });
   }
 
   // No encrypted store available (non-secure context, private browsing): hold
@@ -420,7 +464,7 @@ export async function setSecret(value) {
 
   // `read-only` reaches here too, and deliberately so. What that state forbids
   // is writing PLAINTEXT — not trying the keychain. Refusing to even attempt it
-  // made KEYCHAIN_READ_ONLY_MESSAGE a lie: it tells the user to unlock their
+  // made keychainReadOnlyMessage() a lie: it tells the user to unlock their
   // keychain and try again, and trying again could never succeed short of
   // relaunching the app. A keychain fault at boot is usually transient (locked
   // on login, a prompt dismissed), so the retry is the common case, not the
@@ -432,7 +476,7 @@ export async function setSecret(value) {
     // falling back to a plaintext write would quietly recreate the very
     // exposure the keychain exists to remove, at the moment the user is least
     // likely to notice, since from their side the save would appear to succeed.
-    if (mode === 'read-only') throw new Error(KEYCHAIN_READ_ONLY_MESSAGE);
+    if (mode === 'read-only') throw new Error(keychainReadOnlyMessage());
     throw err;
   }
 
