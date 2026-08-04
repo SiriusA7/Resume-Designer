@@ -48,6 +48,12 @@ const SECRET_NAME = OPENROUTER_KEY_KEY;
 // The credential, hydrated at boot. `null` means "no key configured".
 let cached = null;
 
+// Version of the stored record `cached` came from, so an ordinary save can
+// compare-and-set against what it last SAW rather than blindly overwriting.
+// Without it, a save that paused while encrypting could land after another
+// tab's Clear and resurrect the credential.
+let cachedVersion = 0;
+
 /**
  * Where the credential lives, decided once at boot.
  *
@@ -281,6 +287,7 @@ export function __resetSecretStoreForTests() {
   browserBackend = null;
   credentialChannel = null;
   cleanupPending = false;
+  cachedVersion = 0;
 }
 
 async function invokeSecret(command, args) {
@@ -479,9 +486,28 @@ export async function setSecret(value) {
       // everything — AI cannot be configured at all — and retaining the value
       // in memory costs nothing, because there is no stored credential for it
       // to misrepresent. `session` is the mode that already means exactly this.
-      const hadNoCredential = cached === null;
+      // CONFIRMED missing, not merely "cached is null". In
+      // `browser-unreadable` a durable record exists and simply cannot be read,
+      // so dropping to `session` there would hide it and send every later save
+      // past IndexedDB until reload. Only `browser` with nothing stored is an
+      // established absence.
+      const hadNoCredential = mode === 'browser' && cached === null;
+
+      // Compare-and-set in `browser` mode, where `cachedVersion` is a version
+      // we actually observed. A save that pauses while encrypting could
+      // otherwise land after another tab's Clear and resurrect the credential —
+      // the same race recovery and the boot migration already guard, in the one
+      // write that still did not.
+      //
+      // The degraded and unreadable modes write unconditionally on purpose:
+      // there is no observed version to compare against, and in both the user
+      // is explicitly replacing a record the app could not use.
+      const useCas = mode === 'browser';
+      let result;
       try {
-        await writeSecret(browserBackend, value);
+        result = await writeSecret(
+          browserBackend, value, useCas ? { expectVersion: cachedVersion } : {},
+        );
       } catch (err) {
         if (hadNoCredential) {
           mode = 'session';
@@ -495,10 +521,21 @@ export async function setSecret(value) {
         }
         throw err;
       }
+
+      if (!result.wrote) {
+        // Another tab moved the credential on while this save was in flight.
+        // Adopting theirs rather than retrying ours is the point: a retry would
+        // put this (older) value back and undo their Clear.
+        const winner = await readSecret(browserBackend);
+        await adoptBrowserRead(winner);
+        throw new Error(CREDENTIAL_CONFLICT_MESSAGE);
+      }
+
       // The write landed, so encryption is working again — leave the degraded
       // state rather than continuing to report clear-text storage.
       mode = 'browser';
       cached = value;
+      cachedVersion = result.version;
       // Tell the other tabs BEFORE the cleanup below, which can throw: a cleared
       // credential must be revoked everywhere even if removing an old readable
       // copy fails.
@@ -683,6 +720,7 @@ async function adoptBrowserRead(read) {
 
   mode = 'browser';
   cached = read.status === 'found' ? read.value : null;
+  cachedVersion = read.status === 'found' ? (read.version || 0) : 0;
 
   // Migrate a key an older version left in localStorage. Ordering matters
   // exactly as it does for the keychain: the plaintext original is the only
@@ -708,8 +746,9 @@ async function adoptBrowserRead(read) {
       return;
     }
 
-    if (wrote) {
+    if (wrote.wrote) {
       cached = legacy;
+      cachedVersion = wrote.version;
     } else {
       // Another tab got there between our read and this write; theirs is the
       // newer fact. Read it directly rather than recursing through this
@@ -720,9 +759,11 @@ async function adoptBrowserRead(read) {
       if (winner.status !== 'found') {
         mode = 'browser-unreadable';
         cached = null;
+        cachedVersion = 0;
         return;
       }
       cached = winner.value;
+      cachedVersion = winner.version || 0;
     }
   }
   await stripPlaintextCopy();
@@ -798,6 +839,10 @@ async function adoptKeychainRead(stored) {
  * Returns whether anything changed. Throws if the keychain is still unreachable
  * or the cleanup still fails, so the caller can keep showing why.
  */
+export const CREDENTIAL_CONFLICT_MESSAGE =
+  'Your key was changed in another tab while this was saving, so this save was not applied. '
+  + 'Check the key shown and save again if you still want to change it.';
+
 export const MEMORY_ONLY_FALLBACK_MESSAGE =
   'Your key couldn’t be saved in this browser, so it’s being kept for this session only — '
   + 'you’ll need to enter it again next time.';
@@ -854,7 +899,7 @@ async function runRecovery() {
       // credential the user explicitly cleared. The per-tab queue cannot see
       // B, so the check has to live in the same transaction as the write.
       const wrote = await writeSecret(browserBackend, pending, { expectVersion: 0 });
-      if (!wrote) {
+      if (!wrote.wrote) {
         // Someone got there first. Their value is the newer fact — but the
         // follow-up read can itself fail, and adopting THAT as absence is how
         // the cleared credential would come back. adoptBrowserRead now fails
@@ -862,6 +907,7 @@ async function runRecovery() {
         await adoptBrowserRead(await readSecret(browserBackend));
       } else {
         mode = 'browser';
+        cachedVersion = wrote.version;
         // Recovery writes went unannounced entirely, so other tabs kept
         // whatever they had. It is a credential change like any other.
         announceCredentialChange();

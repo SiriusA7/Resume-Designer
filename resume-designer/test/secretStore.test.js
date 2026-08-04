@@ -589,6 +589,55 @@ describe('secretStore', () => {
       expect(after.getSecret()).toBe('');
     });
 
+    // An ordinary Save that pauses while encrypting must not land after another
+    // tab's Clear and resurrect the credential. The user typed that key BEFORE
+    // the clear, so committing it afterwards is not last-writer-wins, it is an
+    // older write arriving late.
+    it('an in-flight save cannot undo a clear that committed first', async () => {
+      const backend = makeBackend();
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend });
+      await tabA.setSecret('sk-original');
+
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend });
+
+      // B clears while A's next save is conceptually mid-flight: A still holds
+      // the version it observed before the clear.
+      await tabB.setSecret('');
+
+      await expect(tabA.setSecret('sk-late')).rejects.toThrow(/changed in another tab/i);
+
+      // The clear stands, and A has adopted it rather than keeping its own.
+      expect(tabA.getSecret()).toBe('');
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend });
+      expect(after.getSecret()).toBe('');
+    });
+
+    // `cached === null` means "no credential" in `browser` but "exists and
+    // cannot be read" in `browser-unreadable`. Dropping to session there hides
+    // the record and sends every later save past IndexedDB until reload.
+    it('does not fall back to memory when an unreadable record exists', async () => {
+      const backend = makeBackend();
+      const seed = await loadStore({ tauri: false });
+      await seed.initSecretStore({ backend });
+      await seed.setSecret('sk-stored');
+      backend.files.delete('wrap-key-v1'); // now undecryptable forever
+
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      expect(store.isBrowserUnreadable()).toBe(true);
+
+      // The replacement write also fails.
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(store.setSecret('sk-replacement')).rejects.toThrow(/quota/i);
+
+      // It must stay retryable against IndexedDB, not claim memory-only.
+      expect(store.isBrowserUnreadable()).toBe(true);
+    });
+
     // The compare-and-set itself, exercised directly: a write that observed an
     // older version is refused rather than clobbering.
     it('refuses a write whose observed version has moved on', async () => {
@@ -601,7 +650,7 @@ describe('secretStore', () => {
       await writeSecret(backend, 'sk-second');
 
       const wrote = await writeSecret(backend, 'sk-stale', { expectVersion: observed.version });
-      expect(wrote).toBe(false);
+      expect(wrote.wrote).toBe(false);
       expect(await readSecret(backend)).toMatchObject({ value: 'sk-second' });
     });
 

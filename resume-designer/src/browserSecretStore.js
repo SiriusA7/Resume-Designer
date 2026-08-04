@@ -267,7 +267,7 @@ export async function readSecret(backend) {
  * the user their key was not saved, rather than silently keeping a value that
  * will be gone after the next reload.
  *
- * Returns whether it wrote. With `expectVersion` it is a compare-and-set: the
+ * Returns `{ wrote, version }`. With `expectVersion` it is a compare-and-set: the
  * write is skipped, and `false` returned, if the stored record has moved on
  * since the caller read it. That is how a slow recovery is stopped from
  * overwriting a clear another tab committed in the meantime — a per-tab queue
@@ -286,6 +286,7 @@ export async function writeSecret(backend, value, { expectVersion } = {}) {
 
   // Encryption happens BEFORE the transaction on purpose: awaiting a non-IDB
   // promise inside one lets it auto-close.
+  let written = 0;
   const { wrote } = await backend.update(SECRET_ID, (current) => {
     const currentVersion = current?.version || 0;
     // A caller that observed a specific version writes only if nothing has
@@ -293,9 +294,12 @@ export async function writeSecret(backend, value, { expectVersion } = {}) {
     // serializes transactions over the store, so no other tab can slip between
     // the check and the write.
     if (expectVersion !== undefined && currentVersion !== expectVersion) return null;
-    return { iv, data, version: currentVersion + 1 };
+    written = currentVersion + 1;
+    return { iv, data, version: written };
   });
-  return wrote;
+  // The new version comes back so the caller can keep compare-and-setting
+  // against what it last observed, rather than re-reading after every write.
+  return { wrote, version: wrote ? written : null };
 }
 
 // No delete: clearing stores an EMPTY ciphertext instead, exactly as the
