@@ -311,7 +311,46 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                     {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
                   </span>
                 )}
-                {isRunMember ? (
+                {isLead && (
+                  <Button
+                    variant="outline" size="sm" type="button" className="h-7 text-xs"
+                    onClick={() => {
+                      // The only other add action appends to the END of the list, so
+                      // without this a grouped employer followed by another employer
+                      // can never gain a position: the new entry lands non-adjacent
+                      // and "Link to company above" can only reach the last employer.
+                      // Walk the CURRENT items at click time — the company input is
+                      // uncontrolled and writes through, so a render-time bound can
+                      // point past a boundary the user just typed into existence.
+                      const id = exp._groupId || generateId('grp');
+                      const company = exp.company || '';
+                      let last = i;
+                      if (exp._groupId && company) {
+                        while (last + 1 < items.length) {
+                          const entry = items[last + 1];
+                          if (!entry || entry._groupId !== exp._groupId || entry.company !== company) break;
+                          last += 1;
+                        }
+                      }
+                      const next = [...items];
+                      if (!next[i]._groupId) next[i] = { ...next[i], _groupId: id };
+                      next.splice(last + 1, 0, {
+                        id: generateId('exp'),
+                        title: '',
+                        company,
+                        dates: '',
+                        details: '',
+                        _groupId: id,
+                      });
+                      rewrite(next);
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Add role at this company
+                  </Button>
+                )}
+                {/* A run LEAD has no run member above it, so separating it is a pure
+                    no-op that still costs an undo entry — offer it the link action. */}
+                {isRunMember && !isLead ? (
                   <Button
                     variant="outline" size="sm" type="button" className="h-7 text-xs"
                     onClick={() => {

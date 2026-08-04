@@ -265,11 +265,25 @@ function separateFromCompanyAbove(index) {
   store.update('experience', next);
 }
 
-function addRoleAtCompany(leadIndex, lastIndexOfRun) {
+function addRoleAtCompany(leadIndex) {
   const experience = store.get('experience');
   if (!Array.isArray(experience)) return;
   const lead = experience[leadIndex];
+  if (!lead) return;
   const id = lead._groupId || generateId('grp');
+  // Recompute the run's end from FRESH store data rather than trusting a bound
+  // that was computed at render time: the panel suppresses re-renders while a
+  // field is being typed (localEdit), so renaming this lead's company shortens
+  // the run without the render ever hearing about it. Splicing at a stale end
+  // would drop the new role outside the run it belongs to.
+  let lastIndexOfRun = leadIndex;
+  if (lead._groupId && lead.company) {
+    while (lastIndexOfRun + 1 < experience.length) {
+      const nextEntry = experience[lastIndexOfRun + 1];
+      if (!nextEntry || nextEntry._groupId !== lead._groupId || nextEntry.company !== lead.company) break;
+      lastIndexOfRun += 1;
+    }
+  }
   const role = {
     id: generateId('exp'),
     title: 'New Position',
@@ -286,7 +300,7 @@ function addRoleAtCompany(leadIndex, lastIndexOfRun) {
   store.update('experience', next);
 }
 
-function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, lastIndexOfRun }) {
+function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }) {
   const [expanded, setExpanded] = useState(exp._expanded !== false);
   const toggle = () => {
     const next = !expanded;
@@ -363,12 +377,14 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, 
           {isLead && group && group.roles.length > 1 && (
             <Button
               variant="outline" size="sm" type="button" className="h-7 text-xs"
-              onClick={() => addRoleAtCompany(index, lastIndexOfRun)}
+              onClick={() => addRoleAtCompany(index)}
             >
               <Plus className="size-3.5" /> Add role at this company
             </Button>
           )}
-          {isRunMember ? (
+          {/* A run LEAD has no run member above it, so separating it is a pure
+              no-op that still costs an undo entry — offer it the link action. */}
+          {isRunMember && !isLead ? (
             <Button
               variant="outline" size="sm" type="button" className="h-7 text-xs"
               onClick={() => separateFromCompanyAbove(index)}
@@ -697,12 +713,11 @@ export default function StructurePanel() {
                 onReorder={reorderExperience}>
                 {(() => {
                   const groups = groupExperience(experience);
-                  // index -> { group, isLead, lastIndexOfRun }
+                  // index -> { group, isLead }
                   const byIndex = new Map();
                   groups.forEach((group) => {
-                    const last = group.roles[group.roles.length - 1].index;
                     group.roles.forEach((role, position) => {
-                      byIndex.set(role.index, { group, isLead: position === 0, lastIndexOfRun: last });
+                      byIndex.set(role.index, { group, isLead: position === 0 });
                     });
                   });
                   return experience.map((exp, i) => {
@@ -717,7 +732,6 @@ export default function StructurePanel() {
                         group={meta.group}
                         isLead={!!meta.isLead}
                         isRunMember={isRunMember}
-                        lastIndexOfRun={meta.lastIndexOfRun}
                         canLinkAbove={!!prev && !!prev.company && prev.company === exp.company}
                       />
                     );
