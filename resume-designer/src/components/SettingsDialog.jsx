@@ -220,6 +220,28 @@ export default function SettingsDialog() {
     ? 'system keychain'
     : (readOnlyKeychain ? 'app data folder' : 'browser session');
 
+  // Where the key lives, per mode. The browser needs its own sentence rather
+  // than a substituted noun: "kept in your browser session… so it isn't stored
+  // at all" reads as a contradiction, because in that build there is no store
+  // to name.
+  const credentialNote = isKeychainAvailable() || readOnlyKeychain
+    ? `Your key is kept in your ${keychainName} and is sent only to OpenRouter — never share it.`
+    : 'Your key is held in memory for this browser session and is sent only to OpenRouter — never share it.'
+      + ' A browser has no keychain to put it in, so it isn’t saved anywhere: you’ll enter it again after a'
+      + ' reload, a profile switch, or reopening the tab.';
+
+  // What excluding the credential from backups actually means for this user.
+  // The desktop wording ("it stays in your keychain") is false in the browser,
+  // where the key is session-only AND a restore reloads the page — so it does
+  // not merely fail to travel with the backup, it does not survive the restore
+  // at all. Promising otherwise here also contradicted the credential text in
+  // the AI tab, which already says the browser build stores nothing.
+  const backupKeyNote = isKeychainAvailable()
+    ? 'Your API key isn’t included — it stays in your system keychain, so you’ll enter it again on a new machine.'
+    : readOnlyKeychain
+      ? 'Your API key isn’t included — it stays on this machine, so you’ll enter it again on a new one.'
+      : 'Your API key isn’t included, and restoring reloads the page, so you’ll enter it again afterwards.';
+
   const handleSaveKeys = async () => {
     // The rule itself lives in secretStore, where vitest can reach it — it has
     // to avoid BOTH writing an unknown empty value over a good key and skipping
@@ -447,11 +469,8 @@ export default function SettingsDialog() {
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground">
-                    Your key is kept in your {keychainName} and is sent only to OpenRouter — never share it.
-                    {!isKeychainAvailable() && !readOnlyKeychain
-                      && ' Running in a browser there’s no keychain to put it in, so it isn’t stored at all —'
-                        + ' you’ll enter it again after a reload, a profile switch, or reopening the tab.'}
-                    {' '}One key covers Claude, GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
+                    {credentialNote}{' '}
+                    One key covers Claude, GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
                   </p>
                 </section>
 
@@ -518,7 +537,7 @@ export default function SettingsDialog() {
               <section>
                 <SectionHeader
                   title="Backup & restore"
-                  description="Save or restore all resumes, settings, job descriptions, and history as a single JSON file. Your API key isn't included — it stays in your system keychain, so you'll enter it again on a new machine."
+                  description={`Save or restore all resumes, settings, job descriptions, and history as a single JSON file. ${backupKeyNote}`}
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={exportFullBackupWithFeedback}>Export full backup</Button>
