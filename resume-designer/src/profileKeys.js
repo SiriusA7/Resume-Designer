@@ -75,6 +75,49 @@ export function isSharedKey(key) {
   return SHARED_KEYS.has(key);
 }
 
+// The per-profile data blob. Named here because the backup sanitizer below has
+// to recognise it, and this module is the one both exporters can reach.
+const RESUME_DATA_KEY = 'resume-designer-data';
+
+/**
+ * Strip a legacy credential out of a `resume-designer-data` blob crossing a
+ * backup boundary — used by BOTH the full-backup paths in persistence.js and
+ * the per-profile paths in profiles.js.
+ *
+ * It lives here rather than beside either exporter because persistence.js
+ * already imports profiles.js, so a helper owned by one of them cannot be
+ * reached by the other without an import cycle. This module is below both by
+ * construction (see the file header).
+ *
+ * The API key moved to the OS keychain and is deliberately no longer backup
+ * data. Dropping it from the shared-key list is not enough on its own:
+ * getSettings still reads `settings.openrouterKey` as the pre-extraction
+ * fallback, and extractSharedApiKey only clears that field for the ACTIVE
+ * profile, and only once its flush is durable. So an INACTIVE profile — exactly
+ * the kind a per-profile export targets — can still carry the key inside this
+ * blob, and copying it verbatim puts the paid credential into clear-text JSON.
+ *
+ * Applied on import too, so restoring an older backup cannot reintroduce a
+ * plaintext credential that the next boot's extraction would promote into the
+ * keychain.
+ *
+ * Returns the value untouched when there is nothing to strip, including when
+ * the blob will not parse: that is still the user's data and has to round-trip,
+ * and an unparseable blob is not one this app could have read a key out of.
+ */
+export function withoutLegacyCredential(logicalKey, value) {
+  if (logicalKey !== RESUME_DATA_KEY || typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || !parsed.settings) return value;
+    if (!('openrouterKey' in parsed.settings)) return value;
+    delete parsed.settings.openrouterKey;
+    return JSON.stringify(parsed);
+  } catch {
+    return value;
+  }
+}
+
 export function isPhysicalKey(key) {
   return typeof key === 'string' && key.startsWith(PHYSICAL_PREFIX);
 }

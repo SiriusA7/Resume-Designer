@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { importFullBackupFromEnvelope } from '../src/persistence.js';
+import { importFullBackupFromEnvelope, importFullBackupMerge } from '../src/persistence.js';
 
 beforeEach(() => {
   localStorage.clear();
@@ -18,6 +18,40 @@ describe('importFullBackupFromEnvelope', () => {
         keys: { 'resume-designer-data': 123 },
       })
     ).toThrow(/must be a string/i);
+  });
+
+  // Format-1 envelopes predate the keychain move entirely, so they are the
+  // likeliest carriers of a credential inside the data blob. Both merge writes
+  // are reachable: the wholesale adopt takes the incoming blob verbatim, and
+  // the merge keeps incomingData.settings whenever the existing blob has no
+  // settings key of its own to shadow it.
+  describe('legacy credentials in a format-1 merge', () => {
+    const withKey = (extra = {}) => JSON.stringify({
+      variants: { v1: {} },
+      settings: { openrouterKey: 'sk-legacy-blob', theme: 'dark' },
+      ...extra,
+    });
+
+    it('strips it when adopting the incoming blob wholesale', () => {
+      importFullBackupMerge({ backupFormat: 1, keys: { 'resume-designer-data': withKey() } });
+
+      const stored = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(stored.settings.openrouterKey).toBeUndefined();
+      // Only the credential goes.
+      expect(stored.settings.theme).toBe('dark');
+      expect(stored.variants).toEqual({ v1: {} });
+    });
+
+    it('strips it when the existing blob has no settings to shadow it', () => {
+      // No `settings` key locally, so the incoming one survives the spread.
+      localStorage.setItem('resume-designer-data', JSON.stringify({ variants: { v9: {} } }));
+
+      importFullBackupMerge({ backupFormat: 1, keys: { 'resume-designer-data': withKey() } });
+
+      const stored = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(stored.settings?.openrouterKey).toBeUndefined();
+      expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-legacy-blob');
+    });
   });
 
   it('writes owned keys and silently skips foreign keys', () => {

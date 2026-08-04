@@ -376,6 +376,7 @@ import {
   isValidProfileId,
   splitPhysicalKey,
   physicalKey,
+  withoutLegacyCredential,
 } from './profileKeys.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 
@@ -407,39 +408,6 @@ const BACKUP_SHARED_KEYS = [
 // the validator below rejects shared keys it does not recognise — dropping the
 // name outright would make every backup a user already holds fail to import.
 const BACKUP_LEGACY_SHARED_KEYS = [OPENROUTER_KEY_KEY];
-
-/**
- * Strip a legacy credential out of a `resume-designer-data` blob crossing the
- * backup boundary.
- *
- * Dropping the shared key is not enough on its own. getSettings still reads
- * `settings.openrouterKey` as the pre-extraction fallback, and
- * extractSharedApiKey only clears it for the ACTIVE profile, and only once its
- * flush is durable. So an inactive profile — or one whose extraction never
- * flushed — can still carry the key inside this blob, and exporting it verbatim
- * would put the paid credential straight into the clear-text file the Settings
- * copy promises excludes it.
- *
- * Applied on import too, so restoring an older backup cannot reintroduce a
- * plaintext credential that the next boot's extraction would then promote into
- * the keychain — the credential is not backup data in either direction.
- *
- * Returns the value untouched when there is nothing to strip, including when
- * the blob will not parse: that is still the user's data and has to round-trip,
- * and an unparseable blob is not one this app could have read a key out of.
- */
-function withoutLegacyCredential(logicalKey, value) {
-  if (logicalKey !== STORAGE_KEY || typeof value !== 'string') return value;
-  try {
-    const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object' || !parsed.settings) return value;
-    if (!('openrouterKey' in parsed.settings)) return value;
-    delete parsed.settings.openrouterKey;
-    return JSON.stringify(parsed);
-  } catch {
-    return value;
-  }
-}
 
 /**
  * Recognize a localStorage QuotaExceededError across browser engines.
@@ -1065,15 +1033,22 @@ export function importFullBackupMerge(parsed) {
     const existingValue = appStorage.getItem(key);
 
     if (key === 'resume-designer-data') {
+      // Strip a legacy credential from the INCOMING blob before either branch
+      // below can put it in storage. Format-1 envelopes predate the keychain
+      // move entirely, so they are the likeliest carriers — and both writes are
+      // reachable: the wholesale adopt takes the blob verbatim, and the merge
+      // keeps `incomingData.settings` whenever the existing blob has no
+      // `settings` key of its own to shadow it.
+      const incomingClean = withoutLegacyCredential(key, incomingValue);
       // Merge the data blob: variants union (current wins on
       // collision), all top-level singletons preserved from current.
       let incomingData;
-      try { incomingData = JSON.parse(incomingValue); }
+      try { incomingData = JSON.parse(incomingClean); }
       catch { continue; }  // malformed incoming — skip, don't poison existing
 
       if (!existingValue) {
         // No current data — just adopt the incoming wholesale.
-        appStorage.setItem(key, incomingValue);
+        appStorage.setItem(key, incomingClean);
         variantsAdded += Object.keys(incomingData?.variants || {}).length;
         continue;
       }

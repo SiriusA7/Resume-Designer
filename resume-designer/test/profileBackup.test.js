@@ -398,6 +398,42 @@ describe('per-profile export/import', () => {
     expect(localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
   });
 
+  // This is the WORST case for a blob-held credential: a per-profile export
+  // names a profile, usually an inactive one, and extractSharedApiKey only ever
+  // clears that field for the ACTIVE profile.
+  it('strips a legacy credential from a per-profile export', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    appStorage.setItem(
+      `resume-p--${partnerId}--resume-designer-data`,
+      JSON.stringify({ variants: {}, settings: { openrouterKey: 'sk-in-blob', theme: 'dark' } }),
+    );
+    const readDownload = captureDownload();
+    await exportProfileBackup(partnerId);
+    const envelope = await readDownload();
+
+    const blob = JSON.parse(envelope.keys['resume-designer-data']);
+    expect(blob.settings.openrouterKey).toBeUndefined();
+    expect(blob.settings.theme).toBe('dark');
+    expect(JSON.stringify(envelope)).not.toContain('sk-in-blob');
+  });
+
+  it('strips a legacy credential from a per-profile import', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    const readDownload = captureDownload();
+    await exportProfileBackup(partnerId);
+    const envelope = await readDownload();
+    // Forge a profile export written before the strip existed.
+    envelope.keys['resume-designer-data'] =
+      JSON.stringify({ variants: {}, settings: { openrouterKey: 'sk-in-old-profile' } });
+
+    const imported = await importProfileBackup(envelope);
+
+    const restored = JSON.parse(
+      localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`),
+    );
+    expect(restored.settings.openrouterKey).toBeUndefined();
+  });
+
   it('exports the active profile\'s unprefixed live data in the recovery state', async () => {
     // Incomplete-adoption recovery: mapping off, live data at unprefixed keys.
     // A per-profile export of the recovering (active) profile must still capture
