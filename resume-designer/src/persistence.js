@@ -592,20 +592,35 @@ export function exportFullBackup(filename) {
  * store re-reads from storage (via reload, or by running this
  * BEFORE the store first reads).
  */
-// Legacy Electron stores can hold job descriptions as an id-keyed OBJECT map —
-// a shape the Rust migration probe explicitly counts as valid and the envelope
-// passes through verbatim — but jobDescriptions.js requires an array (it
-// spreads/filters the parsed value). Canonicalize on import; anything else
-// (already an array, unparseable) is written unchanged.
+// The single fix-up point for a value arriving from a backup envelope. Both
+// import formats route their owned-key writes through here, so anything that
+// must be true of EVERY imported value belongs in this function rather than at
+// one of the call sites — the credential strip was originally applied per-site
+// and the format-1 replacement path was simply missed.
+//
+// Two jobs:
+//
+// 1. Legacy Electron stores can hold job descriptions as an id-keyed OBJECT map
+//    — a shape the Rust migration probe explicitly counts as valid and the
+//    envelope passes through verbatim — but jobDescriptions.js requires an
+//    array (it spreads/filters the parsed value). Canonicalize on import;
+//    anything else (already an array, unparseable) is written unchanged.
+//
+// 2. Strip a legacy `settings.openrouterKey` out of the data blob. Backups
+//    written before the keychain move still carry it, and on a fresh install
+//    with an empty keychain it would land in plaintext, go live immediately,
+//    and be promoted into the keychain on the next boot — an old backup quietly
+//    restoring a credential the exclusion policy says it must not.
 function normalizeImportedValue(key, value) {
-  if (key !== 'resume-designer-job-descriptions') return value;
+  const sanitized = withoutLegacyCredential(key, value);
+  if (key !== 'resume-designer-job-descriptions') return sanitized;
   try {
-    const jd = JSON.parse(value);
+    const jd = JSON.parse(sanitized);
     if (jd && typeof jd === 'object' && !Array.isArray(jd)) {
       return JSON.stringify(Object.values(jd));
     }
   } catch { /* leave malformed JSON as-is; initJobDescriptions handles it */ }
-  return value;
+  return sanitized;
 }
 
 function importFullBackupV2(parsed) {
@@ -681,10 +696,9 @@ function importFullBackupV2(parsed) {
       profileEntries.push({
         physicalKey: physicalKey(pid, logicalKey),
         logicalKey,
-        // Older backups predate the strip on export, so sanitize on the way in
-        // as well — otherwise the next boot's extractSharedApiKey would promote
-        // a restored blob credential into the keychain.
-        value: withoutLegacyCredential(logicalKey, value),
+        // Sanitized on write, by normalizeImportedValue — see its note on why
+        // that lives in one chokepoint rather than at each call site.
+        value,
       });
     }
   }

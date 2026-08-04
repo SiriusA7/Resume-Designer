@@ -54,6 +54,31 @@ describe('importFullBackupFromEnvelope', () => {
     });
   });
 
+  // The Replace path, including the legacy Electron restore, writes through
+  // normalizeImportedValue — which handled only job descriptions until the
+  // credential strip moved into it. On a fresh install with an empty keychain
+  // the key would land in plaintext, go live immediately, and be promoted into
+  // the keychain on the next boot: an old backup quietly restoring a credential
+  // the exclusion policy says it must not.
+  it('strips a legacy credential on a format-1 REPLACE import', () => {
+    importFullBackupFromEnvelope({
+      backupFormat: 1,
+      keys: {
+        'resume-designer-data': JSON.stringify({
+          variants: { v1: {} },
+          settings: { openrouterKey: 'sk-legacy-replace', theme: 'dark' },
+        }),
+      },
+    });
+
+    const stored = localStorage.getItem('resume-designer-data');
+    expect(stored).not.toContain('sk-legacy-replace');
+    const parsed = JSON.parse(stored);
+    expect(parsed.settings.openrouterKey).toBeUndefined();
+    expect(parsed.settings.theme).toBe('dark');
+    expect(parsed.variants).toEqual({ v1: {} });
+  });
+
   it('writes owned keys and silently skips foreign keys', () => {
     const result = importFullBackupFromEnvelope({
       backupFormat: 1,

@@ -134,6 +134,28 @@ describe('secretStore', () => {
       // Still usable this session, so a keychain fault does not also break AI.
       expect(store.getSecret()).toBe('sk-legacy');
     });
+
+    // The read succeeded, so `mode` had already become 'keychain'. Leaving it
+    // there would make isKeychainAvailable() report true and Settings tell the
+    // user their key is held in the system keychain when its only durable copy
+    // is still the plaintext file — with no warning until a later save also
+    // failed. A denied write has to report the same state as a denied read.
+    it('reports read-only when the migration WRITE is denied', async () => {
+      const store = await loadStore();
+      setPlaintext('sk-legacy');
+      invokeMock.mockImplementation(async (cmd) => {
+        if (cmd === 'secret_get') return null;
+        throw new Error('keychain write denied');
+      });
+
+      await store.initSecretStore();
+
+      expect(store.isKeychainAvailable()).toBe(false);
+      expect(store.isReadOnly()).toBe(true);
+      // And it must not then write fresh plaintext on the next save.
+      await expect(store.setSecret('sk-new')).rejects.toThrow(/keychain could not be reached/i);
+      expect(plaintext()).toBe('sk-legacy');
+    });
   });
 
   // A keychain that cannot be reached on desktop degrades to READ-ONLY: keep

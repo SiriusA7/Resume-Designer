@@ -202,11 +202,15 @@ export async function initSecretStore() {
 
   try {
     await invokeSecret('secret_set', { name: SECRET_NAME, value: plaintext });
-  } catch {
-    // Keep the plaintext copy: it is still the only durable one, and the next
-    // boot retries. Stripping it here is the data-loss bug extractSharedApiKey
-    // was written to avoid.
-    cached = plaintext;
+  } catch (err) {
+    // The read worked but the write was denied, so the credential's only
+    // durable copy is still the plaintext file. Keep it — stripping here is the
+    // data-loss bug extractSharedApiKey was written to avoid — and degrade to
+    // read-only rather than leaving `mode` at 'keychain'. Left as 'keychain',
+    // isKeychainAvailable() would report true and Settings would tell the user
+    // their key is held in the system keychain when it plainly is not, with no
+    // warning until some later save happened to fail too.
+    handleUnavailableKeychain(err);
     return;
   }
   cached = plaintext;
@@ -214,8 +218,13 @@ export async function initSecretStore() {
 }
 
 /**
- * The OS keychain could not be reached on a desktop build — locked, access
- * denied, or otherwise erroring. Degrade to READ-ONLY.
+ * The OS keychain could not be used on a desktop build — locked, access denied,
+ * or otherwise erroring. Degrade to READ-ONLY.
+ *
+ * Reached two ways: the boot read failed outright, or the read succeeded but
+ * the migration write was denied. Both leave the credential's only durable copy
+ * in plaintext, so both must report the same thing — claiming the keychain
+ * holds a key it does not is the failure mode this exists to prevent.
  *
  * Serving the pre-migration plaintext copy keeps someone who already has a key
  * working: their AI does not go dark because an unrelated OS service faulted,
