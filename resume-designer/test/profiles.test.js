@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   appStorage, initAppStorage, __resetAppStorageForTests, setProfileMapping,
 } from '../src/appStorage.js';
-import { __resetSecretStoreForTests } from '../src/secretStore.js';
+import { __resetSecretStoreForTests, initSecretStore, getSecret } from '../src/secretStore.js';
 import {
   loadRegistry, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile,
@@ -777,6 +777,40 @@ describe('shared api key overlay', () => {
   it('getSettings falls back to a blob-resident key before extraction ran', () => {
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }));
     expect(getSettings().openrouterKey).toBe('sk-blob');
+  });
+
+  // The blob is a MIGRATION source, readable only until secretStore has spoken.
+  // `browser-unreadable` returns null deliberately, to stop using a credential
+  // it cannot verify — and this fallback was handing the stale blob key
+  // straight back to aiService, keeping a superseded or revoked key in service
+  // despite the fail-closed state existing for exactly that reason.
+  it('getSettings stops serving the blob once the store has answered null', async () => {
+    appStorage.setItem('resume-designer-data', JSON.stringify({
+      settings: { openrouterKey: 'sk-stale-revoked' },
+    }));
+    // Before the store answers, the blob is the only source there is.
+    expect(getSettings().openrouterKey).toBe('sk-stale-revoked');
+
+    // A browser store holding a record that cannot be decrypted: getSecret()
+    // is null BY DESIGN, not because nothing is stored.
+    const files = new Map([['openrouter-key-v1', { iv: new Uint8Array(12), data: new Uint8Array(8), version: 2 }]]);
+    await initSecretStore({
+      backend: {
+        get: async (id) => (files.has(id) ? files.get(id) : null),
+        put: async (id, v) => { files.set(id, v); },
+        add: async (id, v) => { if (files.has(id)) throw new Error('ConstraintError'); files.set(id, v); },
+        update: async (id, decide) => {
+          const current = files.has(id) ? files.get(id) : null;
+          const next = decide(current);
+          if (next) files.set(id, next);
+          return { wrote: !!next, current };
+        },
+      },
+      channel: { onmessage: null, postMessage: () => {} },
+    });
+
+    expect(getSecret()).toBeNull();
+    expect(getSettings().openrouterKey).toBe('');
   });
 
   it('an intentionally cleared credential masks a stale blob key', async () => {

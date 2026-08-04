@@ -62,6 +62,11 @@ let cachedVersion = 0;
 // any adoption, which replaces the very value the flag describes.
 let memoryOnlyFallback = false;
 
+// Set once initSecretStore has finished, on every path including the failing
+// ones. Read by getSettings to decide whether a null credential is "not asked
+// yet" or "asked, and the answer is no". See isSecretStoreReady.
+let secretStoreReady = false;
+
 /**
  * Where the credential lives, decided once at boot.
  *
@@ -311,6 +316,7 @@ export function __resetSecretStoreForTests() {
   cleanupPending = false;
   cachedVersion = 0;
   memoryOnlyFallback = false;
+  secretStoreReady = false;
 }
 
 async function invokeSecret(command, args) {
@@ -398,6 +404,20 @@ export function isCleanupPending() {
  */
 export function getSecret() {
   return cached;
+}
+
+/**
+ * Whether initSecretStore has finished, on any path including a failed one.
+ *
+ * Exists so getSettings can tell "the store has not answered yet" from "the
+ * store answered null". They used to be the same observation, which was fine
+ * while null could only mean absence — but `browser-unreadable` returns null
+ * DELIBERATELY, to fail closed, and the legacy blob fallback was undoing that
+ * and putting a possibly-revoked credential back into use. The blob is a
+ * MIGRATION source, readable only until this module has spoken.
+ */
+export function isSecretStoreReady() {
+  return secretStoreReady;
 }
 
 /**
@@ -723,6 +743,18 @@ export async function initSecretStore({
   // protected storage over it breaks invariant 3 — see the use below.
   strandedPlaintext = null,
 } = {}) {
+  // In a `finally`, so EVERY exit marks the store as having answered — the
+  // early return for an unreachable keychain, the browser return, and a throw
+  // alike. Anything else leaves getSettings serving the legacy blob fallback
+  // forever on exactly the paths where the credential is least certain.
+  try {
+    await runInitSecretStore({ backend, channel, strandedPlaintext });
+  } finally {
+    secretStoreReady = true;
+  }
+}
+
+async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
   if (!IS_TAURI) {
     // Browser build. Encrypt at rest if the platform allows it, and fall back
     // to memory-only when it does not — never back to plaintext.

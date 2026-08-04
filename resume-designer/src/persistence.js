@@ -9,7 +9,7 @@ import { isTauri } from './native.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 // The API key lives in the OS keychain, not beside the resume data on disk.
-import { getSecret, setSecret } from './secretStore.js';
+import { getSecret, setSecret, isSecretStoreReady } from './secretStore.js';
 
 const STORAGE_KEY = 'resume-designer-data';
 export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
@@ -280,20 +280,33 @@ export async function saveApiKey(value) {
 // the key and must mask any stale blob value); the blob is only a fallback
 // for pre-extraction installs (adoption strips it on the next boot).
 //
-// The credential now comes from the keychain via secretStore's synchronous
-// in-memory copy, hydrated at boot. Before initSecretStore() has run — and in
-// the browser build, which has no keychain — getSecret() falls back to the
-// appStorage value, so this keeps working unchanged during boot.
+// The credential comes from secretStore's synchronous in-memory copy, hydrated
+// at boot from the OS keychain or the encrypted browser store.
+//
+// The blob fallback is gated on the store not having ANSWERED yet, not merely
+// on it answering null. Those were the same observation while null could only
+// mean "nothing stored" — but this PR gave the store states where null is a
+// DELIBERATE refusal: `browser-unreadable` returns null precisely so a
+// credential it cannot verify stops being used. Falling back there handed the
+// stale blob key straight to aiService and undid the safeguard, keeping a
+// superseded or revoked credential in service. An older comment here still
+// claimed the browser build has no keychain and always falls back; that stopped
+// being true when the browser gained an encrypted store.
 export function getSettings() {
   const storage = loadFromStorage();
   const s = storage.settings || DEFAULT_STORAGE.settings;
   const shared = getSecret();
+  // Boot, and the print window (which never initialises the store) — the blob
+  // is genuinely the only source there, and it is a migration source.
+  const beforeStoreAnswered = !isSecretStoreReady();
   // Legacy OpenRouter-era guarantees preserved (see original comment).
   return {
     autoFallback: false,
     customModels: [],
     ...s,
-    openrouterKey: shared !== null ? shared : (s.openrouterKey || ''),
+    openrouterKey: shared !== null
+      ? shared
+      : (beforeStoreAnswered ? (s.openrouterKey || '') : ''),
   };
 }
 
