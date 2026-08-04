@@ -327,9 +327,12 @@ export async function init() {
     // encrypted storage while the paid key sits in clear text, indefinitely if
     // adoption keeps failing.
     //
-    // Idempotent (an existing shared key wins), so running it again here costs
-    // nothing on the paths that already did it, and is the safety net on the
-    // ones that did not.
+    // Safe to repeat, but that took a fix to be true: "an existing shared key
+    // wins" was read as "a second call is free", and a shared value that is
+    // merely PENDING — an earlier call this boot whose flush failed — reads
+    // exactly like a durable one through appStorage's cache. The second call
+    // stripped the blob against it. extractSharedApiKey now proves durability
+    // before every strip, not only the one it wrote.
     await extractSharedApiKey();
     // AFTER the extraction above and BEFORE the gate opens, so React never
     // renders a settings state missing a key the user does have.

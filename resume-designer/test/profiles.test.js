@@ -545,10 +545,10 @@ describe('adoption migration', () => {
     expect(localStorage.getItem('resume-profile-adoption-pending')).toBeNull();
   });
 
-  it('extractSharedApiKey never clobbers an existing shared key', () => {
+  it('extractSharedApiKey never clobbers an existing shared key', async () => {
     appStorage.setItem(OPENROUTER_KEY_KEY, 'sk-keep');
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-old' } }));
-    extractSharedApiKey();
+    await extractSharedApiKey();
     expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-keep');
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
   });
@@ -562,14 +562,61 @@ describe('adoption migration', () => {
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
   });
 
-  it('extractSharedApiKey does not resurrect a stale key over an existing empty shared value', () => {
+  it('extractSharedApiKey does not resurrect a stale key over an existing empty shared value', async () => {
     appStorage.setItem(OPENROUTER_KEY_KEY, '');
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-stale' } }));
 
-    extractSharedApiKey();
+    await extractSharedApiKey();
 
     expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('');
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
+  });
+
+  // main.js calls this a second time as a safety net for the adoption paths
+  // that return before reaching it. "An existing shared key wins" was read as
+  // "a second call is free" — but appStorage.getItem serves the write-behind
+  // cache, so the first call's FAILED write reads back exactly like a durable
+  // one, and the second call stripped the blob against it.
+  it('never strips the blob against a shared value that is only pending', async () => {
+    const backend = makeBackend({
+      'resume-designer-data': JSON.stringify({ settings: { openrouterKey: 'sk-paid' } }),
+    });
+    backend.write.mockImplementation(async (key, value) => {
+      if (key === OPENROUTER_KEY_KEY) throw new Error('disk full');
+      backend.files.set(key, value);
+    });
+    await initAppStorage({ backend });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      // First attempt: the shared write is queued and never reaches disk, so
+      // the blob stays the only durable copy. This half already worked.
+      await extractSharedApiKey();
+      expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey)
+        .toBe('sk-paid');
+
+      // The safety-net call. Nothing durable has changed.
+      await extractSharedApiKey();
+
+      // Assert the CACHE, not the backend: the strip lands there immediately
+      // and only reaches disk on a later drain, so a disk-only assertion
+      // passes against the bug — it did, until the trace was actually read.
+      expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey)
+        .toBe('sk-paid');
+
+      // ...and the durable outcome that follows from it. The blob write would
+      // have succeeded on this drain (only the shared key is failing), so the
+      // strip becomes permanent while the shared copy never exists: restart and
+      // the credential is gone.
+      await appStorage.flush();
+      expect(backend.files.has(OPENROUTER_KEY_KEY)).toBe(false);
+      expect(JSON.parse(backend.files.get('resume-designer-data')).settings.openrouterKey)
+        .toBe('sk-paid');
+    } finally {
+      errSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });
 

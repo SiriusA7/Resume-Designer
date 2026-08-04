@@ -159,13 +159,25 @@ export async function extractSharedApiKey() {
     const data = JSON.parse(raw);
     if (!data?.settings || !('openrouterKey' in data.settings)) return;
     const inBlob = data?.settings?.openrouterKey;
-    if (inBlob && appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
-      appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
+    if (inBlob) {
+      if (appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
+        appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
+      }
       // Cached mode reports write failures only at flush time. Never strip
       // the blob copy until the shared key is DURABLE — if the shared-key
       // file write failed while the (smaller) blob rewrite succeeded, the
       // only durable copy of the credential would vanish on restart. On a
       // failed flush the blob keeps the key and the next boot retries.
+      //
+      // The barrier gates the STRIP, not the write, which is why it sits
+      // outside the `=== null` check. A shared value already present may be
+      // this boot's own PENDING write from an earlier call whose flush failed:
+      // getItem serves the write-behind cache, so a queued value and a durable
+      // one read identically. Gating only the branch that wrote made a second
+      // call skip the barrier and strip the blob against a value still sitting
+      // in the cache — the one durable copy gone if the retry never lands.
+      // Costs nothing in steady state: once extraction has run there is no
+      // `openrouterKey` in the blob and the function returns above.
       if (!(await appStorage.flush())) return;
     }
     delete data.settings.openrouterKey;
