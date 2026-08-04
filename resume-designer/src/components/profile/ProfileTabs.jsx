@@ -314,7 +314,9 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                     {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
                   </span>
                 )}
-                {isGroupStart && (
+                {/* Requires a company: a run needs a non-empty one to form, so
+                    without it this would duplicate the row without grouping it. */}
+                {isGroupStart && !!exp.company && (
                   <Button
                     variant="outline" size="sm" type="button" className="h-7 text-xs"
                     onClick={() => {

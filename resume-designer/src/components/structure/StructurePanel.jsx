@@ -385,8 +385,10 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }
         <div className="flex flex-wrap gap-1.5 border-t pt-2.5">
           {/* Offered on the first member of ANY group, including a run of one:
               "I was promoted here" starts from a single entry, and this is the
-              only path that adds the second role in place. */}
-          {isLead && group && (
+              only path that adds the second role in place. Requires a company —
+              a run needs a non-empty one to form, so without it the action would
+              duplicate the row without producing a visible group. */}
+          {isLead && group && !!exp.company && (
             <Button
               variant="outline" size="sm" type="button" className="h-7 text-xs"
               onClick={() => addRoleAtCompany(index)}
