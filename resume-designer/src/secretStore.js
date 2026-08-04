@@ -633,6 +633,21 @@ export async function initSecretStore({ backend = null, channel = null } = {}) {
  * with Settings reporting encrypted storage in both cases.
  */
 async function adoptBrowserRead(read) {
+  // ENFORCED, not just documented. Every non-`found` status used to fall
+  // through to the `missing` treatment, so an `unreadable` read reaching here
+  // set `cached` to null — which then satisfies the legacy-migration condition
+  // below and wrote the plaintext key over a record we could not even read,
+  // resurrecting a credential another tab had just cleared.
+  //
+  // Three of the four call sites check the status first. The precondition
+  // belongs here anyway: it is invariant 1, and the cost of a caller forgetting
+  // it lands on the user's credential rather than on a crash.
+  if (read.status === 'unreadable') {
+    mode = 'browser-unreadable';
+    cached = null;
+    return;
+  }
+
   mode = 'browser';
   cached = read.status === 'found' ? read.value : null;
 
@@ -780,7 +795,10 @@ async function runRecovery() {
       // B, so the check has to live in the same transaction as the write.
       const wrote = await writeSecret(browserBackend, pending, { expectVersion: 0 });
       if (!wrote) {
-        // Someone got there first. Their value is the newer fact.
+        // Someone got there first. Their value is the newer fact — but the
+        // follow-up read can itself fail, and adopting THAT as absence is how
+        // the cleared credential would come back. adoptBrowserRead now fails
+        // closed on it.
         await adoptBrowserRead(await readSecret(browserBackend));
       } else {
         mode = 'browser';

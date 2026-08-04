@@ -486,6 +486,66 @@ describe('secretStore', () => {
       expect(roundTrip.getSecret()).toBe('');
     });
 
+    // Losing the CAS is not the end of it: the follow-up read can itself fail,
+    // and treating THAT as "nothing stored" let the degraded tab's legacy key
+    // be written back over the newer empty record — resurrecting the credential
+    // the other tab had just cleared.
+    it('fails closed when the post-CAS re-read is unreadable', async () => {
+      const backend = makeBackend();
+      setPlaintext('sk-legacy');
+
+      let allowWrites = false;
+      let breakReads = false;
+      let landClear = null;
+
+      const gated = {
+        ...backend,
+        get: async (id) => {
+          if (breakReads) throw new Error('idb read failed');
+          return backend.get(id);
+        },
+        // Injected at exactly the point the race happens: recovery has already
+        // read "nothing stored", and the other tab's clear commits before this
+        // write is evaluated. Staging it from outside is not possible — the
+        // whole point of the CAS is that the gap is not observable.
+        update: async (id, decide) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          if (landClear) {
+            const run = landClear;
+            landClear = null;
+            await run();
+            breakReads = true; // ...and the follow-up read then fails
+          }
+          return backend.update(id, decide);
+        },
+        add: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.add(id, v);
+        },
+      };
+
+      const degraded = await loadStore({ tauri: false });
+      await degraded.initSecretStore({ backend: gated });
+      expect(degraded.isBrowserDegraded()).toBe(true);
+
+      // Drop the legacy entry before the second tab boots, or ITS migration
+      // writes sk-legacy into the store and recovery below reads `found`,
+      // taking the defer branch and never reaching the CAS at all.
+      localStorage.removeItem(OPENROUTER_KEY_KEY);
+      const other = await loadStore({ tauri: false });
+      await other.initSecretStore({ backend });
+
+      allowWrites = true;
+      landClear = () => other.setSecret('');
+      await degraded.recoverSecretStore().catch(() => {});
+
+      const stored = backend.files.get('openrouter-key-v1');
+      // The legacy key must NOT have been written back over the clear.
+      expect(stored.version).toBe(1);
+      expect(degraded.getSecret()).toBeNull();
+      expect(degraded.isBrowserUnreadable()).toBe(true);
+    });
+
     // The compare-and-set itself, exercised directly: a write that observed an
     // older version is refused rather than clobbering.
     it('refuses a write whose observed version has moved on', async () => {
