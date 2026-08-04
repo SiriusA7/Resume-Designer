@@ -475,7 +475,26 @@ export async function setSecret(value) {
     // interleaving would leave `cached` reflecting whichever FINISHED last
     // rather than whichever happened last.
     return serializeCredentialOp(async () => {
-      await writeSecret(browserBackend, value);
+      // Nothing durable of ours yet? Then a failed write costs the user
+      // everything — AI cannot be configured at all — and retaining the value
+      // in memory costs nothing, because there is no stored credential for it
+      // to misrepresent. `session` is the mode that already means exactly this.
+      const hadNoCredential = cached === null;
+      try {
+        await writeSecret(browserBackend, value);
+      } catch (err) {
+        if (hadNoCredential) {
+          mode = 'session';
+          cached = value;
+          // Still an error: it was NOT saved, and the caller has to say so.
+          // Flagged so onboarding can tell "usable this session" apart from
+          // "lost entirely" — the first should not block setup.
+          const retained = new Error(MEMORY_ONLY_FALLBACK_MESSAGE);
+          retained.retainedInMemory = true;
+          throw retained;
+        }
+        throw err;
+      }
       // The write landed, so encryption is working again — leave the degraded
       // state rather than continuing to report clear-text storage.
       mode = 'browser';
@@ -779,6 +798,10 @@ async function adoptKeychainRead(stored) {
  * Returns whether anything changed. Throws if the keychain is still unreachable
  * or the cleanup still fails, so the caller can keep showing why.
  */
+export const MEMORY_ONLY_FALLBACK_MESSAGE =
+  'Your key couldn’t be saved in this browser, so it’s being kept for this session only — '
+  + 'you’ll need to enter it again next time.';
+
 export const BROWSER_UNREADABLE_MESSAGE =
   'The key stored in this browser could not be read. Enter it again to replace it.';
 

@@ -87,9 +87,15 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
       return;
     }
 
-    setStatus(result.valid
-      ? { message: 'API key validated. AI features are ready to use.', success: true }
-      : { message: 'Could not validate your key. We saved it — you can re-check it later in Settings.', success: false });
+    // `warning` means the key works now but could not be stored — say so
+    // rather than claiming it is ready, which would be true only until reload.
+    if (result.warning) {
+      setStatus({ message: result.warning, success: false });
+    } else {
+      setStatus(result.valid
+        ? { message: 'API key validated. AI features are ready to use.', success: true }
+        : { message: 'Could not validate your key. We saved it — you can re-check it later in Settings.', success: false });
+    }
 
     setTimeout(() => goTo(1), result.valid ? 1000 : 1200);
   };

@@ -208,7 +208,15 @@ export default function OnboardingWizard() {
       await saveApiKey(key);
     } catch (err) {
       console.error('[onboarding] could not persist the API key', err);
-      return { saved: false, error: err?.message || 'Could not save your API key.' };
+      // `retainedInMemory` means the browser refused to store it but the key IS
+      // live for this session, so AI works and blocking setup here would strand
+      // the user over a warning. Anything else genuinely leaves no usable
+      // credential, and advancing would promise AI that is about to fail.
+      if (!err?.retainedInMemory) {
+        return { saved: false, error: err?.message || 'Could not save your API key.' };
+      }
+      refreshChatPanel();
+      return { saved: true, warning: err.message, valid: await validateOpenRouterKey(key) };
     }
     refreshChatPanel();
     return { saved: true, valid: await validateOpenRouterKey(key) };

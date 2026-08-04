@@ -848,6 +848,44 @@ describe('secretStore', () => {
       expect(after.getSecret()).toBe('sk-replacement');
     });
 
+    // A first-time save that the browser refuses left `cached` null and the mode
+    // at `browser`, so AI could not be configured at all — even though `session`
+    // exists for exactly "cannot persist, hold it in memory". Nothing durable
+    // was at stake, so retaining it costs nothing.
+    it('keeps a first key in memory when the browser refuses to store it', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      expect(store.getSecret()).toBeNull();
+
+      backend.update = async () => { throw new Error('quota exceeded'); };
+
+      // Still an error — it was NOT saved, and the caller has to say so.
+      await expect(store.setSecret('sk-typed')).rejects.toMatchObject({
+        retainedInMemory: true,
+      });
+
+      // ...but the session works rather than the app being unconfigurable.
+      expect(store.getSecret()).toBe('sk-typed');
+      expect(store.isEncryptedInBrowser()).toBe(false);
+    });
+
+    // The other half: with a credential already stored, a failed overwrite must
+    // NOT drop to session — that would report memory-only while ciphertext sits
+    // in the store, and hide the value that is actually persisted.
+    it('does not drop to session when a stored credential already exists', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      await store.setSecret('sk-stored');
+
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(store.setSecret('sk-new')).rejects.toThrow(/quota/i);
+
+      expect(store.isEncryptedInBrowser()).toBe(true);
+      expect(store.getSecret()).toBe('sk-stored');
+    });
+
     it('clears to an empty value that still round-trips', async () => {
       const backend = makeBackend();
       const store = await loadStore({ tauri: false });
