@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { readSecret, writeSecret } from '../src/browserSecretStore.js';
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  readSecret, writeSecret, __resetBrowserSecretStoreForTests,
+} from '../src/browserSecretStore.js';
 
 // The browser build has no keychain. Holding the key in memory was safe but
 // hostile — the app reloads itself on profile switch, profile create/delete and
@@ -16,7 +18,11 @@ function makeBackend() {
     files,
     get: async (id) => (files.has(id) ? files.get(id) : null),
     put: async (id, value) => { files.set(id, value); },
-    delete: async (id) => { files.delete(id); },
+    // Mirrors IndexedDB's add(): rejects rather than overwriting.
+    add: async (id, value) => {
+      if (files.has(id)) throw new Error('ConstraintError');
+      files.set(id, value);
+    },
   };
 }
 
@@ -24,6 +30,8 @@ const SECRET_ID = 'openrouter-key-v1';
 const WRAP_KEY_ID = 'wrap-key-v1';
 
 describe('browserSecretStore', () => {
+  beforeEach(() => { __resetBrowserSecretStoreForTests(); });
+
   it('round-trips a credential', async () => {
     const backend = makeBackend();
     await writeSecret(backend, 'sk-or-v1-secret');
@@ -75,6 +83,36 @@ describe('browserSecretStore', () => {
     await writeSecret(backend, '');
     expect(await readSecret(backend)).toBe('');
     expect(backend.files.has(SECRET_ID)).toBe(true);
+  });
+
+  // Two first-time saves in flight at once — a double-click on Save is enough.
+  // Both see no wrapping key; if both generate one, the key and the ciphertext
+  // land in separate writes and the final ciphertext need not match the final
+  // key. The next read then fails to decrypt and reports no credential at all.
+  it('serializes wrapping-key creation across overlapping writes', async () => {
+    const backend = makeBackend();
+
+    await Promise.all([writeSecret(backend, 'sk-a'), writeSecret(backend, 'sk-b')]);
+
+    // Exactly one key exists, and whichever ciphertext won decrypts under it.
+    expect(await readSecret(backend)).toMatch(/^sk-[ab]$/);
+  });
+
+  // The cross-context case the in-flight guard cannot cover: another tab stored
+  // a key between our read and our write. `add` makes us lose rather than
+  // overwrite a key their ciphertext already depends on.
+  it('defers to a wrapping key another context stored first', async () => {
+    const backend = makeBackend();
+    // Someone else got there first, and wrote ciphertext under their key.
+    await writeSecret(backend, 'sk-theirs');
+    const theirKey = backend.files.get(WRAP_KEY_ID);
+    __resetBrowserSecretStoreForTests();
+
+    await writeSecret(backend, 'sk-ours');
+
+    // Their key survived, so their earlier ciphertext would still decrypt.
+    expect(backend.files.get(WRAP_KEY_ID)).toBe(theirKey);
+    expect(await readSecret(backend)).toBe('sk-ours');
   });
 
   describe('unreadable records', () => {

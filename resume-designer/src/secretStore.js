@@ -114,6 +114,7 @@ export function __resetSecretStoreForTests() {
   mode = 'session';
   cached = null;
   browserBackend = null;
+  cleanupPending = false;
 }
 
 async function invokeSecret(command, args) {
@@ -144,6 +145,20 @@ export function isReadOnly() {
  */
 export function isEncryptedInBrowser() {
   return mode === 'browser';
+}
+
+// Set whenever a strip fails to reach disk: the credential is durable in its
+// proper store, but an older READABLE copy survives. Tracked here rather than
+// at each call site so it always reflects reality — and so the retry the UI
+// prompts for can actually re-run the cleanup. Without it, a recovery that
+// promoted the mode back to `keychain` made isReadOnly() false, which made
+// shouldWriteCredential() false, which made the prompted Save a no-op that left
+// the credential in plaintext for good.
+let cleanupPending = false;
+
+/** True when an older readable copy of the credential is still on disk. */
+export function isCleanupPending() {
+  return cleanupPending;
 }
 
 /**
@@ -189,11 +204,14 @@ async function stripPlaintextCopy() {
   //
   // Cheap when there is nothing pending: flush only drains if `dirty` is
   // non-empty, and returns true.
+  let ok;
   try {
-    return await appStorage.flush();
+    ok = await appStorage.flush();
   } catch {
-    return false;
+    ok = false;
   }
+  cleanupPending = !ok;
+  return ok;
 }
 
 /** Thrown when the keychain faulted, so the UI can explain rather than guess. */
@@ -328,12 +346,26 @@ export async function initSecretStore({ backend = null } = {}) {
     return;
   }
 
+  await adoptKeychainRead(stored);
+}
+
+/**
+ * Take up the state implied by a SUCCESSFUL `secret_get`.
+ *
+ * Shared by boot and by the in-session recovery so the recovery cannot skip the
+ * migration a boot would have done. That matters: a keychain that is reachable
+ * but EMPTY, while a plaintext original still exists, is the migration case —
+ * adopting the empty read as the truth there would discard the user's only key.
+ */
+async function adoptKeychainRead(stored) {
+  mode = 'keychain';
+
   if (stored !== null) {
     cached = stored;
     // The keychain is authoritative once populated. A plaintext copy at this
     // point is a leftover from a migration whose strip did not flush. Result
-    // ignored on purpose — see stripPlaintextCopy: no user is present to retry,
-    // and this call IS the retry.
+    // ignored here — no user is necessarily present, and cleanupPending records
+    // it either way.
     await stripPlaintextCopy();
     return;
   }
@@ -349,7 +381,7 @@ export async function initSecretStore({ backend = null } = {}) {
   // getSettings falls through to that stale blob key, and a credential the user
   // explicitly deleted comes back to life.
   const plaintext = appStorage.getItem(OPENROUTER_KEY_KEY);
-  if (plaintext === null) return;
+  if (plaintext === null) { cached = null; return; }
 
   try {
     await invokeSecret('secret_set', { name: SECRET_NAME, value: plaintext });
@@ -368,6 +400,41 @@ export async function initSecretStore({ backend = null } = {}) {
   // Result ignored on purpose, as above: the migration succeeded, and a failed
   // strip is retried by the hydration branch on the next boot.
   await stripPlaintextCopy();
+}
+
+/**
+ * Re-attempt what a degraded startup left unfinished, WITHOUT touching the
+ * credential's value.
+ *
+ * Two things can be outstanding, and both are things the read-only banner
+ * explicitly promises the user can fix without restarting:
+ *
+ *  - The keychain was unreadable, so on an already-migrated install there was
+ *    no plaintext to fall back to and `cached` is null. The user's key exists
+ *    and is simply unavailable. Saving cannot fix that — the Settings field is
+ *    seeded empty, and writing an unknown empty value over a live credential is
+ *    the failure shouldWriteCredential exists to prevent. Re-READING is the fix.
+ *  - A strip never reached disk, leaving a readable copy behind.
+ *
+ * Returns whether anything changed. Throws if the keychain is still unreachable
+ * or the cleanup still fails, so the caller can keep showing why.
+ */
+export async function recoverKeychain() {
+  if (!IS_TAURI) return false;
+  let changed = false;
+
+  if (mode === 'read-only') {
+    // Propagates if still locked — the caller reports it.
+    const stored = await invokeSecret('secret_get', { name: SECRET_NAME });
+    await adoptKeychainRead(stored);
+    changed = true;
+  }
+
+  if (cleanupPending) {
+    if (!(await stripPlaintextCopy())) throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
+    changed = true;
+  }
+  return changed;
 }
 
 /**

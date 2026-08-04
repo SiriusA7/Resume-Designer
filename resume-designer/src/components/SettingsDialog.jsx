@@ -24,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
+  isCleanupPending, recoverKeychain,
 } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
@@ -258,7 +259,26 @@ export default function SettingsDialog() {
     // to avoid BOTH writing an unknown empty value over a good key and skipping
     // the read-only recovery the banner tells the user to perform, and it got
     // each of those wrong in turn while living here untested.
-    if (shouldWriteCredential({ edited: keyDirty, readOnly: readOnlyKeychain, value: apiKey })) {
+    // First, finish anything a degraded startup left outstanding — re-read a
+    // keychain that has since unlocked, and re-run a cleanup that never reached
+    // disk. Both are what the banner promises Save will do, and neither is
+    // reachable through the credential write: the field is seeded empty on an
+    // already-migrated install, and writing that unknown value is exactly what
+    // shouldWriteCredential refuses.
+    if (readOnlyKeychain || isCleanupPending()) {
+      try {
+        await recoverKeychain();
+      } catch (err) {
+        setKeyError(err?.message || 'Could not reach your system keychain.');
+        return;
+      }
+    }
+
+    // isReadOnly() live, not the render-time snapshot: recovery may have just
+    // promoted us out of read-only and rehydrated the real credential, and the
+    // field still holds whatever was seeded before that. Writing the stale
+    // value then would overwrite the key recovery had only just read back.
+    if (shouldWriteCredential({ edited: keyDirty, readOnly: isReadOnly(), value: apiKey })) {
       // The key goes to the OS keychain, so this can genuinely fail (locked or
       // access denied). Keep the dialog open and say so rather than closing on
       // a save that did not happen.

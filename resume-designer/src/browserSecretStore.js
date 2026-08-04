@@ -58,10 +58,30 @@ export function isEncryptedStorageSupported() {
     && typeof crypto.getRandomValues === 'function';
 }
 
-function request(req) {
+/**
+ * Run one operation and settle on the TRANSACTION, not the request.
+ *
+ * A request's `success` fires before the transaction commits, and the
+ * transaction can still abort afterwards — quota, I/O error, a competing
+ * upgrade. Resolving on request success would let writeSecret report the
+ * credential as durable, and let the caller delete the legacy plaintext copy,
+ * for a write that never landed: no usable credential after the next reload.
+ */
+function runTx(db, mode, work) {
   return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    let result;
+    let tx;
+    try {
+      tx = db.transaction(STORE, mode);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const req = work(tx.objectStore(STORE));
+    if (req) req.onsuccess = () => { result = req.result; };
+    tx.oncomplete = () => resolve(result === undefined ? null : result);
+    tx.onabort = () => reject(tx.error || new Error('indexeddb transaction aborted'));
+    tx.onerror = () => reject(tx.error || new Error('indexeddb transaction failed'));
   });
 }
 
@@ -82,11 +102,14 @@ export async function createIndexedDbBackend() {
   } catch {
     return null;
   }
-  const tx = (mode) => db.transaction(STORE, mode).objectStore(STORE);
   return {
-    get: (id) => request(tx('readonly').get(id)),
-    put: (id, value) => request(tx('readwrite').put(value, id)),
-    delete: (id) => request(tx('readwrite').delete(id)),
+    get: (id) => runTx(db, 'readonly', (store) => store.get(id)),
+    put: (id, value) => runTx(db, 'readwrite', (store) => store.put(value, id)),
+    // `add` rejects when the id already exists. That is what makes the
+    // wrapping-key creation below safe against a second tab racing us: the
+    // loser finds out rather than silently overwriting a key that existing
+    // ciphertext was encrypted under.
+    add: (id, value) => runTx(db, 'readwrite', (store) => store.add(value, id)),
   };
 }
 
@@ -103,15 +126,41 @@ async function loadWrappingKey(backend) {
   return key || null;
 }
 
+// One in-flight creation at a time. Two overlapping first-time saves — a
+// double-click on Save is enough — would otherwise both see no key, generate
+// different ones, and write key and ciphertext in separate transactions. The
+// final ciphertext then need not match the final key, and the next read fails
+// to decrypt and reports no credential at all.
+let creating = null;
+
 async function ensureWrappingKey(backend) {
   const existing = await loadWrappingKey(backend);
   if (existing) return existing;
-  // extractable: false is the whole point — see the module note.
-  const key = await crypto.subtle.generateKey(
-    { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
-  );
-  await backend.put(WRAP_KEY_ID, key);
-  return key;
+  if (!creating) {
+    creating = (async () => {
+      // extractable: false is the whole point — see the module note.
+      const key = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
+      );
+      try {
+        // `add`, not `put`: if another context stored one between our read and
+        // this write, we must lose rather than overwrite a key that their
+        // ciphertext depends on.
+        await backend.add(WRAP_KEY_ID, key);
+        return key;
+      } catch {
+        const winner = await loadWrappingKey(backend);
+        if (winner) return winner;
+        throw new Error('could not create an encryption key for this browser');
+      }
+    })().finally(() => { creating = null; });
+  }
+  return creating;
+}
+
+/** Test seam: drop the in-flight creation between cases. */
+export function __resetBrowserSecretStoreForTests() {
+  creating = null;
 }
 
 /**

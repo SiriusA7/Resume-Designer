@@ -88,7 +88,13 @@ describe('secretStore', () => {
         files,
         get: async (id) => (files.has(id) ? files.get(id) : null),
         put: async (id, value) => { files.set(id, value); },
-        delete: async (id) => { files.delete(id); },
+        // Mirrors IndexedDB's add(): rejects rather than overwriting, which is
+        // what stops a second context clobbering a wrapping key that existing
+        // ciphertext depends on.
+        add: async (id, value) => {
+          if (files.has(id)) throw new Error('ConstraintError');
+          files.set(id, value);
+        },
       };
     };
 
@@ -377,6 +383,91 @@ describe('secretStore', () => {
       expect(store.getSecret()).toBeNull();
       await expect(store.setSecret('sk-first')).rejects.toThrow(/not saved/i);
       expect(plaintext()).toBeNull();
+    });
+  });
+
+  // The read-only banner promises the user can fix things without restarting.
+  // Two outstanding conditions are NOT reachable through the credential write,
+  // so Save has to do them explicitly or the promise is empty.
+  describe('in-session recovery', () => {
+    // Already-migrated install: nothing in plaintext to fall back to, so a
+    // transient startup read failure leaves NO credential. Saving cannot fix it
+    // — the field seeds empty and writing that unknown value is exactly what
+    // shouldWriteCredential refuses. Re-READING is the fix.
+    it('recovers an existing key by re-reading, without writing', async () => {
+      const store = await loadStore();
+      invokeMock.mockRejectedValue(new Error('keychain locked'));
+      await store.initSecretStore();
+
+      expect(store.isReadOnly()).toBe(true);
+      expect(store.getSecret()).toBeNull();
+
+      // The user unlocks the keychain and hits Save.
+      invokeMock.mockReset();
+      invokeMock.mockResolvedValue('sk-existing');
+      await store.recoverKeychain();
+
+      expect(store.isReadOnly()).toBe(false);
+      expect(store.isKeychainAvailable()).toBe(true);
+      expect(store.getSecret()).toBe('sk-existing');
+      // Crucially it never wrote — an empty field must not reach the keychain.
+      expect(invokeMock).not.toHaveBeenCalledWith('secret_set', expect.anything());
+    });
+
+    // A reachable-but-EMPTY keychain alongside a surviving plaintext key is the
+    // migration case. Adopting the empty read as truth would discard the user's
+    // only credential, so recovery has to run the same migration boot would.
+    it('migrates a plaintext fallback rather than adopting an empty read', async () => {
+      const store = await loadStore();
+      setPlaintext('sk-fallback');
+      invokeMock.mockRejectedValue(new Error('keychain locked'));
+      await store.initSecretStore();
+      expect(store.getSecret()).toBe('sk-fallback');
+
+      invokeMock.mockReset();
+      invokeMock.mockImplementation(async (cmd) => (cmd === 'secret_get' ? null : undefined));
+      await store.recoverKeychain();
+
+      expect(invokeMock).toHaveBeenCalledWith('secret_set', {
+        name: OPENROUTER_KEY_KEY,
+        value: 'sk-fallback',
+      });
+      expect(store.getSecret()).toBe('sk-fallback');
+      expect(plaintext()).toBeNull();
+    });
+
+    it('stays read-only and reports when the keychain is still locked', async () => {
+      const store = await loadStore();
+      invokeMock.mockRejectedValue(new Error('keychain locked'));
+      await store.initSecretStore();
+
+      await expect(store.recoverKeychain()).rejects.toThrow(/locked/i);
+      expect(store.isReadOnly()).toBe(true);
+    });
+
+    // Promoting the mode back to `keychain` made isReadOnly() false, which made
+    // shouldWriteCredential() false, which made the prompted Save a no-op —
+    // leaving the readable copy on disk for good. Cleanup is tracked separately
+    // so the retry re-runs it regardless of the credential decision.
+    it('keeps cleanup pending until the strip actually lands', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+      await store.initSecretStore();
+
+      setPlaintext('sk-real');
+      const { appStorage } = await import('../src/appStorage.js');
+      const flushSpy = vi.spyOn(appStorage, 'flush').mockResolvedValue(false);
+      invokeMock.mockResolvedValue(undefined);
+
+      await expect(store.setSecret('sk-new')).rejects.toThrow(/older copy of your key/i);
+      expect(store.isCleanupPending()).toBe(true);
+
+      // The retry needs no credential rewrite, so it must run the cleanup on
+      // its own account.
+      flushSpy.mockResolvedValue(true);
+      await store.recoverKeychain();
+
+      expect(store.isCleanupPending()).toBe(false);
     });
   });
 
