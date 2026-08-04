@@ -389,8 +389,7 @@ import {
   isValidProfileId,
   splitPhysicalKey,
   physicalKey,
-  withoutLegacyCredential,
-  withoutDeadProviderCredentials,
+  withoutStoredCredentials,
 } from './profileKeys.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 
@@ -530,7 +529,7 @@ export function exportFullBackup(filename) {
       const v = appStorage.getItem(k);
       if (v !== null) {
         ((profiles[split.profileId] ||= { keys: {} }).keys)[split.logicalKey] =
-          withoutLegacyCredential(split.logicalKey, v);
+          withoutStoredCredentials(split.logicalKey, v);
       }
     } else if (BACKUP_SHARED_KEYS.includes(k)) {
       const v = appStorage.getItem(k);
@@ -558,7 +557,7 @@ export function exportFullBackup(filename) {
   if (recoveryId) {
     for (const k of unprefixedOwned) {
       const v = appStorage.getItem(k);
-      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = withoutLegacyCredential(k, v);
+      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = withoutStoredCredentials(k, v);
     }
   }
   // Reconcile orphan namespaces with the exported registry: a partial
@@ -642,14 +641,10 @@ export function exportFullBackup(filename) {
 //    same disk the Electron app was already keeping the key on in the clear, so
 //    it exposes nothing that was not already exposed.
 function normalizeImportedValue(key, value, keepCredential = false) {
-  // The dead-provider strip is OUTSIDE the keepCredential branch on purpose.
-  // That exemption exists for the one credential the current app still uses; a
-  // credential nothing reads has no claim on it, and the Electron migration is
-  // precisely the path that carries these in.
-  const sanitized = withoutDeadProviderCredentials(
-    key,
-    keepCredential ? value : withoutLegacyCredential(key, value),
-  );
+  // One call, and the flag carries the exemption. `keepCredential` spares the
+  // OpenRouter key for a same-machine migration; the dead provider keys are
+  // never spared, which the helper enforces rather than leaving to this caller.
+  const sanitized = withoutStoredCredentials(key, value, { keepOpenRouterKey: keepCredential });
   if (key !== 'resume-designer-job-descriptions') return sanitized;
   try {
     const jd = JSON.parse(sanitized);
@@ -1138,10 +1133,9 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
       // reachable: the wholesale adopt takes the blob verbatim, and the merge
       // keeps `incomingData.settings` whenever the existing blob has no
       // `settings` key of its own to shadow it.
-      const incomingClean = withoutDeadProviderCredentials(
-        key,
-        keepCredential ? incomingValue : withoutLegacyCredential(key, incomingValue),
-      );
+      const incomingClean = withoutStoredCredentials(key, incomingValue, {
+        keepOpenRouterKey: keepCredential,
+      });
       // Merge the data blob: variants union (current wins on
       // collision), all top-level singletons preserved from current.
       let incomingData;

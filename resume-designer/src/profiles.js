@@ -7,7 +7,7 @@ import { appStorage, setProfileMapping } from './appStorage.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
-  withoutLegacyCredential, withoutDeadProviderCredentials,
+  withoutDeadProviderCredentials, withoutStoredCredentials,
 } from './profileKeys.js';
 
 // Starts with `resume-` ON PURPOSE so appStorage's one-time localStorage→disk
@@ -621,7 +621,7 @@ export function exportProfileBackup(profileId, filename) {
     // A per-profile export is the WORST case for a blob-held credential: it
     // targets a named profile, typically an inactive one, and
     // extractSharedApiKey only ever clears that field for the active profile.
-    if (v !== null) keys[logical] = withoutLegacyCredential(logical, v);
+    if (v !== null) keys[logical] = withoutStoredCredentials(logical, v);
   }
   // Incomplete-adoption recovery state (mapping off): the ACTIVE profile's live
   // data still sits under unprefixed owned keys, so include them here too —
@@ -633,7 +633,7 @@ export function exportProfileBackup(profileId, filename) {
     for (const k of appStorage.keys()) {
       if (!k || splitPhysicalKey(k) || isSharedKey(k) || !isOwnedKey(k)) continue;
       const v = appStorage.getItem(k);
-      if (v !== null) keys[k] = withoutLegacyCredential(k, v);
+      if (v !== null) keys[k] = withoutStoredCredentials(k, v);
     }
   }
   const envelope = {
@@ -681,7 +681,7 @@ export async function importProfileBackup(parsed) {
     for (const [k, v] of Object.entries(parsed.keys)) {
       // Profile exports written before the strip still carry the credential;
       // sanitize on the way in so it cannot land back in plaintext storage.
-      appStorage.setItem(physicalKey(profile.id, k), withoutLegacyCredential(k, v));
+      appStorage.setItem(physicalKey(profile.id, k), withoutStoredCredentials(k, v));
     }
   } catch (err) {
     // Browser passthrough: setItem throws synchronously at localStorage quota

@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { withoutDeadProviderCredentials } from '../src/profileKeys.js';
 import { appStorage, initAppStorage, __resetAppStorageForTests, setProfileMapping } from '../src/appStorage.js';
-import { stripDeadProviderCredentials } from '../src/profiles.js';
-import { importFullBackupFromEnvelope, importFullBackupMerge } from '../src/persistence.js';
+import { stripDeadProviderCredentials, exportProfileBackup } from '../src/profiles.js';
+import {
+  importFullBackupFromEnvelope, importFullBackupMerge, exportFullBackup,
+} from '../src/persistence.js';
 
 // The Electron app stored `anthropicKey` / `openaiKey` / `geminiKey`. The app
 // moved to OpenRouter on 2026-05-30 (7a9e6d6), five days AFTER `electron/` was
@@ -107,6 +109,65 @@ describe('import boundary', () => {
     localStorage.clear();
     importFullBackupMerge(envelope());
     expect(localStorage.getItem(BLOB)).not.toContain('sk-ant');
+  });
+});
+
+// The boundary I covered on the way IN and not on the way OUT. A blob the boot
+// sweep could not clean — quota, or a profile imported after boot — was
+// serialised straight into clear-text backup JSON.
+describe('export boundary', () => {
+  const dirty = JSON.stringify({
+    variants: { v1: {} },
+    settings: { anthropicKey: 'sk-ant', geminiKey: 'sk-gem', theme: 'dark' },
+  });
+
+  // exportFullBackup RETURNS a summary and downloads the envelope, so asserting
+  // on its return value is vacuous — my first version of this did exactly that
+  // and passed against unstripped code. Capture the Blob, as profileBackup does.
+  function captureDownload() {
+    const blobs = [];
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: (b) => { blobs.push(b); return 'blob:x'; },
+      revokeObjectURL: () => {},
+    });
+    return async () => blobs[0].text();
+  }
+
+  const seed = () => {
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem('resume-p--pmine--resume-designer-data', dirty);
+  };
+
+  it('keeps them out of a whole-app backup', async () => {
+    seed();
+    const readDownload = captureDownload();
+
+    exportFullBackup();
+    const json = await readDownload();
+
+    expect(json).not.toContain('sk-ant');
+    expect(json).not.toContain('sk-gem');
+    // Proof the blob really is in there — otherwise the assertions above hold
+    // for the wrong reason.
+    expect(json).toContain('dark');
+  });
+
+  it('keeps them out of a per-profile export', async () => {
+    seed();
+    const readDownload = captureDownload();
+
+    // Returns a PROMISE — it pulls downloadFile through a dynamic import to
+    // keep the module graph acyclic, so the blob does not exist until it settles.
+    await exportProfileBackup('pmine');
+    const json = await readDownload();
+
+    expect(json).not.toContain('sk-ant');
+    expect(json).not.toContain('sk-gem');
+    expect(json).toContain('dark');
   });
 });
 

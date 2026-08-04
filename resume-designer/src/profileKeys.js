@@ -159,6 +159,29 @@ export function withoutDeadProviderCredentials(logicalKey, value) {
   }
 }
 
+/**
+ * Strip every stored credential out of a `resume-designer-data` blob crossing a
+ * boundary — export, import, restore, or migration. THE function to call at a
+ * boundary; the two below are its parts and exist for the paths that genuinely
+ * need only one.
+ *
+ * There were two, chained by hand at eight call sites, and the EXPORT paths are
+ * where the second was forgotten — so a blob the boot sweep could not clean
+ * (quota) was serialised into clear-text backup JSON. Eight sites times two
+ * helpers is eight chances to write one and not the other. One helper with a
+ * flag is none, which is the difference that has actually held in this module.
+ *
+ * `keepOpenRouterKey` exempts ONLY that credential, and only for a same-machine
+ * migration, which has to carry it because the current app still uses it. The
+ * dead provider keys have no such claim — nothing reads them — so no caller may
+ * keep them. That asymmetry is exactly why this is one function with a flag
+ * rather than two functions a caller has to remember to compose.
+ */
+export function withoutStoredCredentials(logicalKey, value, { keepOpenRouterKey = false } = {}) {
+  const withoutActive = keepOpenRouterKey ? value : withoutLegacyCredential(logicalKey, value);
+  return withoutDeadProviderCredentials(logicalKey, withoutActive);
+}
+
 export function isPhysicalKey(key) {
   return typeof key === 'string' && key.startsWith(PHYSICAL_PREFIX);
 }
