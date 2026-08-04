@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Sun, Moon, Monitor, Eye, EyeOff, X,
   SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3, UserCircle,
@@ -152,6 +152,28 @@ export default function SettingsDialog() {
   // the moment the keychain came back. Blank-but-untouched means "unknown",
   // not "clear it".
   const [keyDirty, setKeyDirty] = useState(false);
+  // True while a credential write is in flight. A keychain write can sit for a
+  // long time behind an OS permission prompt, and with the controls live the
+  // user could start Save and then Clear: two native writes finishing in either
+  // order, so a late Save can restore the credential they just cleared. The
+  // handlers also both assign apiKey/keyDirty, which would interleave.
+  const [keyBusy, setKeyBusy] = useState(false);
+  // The state drives the disabled attributes; the REF is the actual guard.
+  // Re-reading `keyBusy` after an await would see the render-time closure
+  // value, not the update — so the second click would sail past the check it
+  // was supposed to hit.
+  const keyBusyRef = useRef(false);
+
+  const beginKeyAction = () => {
+    if (keyBusyRef.current) return false;
+    keyBusyRef.current = true;
+    setKeyBusy(true);
+    return true;
+  };
+  const endKeyAction = () => {
+    keyBusyRef.current = false;
+    setKeyBusy(false);
+  };
   // Set when the OS keychain refuses a write, so the dialog can stay open and
   // explain rather than closing on a save that did not happen.
   const [keyError, setKeyError] = useState('');
@@ -255,6 +277,17 @@ export default function SettingsDialog() {
         : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
 
   const handleSaveKeys = async () => {
+    // Guard as well as disabling the controls: a keypress can land between the
+    // click and the re-render that disables them.
+    if (!beginKeyAction()) return;
+    try {
+      await runSaveKeys();
+    } finally {
+      endKeyAction();
+    }
+  };
+
+  const runSaveKeys = async () => {
     // The rule itself lives in secretStore, where vitest can reach it — it has
     // to avoid BOTH writing an unknown empty value over a good key and skipping
     // the read-only recovery the banner tells the user to perform, and it got
@@ -297,12 +330,26 @@ export default function SettingsDialog() {
   };
 
   const handleClearKeys = async () => {
+    if (keyBusyRef.current) return;
     const ok = await confirmDestructive({
       title: 'Clear all API keys?',
       description: 'Are you sure you want to clear all API keys?',
       actionLabel: 'Clear all keys',
     });
     if (!ok) return;
+    // Claim AFTER the confirmation, not before: the dialog is asynchronous, and
+    // a Save begun while it was open could still be sitting behind an OS
+    // prompt. beginKeyAction re-checks the ref, so this loses that race rather
+    // than clearing a credential the in-flight Save is about to restore.
+    if (!beginKeyAction()) return;
+    try {
+      await runClearKeys();
+    } finally {
+      endKeyAction();
+    }
+  };
+
+  const runClearKeys = async () => {
     // Writes an empty value rather than deleting the entry — see secretStore.
     try {
       await saveApiKey('');
@@ -473,6 +520,7 @@ export default function SettingsDialog() {
                       placeholder="sk-or-v1-..."
                       value={apiKey}
                       onChange={(e) => { setApiKey(e.target.value); setKeyDirty(true); }}
+                      disabled={keyBusy}
                       spellCheck={shouldSpellcheck('identifier')}
                     />
                     <Button
@@ -518,8 +566,10 @@ export default function SettingsDialog() {
 
                 <Separator />
                 <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={handleClearKeys}>Clear all keys</Button>
-                  <Button type="button" onClick={handleSaveKeys}>Save settings</Button>
+                  <Button type="button" variant="outline" disabled={keyBusy} onClick={handleClearKeys}>Clear all keys</Button>
+                  <Button type="button" disabled={keyBusy} onClick={handleSaveKeys}>
+                    {keyBusy ? 'Saving…' : 'Save settings'}
+                  </Button>
                 </div>
               </div>
             )}

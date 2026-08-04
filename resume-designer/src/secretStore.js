@@ -191,9 +191,17 @@ export function getSecret() {
  * flush succeeds. The exposure window is a degraded boot landing before that.
  */
 async function stripPlaintextCopy() {
-  if (appStorage.getItem(OPENROUTER_KEY_KEY) !== null) {
-    appStorage.removeItem(OPENROUTER_KEY_KEY);
-  }
+  const queued = appStorage.getItem(OPENROUTER_KEY_KEY) !== null;
+  if (queued) appStorage.removeItem(OPENROUTER_KEY_KEY);
+
+  // With nothing of OURS outstanding, do not consult the flush at all.
+  // appStorage.flush() reports durability for the whole dirty batch, so an
+  // unrelated failing write — a disk-full resume autosave — would otherwise
+  // make every credential save throw "an older copy could not be removed" when
+  // there was no older copy in the first place, blocking Settings on something
+  // that has nothing to do with the key.
+  if (!queued && !cleanupPending) return true;
+
   // Flush even when the cache already shows it gone. A cache miss is NOT proof
   // the file is gone: removeItem drops the key from the cache immediately, and
   // if the disk delete then fails, appStorage re-marks it dirty and leaves the
@@ -202,8 +210,11 @@ async function stripPlaintextCopy() {
   // credential sat on disk — the precise "durable === true while it never
   // reached disk" failure appStorage's own comment warns about.
   //
-  // Cheap when there is nothing pending: flush only drains if `dirty` is
-  // non-empty, and returns true.
+  // The result is still batch-wide, so a failure elsewhere in the same drain is
+  // attributed to us. There is no per-key durability signal to ask for, and for
+  // a credential that error is the right way round: claiming a readable copy
+  // might survive when it does not costs a retry, while the reverse leaves the
+  // key on disk with the user told it is gone.
   let ok;
   try {
     ok = await appStorage.flush();

@@ -554,6 +554,24 @@ describe('secretStore', () => {
       await expect(store.setSecret('')).resolves.toBeUndefined();
     });
 
+    // appStorage.flush() reports durability for the WHOLE dirty batch, so a
+    // disk-full resume autosave would otherwise make every credential save
+    // throw "an older copy could not be removed" — when there was no older copy
+    // at all — and block Settings on something unrelated to the key.
+    it('ignores an unrelated flush failure when no credential copy is queued', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+      await store.initSecretStore();
+
+      // Nothing of ours in storage; some other write is failing.
+      const { appStorage } = await import('../src/appStorage.js');
+      vi.spyOn(appStorage, 'flush').mockResolvedValue(false);
+      invokeMock.mockResolvedValue(undefined);
+
+      await expect(store.setSecret('sk-new')).resolves.toBeUndefined();
+      expect(store.isCleanupPending()).toBe(false);
+    });
+
     it('resolves normally when the cleanup lands', async () => {
       const store = await loadStore();
       invokeMock.mockResolvedValue(null);
