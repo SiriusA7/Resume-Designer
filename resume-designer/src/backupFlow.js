@@ -368,8 +368,17 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     const incomingCredential = merging ? null : credentialFromEnvelope(envelope);
     previousCredential = getSecret();
     if (incomingCredential !== null) {
-      await saveApiKey(incomingCredential);
+      // Marked BEFORE the await, not after. setSecret writes the keychain and
+      // THEN strips any plaintext copy, and it throws if that strip fails — so
+      // a rejection does not mean the swap did not happen. Setting the flag
+      // afterwards left exactly that case unrolled-back: import reported as
+      // failed, AI silently on the Electron key.
+      //
+      // Optimistic on purpose. The rollback writes a value the keychain may
+      // already hold, which is a harmless no-op, whereas a missed rollback is
+      // the user's credential changed behind a failure message.
       credentialReplaced = true;
+      await saveApiKey(incomingCredential);
     }
 
     // Suspend saves before the import writes appStorage (see the format-2 path
