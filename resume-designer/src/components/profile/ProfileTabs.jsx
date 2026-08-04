@@ -297,7 +297,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
           const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
           return (
             <>
-              <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} />
+              <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} onBlur={refresh} />
               <Input placeholder="Dates (e.g., Jan 2020 - Present)" defaultValue={exp.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
               <Textarea
                 rows={4}
@@ -314,7 +314,21 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                 {isRunMember ? (
                   <Button
                     variant="outline" size="sm" type="button" className="h-7 text-xs"
-                    onClick={() => rewrite(items.map((entry, k) => (k === i ? { ...entry, _groupId: generateId('grp') } : entry)))}
+                    onClick={() => {
+                      const oldId = exp._groupId;
+                      const freshId = generateId('grp');
+                      const next = [...items];
+                      next[i] = { ...next[i], _groupId: freshId };
+                      // Trailing members of the SAME run follow the detached entry, so
+                      // separating the middle role of a 3-role run yields [A] + [B,C]
+                      // rather than orphaning C too.
+                      for (let k = i + 1; k < next.length; k += 1) {
+                        const entry = next[k];
+                        if (!oldId || entry._groupId !== oldId || entry.company !== exp.company) break;
+                        next[k] = { ...entry, _groupId: freshId };
+                      }
+                      rewrite(next);
+                    }}
                   >
                     Separate from company above
                   </Button>

@@ -70,6 +70,35 @@ describe('groupExperience', () => {
     expect(groupExperience([])).toEqual([]);
     expect(groupExperience(undefined)).toEqual([]);
   });
+
+  it('separating the middle role of a 3-role run yields [A] + [B,C], not three singletons (FIX 2)', () => {
+    // Mirrors "Separate from company above" on index 1 of [A,B,C] all sharing id
+    // 'x': re-id the clicked entry AND every FOLLOWING member of the same run,
+    // stopping at the run boundary. Re-idding only the clicked entry (the old,
+    // buggy behaviour) breaks A-B (intended) but ALSO B-C (not intended), silently
+    // orphaning C into a standalone job.
+    const entries = [
+      e('A', 'Acme', '2018 – 2020', { _groupId: 'x' }),
+      e('B', 'Acme', '2020 – 2022', { _groupId: 'x' }),
+      e('C', 'Acme', '2022 – 2024', { _groupId: 'x' }),
+    ];
+    const index = 1;
+    const cur = entries[index];
+    const oldId = cur._groupId;
+    const freshId = 'fresh-id';
+    const next = [...entries];
+    next[index] = { ...next[index], _groupId: freshId };
+    for (let i = index + 1; i < next.length; i += 1) {
+      const entry = next[i];
+      if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+      next[i] = { ...entry, _groupId: freshId };
+    }
+
+    const groups = groupExperience(next);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].roles.map((r) => r.entry.title)).toEqual(['A']);
+    expect(groups[1].roles.map((r) => r.entry.title)).toEqual(['B', 'C']);
+  });
 });
 
 describe('assignGroupIds', () => {

@@ -230,12 +230,17 @@ function linkToCompanyAbove(index) {
   const experience = store.get('experience');
   if (!Array.isArray(experience) || index < 1) return;
   const prev = experience[index - 1];
+  const cur = experience[index];
+  // Re-check against FRESH store data: the panel suppresses re-renders while a
+  // field is being typed (localEdit), so the button's canLinkAbove prop can be
+  // stale and this entry's company may have just changed. Never write `company`
+  // here — copying the neighbour's name is how a role gets filed under an
+  // employer the user never worked for.
+  if (!prev || !prev.company || prev.company !== cur.company) return;
   const id = prev._groupId || generateId('grp');
-  const next = experience.map((entry, i) => {
-    if (i === index - 1) return { ...entry, _groupId: id };
-    if (i === index) return { ...entry, _groupId: id, company: prev.company };
-    return entry;
-  });
+  const next = experience.map((entry, i) => (
+    (i === index - 1 || i === index) ? { ...entry, _groupId: id } : entry
+  ));
   store.setChangeMetadata('Linked roles at one company');
   store.update('experience', next);
 }
@@ -243,8 +248,19 @@ function linkToCompanyAbove(index) {
 function separateFromCompanyAbove(index) {
   const experience = store.get('experience');
   if (!Array.isArray(experience) || index < 0) return;
+  const cur = experience[index];
+  const oldId = cur._groupId;
   // A fresh id — never reuse — so this entry can never re-fuse with the run above.
-  const next = experience.map((entry, i) => (i === index ? { ...entry, _groupId: generateId('grp') } : entry));
+  const freshId = generateId('grp');
+  const next = [...experience];
+  next[index] = { ...next[index], _groupId: freshId };
+  // Trailing members of the SAME run follow the detached entry, so separating the
+  // middle role of a 3-role run yields [A] + [B,C] rather than orphaning C too.
+  for (let i = index + 1; i < next.length; i += 1) {
+    const entry = next[i];
+    if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+    next[i] = { ...entry, _groupId: freshId };
+  }
   store.setChangeMetadata('Separated role from company');
   store.update('experience', next);
 }
