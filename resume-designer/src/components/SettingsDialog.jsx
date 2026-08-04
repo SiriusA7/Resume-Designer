@@ -22,7 +22,7 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
-import { isKeychainAvailable, isReadOnly } from '../secretStore.js';
+import { isKeychainAvailable, isReadOnly, shouldWriteCredential } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
@@ -221,12 +221,11 @@ export default function SettingsDialog() {
     : (readOnlyKeychain ? 'app data folder' : 'browser session');
 
   const handleSaveKeys = async () => {
-    // Only touch the credential when the user actually typed in that field.
-    // Writing it on every save destroys keys: on an already-migrated install a
-    // failed secret_get at startup leaves nothing to seed from, so the field
-    // shows empty, and saving to change some other option would put '' over a
-    // real keychain credential as soon as the keychain came back.
-    if (keyDirty) {
+    // The rule itself lives in secretStore, where vitest can reach it — it has
+    // to avoid BOTH writing an unknown empty value over a good key and skipping
+    // the read-only recovery the banner tells the user to perform, and it got
+    // each of those wrong in turn while living here untested.
+    if (shouldWriteCredential({ edited: keyDirty, readOnly: readOnlyKeychain, value: apiKey })) {
       // The key goes to the OS keychain, so this can genuinely fail (locked or
       // access denied). Keep the dialog open and say so rather than closing on
       // a save that did not happen.

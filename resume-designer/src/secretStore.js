@@ -72,6 +72,35 @@ let cached = null;
 let mode = 'session';
 
 /**
+ * Whether a Settings save should write the credential at all.
+ *
+ * Extracted from SettingsDialog so it is reachable by vitest — the suite covers
+ * service modules only, so this rule passed a green run while being wrong twice
+ * in a row. Same reasoning as changeApply's selectUndecided.
+ *
+ * Two failures pull in opposite directions:
+ *
+ *  - Writing on EVERY save destroys keys. On an already-migrated install a
+ *    failed secret_get leaves nothing to seed the field from, so it shows
+ *    empty, and saving to change an unrelated option puts '' over a real
+ *    keychain credential as soon as the keychain returns. Blank-but-untouched
+ *    means "unknown", not "clear it".
+ *  - Writing ONLY when the user typed strands the recovery. When the keychain
+ *    was unreachable at startup the field holds the real credential, recovered
+ *    from the legacy plaintext file, and the read-only banner tells the user to
+ *    save again to move it back into the keychain. Requiring an edit made that
+ *    instruction do nothing.
+ *
+ * A non-empty field in read-only mode is exactly the recoverable case; an empty
+ * one is exactly the unknown case. They do not overlap, so both hold.
+ *
+ * @param {{edited: boolean, readOnly: boolean, value: string}} state
+ */
+export function shouldWriteCredential({ edited, readOnly, value }) {
+  return !!edited || (!!readOnly && value !== '');
+}
+
+/**
  * Reset the module between tests, mirroring __resetAppStorageForTests. `cached`
  * and `mode` are module state and survive a test otherwise, so one test's saved
  * credential silently answers the next one's reads.

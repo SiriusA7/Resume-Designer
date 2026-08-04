@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
+import { shouldWriteCredential } from '../src/secretStore.js';
 
 // The OpenRouter API key used to sit in appStorage like resume content, which
 // on desktop means a plaintext file under app_data_dir — a directory that gets
@@ -34,6 +35,40 @@ describe('secretStore', () => {
   beforeEach(() => {
     localStorage.clear();
     invokeMock.mockReset();
+  });
+
+  // This rule got it wrong in both directions across successive rounds of
+  // review, each time while living in SettingsDialog where the suite could not
+  // see it. Enumerated here rather than spot-checked, because the failures came
+  // from states nobody thought to check, not from bad logic in the ones they did.
+  describe('shouldWriteCredential', () => {
+    const cases = [
+      // edited, readOnly, value            expected  why
+      [true, false, 'sk-new', true, 'user typed a key normally'],
+      [true, false, '', true, 'user deliberately emptied the field'],
+      [true, true, 'sk-new', true, 'user typed while degraded'],
+      [false, false, 'sk-existing', false, 'untouched save of an unrelated setting'],
+      [false, false, '', false, 'untouched and empty in normal mode'],
+      // THE round-nine bug: already migrated, secret_get failed, nothing to
+      // seed from. Writing here puts '' over a live keychain credential.
+      [false, true, '', false, 'degraded with NO fallback — value is unknown, not empty'],
+      // THE round-eleven bug: degraded WITH a recovered plaintext key. The
+      // banner tells the user to save again to move it back into the keychain;
+      // skipping the write made that instruction a no-op.
+      [false, true, 'sk-fallback', true, 'degraded WITH a fallback — this is the recovery'],
+    ];
+
+    it.each(cases)('edited=%s readOnly=%s value=%p -> %s (%s)', (edited, readOnly, value, expected) => {
+      expect(shouldWriteCredential({ edited, readOnly, value })).toBe(expected);
+    });
+
+    // The two clauses must stay disjoint: an empty field in read-only means
+    // "unknown", a non-empty one means "recoverable". If that ever blurs, one
+    // of the two bugs above comes back.
+    it('never writes an unknown value, and never skips a recoverable one', () => {
+      expect(shouldWriteCredential({ edited: false, readOnly: true, value: '' })).toBe(false);
+      expect(shouldWriteCredential({ edited: false, readOnly: true, value: 'k' })).toBe(true);
+    });
   });
 
   // The browser build has no keychain, so the credential is held for the
