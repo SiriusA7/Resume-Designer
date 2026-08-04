@@ -170,6 +170,31 @@ async function loadWrappingKey(backend) {
   return key || null;
 }
 
+/**
+ * Whether a loaded wrapping key can actually encrypt with.
+ *
+ * Truthiness was the whole test, so a malformed or non-encrypt-capable value —
+ * corrupt IndexedDB, or a key stored with only `decrypt` usage — was handed
+ * straight to `crypto.subtle.encrypt`, which rejects. That made
+ * `browser-unreadable` a dead end: the UI says "enter your key again to replace
+ * it" and every attempt failed on a key the replacement was supposed to escape.
+ *
+ * STRUCTURAL rather than `instanceof CryptoKey`, deliberately. A real key always
+ * passes this; `instanceof` can give a false negative across realms, and a false
+ * negative here regenerates the key and destroys a credential that was
+ * perfectly readable. False positives only cost the encrypt rejection we
+ * already had.
+ */
+function isUsableWrappingKey(key) {
+  return !!key
+    && typeof key === 'object'
+    && key.type === 'secret'
+    && key.algorithm?.name === 'AES-GCM'
+    && typeof key.usages?.includes === 'function'
+    && key.usages.includes('encrypt')
+    && key.usages.includes('decrypt');
+}
+
 // One in-flight creation at a time. Two overlapping first-time saves — a
 // double-click on Save is enough — would otherwise both see no key, generate
 // different ones, and write key and ciphertext in separate transactions. The
@@ -179,7 +204,13 @@ let creating = null;
 
 async function ensureWrappingKey(backend) {
   const existing = await loadWrappingKey(backend);
-  if (existing) return existing;
+  if (isUsableWrappingKey(existing)) return existing;
+  // Present but unusable: REPLACE it. The `add` guard below exists to protect a
+  // key another context's ciphertext depends on — and nothing can depend on a
+  // key that cannot decrypt, so there is nothing here to lose. Any record it
+  // was supposed to protect already reads as `browser-unreadable`, which is
+  // exactly the state the user was told to escape by entering a new key.
+  const replacingUnusable = existing !== null;
   if (!creating) {
     creating = (async () => {
       // extractable: false is the whole point — see the module note.
@@ -189,12 +220,16 @@ async function ensureWrappingKey(backend) {
       try {
         // `add`, not `put`: if another context stored one between our read and
         // this write, we must lose rather than overwrite a key that their
-        // ciphertext depends on.
-        await backend.add(WRAP_KEY_ID, key);
+        // ciphertext depends on. `put` only when we are displacing a key that
+        // was already unusable, where "losing" would mean staying stuck.
+        if (replacingUnusable) await backend.put(WRAP_KEY_ID, key);
+        else await backend.add(WRAP_KEY_ID, key);
         return key;
       } catch {
+        // Deferring to a winner only makes sense if the winner is usable —
+        // otherwise this returns the very key that could not encrypt.
         const winner = await loadWrappingKey(backend);
-        if (winner) return winner;
+        if (isUsableWrappingKey(winner)) return winner;
         throw new Error('could not create an encryption key for this browser');
       }
     })().finally(() => { creating = null; });

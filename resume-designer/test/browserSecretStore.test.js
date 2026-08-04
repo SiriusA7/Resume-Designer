@@ -160,3 +160,62 @@ describe('browserSecretStore', () => {
     });
   });
 });
+
+// A wrapping key can be present and unusable — corrupt IndexedDB, or one stored
+// without `encrypt` usage. Truthiness was the whole test, so that value went
+// straight to crypto.subtle.encrypt, which rejects. `browser-unreadable` became
+// a dead end: the UI says "enter your key again to replace it" and every
+// attempt failed on the very key the replacement was meant to escape.
+describe('unusable wrapping keys', () => {
+  const cases = [
+    ['a corrupt non-key value', { nope: true }],
+    ['a plain-object impostor missing usages', { type: 'secret', algorithm: { name: 'AES-GCM' } }],
+    ['the wrong algorithm', {
+      type: 'secret', algorithm: { name: 'AES-CBC' }, usages: ['encrypt', 'decrypt'],
+    }],
+  ];
+
+  it.each(cases)('replaces %s so a new key can be saved', async (_label, bogus) => {
+    const backend = makeBackend();
+    backend.files.set(WRAP_KEY_ID, bogus);
+    // Ciphertext that nothing could ever have decrypted with that key.
+    backend.files.set(SECRET_ID, { iv: new Uint8Array(12), data: new Uint8Array(8), version: 3 });
+    expect(await readSecret(backend)).toMatchObject({ status: 'unreadable' });
+
+    // The action the UI prescribes must actually work.
+    await writeSecret(backend, 'sk-replacement');
+
+    expect(await readSecret(backend)).toMatchObject({
+      status: 'found', value: 'sk-replacement',
+    });
+  });
+
+  // A key stored with only `decrypt` is structurally a CryptoKey and still
+  // cannot encrypt — the "non-encrypt-capable" half.
+  it('replaces a real CryptoKey that cannot encrypt', async () => {
+    const backend = makeBackend();
+    backend.files.set(WRAP_KEY_ID, await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 }, false, ['decrypt'],
+    ));
+
+    await writeSecret(backend, 'sk-replacement');
+
+    expect(await readSecret(backend)).toMatchObject({
+      status: 'found', value: 'sk-replacement',
+    });
+  });
+
+  // The dangerous direction. A USABLE key must never be replaced: doing so
+  // destroys a credential that was perfectly readable, which is the whole
+  // reason the check is structural rather than `instanceof`.
+  it('never replaces a usable key', async () => {
+    const backend = makeBackend();
+    await writeSecret(backend, 'sk-original');
+    const key = backend.files.get(WRAP_KEY_ID);
+
+    await writeSecret(backend, 'sk-second');
+
+    expect(backend.files.get(WRAP_KEY_ID)).toBe(key);
+    expect(await readSecret(backend)).toMatchObject({ status: 'found', value: 'sk-second' });
+  });
+});
