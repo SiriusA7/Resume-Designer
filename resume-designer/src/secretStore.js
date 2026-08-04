@@ -88,6 +88,45 @@ let mode = 'session';
 let browserBackend = null;
 
 /**
+ * Cross-tab notification for the browser build.
+ *
+ * Each tab has its own module-local `cached`, so without this, clearing the key
+ * in one tab leaves every other tab holding a credential the user believes they
+ * deleted — and going on spending against it until that tab happens to reload.
+ * A stale key after a change is a nuisance; a revoked one still in use is not.
+ *
+ * The message carries NO credential — only the fact that something changed.
+ * Receivers re-read from the encrypted store, which is the authority anyway, so
+ * the secret is never put onto a second channel to solve a problem about the
+ * first.
+ */
+const CREDENTIAL_CHANNEL = 'on-paper-credential';
+let credentialChannel = null;
+
+function announceCredentialChange() {
+  try {
+    credentialChannel?.postMessage({ type: 'credential-changed' });
+  } catch {
+    // A closed or unavailable channel must never fail a save that succeeded.
+  }
+}
+
+/**
+ * Another tab changed the credential. Re-read rather than trusting anything on
+ * the wire.
+ *
+ * An `unreadable` result is ignored on purpose: this tab currently has a
+ * working view, and a transient read failure elsewhere is no reason to throw it
+ * away. Boot is where an unreadable store is diagnosed.
+ */
+async function onRemoteCredentialChange() {
+  if (mode !== 'browser' || !browserBackend) return;
+  const read = await readSecret(browserBackend);
+  if (read.status === 'unreadable') return;
+  cached = read.status === 'found' ? read.value : null;
+}
+
+/**
  * Whether a Settings save should write the credential at all.
  *
  * Extracted from SettingsDialog so it is reachable by vitest — the suite covers
@@ -125,6 +164,7 @@ export function __resetSecretStoreForTests() {
   mode = 'session';
   cached = null;
   browserBackend = null;
+  credentialChannel = null;
   cleanupPending = false;
 }
 
@@ -292,6 +332,10 @@ export async function setSecret(value) {
     // state rather than continuing to report clear-text storage.
     mode = 'browser';
     cached = value;
+    // Tell the other tabs BEFORE the cleanup below, which can throw: a cleared
+    // credential must be revoked everywhere even if removing an old readable
+    // copy fails.
+    announceCredentialChange();
     // A legacy plaintext entry survives a failed migration on purpose. Now that
     // ciphertext is durable it is pure liability, and a failed removal is
     // reported rather than swallowed — same reasoning as the keychain path.
@@ -353,11 +397,21 @@ export async function setSecret(value) {
  * markStorageReady(), so React never renders a settings state that is missing
  * a key the user does have.
  */
-export async function initSecretStore({ backend = null } = {}) {
+export async function initSecretStore({ backend = null, channel = null } = {}) {
   if (!IS_TAURI) {
     // Browser build. Encrypt at rest if the platform allows it, and fall back
     // to memory-only when it does not — never back to plaintext.
     browserBackend = backend || await createIndexedDbBackend();
+
+    // Injectable for tests, like the backend. Absent in older browsers, which
+    // simply lose cross-tab sync rather than anything else.
+    credentialChannel = channel
+      || (typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(CREDENTIAL_CHANNEL) : null);
+    if (credentialChannel) {
+      credentialChannel.onmessage = (event) => {
+        if (event?.data?.type === 'credential-changed') onRemoteCredentialChange();
+      };
+    }
 
     if (!browserBackend) {
       // No encrypted store at all (non-secure context, private browsing). Adopt

@@ -92,6 +92,68 @@ describe('secretStore', () => {
       };
     };
 
+    // Each tab has its own module-local `cached`. Without a broadcast, clearing
+    // the key in one tab leaves the others holding a credential the user
+    // believes they deleted — and spending against it until they reload.
+    it('revokes a cleared key in other tabs', async () => {
+      const backend = makeBackend();
+      // A two-ended channel pair, standing in for two tabs on one origin.
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) {
+              if (other !== self) other.onmessage?.({ data });
+            }
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+      await tabA.setSecret('sk-shared');
+
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend, channel: makeChannel() });
+      expect(tabB.getSecret()).toBe('sk-shared');
+
+      // The user clears it in tab A.
+      await tabA.setSecret('');
+      // Let tab B's re-read settle.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Tab B must not go on using a credential the user deleted.
+      expect(tabB.getSecret()).toBe('');
+    });
+
+    it('picks up a key another tab saved', async () => {
+      const backend = makeBackend();
+      const ends = [];
+      const makeChannel = () => {
+        const self = {
+          onmessage: null,
+          postMessage: (data) => {
+            for (const other of ends) if (other !== self) other.onmessage?.({ data });
+          },
+        };
+        ends.push(self);
+        return self;
+      };
+
+      const tabA = await loadStore({ tauri: false });
+      await tabA.initSecretStore({ backend, channel: makeChannel() });
+      const tabB = await loadStore({ tauri: false });
+      await tabB.initSecretStore({ backend, channel: makeChannel() });
+
+      await tabA.setSecret('sk-entered-in-a');
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(tabB.getSecret()).toBe('sk-entered-in-a');
+    });
+
     // THE regression this exists to prevent: holding the key in memory meant a
     // profile switch or backup restore silently unconfigured the user's AI.
     it('survives a reload', async () => {
