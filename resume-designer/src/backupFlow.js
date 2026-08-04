@@ -398,11 +398,21 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
   } catch (err) {
     if (suspendedHere) store.resumeSaves(); // resume only a suspension THIS call created
     // The import did not happen, so the credential swap it was part of must not
-    // stand either — otherwise a failed replace silently changes the user's key.
+    // stand either — otherwise a failed replace silently reconfigures AI to the
+    // previous installation's key while reporting that nothing was imported.
+    //
+    // Restores on `credentialReplaced` ALONE. Gating on
+    // `previousCredential !== null` as well treated "no key configured" as
+    // nothing to undo, when it is precisely the state that has to be put back:
+    // that user ends up on the imported key having been told the import failed.
+    // `?? ''` because the empty sentinel is how this app expresses "no
+    // credential" — clearing writes '' rather than deleting the entry, so there
+    // is no other way to say it.
+    //
     // Best-effort: if this write fails too there is nothing further to try, and
     // the import error is the one worth showing.
-    if (credentialReplaced && previousCredential !== null) {
-      try { await saveApiKey(previousCredential); }
+    if (credentialReplaced) {
+      try { await saveApiKey(previousCredential ?? ''); }
       catch (restoreErr) { console.error('[backup] could not restore the previous key:', restoreErr); }
     }
     console.error('[backup] Legacy import failed:', err);
