@@ -69,7 +69,7 @@ The app updates itself: when a new release is published, it prompts you to downl
 
 > **Windows note:** the installer is not yet code-signed, so Windows SmartScreen may warn on first launch. Choose **More info → Run anyway** to proceed.
 
-Prefer not to install anything? You can also run it in a browser — see [Run from source](#run-from-source). A browser has no system keychain, so your API key is encrypted before it's stored there, under a key the browser won't hand back to any script.
+Prefer not to install anything? You can also run it in a browser — see [Run from source](#run-from-source). A browser has no system keychain, so your API key is encrypted before it's stored there, under a non-exportable key — files copied off the machine are useless without it.
 
 ## Using the AI features
 

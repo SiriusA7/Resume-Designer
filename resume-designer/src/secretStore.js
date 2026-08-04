@@ -58,9 +58,16 @@ let cached = null;
  *                 refuses to write plaintext — though it still RETRIES the
  *                 keychain, since that fault is usually transient.
  *  - `browser`    browser build: encrypted at rest via browserSecretStore,
- *                 under a non-extractable key the browser will not export.
- *                 Persists properly, so it survives the reloads the app does
- *                 to itself on profile switch and backup restore.
+ *                 under a non-exportable key. Persists properly, so it
+ *                 survives the reloads the app does to itself on profile
+ *                 switch and backup restore.
+ *  - `browser-degraded`
+ *                 IndexedDB opened but the encrypted write failed (quota, I/O,
+ *                 a CryptoKey that would not clone). The credential is still in
+ *                 the legacy plaintext entry, deliberately — it is the only
+ *                 durable copy. Distinct from `browser` because reporting that
+ *                 one while a readable copy sits in localStorage is the same
+ *                 lie `read-only` exists to avoid on the desktop side.
  *  - `session`    browser build WITHOUT crypto.subtle or IndexedDB — a
  *                 non-secure context, or private browsing. Memory only. The
  *                 fallback is deliberately memory rather than plaintext: this
@@ -145,6 +152,16 @@ export function isReadOnly() {
  */
 export function isEncryptedInBrowser() {
   return mode === 'browser';
+}
+
+/**
+ * True when the browser CAN encrypt but the credential is still sitting in the
+ * legacy plaintext entry because an encrypted write failed. The UI must say so
+ * and offer the retry — silently keeping clear text while reporting encrypted
+ * storage is the failure this state exists to prevent.
+ */
+export function isBrowserDegraded() {
+  return mode === 'browser-degraded';
 }
 
 // Set whenever a strip fails to reach disk: the credential is durable in its
@@ -252,9 +269,16 @@ export async function setSecret(value) {
   // so it survives reloads without ever putting the credential itself on disk.
   // Clearing stores an empty ciphertext rather than deleting the record, for
   // the same masking reason as the keychain path.
-  if (mode === 'browser') {
+  if (mode === 'browser' || mode === 'browser-degraded') {
     await writeSecret(browserBackend, value);
+    // The write landed, so encryption is working again — leave the degraded
+    // state rather than continuing to report clear-text storage.
+    mode = 'browser';
     cached = value;
+    // A legacy plaintext entry survives a failed migration on purpose. Now that
+    // ciphertext is durable it is pure liability, and a failed removal is
+    // reported rather than swallowed — same reasoning as the keychain path.
+    if (!(await stripPlaintextCopy())) throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
     return;
   }
 
@@ -333,7 +357,11 @@ export async function initSecretStore({ backend = null } = {}) {
           await writeSecret(browserBackend, legacy);
         } catch {
           // Encrypted write failed. Keep the plaintext copy — it is still the
-          // only durable one, and the next boot retries.
+          // only durable one — and say so, rather than leaving `mode` at
+          // `browser`. Left there, isEncryptedInBrowser() would tell Settings
+          // only ciphertext is stored while the readable entry is right where
+          // it was, and nothing would ever retry the migration.
+          mode = 'browser-degraded';
           cached = legacy;
           return;
         }
@@ -430,11 +458,20 @@ async function adoptKeychainRead(stored) {
  * Returns whether anything changed. Throws if the keychain is still unreachable
  * or the cleanup still fails, so the caller can keep showing why.
  */
-export async function recoverKeychain() {
-  if (!IS_TAURI) return false;
+export async function recoverSecretStore() {
   let changed = false;
 
-  if (mode === 'read-only') {
+  // Browser: the encrypted write failed at boot, so the credential is still in
+  // the readable entry. Retrying is not reachable through the credential write
+  // either — the field is untouched, so shouldWriteCredential says no.
+  if (mode === 'browser-degraded' && cached !== null) {
+    await writeSecret(browserBackend, cached);
+    mode = 'browser';
+    await stripPlaintextCopy();
+    changed = true;
+  }
+
+  if (IS_TAURI && mode === 'read-only') {
     // Propagates if still locked — the caller reports it.
     const stored = await invokeSecret('secret_get', { name: SECRET_NAME });
     await adoptKeychainRead(stored);

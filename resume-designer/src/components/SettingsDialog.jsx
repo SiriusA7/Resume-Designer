@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils';
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
-  isCleanupPending, recoverKeychain,
+  isCleanupPending, recoverSecretStore, isBrowserDegraded,
 } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
@@ -236,6 +236,9 @@ export default function SettingsDialog() {
   // Say so up front when the keychain faulted. Otherwise the first the user
   // hears of it is a failed save after they have typed a key in.
   const readOnlyKeychain = isReadOnly();
+  // The browser equivalent: encryption is available but the credential is
+  // still in the readable entry because a write failed.
+  const degradedBrowser = isBrowserDegraded();
   // Three states, not two. A degraded DESKTOP session also reports
   // isKeychainAvailable() === false, but it is nothing like the browser one:
   // handleUnavailableKeychain kept serving the older credential from the
@@ -253,9 +256,19 @@ export default function SettingsDialog() {
   if (isKeychainAvailable() || readOnlyKeychain) {
     credentialNote = `Your key is kept in your ${keychainName} and is sent only to OpenRouter — never share it.`;
   } else if (isEncryptedInBrowser()) {
-    credentialNote = 'Your key is encrypted before it’s stored in this browser, under a key the browser won’t'
-      + ' hand back to any script — so it’s still here next time, and anyone copying files off this machine'
-      + ' gets ciphertext. It’s sent only to OpenRouter — never share it.';
+    // Says "non-exportable", not "no script can get it". Any same-origin script
+    // can fetch the CryptoKey handle and ask the browser to decrypt; what it
+    // cannot do is take the key elsewhere. This protects the files at rest, and
+    // claiming more than that would be a false assurance about the one case
+    // users would most want it to cover.
+    credentialNote = 'Your key is encrypted before it’s stored in this browser, so it’s still here next time'
+      + ' and files copied off this machine are useless without it. The encryption key is non-exportable —'
+      + ' it can’t be taken elsewhere, though anything running on this page can still use it.'
+      + ' It’s sent only to OpenRouter — never share it.';
+  } else if (degradedBrowser) {
+    credentialNote = 'Your key couldn’t be encrypted for storage — this browser refused the write, so it’s'
+      + ' being kept in ordinary browser storage where it’s readable. Saving it again will retry.'
+      + ' It’s sent only to OpenRouter — never share it.';
   } else {
     credentialNote = 'Your key is held in memory only and is sent only to OpenRouter — never share it.'
       + ' This browser doesn’t allow encrypted storage (private browsing, or an insecure connection), and'
@@ -298,9 +311,9 @@ export default function SettingsDialog() {
     // reachable through the credential write: the field is seeded empty on an
     // already-migrated install, and writing that unknown value is exactly what
     // shouldWriteCredential refuses.
-    if (readOnlyKeychain || isCleanupPending()) {
+    if (readOnlyKeychain || degradedBrowser || isCleanupPending()) {
       try {
-        await recoverKeychain();
+        await recoverSecretStore();
       } catch (err) {
         setKeyError(err?.message || 'Could not reach your system keychain.');
         return;

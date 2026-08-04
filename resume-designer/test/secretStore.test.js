@@ -71,13 +71,7 @@ describe('secretStore', () => {
     });
   });
 
-  // The browser build has no keychain, so the credential is held for the
-  // session and written nowhere. It used to persist through appStorage — which
-  // in a browser IS localStorage, the exact sink CodeQL flagged, reached by the
-  // exact path this module exists to remove. The README offers this build to
-  // real users ("prefer not to install anything"), so it is not a dev-only path
-  // that can be waved through.
-  // The browser build encrypts at rest under a non-extractable key, so the
+  // The browser build encrypts at rest under a non-exportable key, so the
   // credential survives the reloads the app performs on itself — profile
   // switch, profile create/delete, backup restore — without anything readable
   // reaching disk.
@@ -145,6 +139,57 @@ describe('secretStore', () => {
 
       expect(plaintext()).toBe('sk-legacy');
       expect(store.getSecret()).toBe('sk-legacy');
+    });
+
+    // ...and says so. Leaving `mode` at `browser` would have Settings report
+    // that only ciphertext is stored while the readable entry sits untouched —
+    // the same lie `read-only` exists to prevent on the desktop side — and
+    // nothing would ever retry, since an untouched Save writes no credential.
+    it('reports degraded, not encrypted, when the migration write fails', async () => {
+      const backend = makeBackend();
+      backend.put = async () => { throw new Error('quota exceeded'); };
+      setPlaintext('sk-legacy');
+
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+
+      expect(store.isEncryptedInBrowser()).toBe(false);
+      expect(store.isBrowserDegraded()).toBe(true);
+    });
+
+    it('recovers from degraded once the browser accepts the write', async () => {
+      const files = new Map();
+      let allowWrites = false;
+      const backend = {
+        files,
+        get: async (id) => (files.has(id) ? files.get(id) : null),
+        put: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          files.set(id, v);
+        },
+        add: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          if (files.has(id)) throw new Error('ConstraintError');
+          files.set(id, v);
+        },
+      };
+      setPlaintext('sk-legacy');
+
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      expect(store.isBrowserDegraded()).toBe(true);
+
+      // Quota frees up; Settings runs recovery on the next Save.
+      allowWrites = true;
+      await store.recoverSecretStore();
+
+      expect(store.isBrowserDegraded()).toBe(false);
+      expect(store.isEncryptedInBrowser()).toBe(true);
+      // The readable copy is finally gone, and the key survives a reload.
+      expect(plaintext()).toBeNull();
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend });
+      expect(next.getSecret()).toBe('sk-legacy');
     });
 
     it('clears to an empty value that still round-trips', async () => {
@@ -405,7 +450,7 @@ describe('secretStore', () => {
       // The user unlocks the keychain and hits Save.
       invokeMock.mockReset();
       invokeMock.mockResolvedValue('sk-existing');
-      await store.recoverKeychain();
+      await store.recoverSecretStore();
 
       expect(store.isReadOnly()).toBe(false);
       expect(store.isKeychainAvailable()).toBe(true);
@@ -426,7 +471,7 @@ describe('secretStore', () => {
 
       invokeMock.mockReset();
       invokeMock.mockImplementation(async (cmd) => (cmd === 'secret_get' ? null : undefined));
-      await store.recoverKeychain();
+      await store.recoverSecretStore();
 
       expect(invokeMock).toHaveBeenCalledWith('secret_set', {
         name: OPENROUTER_KEY_KEY,
@@ -441,7 +486,7 @@ describe('secretStore', () => {
       invokeMock.mockRejectedValue(new Error('keychain locked'));
       await store.initSecretStore();
 
-      await expect(store.recoverKeychain()).rejects.toThrow(/locked/i);
+      await expect(store.recoverSecretStore()).rejects.toThrow(/locked/i);
       expect(store.isReadOnly()).toBe(true);
     });
 
@@ -465,7 +510,7 @@ describe('secretStore', () => {
       // The retry needs no credential rewrite, so it must run the cleanup on
       // its own account.
       flushSpy.mockResolvedValue(true);
-      await store.recoverKeychain();
+      await store.recoverSecretStore();
 
       expect(store.isCleanupPending()).toBe(false);
     });

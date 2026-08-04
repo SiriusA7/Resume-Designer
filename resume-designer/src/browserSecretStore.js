@@ -17,15 +17,19 @@
  *
  * The AES-GCM wrapping key is generated with `extractable: false` and stored as
  * a live `CryptoKey` in IndexedDB. The browser keeps the raw bytes in its own
- * key store; `crypto.subtle.exportKey` on it REJECTS, so no script — ours or an
- * injected one — can read the key material out and carry it away. Copying the
- * browser profile off the machine yields ciphertext and an opaque key handle.
+ * key store and `crypto.subtle.exportKey` REJECTS, so the key material cannot
+ * be read out and carried away. Copying the browser profile off the machine
+ * yields ciphertext and a key that does not travel with it.
  *
- * What it does NOT defend against, stated plainly: script running on this
- * origin can still ask the browser to decrypt, because it can use the handle
- * even though it cannot read it. That is inherent to any browser-side secret,
- * and it is a strictly smaller exposure than a readable key sitting in
- * localStorage — which is what this replaces.
+ * The guarantee is NON-EXPORTABLE, which is narrower than it sounds and must
+ * not be described to users as more. Any same-origin script — including an
+ * injected one — can fetch the same `CryptoKey` handle from IndexedDB and ask
+ * the browser to decrypt with it. What it cannot do is obtain the raw key and
+ * use it elsewhere. So this defends the FILES at rest, not the running page.
+ *
+ * That is still strictly better than the readable localStorage value it
+ * replaces, and it is the honest limit of what any browser-side secret can
+ * offer. User-facing copy must match this paragraph, not the first one.
  *
  * ## Backend injection
  *
