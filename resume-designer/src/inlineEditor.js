@@ -791,6 +791,15 @@ function startEditing(element) {
     && element.matches('.tool-token, .skill-tag, .skill-tag-inline, .highlight-bullet');
   if (path && !isInlineToolToken) {
     const sourceValue = store.get(path);
+    // A data-editable must always resolve to a scalar. If it points at a container
+    // (an object or array), the textContent fallback below would replace this whole
+    // subtree with the literal string '[object Object]', make it contentEditable, and
+    // let finishEditing persist that string over the record. Refuse instead.
+    if (sourceValue !== null && sourceValue !== undefined
+        && typeof sourceValue !== 'string' && typeof sourceValue !== 'number') {
+      activeElement = null;
+      return;
+    }
     if (typeof sourceValue === 'string') {
       element.textContent = sourceValue;
     } else if (sourceValue === null || sourceValue === undefined) {
