@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   appStorage, initAppStorage, __resetAppStorageForTests, setProfileMapping,
 } from '../src/appStorage.js';
+import { __resetSecretStoreForTests } from '../src/secretStore.js';
 import {
   loadRegistry, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile,
@@ -13,6 +14,7 @@ import { getSettings, saveSettings, saveApiKey } from '../src/persistence.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
+  __resetSecretStoreForTests();
   localStorage.clear();
 });
 
@@ -572,13 +574,18 @@ describe('adoption migration', () => {
 });
 
 describe('shared api key overlay', () => {
-  it('saveApiKey routes the credential to the shared key, not the blob', async () => {
+  it('saveApiKey keeps the credential out of the blob AND out of storage', async () => {
     await saveApiKey('sk-new');
     saveSettings({ defaultModel: 'm' });
-    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-new');
+
+    // secretStore owns the credential now — the keychain on desktop, memory
+    // only in a browser. It must never land in the per-profile blob beside the
+    // resume, and no longer lands in plaintext storage either.
     const blob = JSON.parse(appStorage.getItem('resume-designer-data'));
     expect(blob.settings.openrouterKey).toBeUndefined();
     expect(blob.settings.defaultModel).toBe('m');
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
+    // ...and reads still see it.
     expect(getSettings().openrouterKey).toBe('sk-new');
   });
 
@@ -587,10 +594,12 @@ describe('shared api key overlay', () => {
     expect(getSettings().openrouterKey).toBe('sk-blob');
   });
 
-  it('an intentionally cleared shared key masks a stale blob key', () => {
-    // Presence beats truthiness: '' in the shared key means the user cleared
-    // it — a leftover blob credential must never resurface through getSettings.
-    appStorage.setItem(OPENROUTER_KEY_KEY, '');
+  it('an intentionally cleared credential masks a stale blob key', async () => {
+    // Presence beats truthiness: a stored '' means the user cleared the key —
+    // a leftover blob credential must never resurface through getSettings.
+    // The sentinel lives in secretStore now, which is why clearing writes an
+    // empty value rather than deleting the entry outright.
+    await saveApiKey('');
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-stale' } }));
     expect(getSettings().openrouterKey).toBe('');
   });
@@ -626,8 +635,8 @@ describe('saveSettings blob-credential fallback', () => {
     await saveApiKey('sk-new');
     saveSettings({ autoUpdateCheck: true });
 
-    // Shared key holds the new value; the blob FALLBACK survives untouched.
-    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-new');
+    // secretStore holds the new value; the blob FALLBACK survives untouched.
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
     const blob = JSON.parse(localStorage.getItem('resume-designer-data'));
     expect(blob.settings.openrouterKey).toBe('sk-legacy');
     // And the overlay masks it — reads still see the shared value.

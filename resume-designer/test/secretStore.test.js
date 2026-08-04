@@ -36,15 +36,37 @@ describe('secretStore', () => {
     invokeMock.mockReset();
   });
 
+  // The browser build has no keychain, so the credential is held for the
+  // session and written nowhere. It used to persist through appStorage — which
+  // in a browser IS localStorage, the exact sink CodeQL flagged, reached by the
+  // exact path this module exists to remove. The README offers this build to
+  // real users ("prefer not to install anything"), so it is not a dev-only path
+  // that can be waved through.
   describe('browser build', () => {
-    it('keeps using appStorage when there is no keychain', async () => {
+    it('adopts a previously persisted key, then deletes it from storage', async () => {
       const store = await loadStore({ tauri: false });
       setPlaintext('sk-browser');
       await store.initSecretStore();
 
       expect(store.isKeychainAvailable()).toBe(false);
+      // Still usable this session...
       expect(store.getSecret()).toBe('sk-browser');
+      // ...but the localStorage copy an older version left behind is gone.
+      expect(plaintext()).toBeNull();
       // Nothing was invoked — there is no backend to invoke.
+      expect(invokeMock).not.toHaveBeenCalled();
+    });
+
+    it('never writes a saved key to storage', async () => {
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore();
+
+      await store.setSecret('sk-typed-in');
+
+      expect(store.getSecret()).toBe('sk-typed-in');
+      // The whole point: a key that survives the tab is a key in clear text on
+      // disk. The user re-enters it next session instead.
+      expect(plaintext()).toBeNull();
       expect(invokeMock).not.toHaveBeenCalled();
     });
   });

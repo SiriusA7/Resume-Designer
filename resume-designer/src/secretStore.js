@@ -50,20 +50,36 @@ let cached = null;
 /**
  * Where the credential lives, decided once at boot.
  *
- *  - `plaintext`  browser build and jsdom tests: no keychain exists, so
- *                 appStorage stays the store exactly as it was. Ships to
- *                 nobody — the product is the desktop app.
- *  - `keychain`   desktop, keychain answered: the only mode that ships.
+ *  - `session`    browser build and jsdom tests: no keychain exists, so the
+ *                 credential is held in memory for this session and never
+ *                 written anywhere. It used to persist through appStorage,
+ *                 which in the browser IS localStorage — the precise sink
+ *                 CodeQL flagged, reached by the precise path this module was
+ *                 written to remove. The README offers this build to real
+ *                 users ("prefer not to install anything"), so it cannot be
+ *                 waved through as a dev-only path.
+ *  - `keychain`   desktop, keychain answered: the mode nearly everyone is in.
  *  - `read-only`  desktop, keychain unreachable (locked, denied, broken).
  *                 Keeps serving a pre-migration plaintext key so someone who
  *                 already has one is not locked out of their own AI, but
- *                 REFUSES writes — the app must never mint fresh plaintext
- *                 behind the user's back just because the keychain faulted.
+ *                 refuses to write plaintext — though it still RETRIES the
+ *                 keychain, since that fault is usually transient.
  *
- * `plaintext` and `read-only` both mean "no keychain", but they are not
- * interchangeable: the first may write and the second may not.
+ * `session` and `read-only` both mean "no keychain", and are still not
+ * interchangeable: the first accepts new keys (holding them in memory), the
+ * second refuses them.
  */
-let mode = 'plaintext';
+let mode = 'session';
+
+/**
+ * Reset the module between tests, mirroring __resetAppStorageForTests. `cached`
+ * and `mode` are module state and survive a test otherwise, so one test's saved
+ * credential silently answers the next one's reads.
+ */
+export function __resetSecretStoreForTests() {
+  mode = 'session';
+  cached = null;
+}
 
 async function invokeSecret(command, args) {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -88,12 +104,14 @@ export function isReadOnly() {
  * The credential, read synchronously — this is what lets `getSettings()` stay
  * synchronous. Returns `null` when none is configured.
  *
- * In `plaintext` mode it reads appStorage live rather than a hydrated copy,
- * which also covers every read that happens BEFORE initSecretStore() has run
- * (mode still holds its initial value then), so boot-time readers are unchanged.
+ * Always the in-memory copy now, in every mode — there is no store left to read
+ * through in the browser build. Reads that happen BEFORE initSecretStore() has
+ * run therefore see `null`; that is fine, because the only pre-init reader of
+ * the credential is extractSharedApiKey, which goes to appStorage directly, and
+ * init completes before markStorageReady opens the React gate.
  */
 export function getSecret() {
-  return mode === 'plaintext' ? appStorage.getItem(OPENROUTER_KEY_KEY) : cached;
+  return cached;
 }
 
 /**
@@ -144,12 +162,11 @@ export const PLAINTEXT_CLEANUP_MESSAGE =
  * save never leaves the app using a key it did not persist.
  */
 export async function setSecret(value) {
-  // Clearing writes an EMPTY value rather than removing the entry. That erases
-  // the credential just as well, and keeps getSettings' masking guarantee: a
-  // stored empty string hides a stale key left in the per-profile blob by a
-  // pre-extraction install, which an absent entry would let resurface.
-  if (mode === 'plaintext') {
-    appStorage.setItem(OPENROUTER_KEY_KEY, value);
+  // Browser build: hold it for this session and write it NOWHERE. Persisting
+  // here meant appStorage in passthrough, i.e. localStorage — the same sink,
+  // reached by the same path, that this module exists to get the credential out
+  // of. A key that survives the tab is a key sitting in clear text on disk.
+  if (mode === 'session') {
     cached = value;
     return;
   }
@@ -201,11 +218,17 @@ export async function setSecret(value) {
  */
 export async function initSecretStore() {
   if (!IS_TAURI) {
-    // Browser build and jsdom tests: no keychain exists. The key stays in
-    // appStorage exactly as before — this path ships to nobody, since the
-    // product is the desktop app. getSecret() reads appStorage directly in this
-    // mode, so there is nothing to hydrate here.
-    mode = 'plaintext';
+    // Browser build and jsdom tests: no keychain exists, so the credential is
+    // held for this session only.
+    //
+    // Adopt whatever a previous version persisted, so this session keeps
+    // working, then delete it — the browser build no longer keeps the key at
+    // rest, and leaving the old localStorage entry behind would preserve the
+    // exact exposure this change removes. The user re-enters it next session;
+    // that is the price of the browser build not having a keychain to use.
+    mode = 'session';
+    cached = appStorage.getItem(OPENROUTER_KEY_KEY);
+    await stripPlaintextCopy();
     return;
   }
 

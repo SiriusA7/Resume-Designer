@@ -195,9 +195,12 @@ export default function SettingsDialog() {
   const pickTheme = (value) => { setTheme(value); setThemeState(value); };
 
   // Describe where the key actually lands, rather than claiming a keychain the
-  // browser build does not have. Deliberately platform-neutral: this reads the
-  // same whether the backend is the macOS Keychain or Windows Credential Manager.
-  const keychainName = isKeychainAvailable() ? 'system keychain' : 'app data folder';
+  // browser build does not have. Deliberately platform-neutral on desktop: this
+  // reads the same whether the backend is the macOS Keychain or Windows
+  // Credential Manager. In the browser there is no keychain, so the key is held
+  // for the session and never written down — say that plainly, since it means
+  // the user has to enter it again next time.
+  const keychainName = isKeychainAvailable() ? 'system keychain' : 'browser session';
   // Say so up front when the keychain faulted. Otherwise the first the user
   // hears of it is a failed save after they have typed a key in.
   const readOnlyKeychain = isReadOnly();
@@ -419,8 +422,10 @@ export default function SettingsDialog() {
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground">
-                    Your key is kept in your {keychainName} and is sent only to OpenRouter — never share it. One key
-                    covers Claude, GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
+                    Your key is kept in your {keychainName} and is sent only to OpenRouter — never share it.
+                    {!isKeychainAvailable() && !readOnlyKeychain
+                      && ' Running in a browser, it isn’t saved to disk, so you’ll enter it again next time.'}
+                    {' '}One key covers Claude, GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
                   </p>
                 </section>
 
