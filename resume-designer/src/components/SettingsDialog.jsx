@@ -208,10 +208,17 @@ export default function SettingsDialog() {
   // Credential Manager. In the browser there is no keychain, so the key is held
   // for the session and never written down — say that plainly, since it means
   // the user has to enter it again next time.
-  const keychainName = isKeychainAvailable() ? 'system keychain' : 'browser session';
   // Say so up front when the keychain faulted. Otherwise the first the user
   // hears of it is a failed save after they have typed a key in.
   const readOnlyKeychain = isReadOnly();
+  // Three states, not two. A degraded DESKTOP session also reports
+  // isKeychainAvailable() === false, but it is nothing like the browser one:
+  // handleUnavailableKeychain kept serving the older credential from the
+  // plaintext file on disk. Collapsing the two told those users their key was
+  // held in a browser session — reassuring, and the opposite of true.
+  const keychainName = isKeychainAvailable()
+    ? 'system keychain'
+    : (readOnlyKeychain ? 'app data folder' : 'browser session');
 
   const handleSaveKeys = async () => {
     // Only touch the credential when the user actually typed in that field.
@@ -435,8 +442,9 @@ export default function SettingsDialog() {
                   {readOnlyKeychain && !keyError && (
                     <p className="text-sm text-destructive" role="alert">
                       Your system keychain couldn&rsquo;t be reached when On Paper started, so saving is unavailable
-                      right now. Any key you already had still works. Unlock your keychain and save again &mdash; no
-                      need to restart.
+                      right now. Any key you already had still works &mdash; it&rsquo;s being read from an older
+                      unencrypted copy in this app&rsquo;s data folder. Unlock your keychain and save again to move it
+                      back into the keychain and remove that copy; no need to restart.
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground">
