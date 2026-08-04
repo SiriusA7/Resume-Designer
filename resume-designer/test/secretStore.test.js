@@ -141,6 +141,87 @@ describe('secretStore', () => {
     });
   });
 
+  // A null credential means two different things and only one of them is a
+  // gap. In read-only and browser-unreadable the store could not be READ, so
+  // "none" is unknown rather than established — and a caller filling a gap
+  // (the Electron merge) staged the previous installation's key on top of a
+  // current credential that was merely unreadable.
+  //
+  // Driven through REAL modes rather than a synthetic table, because this reads
+  // module state. One row per mode, so a new mode has to answer this question.
+  describe('hasNoCredentialConfigured', () => {
+    const makeBackend = () => {
+      const files = new Map();
+      return {
+        files,
+        get: async (id) => (files.has(id) ? files.get(id) : null),
+        put: async (id, v) => { files.set(id, v); },
+        add: async (id, v) => { if (files.has(id)) throw new Error('ConstraintError'); files.set(id, v); },
+        update: async (id, decide) => {
+          const current = files.has(id) ? files.get(id) : null;
+          const next = decide(current);
+          if (next) files.set(id, next);
+          return { wrote: !!next, current };
+        },
+      };
+    };
+
+    it('keychain, no entry — an established gap', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+      await store.initSecretStore();
+      expect(store.hasNoCredentialConfigured()).toBe(true);
+    });
+
+    it('keychain with a key — not a gap', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue('sk-stored');
+      await store.initSecretStore();
+      expect(store.hasNoCredentialConfigured()).toBe(false);
+    });
+
+    // THE BUG: unreachable keychain on an already-migrated install. `cached` is
+    // null, but the key may well exist — it just could not be read.
+    it('read-only with nothing to fall back on — UNKNOWN, not a gap', async () => {
+      const store = await loadStore();
+      invokeMock.mockRejectedValue(new Error('keychain locked'));
+      await store.initSecretStore();
+      expect(store.isReadOnly()).toBe(true);
+      expect(store.getSecret()).toBeNull();      // ...which used to read as "none"
+      expect(store.hasNoCredentialConfigured()).toBe(false);
+    });
+
+    it('browser-unreadable — same shape, same answer', async () => {
+      const backend = makeBackend();
+      const first = await loadStore({ tauri: false });
+      await first.initSecretStore({ backend, channel: inertChannel() });
+      await first.setSecret('sk-current');
+      backend.files.delete('wrap-key-v1');
+
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend, channel: inertChannel() });
+      expect(next.isBrowserUnreadable()).toBe(true);
+      expect(next.getSecret()).toBeNull();
+      expect(next.hasNoCredentialConfigured()).toBe(false);
+    });
+
+    it('browser, nothing stored — an established gap', async () => {
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend: makeBackend(), channel: inertChannel() });
+      expect(store.hasNoCredentialConfigured()).toBe(true);
+    });
+
+    // A cleared key is a DECISION, not a gap — the same distinction that has
+    // recurred throughout this module.
+    it('a cleared key is not a gap', async () => {
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend: makeBackend(), channel: inertChannel() });
+      await store.setSecret('');
+      expect(store.getSecret()).toBe('');
+      expect(store.hasNoCredentialConfigured()).toBe(false);
+    });
+  });
+
   // The browser build encrypts at rest under a non-exportable key, so the
   // credential survives the reloads the app performs on itself — profile
   // switch, profile create/delete, backup restore — without anything readable

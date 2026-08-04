@@ -609,6 +609,29 @@ export function hasUsableSecret() {
   return cached !== null && cached !== '';
 }
 
+/**
+ * Whether the store can say AUTHORITATIVELY that no credential is configured.
+ *
+ * Deliberately not `getSecret() === null`. In `read-only` and
+ * `browser-unreadable`, `cached` is null because the store could not be READ —
+ * the answer is unknown, not "none". A caller filling a gap must never treat
+ * unknown as empty: the Electron merge did, and staged the previous
+ * installation's key on top of a current credential that was merely unreadable,
+ * which the next boot then served as the read-only fallback.
+ *
+ * `''` is not a gap either — that is the user's Clear, a decision to preserve.
+ * `getSecret() === null` covers it, since a cleared key reads as `''`.
+ *
+ * Lives here, next to hasUsableSecret, rather than being assembled at the call
+ * site from `isReadOnly() || isBrowserUnreadable()`. Pre-combining mode
+ * predicates in a caller is what put the shouldWriteCredential bug in
+ * SettingsDialog where the suite could not see it, and backupFlow — this
+ * function's caller — is likewise outside the vitest surface.
+ */
+export function hasNoCredentialConfigured() {
+  return cached === null && mode !== 'read-only' && mode !== 'browser-unreadable';
+}
+
 export function keychainReadOnlyMessage() {
   const lead = 'Your system keychain could not be reached, so the key was not saved.';
   return hasUsableSecret()

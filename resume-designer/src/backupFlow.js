@@ -12,7 +12,7 @@ import {
   exportFullBackup, importFullBackupDurably, importFullBackupMerge,
   credentialFromEnvelope, saveApiKey,
 } from './persistence.js';
-import { getSecret } from './secretStore.js';
+import { getSecret, hasNoCredentialConfigured } from './secretStore.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
@@ -397,9 +397,12 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     // fallback and starts spending on the previous installation's key. The
     // merge said current wins and the staged value quietly disagreed.
     //
-    // `=== null` and not falsiness: a stored '' is the user's Clear, which is
-    // also a decision the merge must not overrule.
-    const keepForMerge = previousCredential === null;
+    // `hasNoCredentialConfigured()` rather than `getSecret() === null`: a null
+    // read in read-only or browser-unreadable means the store could not be READ,
+    // not that nothing is there. Starting a merge while the keychain happens to
+    // be locked would otherwise look like a gap and overrule a key that exists.
+    // The rule lives in secretStore because this file is outside the suite.
+    const keepForMerge = hasNoCredentialConfigured();
     const result = merging
       ? importFullBackupMerge(envelope, { keepCredential: keepForMerge })
       : await importFullBackupDurably(envelope, { keepCredential: true });
