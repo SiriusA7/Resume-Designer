@@ -924,11 +924,18 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
   const allEntries = Object.entries(parsed.keys);
   // `resume-designer-openrouter-key` is no longer an owned key — that is how the
   // credential was taken out of backups — so this filter drops it. Correct for a
-  // backup FILE, and wrong for a same-machine migration: the previous app stored
-  // the credential THERE, not only inside the data blob, so an Electron envelope
-  // carrying it that way lost the key before initSecretStore could migrate it,
-  // and the one-shot flag then reported success. Same rule as the blob, applied
-  // to the other place the credential can arrive.
+  // backup FILE, and wrong for a same-machine migration, where a credential
+  // arriving in the shared key would be lost before initSecretStore could move
+  // it to the keychain, with the one-shot flag then reporting success.
+  //
+  // DEFENSIVE, not observed. The shipped Electron app cannot have written this
+  // key: `electron/` was deleted 2026-05-25 (535b24c), OpenRouter arrived
+  // 2026-05-30 (7a9e6d6), and the shared key itself only on 2026-07-15
+  // (9c46406). That app stored anthropicKey/openaiKey/geminiKey and had no
+  // OpenRouter credential of any kind. Kept anyway because it costs nothing
+  // when the key is absent, and because this reads a database that already
+  // exists on users' disks — being wrong about it loses a paid credential
+  // behind a flag that never retries.
   const entries = allEntries.filter(
     ([k]) => isOwnedKey(k) || (keepCredential && k === OPENROUTER_KEY_KEY)
   );
