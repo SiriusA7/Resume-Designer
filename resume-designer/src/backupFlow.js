@@ -417,10 +417,15 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     // not that nothing is there. Starting a merge while the keychain happens to
     // be locked would otherwise look like a gap and overrule a key that exists.
     // The rule lives in secretStore because this file is outside the suite.
+    // REPLACE stages the credential only when the swap above actually
+    // happened. Skipping the swap and staging anyway was half a decision: the
+    // incoming key still landed in appStorage, and a keychain still locked
+    // after the reload adopts it as the read-only fallback — quietly doing the
+    // replacement the success note says was deliberately not done.
     const keepForMerge = hasNoCredentialConfigured();
     const result = merging
       ? importFullBackupMerge(envelope, { keepCredential: keepForMerge })
-      : await importFullBackupDurably(envelope, { keepCredential: true });
+      : await importFullBackupDurably(envelope, { keepCredential: previousKnown });
 
     const skipped = result.historySkipped > 0
       ? `\n\nNote: ${result.historySkipped} oversize undo/redo `
