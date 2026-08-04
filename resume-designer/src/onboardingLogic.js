@@ -309,6 +309,14 @@ export function buildResumeData(resume) {
   // output has none yet, so assignGroupIds must read the run off the AI's own raw
   // adjacency first. Only then can sortRunAware reorder chronologically without
   // shredding that run apart — without this nothing the AI produces is ever grouped.
+  //
+  // This depends on the model emitting one employer's roles CONSECUTIVELY, which
+  // buildGenerateResumePrompt now requires explicitly — the prompt otherwise asks
+  // for relevance ordering, which can legitimately place a different employer
+  // between two roles at the same one, leaving nothing for adjacency to find. The
+  // output schema deliberately carries no _groupId (the model is never asked to
+  // author grouping), so ordering is the only channel that can carry it. If a
+  // response ignores the constraint the resume simply renders ungrouped, as before.
   const grouped = assignGroupIds(experience);
   experience = sortRunAware(
     grouped,

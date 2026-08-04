@@ -483,6 +483,8 @@ Create a clear, well-structured resume that:
 2. Uses the job description's vocabulary for experience the profile actually evidences
 3. Orders experience by relevance (most relevant first), and ALSO provides
    machine-readable startDate/endDate per role so the app can re-sort chronologically
+   — but keeps several roles at ONE employer consecutive (most recent first), never
+   split apart by a role at a different employer
 4. Writes a professional summary grounded in the profile and targeted at this position
 5. Writes bullets that quantify results ONLY where the profile supplies the number
 6. Includes 3-4 highlights that are DISTINCT, career-level achievements — not
@@ -538,6 +540,12 @@ IMPORTANT:
 - Only include sections that have relevant content from the profile
 - Order experience by relevance (most relevant first); ALWAYS include
   machine-readable startDate/endDate so the app can offer a chronological view
+- If the profile shows SEVERAL POSITIONS AT ONE EMPLOYER (a promotion, a lateral
+  move, or two roles held at once), emit them as separate entries that are
+  CONSECUTIVE and share the identical "company" string, most recent first. Never
+  place a role at a different employer between them, even if relevance would.
+  The app groups one employer's roles under a single company heading by that
+  adjacency, so splitting them prints the employer twice as unrelated jobs
 - Put concrete tools/software/platforms (e.g. Figma, Git, Docker, Excel) in
   "tools"; keep "skills" for competencies. Do NOT duplicate an item across both.
 - Limit "highlights" to 3-4 entries, each a DISTINCT career-level achievement
