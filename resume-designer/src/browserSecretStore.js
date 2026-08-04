@@ -17,19 +17,27 @@
  *
  * The AES-GCM wrapping key is generated with `extractable: false` and stored as
  * a live `CryptoKey` in IndexedDB. The browser keeps the raw bytes in its own
- * key store and `crypto.subtle.exportKey` REJECTS, so the key material cannot
- * be read out and carried away. Copying the browser profile off the machine
- * yields ciphertext and a key that does not travel with it.
+ * key store and `crypto.subtle.exportKey` REJECTS.
  *
- * The guarantee is NON-EXPORTABLE, which is narrower than it sounds and must
- * not be described to users as more. Any same-origin script — including an
- * injected one — can fetch the same `CryptoKey` handle from IndexedDB and ask
- * the browser to decrypt with it. What it cannot do is obtain the raw key and
- * use it elsewhere. So this defends the FILES at rest, not the running page.
+ * ## What that does and does not buy — copy must match THIS, not the above
  *
- * That is still strictly better than the readable localStorage value it
- * replaces, and it is the honest limit of what any browser-side secret can
- * offer. User-facing copy must match this paragraph, not the first one.
+ * It buys: the credential is never written in readable form, so anything that
+ * scrapes storage values, or a stray export of just this object store, yields
+ * ciphertext. That is a real improvement on the localStorage value it replaces.
+ *
+ * It does NOT buy two things that are easy to assume:
+ *
+ *  - Protection from same-origin script. Any script on this page — including an
+ *    injected one — can fetch the same `CryptoKey` handle and ask the browser
+ *    to decrypt. It cannot obtain the raw bytes; it does not need them.
+ *  - Machine binding. The wrapping key and the ciphertext live in the SAME
+ *    IndexedDB store, so a copy of the whole browser profile carries both
+ *    halves. `extractable: false` blocks `exportKey`; it does not make the key
+ *    unusable in a browser that loads a copied profile. A profile backup should
+ *    be treated as containing the API key.
+ *
+ * Those limits are inherent to a browser-side secret, which is why the desktop
+ * build uses the OS keychain instead.
  *
  * ## Backend injection
  *

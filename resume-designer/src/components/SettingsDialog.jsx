@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils';
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
-  isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable,
+  isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable, getSecret,
 } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
@@ -242,6 +242,13 @@ export default function SettingsDialog() {
   // A credential IS stored here but will not decrypt. Treated like read-only
   // for the write decision: an untouched empty field must not overwrite it.
   const unreadableBrowser = isBrowserUnreadable();
+  // Whether a credential is actually usable right now. On an already-migrated
+  // install a failed keychain read leaves NO fallback, so the read-only banner
+  // must not promise that an existing key still works.
+  const hasUsableCredential = getSecret() !== null;
+  // A failed strip leaves a readable copy behind. Surfaced here rather than
+  // only on the next Save, which is the one moment the user might never reach.
+  const cleanupPending = isCleanupPending();
   // Three states, not two. A degraded DESKTOP session also reports
   // isKeychainAvailable() === false, but it is nothing like the browser one:
   // handleUnavailableKeychain kept serving the older credential from the
@@ -265,8 +272,9 @@ export default function SettingsDialog() {
     // claiming more than that would be a false assurance about the one case
     // users would most want it to cover.
     credentialNote = 'Your key is encrypted before it’s stored in this browser, so it’s still here next time'
-      + ' and files copied off this machine are useless without it. The encryption key is non-exportable —'
-      + ' it can’t be taken elsewhere, though anything running on this page can still use it.'
+      + ' and never written down in readable form. The encryption key is non-exportable, so it can’t be'
+      + ' read out through the browser’s crypto API — but a copy of this whole browser profile would carry'
+      + ' both halves, so treat profile backups as containing your key.'
       + ' It’s sent only to OpenRouter — never share it.';
   } else if (unreadableBrowser) {
     credentialNote = 'A key is stored in this browser but couldn’t be read — it may have been saved by a'
@@ -574,10 +582,20 @@ export default function SettingsDialog() {
                   )}
                   {readOnlyKeychain && !keyError && (
                     <p className="text-sm text-destructive" role="alert">
-                      Your system keychain couldn&rsquo;t be reached when On Paper started, so saving is unavailable
-                      right now. Any key you already had still works &mdash; it&rsquo;s being read from an older
-                      unencrypted copy in this app&rsquo;s data folder. Unlock your keychain and save again to move it
-                      back into the keychain and remove that copy; no need to restart.
+                      {hasUsableCredential
+                        ? 'Your system keychain couldn’t be reached when On Paper started, so saving is unavailable'
+                          + ' right now. The key you already had still works — it’s being read from an older'
+                          + ' unencrypted copy in this app’s data folder. Unlock your keychain and save again to move'
+                          + ' it back into the keychain and remove that copy; no need to restart.'
+                        : 'Your system keychain couldn’t be reached when On Paper started, so your saved key can’t be'
+                          + ' read and AI features are unavailable. Unlock your keychain and save again to recover it;'
+                          + ' no need to restart.'}
+                    </p>
+                  )}
+                  {cleanupPending && !keyError && !readOnlyKeychain && (
+                    <p className="text-sm text-destructive" role="alert">
+                      An older, unencrypted copy of your key is still in this app&rsquo;s data folder &mdash; removing
+                      it didn&rsquo;t finish. Your current key is stored properly. Save again to retry the cleanup.
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground">
