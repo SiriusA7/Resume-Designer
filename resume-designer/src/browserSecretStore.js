@@ -237,16 +237,20 @@ export async function readSecret(backend) {
     return { status: 'unreadable' };
   }
   if (!record) return { status: 'missing' };
-  if (!record.iv || !record.data) return { status: 'unreadable' };
+  // A record we cannot DECRYPT still has a readable `version`, and ordering
+  // needs that even when the payload is useless — otherwise "cannot read it"
+  // becomes a licence to overwrite whatever another tab just wrote.
+  const version = record.version || 0;
+  if (!record.iv || !record.data) return { status: 'unreadable', version };
 
   let key;
   try {
     key = await loadWrappingKey(backend);
   } catch {
-    return { status: 'unreadable' };
+    return { status: 'unreadable', version };
   }
   // Ciphertext with no key is stored-but-undecryptable, NOT absent.
-  if (!key) return { status: 'unreadable' };
+  if (!key) return { status: 'unreadable', version };
 
   try {
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv }, key, record.data);
@@ -258,7 +262,7 @@ export async function readSecret(backend) {
       version: record.version || 0,
     };
   } catch {
-    return { status: 'unreadable' };
+    return { status: 'unreadable', version };
   }
 }
 

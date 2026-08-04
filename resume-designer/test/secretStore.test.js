@@ -919,6 +919,80 @@ describe('secretStore', () => {
       expect(store.isEncryptedInBrowser()).toBe(false);
     });
 
+    // Switching to `session` made the failure permanent for the tab: every later
+    // save took the memory-only branch and RESOLVED, so Settings reported
+    // success for a save that still vanished on reload.
+    it('retries the store after a failed first save', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+
+      const realUpdate = backend.update;
+      backend.update = async () => { throw new Error('quota exceeded'); };
+      await expect(store.setSecret('sk-typed')).rejects.toMatchObject({ retainedInMemory: true });
+      expect(store.getSecret()).toBe('sk-typed');
+      expect(store.isMemoryOnlyFallback()).toBe(true);
+      expect(store.isEncryptedInBrowser()).toBe(false);
+
+      // Quota frees up and the user saves again — it must reach the store.
+      backend.update = realUpdate;
+      await store.setSecret('sk-typed');
+
+      expect(store.isMemoryOnlyFallback()).toBe(false);
+      expect(store.isEncryptedInBrowser()).toBe(true);
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend });
+      expect(after.getSecret()).toBe('sk-typed');
+    });
+
+    // "I never observed a version" is not a licence to bypass ordering: a
+    // deliberate replacement in a degraded tab could otherwise land after
+    // another tab's Clear and resurrect the credential. The write now reads a
+    // version first — a record that will not DECRYPT still has a readable one.
+    it('orders a replacement write from a degraded tab', async () => {
+      const backend = makeBackend();
+      setPlaintext('sk-legacy');
+      let allowWrites = false;
+      const gated = {
+        ...backend,
+        update: async (id, decide) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.update(id, decide);
+        },
+        add: async (id, v) => {
+          if (!allowWrites) throw new Error('quota exceeded');
+          return backend.add(id, v);
+        },
+      };
+      const degraded = await loadStore({ tauri: false });
+      await degraded.initSecretStore({ backend: gated });
+      expect(degraded.isBrowserDegraded()).toBe(true);
+
+      // Another tab stores a credential and then clears it. Drop the legacy
+      // entry first, or ITS boot migration writes one too and muddies the trace.
+      localStorage.removeItem(OPENROUTER_KEY_KEY);
+      allowWrites = true;
+      const other = await loadStore({ tauri: false });
+      await other.initSecretStore({ backend });
+      await other.setSecret('sk-other');
+      await other.setSecret('');
+      const clearedVersion = backend.files.get('openrouter-key-v1').version;
+
+      // Let any broadcast the degraded tab received settle first.
+      await new Promise((r) => setTimeout(r, 50));
+      await degraded.setSecret('sk-replacement');
+
+      // The explicit save is genuinely newer than the clear, so it wins — but it
+      // went THROUGH the ordering check rather than round it, which is what
+      // stops a stale replacement from resurrecting a cleared key. Evidence:
+      // the version advanced from the clear rather than restarting.
+      const stored = backend.files.get('openrouter-key-v1');
+      expect(stored.version).toBe(clearedVersion + 1);
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend });
+      expect(after.getSecret()).toBe('sk-replacement');
+    });
+
     // The other half: with a credential already stored, a failed overwrite must
     // NOT drop to session — that would report memory-only while ciphertext sits
     // in the store, and hide the value that is actually persisted.

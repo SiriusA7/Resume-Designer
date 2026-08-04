@@ -139,7 +139,7 @@ describe('browserSecretStore', () => {
 
       // UNREADABLE, not missing: ciphertext is present, so absence was never
       // established and nothing may be written over it.
-      expect(await readSecret(backend)).toEqual({ status: 'unreadable' });
+      expect(await readSecret(backend)).toMatchObject({ status: 'unreadable' });
       // Crucially, it did not replace the missing key.
       expect(backend.files.has(WRAP_KEY_ID)).toBe(false);
     });
@@ -150,13 +150,13 @@ describe('browserSecretStore', () => {
       backend.files.set(SECRET_ID, { iv: new Uint8Array(12), data: new Uint8Array(8) });
 
       // Boot must not die on a damaged record.
-      await expect(readSecret(backend)).resolves.toEqual({ status: 'unreadable' });
+      await expect(readSecret(backend)).resolves.toMatchObject({ status: 'unreadable' });
     });
 
     it('treats a malformed record as no credential', async () => {
       const backend = makeBackend();
       backend.files.set(SECRET_ID, { nonsense: true });
-      await expect(readSecret(backend)).resolves.toEqual({ status: 'unreadable' });
+      await expect(readSecret(backend)).resolves.toMatchObject({ status: 'unreadable' });
     });
   });
 });

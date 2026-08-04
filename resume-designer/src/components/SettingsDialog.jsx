@@ -25,6 +25,7 @@ import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
   isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable, getSecret,
+  isMemoryOnlyFallback,
 } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
@@ -242,6 +243,9 @@ export default function SettingsDialog() {
   // A credential IS stored here but will not decrypt. Treated like read-only
   // for the write decision: an untouched empty field must not overwrite it.
   const unreadableBrowser = isBrowserUnreadable();
+  // A save the browser refused: the key works now but was not stored, and the
+  // next save retries the store.
+  const memoryOnly = isMemoryOnlyFallback();
   // Whether a credential is actually usable right now. On an already-migrated
   // install a failed keychain read leaves NO fallback, so the read-only banner
   // must not promise that an existing key still works.
@@ -276,6 +280,9 @@ export default function SettingsDialog() {
       + ' read out through the browser’s crypto API — but a copy of this whole browser profile would carry'
       + ' both halves, so treat profile backups as containing your key.'
       + ' It’s sent only to OpenRouter — never share it.';
+  } else if (memoryOnly) {
+    credentialNote = 'Your key couldn’t be stored in this browser, so it’s being kept for this session only'
+      + ' — saving again will retry. It’s sent only to OpenRouter — never share it.';
   } else if (unreadableBrowser) {
     credentialNote = 'A key is stored in this browser but couldn’t be read — it may have been saved by a'
       + ' different browser profile, or the browser’s stored data was partly cleared. Enter your key again'

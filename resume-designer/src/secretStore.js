@@ -54,6 +54,13 @@ let cached = null;
 // tab's Clear and resurrect the credential.
 let cachedVersion = 0;
 
+// Set when a browser save could not be stored and the value is being held in
+// memory instead. NOT a mode: switching to `session` made the failure permanent
+// for the tab — every later save took the memory-only branch and RESOLVED, so
+// Settings reported success for a save that still vanished on reload. As a flag
+// the encrypted store stays the target and the next save retries it.
+let memoryOnlyFallback = false;
+
 /**
  * Where the credential lives, decided once at boot.
  *
@@ -288,6 +295,7 @@ export function __resetSecretStoreForTests() {
   credentialChannel = null;
   cleanupPending = false;
   cachedVersion = 0;
+  memoryOnlyFallback = false;
 }
 
 async function invokeSecret(command, args) {
@@ -317,7 +325,16 @@ export function isReadOnly() {
  * other's story.
  */
 export function isEncryptedInBrowser() {
-  return mode === 'browser';
+  return mode === 'browser' && !memoryOnlyFallback;
+}
+
+/**
+ * True when a browser save could not be stored and the key is being held for
+ * this session only — while the encrypted store is still the target, so the
+ * next save retries it rather than silently succeeding into memory forever.
+ */
+export function isMemoryOnlyFallback() {
+  return memoryOnlyFallback;
 }
 
 /**
@@ -493,24 +510,36 @@ export async function setSecret(value) {
       // established absence.
       const hadNoCredential = mode === 'browser' && cached === null;
 
-      // Compare-and-set in `browser` mode, where `cachedVersion` is a version
-      // we actually observed. A save that pauses while encrypting could
-      // otherwise land after another tab's Clear and resurrect the credential —
-      // the same race recovery and the boot migration already guard, in the one
-      // write that still did not.
+      // Compare-and-set against the newest version this tab can establish.
       //
-      // The degraded and unreadable modes write unconditionally on purpose:
-      // there is no observed version to compare against, and in both the user
-      // is explicitly replacing a record the app could not use.
-      const useCas = mode === 'browser';
+      // In `browser` mode that is `cachedVersion`, observed at read time. In the
+      // degraded and unreadable modes there is none from boot — but "I never
+      // observed a version" is not a licence to bypass ordering, which is what
+      // an earlier version of this code assumed. Read one now, inside the
+      // queue: a record that will not DECRYPT still has a readable version, so
+      // even a deliberate replacement of a broken record can be ordered against
+      // whatever another tab last wrote.
+      //
+      // Only a read that fails outright leaves nothing to compare, and that is
+      // the one case that writes unconditionally.
+      let expectVersion = cachedVersion;
+      if (mode !== 'browser') {
+        const seen = await readSecret(browserBackend);
+        expectVersion = seen.status === 'missing' ? 0 : seen.version;
+      }
+
       let result;
       try {
         result = await writeSecret(
-          browserBackend, value, useCas ? { expectVersion: cachedVersion } : {},
+          browserBackend,
+          value,
+          expectVersion === undefined ? {} : { expectVersion },
         );
       } catch (err) {
         if (hadNoCredential) {
-          mode = 'session';
+          // Retryable: the mode stays `browser`, so the next save targets the
+          // store again. Only the flag records that this value is unstored.
+          memoryOnlyFallback = true;
           cached = value;
           // Still an error: it was NOT saved, and the caller has to say so.
           // Flagged so onboarding can tell "usable this session" apart from
@@ -534,6 +563,7 @@ export async function setSecret(value) {
       // The write landed, so encryption is working again — leave the degraded
       // state rather than continuing to report clear-text storage.
       mode = 'browser';
+      memoryOnlyFallback = false;
       cached = value;
       cachedVersion = result.version;
       // Tell the other tabs BEFORE the cleanup below, which can throw: a cleared
