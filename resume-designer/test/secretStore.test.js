@@ -1305,6 +1305,28 @@ describe('secretStore', () => {
       expect(store.isCleanupPending()).toBe(false);
     });
 
+    // During a restore, appStorage defers removals into a buffer the SUCCESSFUL
+    // restore path then discards — while flush() can still report true. Taking
+    // that as done left the readable credential on disk with cleanupPending
+    // false, so a transient keychain failure after the restore's reload could
+    // serve a key the user had just cleared.
+    it('does not call cleanup done while a restore guard defers the delete', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+      await store.initSecretStore();
+
+      setPlaintext('sk-real');
+      const { appStorage } = await import('../src/appStorage.js');
+      vi.spyOn(appStorage, 'isRestoreGuardActive').mockReturnValue(true);
+      invokeMock.mockResolvedValue(undefined);
+
+      await expect(store.setSecret('sk-new')).rejects.toThrow(/older copy of your key/i);
+      expect(store.isCleanupPending()).toBe(true);
+      // The readable copy is untouched, which is precisely why it must not be
+      // reported as removed.
+      expect(plaintext()).toBe('sk-real');
+    });
+
     it('resolves normally when the cleanup lands', async () => {
       const store = await loadStore();
       invokeMock.mockResolvedValue(null);

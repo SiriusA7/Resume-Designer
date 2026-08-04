@@ -377,6 +377,20 @@ export function getSecret() {
  * flush succeeds. The exposure window is a degraded boot landing before that.
  */
 async function stripPlaintextCopy() {
+  // A restore has appStorage's guard armed: removeItem only records into
+  // `deferredDuringRestore` — it touches neither the cache nor disk — while
+  // flush() can still report true. Worse, the SUCCESSFUL restore path then
+  // discards those deferred writes, so the readable credential survives with
+  // cleanupPending false, and a transient keychain failure after the restore's
+  // reload can serve a key the user had just cleared.
+  //
+  // Report it as outstanding instead. The restore reloads the app, and boot's
+  // own strip is the retry.
+  if (appStorage.isRestoreGuardActive()) {
+    cleanupPending = true;
+    return false;
+  }
+
   const queued = appStorage.getItem(OPENROUTER_KEY_KEY) !== null;
   if (queued) appStorage.removeItem(OPENROUTER_KEY_KEY);
 
