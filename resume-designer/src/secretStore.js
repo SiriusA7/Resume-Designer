@@ -130,8 +130,19 @@ export function getSecret() {
  * flush succeeds. The exposure window is a degraded boot landing before that.
  */
 async function stripPlaintextCopy() {
-  if (appStorage.getItem(OPENROUTER_KEY_KEY) === null) return true;
-  appStorage.removeItem(OPENROUTER_KEY_KEY);
+  if (appStorage.getItem(OPENROUTER_KEY_KEY) !== null) {
+    appStorage.removeItem(OPENROUTER_KEY_KEY);
+  }
+  // Flush even when the cache already shows it gone. A cache miss is NOT proof
+  // the file is gone: removeItem drops the key from the cache immediately, and
+  // if the disk delete then fails, appStorage re-marks it dirty and leaves the
+  // retry to the next flush (see its drain()). Early-returning true on the miss
+  // meant the retry the user was told to perform reported success while the old
+  // credential sat on disk — the precise "durable === true while it never
+  // reached disk" failure appStorage's own comment warns about.
+  //
+  // Cheap when there is nothing pending: flush only drains if `dirty` is
+  // non-empty, and returns true.
   try {
     return await appStorage.flush();
   } catch {

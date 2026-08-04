@@ -320,6 +320,35 @@ describe('secretStore', () => {
       expect(store.getSecret()).toBe('');
     });
 
+    // The retry the failure message tells the user to perform was the thing
+    // reporting a false success. removeItem drops the key from appStorage's
+    // cache immediately; if the disk delete then fails it is re-marked dirty and
+    // retried by the NEXT flush. Treating the resulting cache miss as "already
+    // clean" skipped that flush entirely.
+    it('retries a queued deletion instead of trusting a cache miss', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+      await store.initSecretStore();
+
+      const { appStorage } = await import('../src/appStorage.js');
+      setPlaintext('sk-real');
+      invokeMock.mockResolvedValue(undefined);
+
+      // First attempt: the disk delete does not land.
+      const flushSpy = vi.spyOn(appStorage, 'flush').mockResolvedValue(false);
+      await expect(store.setSecret('')).rejects.toThrow(/older copy of your key/i);
+
+      // The user retries. The key is gone from the cache now, so a cache-miss
+      // early return would claim success while the delete is still queued.
+      flushSpy.mockClear();
+      await expect(store.setSecret('')).rejects.toThrow(/older copy of your key/i);
+      expect(flushSpy).toHaveBeenCalled();
+
+      // Disk recovers; the queued delete finally lands and the save succeeds.
+      flushSpy.mockResolvedValue(true);
+      await expect(store.setSecret('')).resolves.toBeUndefined();
+    });
+
     it('resolves normally when the cleanup lands', async () => {
       const store = await loadStore();
       invokeMock.mockResolvedValue(null);
