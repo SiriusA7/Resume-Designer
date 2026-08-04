@@ -150,11 +150,42 @@ function adoptionProfileName() {
  * One-time move of settings.openrouterKey (per-profile blob) to the shared
  * key, so one configured key serves every profile. Idempotent; an existing
  * shared key wins (never clobbered by a stale key from an imported backup).
- * Runs with mapping ACTIVE (reads the active profile's blob).
+ *
+ * Visits EVERY profile's blob, not only the active one. The key is shared
+ * across profiles by design, so a credential left in an inactive profile's
+ * blob is a stale duplicate — but it is a stale duplicate sitting in clear text
+ * under app_data_dir, which is the exposure this whole module exists to close.
+ * It could linger there indefinitely, since nothing visits a profile that is
+ * never switched to. `withoutLegacyCredential` already sanitized these blobs at
+ * the BACKUP boundary; that kept the key out of exported files and did nothing
+ * about the file it is actually stored in.
+ *
+ * Active profile first, so its key is the one that wins the shared slot when
+ * more than one blob still holds a credential — it is the one the user is
+ * demonstrably using. Inactive keys are adopted rather than merely deleted when
+ * no shared key exists yet, because deleting could destroy the user's only
+ * credential; the migration invariant applies to them exactly as it does to the
+ * active blob.
  */
 export async function extractSharedApiKey() {
+  // The active profile, however it currently resolves: the mapped physical key
+  // with mapping on, the unprefixed key with mapping off (adoption degraded).
+  await extractCredentialFromBlob('resume-designer-data');
+  // Snapshot: the shared-key write below adds a key mid-sweep.
+  for (const key of appStorage.keys()) {
+    const split = splitPhysicalKey(key);
+    if (split?.logicalKey === 'resume-designer-data') await extractCredentialFromBlob(key);
+  }
+}
+
+/**
+ * Move one blob's credential into the shared key and strip it. Per-blob rather
+ * than per-sweep error handling, so one corrupt profile cannot stop the others
+ * being sanitized.
+ */
+async function extractCredentialFromBlob(blobKey) {
   try {
-    const raw = appStorage.getItem('resume-designer-data');
+    const raw = appStorage.getItem(blobKey);
     if (!raw) return;
     const data = JSON.parse(raw);
     if (!data?.settings || !('openrouterKey' in data.settings)) return;
@@ -181,7 +212,7 @@ export async function extractSharedApiKey() {
       if (!(await appStorage.flush())) return;
     }
     delete data.settings.openrouterKey;
-    appStorage.setItem('resume-designer-data', JSON.stringify(data));
+    appStorage.setItem(blobKey, JSON.stringify(data));
   } catch {
     // Corrupt blob: leave it for loadFromStorage()'s own error handling.
   }

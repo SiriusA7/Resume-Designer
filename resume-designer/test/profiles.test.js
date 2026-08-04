@@ -572,6 +572,73 @@ describe('adoption migration', () => {
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
   });
 
+  // The key is shared across profiles by design, so a credential left in an
+  // INACTIVE profile's blob is a stale duplicate — but a stale duplicate in
+  // clear text under app_data_dir, which is the exposure this module exists to
+  // close. Nothing visits a profile that is never switched to, so it lingered
+  // there indefinitely, surviving even a Clear of the active key.
+  it('extractSharedApiKey sanitizes INACTIVE profile blobs too', async () => {
+    const backend = makeBackend({
+      'resume-designer-profiles': JSON.stringify([
+        { id: 'pactive', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+        { id: 'pother', name: 'Other', emoji: '🙂', createdAt: 'x' },
+      ]),
+      'resume-designer-active-profile': 'pactive',
+      'resume-p--pactive--resume-designer-data': JSON.stringify({
+        settings: { openrouterKey: 'sk-active', theme: 'dark' },
+      }),
+      'resume-p--pother--resume-designer-data': JSON.stringify({
+        settings: { openrouterKey: 'sk-inactive-paid', theme: 'light' },
+      }),
+    });
+    await initAppStorage({ backend });
+    setProfileMapping('pactive');
+
+    await extractSharedApiKey();
+    // The strips land in the write-behind cache; the claim under test is about
+    // what is left ON DISK, so drain before reading the backend.
+    await appStorage.flush();
+
+    // The ACTIVE profile's key wins the shared slot — it is the one in use.
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-active');
+    // Both blobs are sanitized, and the rest of each blob is untouched.
+    const active = JSON.parse(backend.files.get('resume-p--pactive--resume-designer-data'));
+    const other = JSON.parse(backend.files.get('resume-p--pother--resume-designer-data'));
+    expect(active.settings.openrouterKey).toBeUndefined();
+    expect(other.settings.openrouterKey).toBeUndefined();
+    expect(active.settings.theme).toBe('dark');
+    expect(other.settings.theme).toBe('light');
+    // Nothing readable left anywhere on disk.
+    expect(JSON.stringify([...backend.files.values()])).not.toContain('sk-inactive-paid');
+  });
+
+  // The other direction: an inactive blob must not be stripped when it holds
+  // the only credential. Deleting it would destroy the user's key outright —
+  // the migration invariant applies to inactive blobs exactly as it does to
+  // the active one.
+  it('extractSharedApiKey adopts an inactive blob key when there is no other', async () => {
+    const backend = makeBackend({
+      'resume-designer-profiles': JSON.stringify([
+        { id: 'pactive', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+        { id: 'pother', name: 'Other', emoji: '🙂', createdAt: 'x' },
+      ]),
+      'resume-designer-active-profile': 'pactive',
+      'resume-p--pactive--resume-designer-data': JSON.stringify({ settings: { theme: 'dark' } }),
+      'resume-p--pother--resume-designer-data': JSON.stringify({
+        settings: { openrouterKey: 'sk-only-copy' },
+      }),
+    });
+    await initAppStorage({ backend });
+    setProfileMapping('pactive');
+
+    await extractSharedApiKey();
+    await appStorage.flush();
+
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-only-copy');
+    expect(JSON.parse(backend.files.get('resume-p--pother--resume-designer-data'))
+      .settings.openrouterKey).toBeUndefined();
+  });
+
   // main.js calls this a second time as a safety net for the adoption paths
   // that return before reaching it. "An existing shared key wins" was read as
   // "a second call is free" — but appStorage.getItem serves the write-behind
