@@ -118,6 +118,47 @@ export function withoutLegacyCredential(logicalKey, value) {
   }
 }
 
+// Pre-OpenRouter provider credentials. The app moved to OpenRouter on
+// 2026-05-30 (7a9e6d6), five days AFTER the Electron app was deleted
+// (535b24c, 2026-05-25) — so any blob carrying these came from that app, and
+// nothing in the current codebase reads them: grepping the tree for these three
+// names matches comments only. They are dead weight, and the kind of dead
+// weight that is a paid credential in clear text under app_data_dir.
+const DEAD_PROVIDER_CREDENTIALS = ['anthropicKey', 'openaiKey', 'geminiKey'];
+
+/**
+ * Strip the pre-OpenRouter provider credentials out of a `resume-designer-data`
+ * blob. Same shape as withoutLegacyCredential, and deliberately NOT part of it.
+ *
+ * That function is skipped whenever `keepCredential` is set, because the
+ * OpenRouter key is one the current app still USES and a same-machine migration
+ * has to carry it. These have no such claim: no code path reads them, so there
+ * is nothing to preserve and no reason to exempt any caller. Folding them in
+ * would have meant the Electron migration — the one path that actually carries
+ * them — was the one path that skipped removing them.
+ *
+ * Deletes only the fields it knows about, leaving the rest of `settings`
+ * untouched: this runs over the user's live data, not just over backups.
+ */
+export function withoutDeadProviderCredentials(logicalKey, value) {
+  if (logicalKey !== RESUME_DATA_KEY || typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    const settings = parsed?.settings;
+    // Object check before `in`, which throws on a string operand — a
+    // hand-edited or imported blob can hold `settings: "…"`.
+    if (!settings || typeof settings !== 'object') return value;
+    const present = DEAD_PROVIDER_CREDENTIALS.filter((k) => k in settings);
+    if (!present.length) return value;
+    for (const k of present) delete settings[k];
+    return JSON.stringify(parsed);
+  } catch {
+    // Unparseable: still the user's data, and not a blob this app could have
+    // read a credential out of. Round-trips untouched, as above.
+    return value;
+  }
+}
+
 export function isPhysicalKey(key) {
   return typeof key === 'string' && key.startsWith(PHYSICAL_PREFIX);
 }

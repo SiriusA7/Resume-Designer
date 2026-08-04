@@ -7,7 +7,7 @@ import { appStorage, setProfileMapping } from './appStorage.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
-  withoutLegacyCredential,
+  withoutLegacyCredential, withoutDeadProviderCredentials,
 } from './profileKeys.js';
 
 // Starts with `resume-` ON PURPOSE so appStorage's one-time localStorage→disk
@@ -187,6 +187,48 @@ export async function extractSharedApiKey() {
     }
   }
   return stranded;
+}
+
+/**
+ * Remove the dead pre-OpenRouter provider credentials from EVERY profile blob.
+ *
+ * Sanitising on import only helps FUTURE migrations. The Electron import has
+ * been shipping since 2026-05-27, so anyone who already took it is carrying
+ * `anthropicKey` / `openaiKey` / `geminiKey` in clear text under app_data_dir
+ * right now — and nothing will ever visit them, precisely because nothing reads
+ * them: no code path has a reason to rewrite the blob and drop them. Left
+ * alone, they stay for the life of the install.
+ *
+ * Sweeps the same key set as extractSharedApiKey, and deliberately does NOT
+ * reuse extractCredentialFromBlob: that returns early on a blob with no
+ * `openrouterKey`, which is exactly the blob this is for.
+ *
+ * Synchronous and best-effort, unlike the credential extraction beside it.
+ * Nothing here is a durability barrier — the whole operation is a DELETION of
+ * data nothing depends on, so there is no "strip only after the new copy is
+ * durable" rule to obey. A blob storage refuses to rewrite is simply retried on
+ * the next boot.
+ */
+export function stripDeadProviderCredentials() {
+  const keys = ['resume-designer-data'];
+  for (const key of appStorage.keys()) {
+    const split = splitPhysicalKey(key);
+    if (split?.logicalKey === 'resume-designer-data') keys.push(key);
+  }
+  for (const key of keys) {
+    try {
+      const raw = appStorage.getItem(key);
+      if (raw === null) continue;
+      // Always the LOGICAL key: the helper matches on it, and every key here is
+      // a `resume-designer-data` blob by construction.
+      const cleaned = withoutDeadProviderCredentials('resume-designer-data', raw);
+      if (cleaned === raw) continue;
+      appStorage.setItem(key, cleaned);
+    } catch {
+      // Storage refused this one (passthrough quota). The next boot retries;
+      // nothing else depends on it having happened.
+    }
+  }
 }
 
 /**

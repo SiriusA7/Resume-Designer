@@ -390,6 +390,7 @@ import {
   splitPhysicalKey,
   physicalKey,
   withoutLegacyCredential,
+  withoutDeadProviderCredentials,
 } from './profileKeys.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 
@@ -641,7 +642,14 @@ export function exportFullBackup(filename) {
 //    same disk the Electron app was already keeping the key on in the clear, so
 //    it exposes nothing that was not already exposed.
 function normalizeImportedValue(key, value, keepCredential = false) {
-  const sanitized = keepCredential ? value : withoutLegacyCredential(key, value);
+  // The dead-provider strip is OUTSIDE the keepCredential branch on purpose.
+  // That exemption exists for the one credential the current app still uses; a
+  // credential nothing reads has no claim on it, and the Electron migration is
+  // precisely the path that carries these in.
+  const sanitized = withoutDeadProviderCredentials(
+    key,
+    keepCredential ? value : withoutLegacyCredential(key, value),
+  );
   if (key !== 'resume-designer-job-descriptions') return sanitized;
   try {
     const jd = JSON.parse(sanitized);
@@ -1130,7 +1138,10 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
       // reachable: the wholesale adopt takes the blob verbatim, and the merge
       // keeps `incomingData.settings` whenever the existing blob has no
       // `settings` key of its own to shadow it.
-      const incomingClean = keepCredential ? incomingValue : withoutLegacyCredential(key, incomingValue);
+      const incomingClean = withoutDeadProviderCredentials(
+        key,
+        keepCredential ? incomingValue : withoutLegacyCredential(key, incomingValue),
+      );
       // Merge the data blob: variants union (current wins on
       // collision), all top-level singletons preserved from current.
       let incomingData;

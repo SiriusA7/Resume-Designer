@@ -8,7 +8,7 @@ import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
-  hasProfileNamespaces,
+  hasProfileNamespaces, stripDeadProviderCredentials,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -341,6 +341,12 @@ export async function init() {
     // stripped the blob against it. extractSharedApiKey now proves durability
     // before every strip, not only the one it wrote.
     const strandedPlaintext = await extractSharedApiKey();
+    // Dead pre-OpenRouter provider credentials, carried in by the Electron
+    // migration and read by nothing since. Import-time sanitising only covers
+    // future migrations; this is what reaches the installs that already took
+    // one. Synchronous, best-effort, and safe to run every boot — it is a no-op
+    // once the blobs are clean.
+    stripDeadProviderCredentials();
     // AFTER the extraction above and BEFORE the gate opens, so React never
     // renders a settings state missing a key the user does have.
     // Swallows its own failures — a keychain problem must not block boot.
