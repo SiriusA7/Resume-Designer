@@ -546,6 +546,49 @@ describe('secretStore', () => {
       expect(degraded.isBrowserUnreadable()).toBe(true);
     });
 
+    // Two tabs doing the first migration. One observes "nothing stored", the
+    // other migrates and then the user clears — and the first tab, resuming,
+    // writes the legacy paid key over the newer empty ciphertext.
+    it('boot migration cannot overwrite a newer cross-tab clear', async () => {
+      const backend = makeBackend();
+
+      let landClear = null;
+      const raced = {
+        ...backend,
+        // Injected between this tab's read and its migration write, which is
+        // the window the compare-and-set closes.
+        update: async (id, decide) => {
+          if (landClear) {
+            const run = landClear;
+            landClear = null;
+            await run();
+          }
+          return backend.update(id, decide);
+        },
+      };
+
+      // The second tab boots FIRST and with no legacy entry present, or its own
+      // boot migration consumes the entry and the tab under test never reaches
+      // the write this is about.
+      const other = await loadStore({ tauri: false });
+      await other.initSecretStore({ backend });
+      landClear = async () => {
+        await other.setSecret('sk-legacy'); // its migration
+        await other.setSecret('');          // then the user clears
+      };
+
+      // Now stage the legacy entry for the tab under test.
+      setPlaintext('sk-legacy');
+      const booting = await loadStore({ tauri: false });
+      await booting.initSecretStore({ backend: raced });
+
+      // The clear must survive: no resurrection of the legacy key.
+      expect(booting.getSecret()).toBe('');
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend });
+      expect(after.getSecret()).toBe('');
+    });
+
     // The compare-and-set itself, exercised directly: a write that observed an
     // older version is refused rather than clobbering.
     it('refuses a write whose observed version has moved on', async () => {

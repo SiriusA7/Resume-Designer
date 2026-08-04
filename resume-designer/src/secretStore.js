@@ -657,8 +657,15 @@ async function adoptBrowserRead(read) {
   // never before.
   const legacy = appStorage.getItem(OPENROUTER_KEY_KEY);
   if (legacy !== null && cached === null) {
+    let wrote;
     try {
-      await writeSecret(browserBackend, legacy);
+      // COMPARE-AND-SET on "still nothing stored", the same guard degraded
+      // recovery uses. This read-then-write had the identical race and I fixed
+      // only the other one: two tabs doing the first migration, one suspended
+      // after observing `missing` while the other migrates and then clears —
+      // the suspended tab resumes and writes the legacy paid key over the newer
+      // empty ciphertext.
+      wrote = await writeSecret(browserBackend, legacy, { expectVersion: 0 });
     } catch {
       // Keep the plaintext copy — still the only durable one — and say so.
       // Left at `browser`, isEncryptedInBrowser() would tell Settings only
@@ -667,7 +674,23 @@ async function adoptBrowserRead(read) {
       cached = legacy;
       return;
     }
-    cached = legacy;
+
+    if (wrote) {
+      cached = legacy;
+    } else {
+      // Another tab got there between our read and this write; theirs is the
+      // newer fact. Read it directly rather than recursing through this
+      // function, and fail closed on anything that is not a confirmed value —
+      // stripping the legacy copy against an unconfirmed store would destroy
+      // the only credential we still hold.
+      const winner = await readSecret(browserBackend);
+      if (winner.status !== 'found') {
+        mode = 'browser-unreadable';
+        cached = null;
+        return;
+      }
+      cached = winner.value;
+    }
   }
   await stripPlaintextCopy();
 }
