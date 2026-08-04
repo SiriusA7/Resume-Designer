@@ -327,8 +327,13 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                       // Walk the CURRENT items at click time — the company input is
                       // uncontrolled and writes through, so a render-time bound can
                       // point past a boundary the user just typed into existence.
-                      const id = exp._groupId || generateId('grp');
+                      // Revalidate the company here too, not just in the gating:
+                      // the field is uncontrolled, so it can be cleared while the
+                      // already-rendered button stays visible, and a run cannot
+                      // form without a non-empty company.
                       const company = exp.company || '';
+                      if (!company) return;
+                      const id = exp._groupId || generateId('grp');
                       let last = i;
                       if (exp._groupId && company) {
                         while (last + 1 < items.length) {

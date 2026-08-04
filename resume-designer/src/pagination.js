@@ -242,8 +242,10 @@ export function buildColumnRecursive(targetEl, units) {
  *
  * Runs after measurement, and can add a line: revealing flips the company's
  * `display: none` to `inline`, adding a flex child to `.experience-header`
- * (which wraps), so it tags the sheet to grow (`.is-overflowing`) rather than
- * let a fixed-height, `overflow: hidden` sheet clip its bottom-most block.
+ * (which wraps). Where that genuinely overflows a fixed-height, `overflow:
+ * hidden` sheet, the sheet is tagged to grow (`.is-overflowing`) rather than
+ * clip its bottom-most block — but only then, since that class also drives the
+ * exported page height.
  *
  * @param {Array<Element>} pages
  */
@@ -263,9 +265,16 @@ export function revealGroupContinuations(pages) {
         company.classList.add('is-continuation');
         // Revealing flips display:none -> inline, adding a flex child to
         // .experience-header, which can wrap to a new line. The sheet has a fixed
-        // height and overflow:hidden and overflowingPages has already run, so let
-        // this sheet grow instead of clipping its bottom-most block.
-        page.classList.add('is-overflowing');
+        // height and overflow:hidden and overflowingPages has already run, so a
+        // wrap here would clip the bottom-most block.
+        //
+        // Only grow the sheet when that actually happened: `.is-overflowing` sets
+        // `height: auto !important`, and pdf.js sizes each PDF page from its
+        // sheet's measured height — so tagging a sheet that still fits would
+        // SHRINK that page to its content and export a document whose pages are
+        // not all the selected size. Reading scrollHeight forces the layout we
+        // need, and the 1px epsilon matches overflowingPages' float-drift guard.
+        if (page.scrollHeight > page.clientHeight + 1) page.classList.add('is-overflowing');
         break;
       }
     }

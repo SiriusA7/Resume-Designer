@@ -279,6 +279,12 @@ function addRoleAtCompany(leadIndex) {
   if (!Array.isArray(experience)) return;
   const lead = experience[leadIndex];
   if (!lead) return;
+  // Revalidate the company against FRESH data, not just the button's gating: local
+  // text edits suppress re-renders, so the user can clear this field while the
+  // already-rendered button stays visible. A run needs a non-empty company, so
+  // proceeding would insert a second blank row and id both entries into a "run"
+  // the grouping rule then refuses to form.
+  if (!lead.company) return;
   const id = lead._groupId || generateId('grp');
   // Recompute the run's end from FRESH store data rather than trusting a bound
   // that was computed at render time: the panel suppresses re-renders while a
