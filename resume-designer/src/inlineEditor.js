@@ -849,8 +849,20 @@ function finishEditing(element) {
   // Extract value, handling special cases for skill tags and highlight bullets
   let newValue = extractEditedValue(element, path);
   
-  // Handle different types of editable content
-  if (path.includes('[') && path.includes('].')) {
+  // A company header edit renames EVERY role in the run. data-editable-group is
+  // DOM metadata (a comma-separated list of array indices), not a store path — the
+  // AI-addressable path grammar is unchanged. One array write keeps it to a single
+  // undo step and a single re-render, instead of N torn intermediate states.
+  const groupIndices = element.dataset.editableGroup;
+  if (groupIndices) {
+    const indices = groupIndices.split(',').map((n) => parseInt(n, 10)).filter(Number.isInteger);
+    const experience = store.get('experience');
+    if (Array.isArray(experience) && indices.length > 0) {
+      const next = experience.map((entry, i) => (indices.includes(i) ? { ...entry, company: newValue } : entry));
+      store.setChangeMetadata('Renamed company');
+      store.update('experience', next);
+    }
+  } else if (path.includes('[') && path.includes('].')) {
     // Array item property (e.g., "experience[0].title")
     store.update(path, newValue);
   } else if (path.startsWith('sections[')) {
