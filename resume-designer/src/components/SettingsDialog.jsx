@@ -142,6 +142,13 @@ export default function SettingsDialog() {
 
   // Form/display state, seeded from the services each time the dialog opens.
   const [apiKey, setApiKey] = useState('');
+  // Whether the user actually TYPED in the key field this time round. Saving
+  // must not write the credential otherwise: if the keychain was unreadable at
+  // startup the field seeds empty, and an unconditional save — triggered by
+  // changing some unrelated option — would write '' over a perfectly good key
+  // the moment the keychain came back. Blank-but-untouched means "unknown",
+  // not "clear it".
+  const [keyDirty, setKeyDirty] = useState(false);
   // Set when the OS keychain refuses a write, so the dialog can stay open and
   // explain rather than closing on a save that did not happen.
   const [keyError, setKeyError] = useState('');
@@ -164,6 +171,7 @@ export default function SettingsDialog() {
   const seed = useCallback(() => {
     const s = getSettings();
     setApiKey(s.openrouterKey || '');
+    setKeyDirty(false);
     setAutoFallback(!!s.autoFallback);
     setThemeState(getTheme());
     if (isTauri) {
@@ -206,14 +214,22 @@ export default function SettingsDialog() {
   const readOnlyKeychain = isReadOnly();
 
   const handleSaveKeys = async () => {
-    // The key goes to the OS keychain, so this can genuinely fail (locked or
-    // access denied). Keep the dialog open and say so rather than closing on a
-    // save that did not happen.
-    try {
-      await saveApiKey(apiKey);
-    } catch (err) {
-      setKeyError(err?.message || 'Could not save your key to the system keychain.');
-      return;
+    // Only touch the credential when the user actually typed in that field.
+    // Writing it on every save destroys keys: on an already-migrated install a
+    // failed secret_get at startup leaves nothing to seed from, so the field
+    // shows empty, and saving to change some other option would put '' over a
+    // real keychain credential as soon as the keychain came back.
+    if (keyDirty) {
+      // The key goes to the OS keychain, so this can genuinely fail (locked or
+      // access denied). Keep the dialog open and say so rather than closing on
+      // a save that did not happen.
+      try {
+        await saveApiKey(apiKey);
+      } catch (err) {
+        setKeyError(err?.message || 'Could not save your key to the system keychain.');
+        return;
+      }
+      setKeyDirty(false);
     }
     setKeyError('');
     saveSettings({ autoFallback });
@@ -238,6 +254,8 @@ export default function SettingsDialog() {
     setKeyError('');
     refreshChatPanel();
     setApiKey('');
+    // Already committed, so a following Save must not write it a second time.
+    setKeyDirty(false);
   };
 
   const handleExportUsage = () => {
@@ -395,7 +413,7 @@ export default function SettingsDialog() {
                       type={showKey ? 'text' : 'password'}
                       placeholder="sk-or-v1-..."
                       value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
+                      onChange={(e) => { setApiKey(e.target.value); setKeyDirty(true); }}
                       spellCheck={shouldSpellcheck('identifier')}
                     />
                     <Button
