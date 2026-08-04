@@ -5,6 +5,7 @@
 
 import { store, generateId } from './store.js';
 import { parseResume } from './parser.js';
+import { assignGroupIds } from './experienceGroups.js';
 import { isTauri } from './native.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
@@ -1293,7 +1294,10 @@ function generateMarkdown(data) {
   if (data.experience && data.experience.length > 0) {
     md += `## Experience\n\n`;
     for (const exp of data.experience) {
-      md += `### ${exp.title} — ${exp.company} **${exp.dates}**\n\n`;
+      // Dates go on their own bold line — the grammar the reader and
+      // Templates/RESUME-TEMPLATE.md both document — so the round trip is lossless.
+      md += `### ${exp.title} — ${exp.company}\n`;
+      md += `**${exp.dates}**\n\n`;
       if (exp.bullets && exp.bullets.length > 0) {
         for (const bullet of exp.bullets) {
           md += `- ${bullet}\n`;
@@ -1357,6 +1361,9 @@ export async function importFromMarkdown(file) {
       try {
         const markdown = e.target.result;
         const data = parseResume(markdown);
+        // Same predicate the renderer uses, so import and render agree by
+        // construction: consecutive entries at an identical company are one tenure.
+        data.experience = assignGroupIds(data.experience);
         resolve(data);
       } catch (err) {
         reject(new Error('Failed to parse Markdown: ' + err.message));
