@@ -449,7 +449,8 @@ export default function SettingsDialog() {
                   <p className="text-sm text-muted-foreground">
                     Your key is kept in your {keychainName} and is sent only to OpenRouter — never share it.
                     {!isKeychainAvailable() && !readOnlyKeychain
-                      && ' Running in a browser, it isn’t saved to disk, so you’ll enter it again next time.'}
+                      && ' Running in a browser there’s no keychain to put it in, so it isn’t stored at all —'
+                        + ' you’ll enter it again after a reload, a profile switch, or reopening the tab.'}
                     {' '}One key covers Claude, GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
                   </p>
                 </section>
