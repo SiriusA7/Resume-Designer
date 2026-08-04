@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
 
 import { store, generateId, experienceSortValue } from '../../store.js';
-import { sortRunAware } from '../../experienceGroups.js';
+import { sortRunAware, groupExperience } from '../../experienceGroups.js';
 import { SINGLE_COLUMN_LAYOUTS } from '../../renderer.js';
 import { getSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { SortableList, SortableItem, DragHandle } from '../Sortable.jsx';
@@ -221,7 +221,56 @@ function SectionItem({ section, index, activeLayout }) {
   );
 }
 
-function ExperienceItem({ exp, index }) {
+// --- grouping actions -------------------------------------------------------
+// Each is ONE store.update('experience', next) preceded by setChangeMetadata, so
+// each is a single undo step. Never push-then-drag: that is two history entries
+// and routes the user through the drag that breaks runs.
+
+function linkToCompanyAbove(index) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience) || index < 1) return;
+  const prev = experience[index - 1];
+  const id = prev._groupId || generateId('grp');
+  const next = experience.map((entry, i) => {
+    if (i === index - 1) return { ...entry, _groupId: id };
+    if (i === index) return { ...entry, _groupId: id, company: prev.company };
+    return entry;
+  });
+  store.setChangeMetadata('Linked roles at one company');
+  store.update('experience', next);
+}
+
+function separateFromCompanyAbove(index) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience) || index < 0) return;
+  // A fresh id — never reuse — so this entry can never re-fuse with the run above.
+  const next = experience.map((entry, i) => (i === index ? { ...entry, _groupId: generateId('grp') } : entry));
+  store.setChangeMetadata('Separated role from company');
+  store.update('experience', next);
+}
+
+function addRoleAtCompany(leadIndex, lastIndexOfRun) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience)) return;
+  const lead = experience[leadIndex];
+  const id = lead._groupId || generateId('grp');
+  const role = {
+    id: generateId('exp'),
+    title: 'New Position',
+    company: lead.company,
+    dates: 'Start – End',
+    bullets: ['Describe your accomplishments'],
+    _groupId: id,
+    _expanded: true,
+  };
+  const next = [...experience];
+  if (!next[leadIndex]._groupId) next[leadIndex] = { ...next[leadIndex], _groupId: id };
+  next.splice(lastIndexOfRun + 1, 0, role);
+  store.setChangeMetadata('Added a role at this company');
+  store.update('experience', next);
+}
+
+function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, lastIndexOfRun }) {
   const [expanded, setExpanded] = useState(exp._expanded !== false);
   const toggle = () => {
     const next = !expanded;
@@ -243,9 +292,20 @@ function ExperienceItem({ exp, index }) {
     <SortableItem id={exp.id || `exp-${index}`} className="overflow-hidden rounded-[9px] border bg-background">
       <div className="flex cursor-pointer items-center gap-2 px-2.5 py-2" onClick={toggle}>
         <DragHandle />
+        {/* The rail is the whole grouping affordance: membership is visible
+            without opening an accordion. */}
+        <span
+          aria-hidden="true"
+          className={cn('w-[3px] self-stretch rounded-full', isRunMember ? 'bg-primary/40' : 'bg-transparent')}
+        />
         <span className="min-w-0 flex-1">
+          {isLead && group && group.roles.length > 1 && (
+            <span className="block truncate text-[11.5px] font-semibold text-muted-foreground">
+              {exp.company} · {group.roles.length} roles
+            </span>
+          )}
           <span className="block truncate text-[13px] font-semibold">{exp.title || 'Untitled position'}</span>
-          <span className="block truncate text-[11.5px] text-muted-foreground">{exp.company || ''}</span>
+          {!isRunMember && <span className="block truncate text-[11.5px] text-muted-foreground">{exp.company || ''}</span>}
         </span>
         <ChevronDown
           className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')}
@@ -282,6 +342,33 @@ function ExperienceItem({ exp, index }) {
             ))}
             <AddRowButton label="Add bullet" onClick={() => store.addToArray(`experience[${index}].bullets`, 'New bullet point')} />
           </SortableList>
+        </div>
+        <div className="flex flex-wrap gap-1.5 border-t pt-2.5">
+          {isLead && group && group.roles.length > 1 && (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              onClick={() => addRoleAtCompany(index, lastIndexOfRun)}
+            >
+              <Plus className="size-3.5" /> Add role at this company
+            </Button>
+          )}
+          {isRunMember ? (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              onClick={() => separateFromCompanyAbove(index)}
+            >
+              Separate from company above
+            </Button>
+          ) : (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              disabled={!canLinkAbove}
+              title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
+              onClick={() => linkToCompanyAbove(index)}
+            >
+              Link to company above
+            </Button>
+          )}
         </div>
         <Button
           variant="ghost" size="sm" type="button"
@@ -424,7 +511,23 @@ export default function StructurePanel() {
   const reorderExperience = (from, to) => {
     setSortMode('custom');
     store.updateSilent('experienceSortMode', 'custom');
-    store.moveInArray('experience', from, to);
+    const experience = store.get('experience');
+    if (!Array.isArray(experience)) return;
+    const next = [...experience];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    // A drag can strand an entry away from its run. Rather than leave an id that
+    // no longer describes anything, clear it — immediately visible in the rail,
+    // and re-linked with one click.
+    const before = next[to - 1];
+    const after = next[to + 1];
+    const stillAdjacent = (before && before._groupId && before._groupId === moved._groupId && before.company === moved.company)
+      || (after && after._groupId && after._groupId === moved._groupId && after.company === moved.company);
+    if (moved._groupId && !stillAdjacent) {
+      next[to] = { ...moved, _groupId: undefined };
+    }
+    store.setChangeMetadata('Reordered experience');
+    store.update('experience', next);
   };
 
   const sections = data.sections || [];
@@ -576,7 +679,34 @@ export default function StructurePanel() {
               )}
               <SortableList className="space-y-2" ids={experience.map((e, i) => e.id || `exp-${i}`)}
                 onReorder={reorderExperience}>
-                {experience.map((exp, i) => <ExperienceItem key={exp.id || `exp-${i}`} exp={exp} index={i} />)}
+                {(() => {
+                  const groups = groupExperience(experience);
+                  // index -> { group, isLead, lastIndexOfRun }
+                  const byIndex = new Map();
+                  groups.forEach((group) => {
+                    const last = group.roles[group.roles.length - 1].index;
+                    group.roles.forEach((role, position) => {
+                      byIndex.set(role.index, { group, isLead: position === 0, lastIndexOfRun: last });
+                    });
+                  });
+                  return experience.map((exp, i) => {
+                    const meta = byIndex.get(i) || {};
+                    const isRunMember = !!meta.group && meta.group.roles.length > 1;
+                    const prev = i > 0 ? experience[i - 1] : null;
+                    return (
+                      <ExperienceItem
+                        key={exp.id || `exp-${i}`}
+                        exp={exp}
+                        index={i}
+                        group={meta.group}
+                        isLead={!!meta.isLead}
+                        isRunMember={isRunMember}
+                        lastIndexOfRun={meta.lastIndexOfRun}
+                        canLinkAbove={!!prev && !!prev.company && prev.company === exp.company}
+                      />
+                    );
+                  });
+                })()}
               </SortableList>
             </PanelSection>
 
