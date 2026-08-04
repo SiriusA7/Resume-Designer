@@ -1547,6 +1547,51 @@ describe('secretStore', () => {
       expect(store.isCleanupPending()).toBe(false);
     });
 
+    // A clear whose scrub failed leaves the sentinel up and a debt outstanding.
+    // If the user then types a REPLACEMENT rather than saving unchanged, the
+    // session path sets `cached` to that value first, so `scrubBlob` computes
+    // false — and the strip went on to drop the sentinel anyway, clear the debt,
+    // and report success. The next boot then extracted the stale key back over
+    // a replacement that only ever existed in memory.
+    it('keeps the sentinel up when a replacement arrives with a scrub still owed', async () => {
+      const BLOB = 'resume-p--pother--resume-designer-data';
+      localStorage.setItem(OPENROUTER_KEY_KEY, '');
+      localStorage.setItem(BLOB, JSON.stringify({ settings: { openrouterKey: 'sk-paid' } }));
+
+      const realSetItem = Storage.prototype.setItem;
+      const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function set(k, v) {
+        if (k === BLOB) throw new Error('QuotaExceededError');
+        return realSetItem.call(this, k, v);
+      });
+
+      const store = await loadStore({ tauri: false });
+      try {
+        // Boot on a cleared key whose blob scrub is refused.
+        await store.initSecretStore({ backend: null, channel: inertChannel() });
+        expect(store.isCleanupPending()).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Storage recovers, so the sentinel removal WOULD now succeed — which is
+      // exactly what must not happen while the blob is still dirty.
+      await expect(store.setSecret('sk-replacement')).rejects.toThrow(/older copy/i);
+
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('');   // mask still up
+      expect(localStorage.getItem(BLOB)).toContain('sk-paid');     // debt still owed
+      expect(store.isCleanupPending()).toBe(true);
+      // The replacement is still usable for this session; only the cleanup failed.
+      expect(store.getSecret()).toBe('sk-replacement');
+
+      // And it is NOT a dead end: the next boot seeds `cached` from that same
+      // sentinel, so the scrub is retried and the debt clears.
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend: null, channel: inertChannel() });
+      expect(localStorage.getItem(BLOB)).not.toContain('sk-paid');
+      expect(next.isCleanupPending()).toBe(false);
+      expect(next.getSecret()).not.toBe('sk-paid');
+    });
+
     // The other half, and the reason the clear is gated rather than blanket:
     // a session SAVE must leave the blob alone. It is the only DURABLE copy,
     // and the value replacing it evaporates on reload — PR #89 finding 40 from

@@ -565,6 +565,21 @@ async function stripPlaintextCopy({ scrubBlob = mode !== 'session' || cached ===
     }
   }
 
+  // A scrub is still OWED — a previous strip left one — and this pass is not
+  // permitted to attempt it. That is the non-empty session save: the blob may
+  // be the only durable copy, so `scrubBlob` is false by design.
+  //
+  // Removing the shared value here would drop the empty sentinel that is the
+  // sole thing masking that stale blob, and the next boot would extract the old
+  // key back OVER the replacement the user just typed — which in this mode
+  // exists only in memory, so the old key simply wins. Worse, the flush below
+  // would then clear `cleanupPending` and report the whole thing a success.
+  //
+  // Change nothing and stay pending. Not a dead end: the next boot seeds
+  // `cached` from that same sentinel, so `scrubBlob` is true there and the debt
+  // is retried — and in this mode a reload is never far away.
+  if (cleanupPending && !scrubBlob) return false;
+
   const sharedQueued = appStorage.getItem(OPENROUTER_KEY_KEY) !== null;
   if (sharedQueued) appStorage.removeItem(OPENROUTER_KEY_KEY);
 
