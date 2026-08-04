@@ -198,19 +198,20 @@ export default function OnboardingWizard() {
 
   const validateKey = useCallback(async (key) => {
     // Persist immediately so every AI entry point can use it, then validate.
-    // A keychain refusal must not trap the user inside onboarding, so this
-    // logs and continues to the validation step. Note the key is then NOT
-    // persisted — setSecret updates its in-memory copy only after a confirmed
-    // write — so AI calls keep failing until it is saved again from Settings,
-    // which reports the error properly. Revisit alongside
-    // secretStore#handleUnavailableKeychain.
+    //
+    // A keychain refusal has to STOP here. setSecret updates its in-memory copy
+    // only after a confirmed write, so on failure the app holds the old key or
+    // none at all — advancing would show "AI features are ready" and then fail
+    // every call in the steps that follow, with nothing connecting the two.
+    // Better to keep the user on key setup with something they can act on.
     try {
       await saveApiKey(key);
     } catch (err) {
       console.error('[onboarding] could not persist the API key', err);
+      return { saved: false, error: err?.message || 'Could not save your API key.' };
     }
     refreshChatPanel();
-    return validateOpenRouterKey(key);
+    return { saved: true, valid: await validateOpenRouterKey(key) };
   }, []);
 
   const chooseMode = useCallback((m) => {

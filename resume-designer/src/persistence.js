@@ -409,6 +409,39 @@ const BACKUP_SHARED_KEYS = [
 const BACKUP_LEGACY_SHARED_KEYS = [OPENROUTER_KEY_KEY];
 
 /**
+ * Strip a legacy credential out of a `resume-designer-data` blob crossing the
+ * backup boundary.
+ *
+ * Dropping the shared key is not enough on its own. getSettings still reads
+ * `settings.openrouterKey` as the pre-extraction fallback, and
+ * extractSharedApiKey only clears it for the ACTIVE profile, and only once its
+ * flush is durable. So an inactive profile — or one whose extraction never
+ * flushed — can still carry the key inside this blob, and exporting it verbatim
+ * would put the paid credential straight into the clear-text file the Settings
+ * copy promises excludes it.
+ *
+ * Applied on import too, so restoring an older backup cannot reintroduce a
+ * plaintext credential that the next boot's extraction would then promote into
+ * the keychain — the credential is not backup data in either direction.
+ *
+ * Returns the value untouched when there is nothing to strip, including when
+ * the blob will not parse: that is still the user's data and has to round-trip,
+ * and an unparseable blob is not one this app could have read a key out of.
+ */
+function withoutLegacyCredential(logicalKey, value) {
+  if (logicalKey !== STORAGE_KEY || typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || !parsed.settings) return value;
+    if (!('openrouterKey' in parsed.settings)) return value;
+    delete parsed.settings.openrouterKey;
+    return JSON.stringify(parsed);
+  } catch {
+    return value;
+  }
+}
+
+/**
  * Recognize a localStorage QuotaExceededError across browser engines.
  * Different browsers report this differently and JS doesn't expose a
  * single canonical predicate; we accept the four common forms:
@@ -513,7 +546,10 @@ export function exportFullBackup(filename) {
     const split = splitPhysicalKey(k);
     if (split && isOwnedKey(split.logicalKey)) {
       const v = appStorage.getItem(k);
-      if (v !== null) ((profiles[split.profileId] ||= { keys: {} }).keys)[split.logicalKey] = v;
+      if (v !== null) {
+        ((profiles[split.profileId] ||= { keys: {} }).keys)[split.logicalKey] =
+          withoutLegacyCredential(split.logicalKey, v);
+      }
     } else if (BACKUP_SHARED_KEYS.includes(k)) {
       const v = appStorage.getItem(k);
       if (v !== null) shared[k] = v;
@@ -540,7 +576,7 @@ export function exportFullBackup(filename) {
   if (recoveryId) {
     for (const k of unprefixedOwned) {
       const v = appStorage.getItem(k);
-      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = v;
+      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = withoutLegacyCredential(k, v);
     }
   }
   // Reconcile orphan namespaces with the exported registry: a partial
@@ -677,7 +713,10 @@ function importFullBackupV2(parsed) {
       profileEntries.push({
         physicalKey: physicalKey(pid, logicalKey),
         logicalKey,
-        value,
+        // Older backups predate the strip on export, so sanitize on the way in
+        // as well — otherwise the next boot's extractSharedApiKey would promote
+        // a restored blob credential into the keychain.
+        value: withoutLegacyCredential(logicalKey, value),
       });
     }
   }

@@ -276,6 +276,60 @@ describe('format-2 export/restore', () => {
     expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared');
   });
 
+  // Dropping the shared key is not enough on its own. getSettings still reads
+  // `settings.openrouterKey` as the pre-extraction fallback, and
+  // extractSharedApiKey only clears it for the ACTIVE profile, once its flush is
+  // durable — so an inactive profile can still be carrying the credential
+  // inside its blob. Exporting that verbatim would put the paid key straight
+  // into the file the Settings copy promises excludes it.
+  it('strips a legacy credential out of an exported profile blob', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    appStorage.setItem(
+      `resume-p--${partnerId}--resume-designer-data`,
+      JSON.stringify({ variants: { v2: {} }, settings: { openrouterKey: 'sk-in-blob', theme: 'dark' } }),
+    );
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    const blob = JSON.parse(envelope.profiles[partnerId].keys['resume-designer-data']);
+    expect(blob.settings.openrouterKey).toBeUndefined();
+    // Only the credential goes — the rest of the blob round-trips untouched.
+    expect(blob.settings.theme).toBe('dark');
+    expect(blob.variants).toEqual({ v2: {} });
+    // And nothing anywhere in the serialized file still carries it.
+    expect(JSON.stringify(envelope)).not.toContain('sk-in-blob');
+  });
+
+  it('strips a legacy credential out of an imported profile blob', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+    // Forge a pre-strip backup: the credential still inside the blob.
+    envelope.profiles[partnerId].keys['resume-designer-data'] =
+      JSON.stringify({ variants: {}, settings: { openrouterKey: 'sk-in-old-blob' } });
+
+    importFullBackupFromEnvelope(envelope);
+
+    // Otherwise the next boot's extractSharedApiKey would promote this into the
+    // keychain — a backup restoring a credential through the back door.
+    const restored = JSON.parse(
+      localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`),
+    );
+    expect(restored.settings.openrouterKey).toBeUndefined();
+  });
+
+  it('leaves an unparseable blob alone rather than dropping the user data', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    appStorage.setItem(`resume-p--${partnerId}--resume-designer-data`, 'not json{{');
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    expect(envelope.profiles[partnerId].keys['resume-designer-data']).toBe('not json{{');
+  });
+
   it('writes critical data for every profile before best-effort history', () => {
     const originalSetItem = Storage.prototype.setItem;
     let historyAttempted = false;
