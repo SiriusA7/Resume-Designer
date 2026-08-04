@@ -156,6 +156,15 @@ function serializeCredentialOp(run) {
   return result;
 }
 
+function openCredentialChannel() {
+  if (typeof BroadcastChannel === 'undefined') return null;
+  try {
+    return new BroadcastChannel(CREDENTIAL_CHANNEL);
+  } catch {
+    return null;
+  }
+}
+
 function announceCredentialChange() {
   try {
     credentialChannel?.postMessage({ type: 'credential-changed' });
@@ -515,8 +524,13 @@ export async function initSecretStore({ backend = null, channel = null } = {}) {
 
     // Injectable for tests, like the backend. Absent in older browsers, which
     // simply lose cross-tab sync rather than anything else.
-    credentialChannel = channel
-      || (typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(CREDENTIAL_CHANNEL) : null);
+    // Constructing it can THROW as well as be absent — an opaque origin or a
+    // storage-restricted context rejects it. Cross-tab sync is optional; an
+    // optional feature must never abort boot. Uncaught, this skipped both the
+    // encrypted read and the memory-only fallback, and main.js opens the React
+    // gate in its `finally` regardless, so the app came up with cached null and
+    // AI apparently unconfigured while the credential sat safely in storage.
+    credentialChannel = channel || openCredentialChannel();
     if (credentialChannel) {
       credentialChannel.onmessage = (event) => {
         if (event?.data?.type === 'credential-changed') onRemoteCredentialChange();

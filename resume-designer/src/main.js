@@ -7,7 +7,8 @@ import { store } from './store.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
 import {
-  ensureProfilesInitialized, loadRegistry, isAdoptionPending, hasProfileNamespaces,
+  ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
+  hasProfileNamespaces,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -317,9 +318,21 @@ export async function init() {
     await initAppStorage();
     await maybeAutoMigrateLegacyData();
     await ensureProfilesInitialized();   // profiles resolve BEFORE the React gate opens
-    // AFTER profiles (ensureProfilesInitialized runs extractSharedApiKey, which
-    // consolidates the credential into one key) and BEFORE the gate opens, so
-    // React never renders a settings state missing a key the user does have.
+    // ensureProfilesInitialized runs extractSharedApiKey on its HAPPY paths
+    // only: an adoption that cannot finish (browser quota, a Tauri disk
+    // failure) returns early without it. Left to that, a credential still
+    // inside the per-profile blob is never consolidated, initSecretStore finds
+    // nothing to migrate and reports healthy storage, and getSettings quietly
+    // goes on serving the readable blob value — Settings claiming keychain or
+    // encrypted storage while the paid key sits in clear text, indefinitely if
+    // adoption keeps failing.
+    //
+    // Idempotent (an existing shared key wins), so running it again here costs
+    // nothing on the paths that already did it, and is the safety net on the
+    // ones that did not.
+    await extractSharedApiKey();
+    // AFTER the extraction above and BEFORE the gate opens, so React never
+    // renders a settings state missing a key the user does have.
     // Swallows its own failures — a keychain problem must not block boot.
     await initSecretStore();
   } finally {

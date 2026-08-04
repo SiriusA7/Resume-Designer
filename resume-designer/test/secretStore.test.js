@@ -795,6 +795,38 @@ describe('secretStore', () => {
     });
   });
 
+  // ensureProfilesInitialized runs extractSharedApiKey on its happy paths only;
+  // an adoption that cannot finish returns early without it. boot therefore
+  // calls it independently, or a credential still inside the per-profile blob
+  // is never consolidated — initSecretStore finds nothing to migrate, reports
+  // healthy storage, and getSettings quietly serves the readable blob value.
+  describe('boot extracts the credential even when adoption degraded', () => {
+    it('migrates a blob-resident key into the keychain', async () => {
+      const { extractSharedApiKey } = await import('../src/profiles.js');
+      localStorage.setItem('resume-designer-data', JSON.stringify({
+        variants: {}, settings: { openrouterKey: 'sk-in-blob', theme: 'dark' },
+      }));
+
+      // The boot sequence, minus the profile adoption that failed.
+      await extractSharedApiKey();
+      const store = await loadStore();
+      invokeMock.mockImplementation(async (cmd) => (cmd === 'secret_get' ? null : undefined));
+      await store.initSecretStore();
+
+      // It reached the keychain...
+      expect(invokeMock).toHaveBeenCalledWith('secret_set', {
+        name: OPENROUTER_KEY_KEY,
+        value: 'sk-in-blob',
+      });
+      expect(store.getSecret()).toBe('sk-in-blob');
+      // ...and is no longer readable in either plaintext home.
+      expect(plaintext()).toBeNull();
+      const blob = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(blob.settings.openrouterKey).toBeUndefined();
+      expect(blob.settings.theme).toBe('dark');
+    });
+  });
+
   // The read-only banner promises the user can fix things without restarting.
   // Two outstanding conditions are NOT reachable through the credential write,
   // so Save has to do them explicitly or the promise is empty.
