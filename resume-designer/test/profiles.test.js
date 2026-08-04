@@ -792,6 +792,51 @@ describe('shared api key overlay', () => {
     expect(getSettings().openrouterKey).toBe('sk-blob');
   });
 
+  // The boot cleanup deletes the legacy shared value — including when that
+  // value is the EMPTY Clear sentinel, which in session mode is the only
+  // durable thing masking a stale blob credential extraction could not remove.
+  // Dropping it without scrubbing left the NEXT boot scanning an unmasked blob,
+  // and the key the user cleared came back. Only provable across a reboot, and
+  // only with the real extraction in the loop, so this runs the actual boot
+  // sequence twice: extractSharedApiKey → initSecretStore.
+  it('a cleared key does not come back after the sentinel is dropped', async () => {
+    const BLOB = 'resume-p--pother--resume-designer-data';
+    // The user cleared their key: sentinel present, and a stale copy still in
+    // an inactive profile blob.
+    localStorage.setItem(OPENROUTER_KEY_KEY, '');
+    localStorage.setItem(BLOB, JSON.stringify({
+      settings: { openrouterKey: 'sk-paid', theme: 'light' },
+    }));
+
+    // THE PRECONDITION, and the test was vacuous without it: storage refuses
+    // to rewrite the blob, which is why the stale credential is still there.
+    // With writes working, extraction scrubs it on the first boot and there is
+    // nothing left to unmask.
+    const realSetItem = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function set(k, v) {
+      if (k === BLOB) throw new Error('QuotaExceededError');
+      return realSetItem.call(this, k, v);
+    });
+
+    // Boot 1 — session mode (jsdom has no IndexedDB, so no encrypted backend).
+    await initSecretStore({ backend: null, strandedPlaintext: await extractSharedApiKey() });
+    expect(getSecret()).toBe('');
+    // The blob still holds it, so the sentinel is still doing a job.
+    expect(localStorage.getItem(BLOB)).toContain('sk-paid');
+
+    // Storage recovers, and the app restarts.
+    spy.mockRestore();
+    __resetSecretStoreForTests();
+
+    // Boot 2, against whatever boot 1 left behind. THE CLAIM: the key the user
+    // cleared must not be back.
+    await initSecretStore({ backend: null, strandedPlaintext: await extractSharedApiKey() });
+    expect(getSecret()).not.toBe('sk-paid');
+    expect(getSettings().openrouterKey).not.toBe('sk-paid');
+    // ...and the rest of that profile's blob survived throughout.
+    expect(JSON.parse(localStorage.getItem(BLOB)).settings.theme).toBe('light');
+  });
+
   // The blob is a MIGRATION source, readable only until secretStore has spoken.
   // `browser-unreadable` returns null deliberately, to stop using a credential
   // it cannot verify — and this fallback was handing the stale blob key

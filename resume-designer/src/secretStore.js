@@ -510,9 +510,6 @@ async function stripPlaintextCopy({ scrubBlob = mode !== 'session' } = {}) {
     return false;
   }
 
-  const sharedQueued = appStorage.getItem(OPENROUTER_KEY_KEY) !== null;
-  if (sharedQueued) appStorage.removeItem(OPENROUTER_KEY_KEY);
-
   // The DATA BLOB is a plaintext copy too, and used not to be scrubbed here at
   // all — extraction owned it, and extraction is exactly what fails in the
   // states that leave one behind. In `session` mode with a stranded blob
@@ -526,7 +523,28 @@ async function stripPlaintextCopy({ scrubBlob = mode !== 'session' } = {}) {
   // there is no durable sentinel to write, so the next boot's sweep reaches an
   // inactive profile's surviving credential and adopts it: a Clear the user
   // performed, undone by a profile they never opened.
-  const blobQueued = scrubBlob && scrubEveryBlobCredential();
+  //
+  // BEFORE the shared removal below, and the order is load-bearing. An EMPTY
+  // shared value is the sentinel MASKING a stale blob credential, and the next
+  // lines delete it. Unmasking before the thing being masked is gone is the
+  // worst available order: passthrough setItem throws synchronously once
+  // localStorage is full, so the sentinel would already be removed and the next
+  // boot would scan the blobs with nothing masking them.
+  let blobQueued = false;
+  if (scrubBlob) {
+    try {
+      blobQueued = scrubEveryBlobCredential();
+    } catch {
+      // Storage refused the rewrite. Report it outstanding and leave the shared
+      // value ALONE — if it is the empty sentinel, it is still the only thing
+      // standing between a stale blob and the next boot's sweep.
+      cleanupPending = true;
+      return false;
+    }
+  }
+
+  const sharedQueued = appStorage.getItem(OPENROUTER_KEY_KEY) !== null;
+  if (sharedQueued) appStorage.removeItem(OPENROUTER_KEY_KEY);
 
   const queued = sharedQueued || blobQueued;
 
@@ -787,7 +805,16 @@ async function initBrowserCredential() {
     // fallback, never plaintext.
     mode = 'session';
     cached = appStorage.getItem(OPENROUTER_KEY_KEY);
-    await stripPlaintextCopy();
+    // Scrub the blobs on exactly the same rule the session WRITE path uses:
+    // when the credential is empty. An empty shared value is the user's Clear,
+    // and the cleanup below deletes it — so it is the last durable thing
+    // masking a stale blob credential extraction could not remove. Without the
+    // scrub, the next boot scans those blobs with no sentinel present and
+    // adopts the paid key the user deleted.
+    //
+    // A REAL key must not scrub: in this mode the blob is then the only durable
+    // copy, and removing it is PR #89's finding 40.
+    await stripPlaintextCopy({ scrubBlob: cached === '' });
     return;
   }
 
