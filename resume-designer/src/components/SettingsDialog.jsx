@@ -253,22 +253,29 @@ export default function SettingsDialog() {
   // A failed strip leaves a readable copy behind. Surfaced here rather than
   // only on the next Save, which is the one moment the user might never reach.
   const cleanupPending = isCleanupPending();
-  // Three states, not two. A degraded DESKTOP session also reports
-  // isKeychainAvailable() === false, but it is nothing like the browser one:
-  // handleUnavailableKeychain kept serving the older credential from the
-  // plaintext file on disk. Collapsing the two told those users their key was
-  // held in a browser session — reassuring, and the opposite of true.
-  const keychainName = isKeychainAvailable()
-    ? 'system keychain'
-    : (readOnlyKeychain ? 'app data folder' : 'browser session');
-
   // Where the key lives, per mode. Each gets its own sentence rather than a
   // substituted noun — "kept in your browser session… so it isn't stored at
   // all" read as a contradiction, and the encrypted case needs to say what is
   // actually protecting it.
   let credentialNote;
-  if (isKeychainAvailable() || readOnlyKeychain) {
-    credentialNote = `Your key is kept in your ${keychainName} and is sent only to OpenRouter — never share it.`;
+  if (isKeychainAvailable()) {
+    credentialNote = 'Your key is kept in your system keychain and is sent only to OpenRouter'
+      + ' — never share it.';
+  } else if (readOnlyKeychain && hasUsableCredential) {
+    // A degraded DESKTOP session is nothing like the browser one, and the two
+    // read-only cases differ from each other too. There is only one reason a
+    // read-only session HAS a usable key: a pre-migration plaintext copy in the
+    // app data folder, which is exactly where the banner says it is.
+    credentialNote = 'Your key is kept in your app data folder and is sent only to OpenRouter'
+      + ' — never share it.';
+  } else if (readOnlyKeychain) {
+    // Already migrated, and the keychain read failed. Nothing readable exists
+    // on disk to point at, so naming the app data folder here both contradicted
+    // the banner directly above and claimed the credential was somewhere it is
+    // not.
+    credentialNote = 'Your key is in your system keychain, which couldn’t be reached — so it can’t be'
+      + ' read right now, and nothing readable is stored anywhere else. Unlock your keychain and save'
+      + ' again to recover it.';
   } else if (isEncryptedInBrowser()) {
     // Says "non-exportable", not "no script can get it". Any same-origin script
     // can fetch the CryptoKey handle and ask the browser to decrypt; what it
@@ -316,7 +323,14 @@ export default function SettingsDialog() {
         : degradedBrowser
           ? 'Your API key isn’t included. It’s currently saved unencrypted in this browser and will persist'
             + ' between visits — save it again from the AI tab to encrypt it.'
-          : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
+          // Unreadable is NOT "can't store it" either: a record IS stored, it
+          // just won't decrypt, and a restore neither removes it nor repairs
+          // it. The fallthrough promised the opposite on both counts.
+          : unreadableBrowser
+            ? 'Your API key isn’t included. A key is already stored in this browser but can’t be read —'
+              + ' restoring a backup won’t remove it or repair it. Enter your key again from the AI tab'
+              + ' to replace it.'
+            : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
 
   const handleSaveKeys = async () => {
     // Guard as well as disabling the controls: a keypress can land between the
