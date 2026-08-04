@@ -1115,6 +1115,22 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
                                           //   userProfile, settings, etc.
         variants: mergedVariants,
       };
+      // `settings` is replaced WHOLESALE by the current one just above, so
+      // keeping the credential in the incoming blob was not enough on its own:
+      // a user with existing Tauri-side data but no key, choosing "Merge
+      // previous data", still lost the Electron credential before the
+      // reload-time extraction could migrate it. Carry just that one field, and
+      // only into a gap — current settings win everywhere else, and an existing
+      // `openrouterKey` (including a deliberate '') is never overwritten.
+      if (keepCredential) {
+        const incomingKey = incomingData?.settings?.openrouterKey;
+        const mergedSettings = merged.settings;
+        if (incomingKey !== undefined
+            && mergedSettings && typeof mergedSettings === 'object'
+            && !('openrouterKey' in mergedSettings)) {
+          merged.settings = { ...mergedSettings, openrouterKey: incomingKey };
+        }
+      }
       appStorage.setItem(key, JSON.stringify(merged));
     } else if (key === 'resume-designer-job-descriptions') {
       // Union job descriptions, dedupe by id. Handles both array and

@@ -710,6 +710,19 @@ describe('adoption migration', () => {
     expect(await extractSharedApiKey()).toBeNull();
   });
 
+  // `in` on a truthy NON-object throws a TypeError, and that check sits outside
+  // the parse catch since the catch was narrowed to tell a corrupt blob from a
+  // storage refusal. Boot awaits this before initSecretStore, so one
+  // hand-edited or imported profile aborted the rest of init.
+  it('extractSharedApiKey survives a non-object settings blob', async () => {
+    for (const settings of ['nope', 42, true, []]) {
+      localStorage.setItem('resume-designer-data', JSON.stringify({ variants: {}, settings }));
+      await expect(extractSharedApiKey()).resolves.toBeNull();
+      // Left exactly as found, for loadFromStorage's own fallback to deal with.
+      expect(JSON.parse(localStorage.getItem('resume-designer-data')).settings).toEqual(settings);
+    }
+  });
+
   // main.js calls this a second time as a safety net for the adoption paths
   // that return before reaching it. "An existing shared key wins" was read as
   // "a second call is free" — but appStorage.getItem serves the write-behind

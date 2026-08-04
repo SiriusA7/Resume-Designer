@@ -132,6 +132,42 @@ describe('importFullBackupFromEnvelope', () => {
 
       expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-electron-live');
     });
+
+    // Keeping the credential in the incoming blob is not enough on its own:
+    // with existing data present, the merge replaces `settings` WHOLESALE with
+    // the current one, so a user who already had Tauri-side data but no key and
+    // chose "Merge previous data" still lost the Electron credential before the
+    // reload-time extraction could migrate it.
+    it('carries the credential into a merge with existing data', () => {
+      localStorage.setItem('resume-designer-data', JSON.stringify({
+        variants: { mine: {} },
+        settings: { theme: 'light' },   // existing settings, no key of their own
+      }));
+
+      importFullBackupMerge(envelope(), { keepCredential: true });
+
+      const parsed = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(parsed.settings.openrouterKey).toBe('sk-electron-live');
+      // Current settings still win everywhere else.
+      expect(parsed.settings.theme).toBe('light');
+      expect(parsed.variants.mine).toBeDefined();
+    });
+
+    // Only into a GAP. An existing credential — including a deliberate '' —
+    // is the user's current intent and must not be overwritten by an older one.
+    it('never overwrites an existing credential during a merge', () => {
+      for (const existing of ['sk-current', '']) {
+        localStorage.clear();
+        localStorage.setItem('resume-designer-data', JSON.stringify({
+          variants: {}, settings: { openrouterKey: existing },
+        }));
+
+        importFullBackupMerge(envelope(), { keepCredential: true });
+
+        expect(JSON.parse(localStorage.getItem('resume-designer-data')).settings.openrouterKey)
+          .toBe(existing);
+      }
+    });
   });
 
   it('writes owned keys and silently skips foreign keys', () => {

@@ -206,8 +206,16 @@ async function extractCredentialFromBlob(blobKey) {
     // key out of.
     return null;
   }
-  if (!data?.settings || !('openrouterKey' in data.settings)) return null;
-  const inBlob = data.settings.openrouterKey;
+  // `in` on a truthy NON-object throws a TypeError, and this line sits outside
+  // the parse catch since the catch was narrowed to distinguish a corrupt blob
+  // from a storage refusal. A hand-edited or imported blob with
+  // `settings: "…"` would therefore escape here — and boot awaits this before
+  // initSecretStore, so one malformed profile aborted the rest of init rather
+  // than being left to loadFromStorage's own fallback.
+  const settings = data?.settings;
+  if (!settings || typeof settings !== 'object') return null;
+  if (!('openrouterKey' in settings)) return null;
+  const inBlob = settings.openrouterKey;
   try {
     // PRESENCE, not truthiness. Reaching here means the field is present, so an
     // empty value is the user's explicit Clear and has to become the shared

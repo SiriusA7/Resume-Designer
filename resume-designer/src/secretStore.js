@@ -29,7 +29,7 @@
  */
 
 import { appStorage } from './appStorage.js';
-import { OPENROUTER_KEY_KEY } from './profileKeys.js';
+import { OPENROUTER_KEY_KEY, withoutLegacyCredential } from './profileKeys.js';
 import { createIndexedDbBackend, readSecret, writeSecret } from './browserSecretStore.js';
 
 // Canonical Tauri sniff — same predicate as appStorage.js / native.js.
@@ -44,6 +44,10 @@ const IS_TAURI =
 // `resume-designer-*` key, it is a data address rather than branding and must
 // not be renamed with the app (see the naming rules in CLAUDE.md).
 const SECRET_NAME = OPENROUTER_KEY_KEY;
+
+// The per-profile data blob, which can carry a pre-migration credential inside
+// `settings.openrouterKey`. Mapped to the active profile by appStorage.
+const RESUME_DATA_KEY = 'resume-designer-data';
 
 // The credential, hydrated at boot. `null` means "no key configured".
 let cached = null;
@@ -435,7 +439,16 @@ export function isSecretStoreReady() {
  * retries the strip on every subsequent boot, so it self-heals as soon as one
  * flush succeeds. The exposure window is a degraded boot landing before that.
  */
-async function stripPlaintextCopy() {
+// `scrubBlob` defaults to "a durable copy of ours exists" — true in every mode
+// but `session`. That default is load-bearing: in `session` a save is
+// memory-only, so scrubbing the blob would delete the user's ONLY durable
+// credential and replace it with one that dies on reload. That is PR #89's
+// finding 40 arriving from the other side, and the existing regression test for
+// it is what caught this.
+//
+// A session CLEAR passes true explicitly, because there the blob IS the thing
+// being cleared — nothing is lost, and leaving it made Clear a lie.
+async function stripPlaintextCopy({ scrubBlob = mode !== 'session' } = {}) {
   // A restore has appStorage's guard armed: removeItem only records into
   // `deferredDuringRestore` — it touches neither the cache nor disk — while
   // flush() can still report true. Worse, the SUCCESSFUL restore path then
@@ -450,8 +463,25 @@ async function stripPlaintextCopy() {
     return false;
   }
 
-  const queued = appStorage.getItem(OPENROUTER_KEY_KEY) !== null;
-  if (queued) appStorage.removeItem(OPENROUTER_KEY_KEY);
+  const sharedQueued = appStorage.getItem(OPENROUTER_KEY_KEY) !== null;
+  if (sharedQueued) appStorage.removeItem(OPENROUTER_KEY_KEY);
+
+  // The DATA BLOB is a plaintext copy too, and used not to be scrubbed here at
+  // all — extraction owned it, and extraction is exactly what fails in the
+  // states that leave one behind. In `session` mode with a stranded blob
+  // credential the omission was visible: Clear updated `cached` and nothing
+  // else, so it looked like it worked until the next boot read the same
+  // plaintext blob and put the paid key straight back.
+  //
+  // Only the ACTIVE profile's blob, which is what the mapped key resolves to.
+  // The other profiles are extraction's job on the next boot; this function
+  // runs at moments when there is a user waiting, not as a sweep.
+  const blob = scrubBlob ? appStorage.getItem(RESUME_DATA_KEY) : null;
+  const scrubbed = blob === null ? null : withoutLegacyCredential(RESUME_DATA_KEY, blob);
+  const blobQueued = scrubbed !== null && scrubbed !== blob;
+  if (blobQueued) appStorage.setItem(RESUME_DATA_KEY, scrubbed);
+
+  const queued = sharedQueued || blobQueued;
 
   // With nothing of OURS outstanding, do not consult the flush at all.
   // appStorage.flush() reports durability for the whole dirty batch, so an
@@ -648,6 +678,15 @@ export async function setSecret(value) {
     // revoked key still in use is the failure that matters. Receivers drop
     // theirs; re-entry is already this mode's normal cost.
     announceCredentialChange();
+    // This mode holds nothing durable, but a stranded blob credential IS
+    // durable, and leaving it made Clear a lie: memory said gone, the next boot
+    // read the same plaintext blob and restored the paid key.
+    //
+    // ONLY on a clear. A session SAVE must leave the blob alone — it is the
+    // only durable copy, and the value replacing it evaporates on reload.
+    if (!(await stripPlaintextCopy({ scrubBlob: value === '' }))) {
+      throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
+    }
     return;
   }
 

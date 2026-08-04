@@ -1153,6 +1153,49 @@ describe('secretStore', () => {
       expect(store.getSecret()).toBe('');
     });
 
+    // `session` holds nothing durable, but a stranded blob credential IS
+    // durable. Clearing updated `cached` and nothing else, so Clear looked like
+    // it worked until the next boot read the same plaintext blob and put the
+    // paid key straight back.
+    it('makes a session-mode clear durable against a stranded blob', async () => {
+      localStorage.setItem('resume-designer-data', JSON.stringify({
+        variants: {}, settings: { openrouterKey: 'sk-paid', theme: 'dark' },
+      }));
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend: null, strandedPlaintext: 'sk-paid' });
+      expect(store.getSecret()).toBe('sk-paid');
+
+      await store.setSecret('');
+
+      expect(store.getSecret()).toBe('');
+      // The readable copy is GONE, so a reload cannot resurrect it...
+      const blob = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(blob.settings.openrouterKey).toBeUndefined();
+      expect(blob.settings.theme).toBe('dark');
+      // ...proven by actually rebooting against what is left.
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend: null });
+      expect(after.getSecret()).not.toBe('sk-paid');
+    });
+
+    // The other half, and the reason the clear is gated rather than blanket:
+    // a session SAVE must leave the blob alone. It is the only DURABLE copy,
+    // and the value replacing it evaporates on reload — PR #89 finding 40 from
+    // the other side.
+    it('leaves the blob alone on a session-mode SAVE', async () => {
+      localStorage.setItem('resume-designer-data', JSON.stringify({
+        variants: {}, settings: { openrouterKey: 'sk-legacy', theme: 'dark' },
+      }));
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend: null, strandedPlaintext: 'sk-legacy' });
+
+      await store.setSecret('sk-new');
+
+      expect(store.getSecret()).toBe('sk-new');
+      expect(JSON.parse(localStorage.getItem('resume-designer-data')).settings.openrouterKey)
+        .toBe('sk-legacy');
+    });
+
     // Only when there is nothing of ours stored. A durable credential is the
     // truth; a leftover blob copy is a cleanup problem, not a demotion.
     it('ignores a stranded blob credential when a stored one exists', async () => {
