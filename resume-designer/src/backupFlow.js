@@ -12,7 +12,7 @@ import {
   exportFullBackup, importFullBackupDurably, importFullBackupMerge,
   credentialFromEnvelope, saveApiKey,
 } from './persistence.js';
-import { getSecret, hasNoCredentialConfigured } from './secretStore.js';
+import { getSecret, hasNoCredentialConfigured, recoverSecretStore } from './secretStore.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
@@ -366,8 +366,23 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     // MERGE is deliberately untouched — "your current data wins on conflict" is
     // its whole contract, and the current key is current data.
     const incomingCredential = merging ? null : credentialFromEnvelope(envelope);
+
+    // A null snapshot in read-only or browser-unreadable means the current key
+    // could not be READ, not that there is none — and rolling THAT back as ''
+    // would clear a credential the user still has while telling them the import
+    // failed. So make it knowable first: recoverSecretStore is the same retry
+    // the Settings banner offers, and it usually succeeds because a keychain
+    // fault at boot is usually transient.
+    if (incomingCredential !== null && !hasNoCredentialConfigured() && getSecret() === null) {
+      try { await recoverSecretStore(); } catch { /* still unreadable — handled below */ }
+    }
     previousCredential = getSecret();
-    if (incomingCredential !== null) {
+    // Trustworthy iff we either read a value or can say authoritatively there is
+    // none. Unknown is neither, and there is no safe swap from unknown: once the
+    // incoming key is written the original is gone and cannot be read back.
+    const previousKnown = previousCredential !== null || hasNoCredentialConfigured();
+
+    if (incomingCredential !== null && previousKnown) {
       // Marked BEFORE the await, not after. setSecret writes the keychain and
       // THEN strips any plaintext copy, and it throws if that strip fails — so
       // a rejection does not mean the swap did not happen. Setting the flag
@@ -416,7 +431,13 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       ? `Merged your previous app's resumes and settings into this one.`
       : `Imported ${result.keysImported} keys from your previous app `
         + `(removed ${result.removedExistingKeys} existing keys).`;
-    showImportSuccessAndReload(summary + skipped);
+    // Said out loud rather than left silent: the user asked to replace
+    // everything, and one thing was deliberately not replaced.
+    const keyNote = (incomingCredential !== null && !previousKnown)
+      ? `\n\nYour API key was left as it is — the current one couldn't be read, `
+        + `so replacing it would have discarded a key you may still have.`
+      : '';
+    showImportSuccessAndReload(summary + skipped + keyNote);
   } catch (err) {
     if (suspendedHere) store.resumeSaves(); // resume only a suspension THIS call created
     // The import did not happen, so the credential swap it was part of must not

@@ -501,16 +501,23 @@ function scrubEveryBlobCredential() {
   return changed;
 }
 
-// `scrubBlob` defaults to "a durable copy of ours exists" — true in every mode
-// but `session`. That default is load-bearing: in `session` a save is
-// memory-only, so scrubbing the blob would delete the user's ONLY durable
-// credential and replace it with one that dies on reload. That is PR #89's
-// finding 40 arriving from the other side, and the existing regression test for
-// it is what caught this.
+// `scrubBlob` asks one question: can scrubbing destroy the ONLY durable copy?
+// It cannot when something durable of ours already exists (every mode but
+// `session`), and it cannot when the credential is EMPTY — a cleared key has
+// nothing to destroy, and the blob is then the thing being cleared.
 //
-// A session CLEAR passes true explicitly, because there the blob IS the thing
-// being cleared — nothing is lost, and leaving it made Clear a lie.
-async function stripPlaintextCopy({ scrubBlob = mode !== 'session' } = {}) {
+// In `session` a save is memory-only, so scrubbing a real key there would
+// delete the user's only durable credential and replace it with one that dies
+// on reload: PR #89's finding 40 from the other side, caught by its existing
+// regression test.
+//
+// Computed as a DEFAULT rather than passed by each caller, which is the fix for
+// the third bug in this area. Three call sites decide this — boot's no-backend
+// branch, setSecret's session branch, and the cleanup retry in recovery — and
+// the retry was the one still taking the bare default, so a session clear whose
+// scrub failed removed the sentinel on retry WITHOUT scrubbing, leaving the next
+// boot to unmask a stale blob. One default, no call site to forget.
+async function stripPlaintextCopy({ scrubBlob = mode !== 'session' || cached === '' } = {}) {
   // A restore has appStorage's guard armed: removeItem only records into
   // `deferredDuringRestore` — it touches neither the cache nor disk — while
   // flush() can still report true. Worse, the SUCCESSFUL restore path then
@@ -817,9 +824,9 @@ export async function setSecret(value) {
     //
     // ONLY on a clear. A session SAVE must leave the blob alone — it is the
     // only durable copy, and the value replacing it evaporates on reload.
-    if (!(await stripPlaintextCopy({ scrubBlob: value === '' }))) {
-      throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
-    }
+    // `cached` is `value` by now, so the default computes the same answer the
+    // explicit argument used to.
+    if (!(await stripPlaintextCopy())) throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
     return;
   }
 
@@ -882,7 +889,7 @@ async function initBrowserCredential() {
     //
     // A REAL key must not scrub: in this mode the blob is then the only durable
     // copy, and removing it is PR #89's finding 40.
-    await stripPlaintextCopy({ scrubBlob: cached === '' });
+    await stripPlaintextCopy();
     return;
   }
 

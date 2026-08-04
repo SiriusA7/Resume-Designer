@@ -1511,6 +1511,42 @@ describe('secretStore', () => {
         .settings.theme).toBe('light');
     });
 
+    // The cleanup RETRY was the one call site still taking the bare default.
+    // After a session clear whose blob scrub failed, cleanupPending is set and
+    // the sentinel deliberately kept — then Save-again removed that sentinel
+    // without scrubbing, and the next boot could unmask the stale blob and
+    // restore the paid key the user cleared.
+    it('scrubs the blob when RETRYING a failed session cleanup', async () => {
+      const BLOB = 'resume-p--pother--resume-designer-data';
+      localStorage.setItem(OPENROUTER_KEY_KEY, '');
+      localStorage.setItem(BLOB, JSON.stringify({ settings: { openrouterKey: 'sk-paid' } }));
+
+      // The first scrub is refused, so the clear reports cleanup pending and
+      // the sentinel stays.
+      const realSetItem = Storage.prototype.setItem;
+      const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function set(k, v) {
+        if (k === BLOB) throw new Error('QuotaExceededError');
+        return realSetItem.call(this, k, v);
+      });
+
+      const store = await loadStore({ tauri: false });
+      try {
+        await store.initSecretStore({ backend: null, channel: inertChannel() });
+        expect(store.getSecret()).toBe('');
+        expect(store.isCleanupPending()).toBe(true);
+        expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('');   // sentinel kept
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Storage recovers and the user saves again, which retries the cleanup.
+      await store.recoverSecretStore();
+
+      // The stale blob is scrubbed — so dropping the sentinel is now safe.
+      expect(localStorage.getItem(BLOB)).not.toContain('sk-paid');
+      expect(store.isCleanupPending()).toBe(false);
+    });
+
     // The other half, and the reason the clear is gated rather than blanket:
     // a session SAVE must leave the blob alone. It is the only DURABLE copy,
     // and the value replacing it evaporates on reload — PR #89 finding 40 from
