@@ -5,6 +5,7 @@
 
 import { getSettings, saveSettings, getUserProfile, saveUserProfile } from './persistence.js';
 import { store } from './store.js';
+import { groupExperience } from './experienceGroups.js';
 import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
@@ -644,11 +645,26 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
   
   if (profile.workExperience && profile.workExperience.length > 0) {
     profileContext += `### Work Experience\n`;
-    for (const exp of profile.workExperience) {
-      profileContext += `\n**${exp.title || 'Position'}** at **${exp.company || 'Company'}**`;
-      if (exp.dates) profileContext += ` (${exp.dates})`;
-      profileContext += `\n`;
-      if (exp.details) profileContext += `${exp.details}\n`;
+    // Grouped runs emit ONE company heading with its roles beneath, so the model is
+    // told that several positions are one tenure instead of inferring it from a
+    // repeated company string — which it gets wrong for return stints and for
+    // concurrent roles.
+    for (const group of groupExperience(profile.workExperience)) {
+      if (group.roles.length > 1) {
+        profileContext += `\n**${group.company}** — ${group.roles.length} positions\n`;
+        for (const { entry } of group.roles) {
+          profileContext += `- **${entry.title || 'Position'}**`;
+          if (entry.dates) profileContext += ` (${entry.dates})`;
+          profileContext += `\n`;
+          if (entry.details) profileContext += `${entry.details}\n`;
+        }
+      } else {
+        const exp = group.roles[0].entry;
+        profileContext += `\n**${exp.title || 'Position'}** at **${exp.company || 'Company'}**`;
+        if (exp.dates) profileContext += ` (${exp.dates})`;
+        profileContext += `\n`;
+        if (exp.details) profileContext += `${exp.details}\n`;
+      }
     }
     profileContext += '\n';
   }
@@ -776,12 +792,24 @@ function getUserProfileContext() {
   
   if (profile.workExperience && profile.workExperience.length > 0) {
     context += `### Detailed Work Experience\n`;
-    for (const exp of profile.workExperience) {
-      if (exp.title || exp.company) {
-        context += `\n**${exp.title || 'Untitled'}** at ${exp.company || 'Unknown Company'}`;
-        if (exp.dates) context += ` (${exp.dates})`;
-        context += `\n`;
-        if (exp.details) context += `${exp.details}\n`;
+    for (const group of groupExperience(profile.workExperience)) {
+      if (group.roles.length > 1) {
+        context += `\n**${group.company}** — ${group.roles.length} positions\n`;
+        for (const { entry } of group.roles) {
+          if (!entry.title && !entry.company) continue;
+          context += `- **${entry.title || 'Untitled'}**`;
+          if (entry.dates) context += ` (${entry.dates})`;
+          context += `\n`;
+          if (entry.details) context += `${entry.details}\n`;
+        }
+      } else {
+        const exp = group.roles[0].entry;
+        if (exp.title || exp.company) {
+          context += `\n**${exp.title || 'Untitled'}** at ${exp.company || 'Unknown Company'}`;
+          if (exp.dates) context += ` (${exp.dates})`;
+          context += `\n`;
+          if (exp.details) context += `${exp.details}\n`;
+        }
       }
     }
     context += '\n';

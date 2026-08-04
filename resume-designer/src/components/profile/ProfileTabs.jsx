@@ -10,6 +10,8 @@ import {
 import { cn } from '@/lib/utils';
 
 import { shouldSpellcheck } from '../../spellcheck.js';
+import { groupExperience } from '../../experienceGroups.js';
+import { generateId } from '../../store.js';
 
 // The profile editor's per-tab content, rebuilt on genuine shadcn primitives to
 // match SettingsDialog's idiom (Label + Input grids, SectionHeader, entry cards
@@ -256,7 +258,7 @@ function ItemList({ items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete,
         <Empty title={emptyTitle} subtitle={emptySubtitle} />
       ) : (
         items.map((item, i) => (
-          <EntryCard key={i} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
+          <EntryCard key={item.id || `row-${i}`} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
             {renderBody(item, i)}
           </EntryCard>
         ))
@@ -280,23 +282,63 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
         emptyTitle="No experience entries yet"
         emptySubtitle="Add detailed information about your work history"
         addLabel="Add experience entry"
-        onAdd={() => { items.push({ title: '', company: '', dates: '', details: '' }); refresh(); }}
+        onAdd={() => { items.push({ id: generateId('exp'), title: '', company: '', dates: '', details: '' }); refresh(); }}
         onDelete={(i) => { items.splice(i, 1); refresh(); }}
         renderTitle={(exp, i) => (
           <Input className="font-medium" placeholder="Job title" defaultValue={exp.title || ''} onChange={(e) => set(i, 'title')(e.target.value)} />
         )}
-        renderBody={(exp, i) => (
-          <>
-            <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} />
-            <Input placeholder="Dates (e.g., Jan 2020 - Present)" defaultValue={exp.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
-            <Textarea
-              rows={4}
-              placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
-              defaultValue={stripEmphasis(exp.details)}
-              onChange={(e) => set(i, 'details')(e.target.value)}
-            />
-          </>
-        )}
+        renderBody={(exp, i) => {
+          const groups = groupExperience(items);
+          const group = groups.find((g) => g.roles.some((r) => r.index === i));
+          const isRunMember = !!group && group.roles.length > 1;
+          const isLead = isRunMember && group.roles[0].index === i;
+          const prev = i > 0 ? items[i - 1] : null;
+          const canLinkAbove = !!prev && !!prev.company && prev.company === exp.company;
+          const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
+          return (
+            <>
+              <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} />
+              <Input placeholder="Dates (e.g., Jan 2020 - Present)" defaultValue={exp.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
+              <Textarea
+                rows={4}
+                placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
+                defaultValue={stripEmphasis(exp.details)}
+                onChange={(e) => set(i, 'details')(e.target.value)}
+              />
+              <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
+                {isRunMember && (
+                  <span className="text-[11px] font-medium text-muted-foreground">
+                    {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
+                  </span>
+                )}
+                {isRunMember ? (
+                  <Button
+                    variant="outline" size="sm" type="button" className="h-7 text-xs"
+                    onClick={() => rewrite(items.map((entry, k) => (k === i ? { ...entry, _groupId: generateId('grp') } : entry)))}
+                  >
+                    Separate from company above
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline" size="sm" type="button" className="h-7 text-xs"
+                    disabled={!canLinkAbove}
+                    title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
+                    onClick={() => {
+                      const id = prev._groupId || generateId('grp');
+                      rewrite(items.map((entry, k) => {
+                        if (k === i - 1) return { ...entry, _groupId: id };
+                        if (k === i) return { ...entry, _groupId: id };
+                        return entry;
+                      }));
+                    }}
+                  >
+                    Link to company above
+                  </Button>
+                )}
+              </div>
+            </>
+          );
+        }}
       />
     </section>
   );

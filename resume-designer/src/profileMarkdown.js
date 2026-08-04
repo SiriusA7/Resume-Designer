@@ -5,6 +5,9 @@
  * dependencies; the only shared value is DEFAULT_PROFILE (the empty shape).
  */
 
+import { generateId } from './store.js';
+import { assignGroupIds } from './experienceGroups.js';
+
 export const DEFAULT_PROFILE = {
   contactInfo: {
     fullName: '', email: '', phone: '', location: '',
@@ -128,7 +131,14 @@ export function profileToMarkdown(profile) {
 
 /** Parse a markdown document back into profile data. */
 export function markdownToProfile(markdown) {
-  const profile = { ...DEFAULT_PROFILE };
+  // Deep-ish copy: a shallow spread ALIASES DEFAULT_PROFILE's arrays, so a parser
+  // that pushes would permanently mutate the module constant for the session.
+  const profile = {
+    ...DEFAULT_PROFILE,
+    contactInfo: { ...DEFAULT_PROFILE.contactInfo },
+    workExperience: [], skills: [], education: [], projects: [],
+    certifications: [], achievements: [], customSections: [],
+  };
   const sections = markdown.split(/^## /gm).slice(1);
 
   for (const section of sections) {
@@ -145,7 +155,7 @@ export function markdownToProfile(markdown) {
     } else if (sectionTitle.includes('industry knowledge')) {
       profile.industryKnowledge = cleanContent(sectionContent);
     } else if (sectionTitle.includes('work experience')) {
-      profile.workExperience = parseWorkExperience(sectionContent);
+      profile.workExperience = assignGroupIds(parseWorkExperience(sectionContent));
     } else if (sectionTitle.includes('skills')) {
       profile.skills = parseSkillsTable(sectionContent);
     } else if (sectionTitle.includes('education')) {
@@ -193,7 +203,7 @@ function parseWorkExperience(content) {
     }
     const details = cleanContent(lines.slice(detailsStart).join('\n'));
     if (title === 'Job Title' && company === 'Company' && !details) continue;
-    if (title || company || details) experiences.push({ title, company, dates, details });
+    if (title || company || details) experiences.push({ id: generateId('exp'), title, company, dates, details });
   }
   return experiences;
 }
