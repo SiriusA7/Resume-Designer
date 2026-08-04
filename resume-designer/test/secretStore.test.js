@@ -1404,6 +1404,30 @@ describe('secretStore', () => {
       // Their AI does not go dark because an unrelated OS service faulted, and
       // the file being read already existed — nothing new is exposed.
       expect(store.getSecret()).toBe('sk-legacy');
+      expect(store.hasUsableSecret()).toBe(true);
+    });
+
+    // PRESENT is not USABLE. '' is the sentinel for a key the user cleared, so
+    // getSettings().openrouterKey is '' and AI is unconfigured — but a `!== null`
+    // test says a credential is there, and both the Settings copy and the thrown
+    // save message told the user their existing key still worked. Fourth place
+    // in this module where presence answered a question about usability.
+    it('does not call a CLEARED key a usable one', async () => {
+      const store = await degraded('');
+
+      expect(store.isReadOnly()).toBe(true);
+      // Present, so the module still knows the user cleared it deliberately...
+      expect(store.getSecret()).toBe('');
+      // ...but nothing may claim they have a working key.
+      expect(store.hasUsableSecret()).toBe(false);
+      expect(store.keychainReadOnlyMessage()).toMatch(/can’t be read either/);
+      expect(store.keychainReadOnlyMessage()).not.toMatch(/still works/);
+    });
+
+    // The other direction, so the predicate cannot be "fixed" into always false.
+    it('calls a real recovered key usable', async () => {
+      const store = await degraded('sk-legacy');
+      expect(store.keychainReadOnlyMessage()).toMatch(/still works/);
     });
 
     it('REFUSES to write plaintext when the keychain is still down', async () => {

@@ -476,9 +476,27 @@ async function stripPlaintextCopy() {
  * that just failed with nothing configured. The Settings banner was fixed for
  * this; the thrown message said it anyway.
  */
+/**
+ * Whether a credential that will actually AUTHENTICATE is available right now.
+ *
+ * Deliberately NOT `getSecret() !== null`. `''` is a stored sentinel meaning the
+ * user cleared their key — presence and usability are different questions, and
+ * every place that answers one while meaning the other has been a bug. This is
+ * the fourth: `getSettings().openrouterKey` resolves to `''`, AI is
+ * unconfigured, and a read-only session was telling the user their existing key
+ * still worked.
+ *
+ * Exported so the Settings copy and the thrown save message share one answer.
+ * Both derived it independently from `!== null`, which is exactly how the two
+ * drifted from the truth in the same way.
+ */
+export function hasUsableSecret() {
+  return cached !== null && cached !== '';
+}
+
 export function keychainReadOnlyMessage() {
   const lead = 'Your system keychain could not be reached, so the key was not saved.';
-  return cached !== null
+  return hasUsableSecret()
     ? `${lead} Your existing key still works for now. Unlock your keychain and try again.`
     : `${lead} Your saved key can’t be read either, so AI features stay unavailable`
       + ' until it unlocks. Unlock your keychain and try again.';

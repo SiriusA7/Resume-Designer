@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils';
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
-  isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable, getSecret,
+  isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable, hasUsableSecret,
   isMemoryOnlyFallback,
 } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
@@ -249,7 +249,10 @@ export default function SettingsDialog() {
   // Whether a credential is actually usable right now. On an already-migrated
   // install a failed keychain read leaves NO fallback, so the read-only banner
   // must not promise that an existing key still works.
-  const hasUsableCredential = getSecret() !== null;
+  // USABLE, not merely present: a stored '' is the user's Clear, so AI is
+  // unconfigured and no copy may claim their existing key still works. The rule
+  // lives in secretStore so this and keychainReadOnlyMessage cannot drift.
+  const hasUsableCredential = hasUsableSecret();
   // A failed strip leaves a readable copy behind. Surfaced here rather than
   // only on the next Save, which is the one moment the user might never reach.
   const cleanupPending = isCleanupPending();
