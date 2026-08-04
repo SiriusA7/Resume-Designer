@@ -346,9 +346,14 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     // above for the flush-await race); resumed in the catch if it throws.
     suspendedHere = store.suspendSaves();
 
+    // keepCredential, for the same reason as the automatic upgrade in main.js:
+    // this reads the previous Electron installation ON THIS MACHINE, so it is a
+    // migration of the user's own live data, not the restore of a backup file.
+    // Without it the credential is stripped before extraction can move it into
+    // the keychain, and the user loses the key by choosing a recovery path.
     const result = merging
-      ? importFullBackupMerge(envelope)
-      : await importFullBackupDurably(envelope);
+      ? importFullBackupMerge(envelope, { keepCredential: true })
+      : await importFullBackupDurably(envelope, { keepCredential: true });
 
     const skipped = result.historySkipped > 0
       ? `\n\nNote: ${result.historySkipped} oversize undo/redo `

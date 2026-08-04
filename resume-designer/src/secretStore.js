@@ -798,8 +798,17 @@ async function runInitSecretStore({ backend, channel, strandedPlaintext }) {
     // on desktop the failed write stays in appStorage's cache, so
     // adoptKeychainRead finds it as the legacy copy and migrates it, and
     // `cached` is not null by the time anything gets here.
+    // Only `browser-degraded` when there is a backend to be degraded ABOUT.
+    // With none, that mode routes Save and Clear through the encrypted store,
+    // where readSecret(null) can only fail — so the user cannot even clear the
+    // key — and the no-backend broadcast handler drops `cached` for `session`
+    // alone, so other tabs keep spending against a credential this one was told
+    // to revoke. `session` already means "memory only, and a remote change
+    // drops it", which is the truth here; only the value was missing, because
+    // initBrowserCredential seeds it from the shared key and extraction never
+    // managed to write one.
     if (cached === null && strandedPlaintext) {
-      mode = 'browser-degraded';
+      if (browserBackend) mode = 'browser-degraded';
       cached = strandedPlaintext;
     }
     return;

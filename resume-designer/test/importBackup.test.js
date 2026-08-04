@@ -114,6 +114,24 @@ describe('importFullBackupFromEnvelope', () => {
 
       expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-electron-live');
     });
+
+    // backupFlow's manual "import from previous installation" reads the SAME
+    // LevelDB store on the same machine, and offers a merge as well as a
+    // replace. Fixing only the automatic path left a user who chose the manual
+    // recovery losing their key — the exemption belongs to the data's origin,
+    // not to one caller.
+    it('carries the credential through the MERGE path too', () => {
+      importFullBackupMerge(envelope(), { keepCredential: true });
+
+      const parsed = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(parsed.settings.openrouterKey).toBe('sk-electron-live');
+    });
+
+    it('merge still strips when the flag is absent', () => {
+      importFullBackupMerge(envelope());
+
+      expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-electron-live');
+    });
   });
 
   it('writes owned keys and silently skips foreign keys', () => {

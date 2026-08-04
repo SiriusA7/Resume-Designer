@@ -1132,6 +1132,27 @@ describe('secretStore', () => {
       expect(store.getSecret()).toBe('sk-stuck');
     });
 
+    // `browser-degraded` presumes a store to retry against. With none, Save and
+    // Clear route through the encrypted path where readSecret(null) can only
+    // fail — so the user cannot even CLEAR a paid key — and the no-backend
+    // broadcast handler drops `cached` for `session` alone, so other tabs go on
+    // using a credential this one was told to revoke.
+    it('stays in session mode when a stranded credential arrives with no backend', async () => {
+      const store = await loadStore({ tauri: false });
+
+      // backend: null is how a non-secure context or private browsing arrives.
+      await store.initSecretStore({ backend: null, strandedPlaintext: 'sk-stuck' });
+
+      expect(store.isBrowserDegraded()).toBe(false);
+      expect(store.isEncryptedInBrowser()).toBe(false);
+      // The value is still adopted, or AI breaks for these users entirely:
+      // getSettings stops serving the blob once the store has answered.
+      expect(store.getSecret()).toBe('sk-stuck');
+      // And the thing degraded mode would have broken — clearing — works.
+      await store.setSecret('');
+      expect(store.getSecret()).toBe('');
+    });
+
     // Only when there is nothing of ours stored. A durable credential is the
     // truth; a leftover blob copy is a cleanup problem, not a demotion.
     it('ignores a stranded blob credential when a stored one exists', async () => {

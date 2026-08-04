@@ -625,9 +625,13 @@ export function exportFullBackup(filename) {
 //    and be promoted into the keychain on the next boot — an old backup quietly
 //    restoring a credential the exclusion policy says it must not.
 //
-//    `keepCredential` exempts the automatic Electron upgrade, which is a
-//    MIGRATION of the user's own live data on this machine, not the restore of
-//    a backup FILE. Stripping there deleted the key outright and then stamped
+//    `keepCredential` exempts BOTH Electron paths — the automatic upgrade in
+//    main.js and the manual "import from previous installation" in
+//    backupFlow.js. Each is a MIGRATION of the user's own live data on this
+//    machine, not the restore of a backup FILE. The test is where the data came
+//    from, not which function is calling: a file could have come from any
+//    machine, the LevelDB store next door could not. Stripping deleted the key
+//    outright, and on the automatic path it then stamped
 //    the migration flag `imported`, so it never ran again and the user came up
 //    permanently without the AI credential they had configured. Kept, it flows
 //    through the ordinary upgrade pipeline instead — extractSharedApiKey moves
@@ -1034,7 +1038,7 @@ export async function importFullBackup(file) {
  * so the caller can build a precise "merged in X resumes, Y JDs"
  * confirmation toast.
  */
-export function importFullBackupMerge(parsed) {
+export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
   // Serialize restores (see importFullBackupDurably): don't run a merge while
   // another restore's guard is active, or its writes would be deferred + cleared.
   if (appStorage.isRestoreGuardActive()) {
@@ -1078,7 +1082,7 @@ export function importFullBackupMerge(parsed) {
       // reachable: the wholesale adopt takes the blob verbatim, and the merge
       // keeps `incomingData.settings` whenever the existing blob has no
       // `settings` key of its own to shadow it.
-      const incomingClean = withoutLegacyCredential(key, incomingValue);
+      const incomingClean = keepCredential ? incomingValue : withoutLegacyCredential(key, incomingValue);
       // Merge the data blob: variants union (current wins on
       // collision), all top-level singletons preserved from current.
       let incomingData;
