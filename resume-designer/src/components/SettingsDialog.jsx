@@ -318,7 +318,13 @@ export default function SettingsDialog() {
     // reachable through the credential write: the field is seeded empty on an
     // already-migrated install, and writing that unknown value is exactly what
     // shouldWriteCredential refuses.
-    if (readOnlyKeychain || degradedBrowser || unreadableBrowser || isCleanupPending()) {
+    // An explicit, non-empty edit IS the fix — the unreadable-record copy tells
+    // the user to enter their key again, and recovery throws while the record
+    // is still unreadable, so running it first made that instruction
+    // impossible. Let the write go straight through instead.
+    const replacing = keyDirty && apiKey !== '';
+    if (!replacing
+      && (readOnlyKeychain || degradedBrowser || unreadableBrowser || isCleanupPending())) {
       try {
         await recoverSecretStore();
       } catch (err) {

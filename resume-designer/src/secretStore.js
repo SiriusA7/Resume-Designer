@@ -283,7 +283,10 @@ export async function setSecret(value) {
   // so it survives reloads without ever putting the credential itself on disk.
   // Clearing stores an empty ciphertext rather than deleting the record, for
   // the same masking reason as the keychain path.
-  if (mode === 'browser' || mode === 'browser-degraded') {
+  // `browser-unreadable` included deliberately: replacing a record that cannot
+  // be decrypted is exactly what the UI tells the user to do, and a fresh write
+  // regenerates the wrapping key if that is what went missing.
+  if (mode === 'browser' || mode === 'browser-degraded' || mode === 'browser-unreadable') {
     await writeSecret(browserBackend, value);
     // The write landed, so encryption is working again — leave the degraded
     // state rather than continuing to report clear-text storage.
@@ -355,48 +358,36 @@ export async function initSecretStore({ backend = null } = {}) {
     // Browser build. Encrypt at rest if the platform allows it, and fall back
     // to memory-only when it does not — never back to plaintext.
     browserBackend = backend || await createIndexedDbBackend();
-    mode = browserBackend ? 'browser' : 'session';
 
-    if (mode === 'browser') {
-      const read = await readSecret(browserBackend);
-      if (read.status === 'found') {
-        cached = read.value;
-      } else if (read.status === 'unreadable') {
-        // Something IS stored and cannot be read right now. Absence was never
-        // established, so the migration below must not run: writing a legacy
-        // plaintext copy over this record would replace a newer credential, or
-        // resurrect one the user deliberately cleared. Leave it all alone.
-        mode = 'browser-unreadable';
-        cached = null;
-        return;
-      }
-      // 'missing' falls through to the migration — that one IS established.
+    if (!browserBackend) {
+      // No encrypted store at all (non-secure context, private browsing). Adopt
+      // a legacy copy so this session works, then remove it — memory-only is
+      // the fallback, never plaintext.
+      mode = 'session';
+      cached = appStorage.getItem(OPENROUTER_KEY_KEY);
+      await stripPlaintextCopy();
+      return;
     }
 
-    // Migrate a key an older version left in localStorage: adopt it so the
-    // session keeps working, encrypt it if we can, then delete the readable
-    // copy. Ordering matters exactly as it does for the keychain — the
-    // plaintext original is the only durable copy until the encrypted write
-    // lands, so it is stripped after, never before.
-    const legacy = appStorage.getItem(OPENROUTER_KEY_KEY);
-    if (legacy !== null && cached === null) {
-      if (mode === 'browser') {
-        try {
-          await writeSecret(browserBackend, legacy);
-        } catch {
-          // Encrypted write failed. Keep the plaintext copy — it is still the
-          // only durable one — and say so, rather than leaving `mode` at
-          // `browser`. Left there, isEncryptedInBrowser() would tell Settings
-          // only ciphertext is stored while the readable entry is right where
-          // it was, and nothing would ever retry the migration.
-          mode = 'browser-degraded';
-          cached = legacy;
-          return;
-        }
-      }
-      cached = legacy;
+    const read = await readSecret(browserBackend);
+    if (read.status === 'unreadable') {
+      // Something IS stored and cannot be read right now. Absence was never
+      // established, so adoption must not run: writing a legacy plaintext copy
+      // over this record would replace a newer credential, or resurrect one the
+      // user deliberately cleared. Leave it all alone.
+      //
+      // Deliberately does NOT serve a legacy plaintext copy the way the desktop
+      // read-only path does, and the asymmetry is the point. On desktop that
+      // copy IS the pre-migration credential and the keychain holds nothing
+      // newer. Here we know ciphertext exists, so any plaintext beside it is
+      // the OLDER value — serving it silently would mean a revoked or
+      // superseded key and unexplained failures. The record is left intact and
+      // the user is asked to re-enter, which also replaces it.
+      mode = 'browser-unreadable';
+      cached = null;
+      return;
     }
-    await stripPlaintextCopy();
+    await adoptBrowserRead(read);
     return;
   }
 
@@ -414,6 +405,41 @@ export async function initSecretStore({ backend = null } = {}) {
   }
 
   await adoptKeychainRead(stored);
+}
+
+/**
+ * Take up the state implied by a SETTLED browser read — `found` or `missing`,
+ * never `unreadable`.
+ *
+ * The browser twin of adoptKeychainRead, and shared with recovery for the same
+ * reason: recovery that merely flipped the mode back skipped the migration and
+ * the cleanup entirely, so a legacy plaintext copy either lingered beside fresh
+ * ciphertext or stayed the only durable credential while `cached` read null —
+ * with Settings reporting encrypted storage in both cases.
+ */
+async function adoptBrowserRead(read) {
+  mode = 'browser';
+  cached = read.status === 'found' ? read.value : null;
+
+  // Migrate a key an older version left in localStorage. Ordering matters
+  // exactly as it does for the keychain: the plaintext original is the only
+  // durable copy until the encrypted write lands, so it is stripped after,
+  // never before.
+  const legacy = appStorage.getItem(OPENROUTER_KEY_KEY);
+  if (legacy !== null && cached === null) {
+    try {
+      await writeSecret(browserBackend, legacy);
+    } catch {
+      // Keep the plaintext copy — still the only durable one — and say so.
+      // Left at `browser`, isEncryptedInBrowser() would tell Settings only
+      // ciphertext is stored while the readable entry sits untouched.
+      mode = 'browser-degraded';
+      cached = legacy;
+      return;
+    }
+    cached = legacy;
+  }
+  await stripPlaintextCopy();
 }
 
 /**
@@ -498,8 +524,10 @@ export async function recoverSecretStore() {
   if (mode === 'browser-unreadable') {
     const read = await readSecret(browserBackend);
     if (read.status === 'unreadable') throw new Error(BROWSER_UNREADABLE_MESSAGE);
-    mode = 'browser';
-    cached = read.status === 'found' ? read.value : null;
+    // adoptBrowserRead, not a bare mode flip: the plaintext reconciliation boot
+    // would have done was skipped when we entered this state, and it still has
+    // to happen.
+    await adoptBrowserRead(read);
     changed = true;
   }
 

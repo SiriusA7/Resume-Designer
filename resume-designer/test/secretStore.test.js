@@ -242,6 +242,68 @@ describe('secretStore', () => {
       expect(next.getSecret()).toBe('sk-current');
     });
 
+    // Recovery used to flip the mode back without reconciling anything, so a
+    // legacy plaintext copy either lingered beside fresh ciphertext or stayed
+    // the only durable credential while cached read null — with Settings
+    // reporting encrypted storage either way.
+    it('reconciles a plaintext copy when an unreadable store recovers', async () => {
+      const backend = makeBackend();
+      setPlaintext('sk-legacy');
+
+      let failing = true;
+      const flaky = {
+        ...backend,
+        get: async (id) => {
+          if (failing) throw new Error('idb read failed');
+          return backend.get(id);
+        },
+      };
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend: flaky });
+      expect(store.isBrowserUnreadable()).toBe(true);
+      // Untouched while unreadable — absence was never established.
+      expect(plaintext()).toBe('sk-legacy');
+
+      // The read recovers and finds nothing stored, so the legacy copy IS the
+      // credential and has to be migrated, not abandoned.
+      failing = false;
+      await store.recoverSecretStore();
+
+      expect(store.isEncryptedInBrowser()).toBe(true);
+      expect(store.getSecret()).toBe('sk-legacy');
+      expect(plaintext()).toBeNull();
+      // ...and it is genuinely encrypted now, so it survives a reload.
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend });
+      expect(next.getSecret()).toBe('sk-legacy');
+    });
+
+    // The copy tells the user to enter their key again. A permanently
+    // unreadable record — wrapping key cleared — must therefore be replaceable.
+    it('lets a new key replace a permanently unreadable record', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      await store.setSecret('sk-old');
+      // Wipe the wrapping key: the ciphertext can never be decrypted again.
+      backend.files.delete('wrap-key-v1');
+
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend });
+      expect(next.isBrowserUnreadable()).toBe(true);
+
+      // Recovery genuinely cannot help here...
+      await expect(next.recoverSecretStore()).rejects.toThrow(/could not be read/i);
+      // ...but typing a replacement must work, or the instruction is a dead end.
+      await next.setSecret('sk-replacement');
+
+      expect(next.isEncryptedInBrowser()).toBe(true);
+      expect(next.getSecret()).toBe('sk-replacement');
+      const after = await loadStore({ tauri: false });
+      await after.initSecretStore({ backend });
+      expect(after.getSecret()).toBe('sk-replacement');
+    });
+
     it('clears to an empty value that still round-trips', async () => {
       const backend = makeBackend();
       const store = await loadStore({ tauri: false });
