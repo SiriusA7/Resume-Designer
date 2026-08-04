@@ -624,8 +624,20 @@ export function exportFullBackup(filename) {
 //    with an empty keychain it would land in plaintext, go live immediately,
 //    and be promoted into the keychain on the next boot — an old backup quietly
 //    restoring a credential the exclusion policy says it must not.
-function normalizeImportedValue(key, value) {
-  const sanitized = withoutLegacyCredential(key, value);
+//
+//    `keepCredential` exempts the automatic Electron upgrade, which is a
+//    MIGRATION of the user's own live data on this machine, not the restore of
+//    a backup FILE. Stripping there deleted the key outright and then stamped
+//    the migration flag `imported`, so it never ran again and the user came up
+//    permanently without the AI credential they had configured. Kept, it flows
+//    through the ordinary upgrade pipeline instead — extractSharedApiKey moves
+//    it to the shared key, initSecretStore moves that into the keychain and
+//    strips the plaintext — the same path every pre-keychain user already takes
+//    on first launch of this version. The plaintext hop is momentary and on the
+//    same disk the Electron app was already keeping the key on in the clear, so
+//    it exposes nothing that was not already exposed.
+function normalizeImportedValue(key, value, keepCredential = false) {
+  const sanitized = keepCredential ? value : withoutLegacyCredential(key, value);
   if (key !== 'resume-designer-job-descriptions') return sanitized;
   try {
     const jd = JSON.parse(sanitized);
@@ -636,7 +648,7 @@ function normalizeImportedValue(key, value) {
   return sanitized;
 }
 
-function importFullBackupV2(parsed) {
+function importFullBackupV2(parsed, keepCredential = false) {
   const registry = parsed.registry;
   // A PRESENT emoji must be a string: the switcher renders it directly as a
   // React child, so a non-string (e.g. {}) would throw and blank the app after
@@ -795,7 +807,7 @@ function importFullBackupV2(parsed) {
       ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
     );
     for (const { physicalKey: key, logicalKey, value } of nonHistory) {
-      writeTracked(key, normalizeImportedValue(logicalKey, value));
+      writeTracked(key, normalizeImportedValue(logicalKey, value, keepCredential));
       keysImported++;
     }
     for (const { physicalKey: key, value } of history) {
@@ -824,9 +836,9 @@ function importFullBackupV2(parsed) {
   };
 }
 
-export function importFullBackupFromEnvelope(parsed) {
+export function importFullBackupFromEnvelope(parsed, { keepCredential = false } = {}) {
   if (parsed && parsed.backupFormat === 2 && parsed.kind === 'full') {
-    return importFullBackupV2(parsed);
+    return importFullBackupV2(parsed, keepCredential);
   }
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
@@ -893,7 +905,7 @@ export function importFullBackupFromEnvelope(parsed) {
   let historySkipped = 0;
   try {
     for (const [k, v] of nonHistory) {
-      appStorage.setItem(k, normalizeImportedValue(k, v));
+      appStorage.setItem(k, normalizeImportedValue(k, v, keepCredential));
       written.push(k);
     }
     for (const [k, v] of history) {
@@ -928,14 +940,14 @@ export function importFullBackupFromEnvelope(parsed) {
  * when durability fails. The sync core stays exported for validation and
  * for the merge path.
  */
-export async function importFullBackupDurably(parsed) {
+export async function importFullBackupDurably(parsed, { keepCredential = false } = {}) {
   // Serialize restores: if one is already mid-flight (guard armed during its
   // flush await / success modal), bail before writing — otherwise these
   // synchronous writes get deferred by the active guard and then cleared.
   if (appStorage.isRestoreGuardActive()) {
     throw new Error('Another restore is already in progress — wait for it to finish before importing again.');
   }
-  const { rollback, preRestore, writtenKeys, ...result } = importFullBackupFromEnvelope(parsed);
+  const { rollback, preRestore, writtenKeys, ...result } = importFullBackupFromEnvelope(parsed, { keepCredential });
   // The synchronous restore writes are done. Block every OTHER appStorage writer
   // from here until the reload, so a late async completion (chat/AI reply, tailor
   // draft, design-setting edit) can't clobber the just-restored keys during the

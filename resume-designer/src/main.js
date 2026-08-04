@@ -222,7 +222,14 @@ async function maybeAutoMigrateLegacyData() {
     const envelope = await importLegacyElectronData();
     // Durable variant: a disk-full flush failure rolls the (empty-ish) store
     // back and throws into the catch below — flag 'failed', boot continues.
-    const result = await importFullBackupDurably(envelope);
+    // keepCredential: this is the user's own live data being carried across an
+    // in-place upgrade on the same machine, NOT a backup file being restored.
+    // The credential exclusion exists to stop an old backup reintroducing a key;
+    // applied here it DELETED the key, and the flag stamped below is one-shot,
+    // so the user came up permanently without their configured AI credential.
+    // Left in place it goes through the normal upgrade path — extraction to the
+    // shared key, then initSecretStore into the keychain, then stripped.
+    const result = await importFullBackupDurably(envelope, { keepCredential: true });
     // Non-reloading caller: importFullBackupDurably keeps the restore guard armed
     // on success (interactive callers rely on continuous ownership), but this boot
     // path continues WITHOUT a reload — release it now, or the migration flag and

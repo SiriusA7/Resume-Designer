@@ -54,12 +54,14 @@ describe('importFullBackupFromEnvelope', () => {
     });
   });
 
-  // The Replace path, including the legacy Electron restore, writes through
-  // normalizeImportedValue — which handled only job descriptions until the
-  // credential strip moved into it. On a fresh install with an empty keychain
-  // the key would land in plaintext, go live immediately, and be promoted into
-  // the keychain on the next boot: an old backup quietly restoring a credential
-  // the exclusion policy says it must not.
+  // The Replace path writes through normalizeImportedValue — which handled only
+  // job descriptions until the credential strip moved into it. On a fresh
+  // install with an empty keychain the key would land in plaintext, go live
+  // immediately, and be promoted into the keychain on the next boot: an old
+  // backup quietly restoring a credential the exclusion policy says it must not.
+  //
+  // The automatic Electron upgrade shares this code path and is the ONE case
+  // that must not strip — see the keepCredential tests below.
   it('strips a legacy credential on a format-1 REPLACE import', () => {
     importFullBackupFromEnvelope({
       backupFormat: 1,
@@ -77,6 +79,41 @@ describe('importFullBackupFromEnvelope', () => {
     expect(parsed.settings.openrouterKey).toBeUndefined();
     expect(parsed.settings.theme).toBe('dark');
     expect(parsed.variants).toEqual({ v1: {} });
+  });
+
+  // The automatic Electron upgrade carries the user's own LIVE data across an
+  // in-place install on the same machine — it is not a backup file being
+  // restored. Stripping there deleted the key outright, and main.js then stamps
+  // the migration flag one-shot, so the migration never ran again and the user
+  // came up permanently without the AI credential they had configured.
+  describe('keepCredential (automatic Electron upgrade)', () => {
+    const envelope = () => ({
+      backupFormat: 1,
+      keys: {
+        'resume-designer-data': JSON.stringify({
+          variants: { v1: {} },
+          settings: { openrouterKey: 'sk-electron-live', theme: 'dark' },
+        }),
+      },
+    });
+
+    it('carries the credential across so extraction can migrate it', () => {
+      importFullBackupFromEnvelope(envelope(), { keepCredential: true });
+
+      const parsed = JSON.parse(localStorage.getItem('resume-designer-data'));
+      // Left in the blob, which is exactly where extractSharedApiKey looks —
+      // it then moves to the shared key and on into the keychain.
+      expect(parsed.settings.openrouterKey).toBe('sk-electron-live');
+      expect(parsed.settings.theme).toBe('dark');
+    });
+
+    // The exemption must be opt-in, or it silently reopens the backup hole it
+    // is carved out of.
+    it('still strips when the flag is absent', () => {
+      importFullBackupFromEnvelope(envelope());
+
+      expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-electron-live');
+    });
   });
 
   it('writes owned keys and silently skips foreign keys', () => {
