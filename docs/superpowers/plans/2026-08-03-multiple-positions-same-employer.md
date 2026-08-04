@@ -1824,30 +1824,28 @@ with:
     if (line.startsWith('**') && line.endsWith('**') && !resume.tagline && !currentSection) {
 ```
 
-- [ ] **Step 5: Group on import**
+- [ ] **Step 5: Group on parse**
 
-In `resume-designer/src/persistence.js`, add the import at the top:
+Grouping belongs in `parseResume` itself, not in a caller. Parsing is the boundary where markdown text becomes the document model, and normalizing there means **every** caller gets it — `parseResume` has two (`importFromMarkdown` at `persistence.js:1180` and `migrateBuiltInVariants` at `:1225`), and wiring only the first would leave built-in variants permanently ungrouped. It also mirrors the generation path, which calls `assignGroupIds` at its own boundary in `onboardingLogic.js`.
+
+In `resume-designer/src/parser.js`, extend the import added in Step 3:
 
 ```js
+import { generateId } from './store.js';
 import { assignGroupIds } from './experienceGroups.js';
 ```
 
-Then in `importFromMarkdown` (`:1180`), replace:
+Then, immediately before `parseResume` returns, group the collected entries:
 
 ```js
-        const data = parseResume(markdown);
-        resolve(data);
+  // Same predicate the renderer uses, so import and render agree by construction:
+  // consecutive entries at an identical company are one tenure.
+  resume.experience = assignGroupIds(resume.experience);
+
+  return resume;
 ```
 
-with:
-
-```js
-        const data = parseResume(markdown);
-        // Same predicate the renderer uses, so import and render agree by
-        // construction: consecutive entries at an identical company are one tenure.
-        data.experience = assignGroupIds(data.experience);
-        resolve(data);
-```
+Do **not** also call `assignGroupIds` in `persistence.js` — it would be a proven no-op (the function recomputes run boundaries from `company` adjacency alone and its `if (!out[k]._groupId)` guard blocks rewriting), and a second call site falsely suggests that is where grouping happens.
 
 - [ ] **Step 6: Make the exporter emit the reader's grammar**
 
