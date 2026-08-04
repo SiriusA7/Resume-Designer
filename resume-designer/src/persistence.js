@@ -840,6 +840,32 @@ function importFullBackupV2(parsed, keepCredential = false) {
   };
 }
 
+/**
+ * The credential a format-1 envelope carries, or null when it carries none.
+ *
+ * Looks in BOTH places it can be, because the previous app used both: the
+ * shared key once its own extraction had run, and `settings.openrouterKey` in
+ * the data blob before that. Shared key first — it is the later of the two.
+ *
+ * Returns `''` verbatim when that is what is stored. An empty value means the
+ * user had CLEARED their key in the previous installation, and on a
+ * same-machine replace that is a state to adopt, not an absence to skip.
+ */
+export function credentialFromEnvelope(parsed) {
+  const keys = parsed?.keys;
+  if (!keys || typeof keys !== 'object') return null;
+  if (typeof keys[OPENROUTER_KEY_KEY] === 'string') return keys[OPENROUTER_KEY_KEY];
+  const blob = keys[STORAGE_KEY];
+  if (typeof blob !== 'string') return null;
+  try {
+    const settings = JSON.parse(blob)?.settings;
+    if (!settings || typeof settings !== 'object') return null;
+    return typeof settings.openrouterKey === 'string' ? settings.openrouterKey : null;
+  } catch {
+    return null;
+  }
+}
+
 export function importFullBackupFromEnvelope(parsed, { keepCredential = false } = {}) {
   if (parsed && parsed.backupFormat === 2 && parsed.kind === 'full') {
     return importFullBackupV2(parsed, keepCredential);

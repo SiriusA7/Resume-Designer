@@ -8,7 +8,11 @@
  * inline comments for why every step is ordered the way it is.
  */
 
-import { exportFullBackup, importFullBackupDurably, importFullBackupMerge } from './persistence.js';
+import {
+  exportFullBackup, importFullBackupDurably, importFullBackupMerge,
+  credentialFromEnvelope, saveApiKey,
+} from './persistence.js';
+import { getSecret } from './secretStore.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
@@ -316,6 +320,10 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
   // See importBackupFromFile: TRUE only if this call ACQUIRED the suspension, so
   // the catch never resumes one a prior import (or an early throw) left in place.
   let suspendedHere = false;
+  // Hoisted so the catch can undo a credential swap the import then failed to
+  // justify — see the replace branch below.
+  let previousCredential = null;
+  let credentialReplaced = false;
   try {
     const probe = await probeLegacyElectronData();
     if (!probe?.found) {
@@ -340,6 +348,28 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       flushPendingProfileSave();
     } catch (err) {
       console.warn('[backup] pre-import flush failed:', err);
+    }
+
+    // A REPLACE means the previous installation's data wins, and the credential
+    // is part of "everything". keepCredential carries it through STORAGE, which
+    // is not enough on its own: this install's keychain entry would win at the
+    // next boot — adoptKeychainRead treats a present value as authoritative —
+    // and the cleanup right after it would strip the imported copy. The replace
+    // then comes up with the CURRENT key, or with none at all when that entry is
+    // the empty Clear sentinel. So the credential goes to the keychain here,
+    // alongside every other key this replace is about to write.
+    //
+    // BEFORE importFullBackupDurably, which arms the restore guard: with that
+    // armed, setSecret's plaintext cleanup is deferred and reports failure, so
+    // a successful keychain write would surface as an import error.
+    //
+    // MERGE is deliberately untouched — "your current data wins on conflict" is
+    // its whole contract, and the current key is current data.
+    const incomingCredential = merging ? null : credentialFromEnvelope(envelope);
+    previousCredential = getSecret();
+    if (incomingCredential !== null) {
+      await saveApiKey(incomingCredential);
+      credentialReplaced = true;
     }
 
     // Suspend saves before the import writes appStorage (see the format-2 path
@@ -367,6 +397,14 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     showImportSuccessAndReload(summary + skipped);
   } catch (err) {
     if (suspendedHere) store.resumeSaves(); // resume only a suspension THIS call created
+    // The import did not happen, so the credential swap it was part of must not
+    // stand either — otherwise a failed replace silently changes the user's key.
+    // Best-effort: if this write fails too there is nothing further to try, and
+    // the import error is the one worth showing.
+    if (credentialReplaced && previousCredential !== null) {
+      try { await saveApiKey(previousCredential); }
+      catch (restoreErr) { console.error('[backup] could not restore the previous key:', restoreErr); }
+    }
     console.error('[backup] Legacy import failed:', err);
     alert(`Couldn't import data from the previous app: ${err.message ?? String(err)}`);
   }

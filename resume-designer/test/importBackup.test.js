@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { importFullBackupFromEnvelope, importFullBackupMerge } from '../src/persistence.js';
+import {
+  importFullBackupFromEnvelope, importFullBackupMerge, credentialFromEnvelope,
+} from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 
 beforeEach(() => {
@@ -203,6 +205,58 @@ describe('importFullBackupFromEnvelope', () => {
       }, { keepCredential: true });
 
       expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared-electron');
+    });
+
+    // A same-machine REPLACE has to put the credential in the KEYCHAIN, not
+    // just in storage: adoptKeychainRead treats an existing entry as
+    // authoritative at the next boot and the cleanup then strips the imported
+    // copy, so the replace came up with the current key — or with none, when
+    // that entry is the empty Clear sentinel. backupFlow does the write; this
+    // pins the part that decides WHAT it writes.
+    describe('credentialFromEnvelope', () => {
+      it('finds it in the shared key', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1, keys: { [OPENROUTER_KEY_KEY]: 'sk-shared' },
+        })).toBe('sk-shared');
+      });
+
+      it('falls back to the data blob, where pre-extraction installs kept it', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1,
+          keys: {
+            'resume-designer-data': JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }),
+          },
+        })).toBe('sk-blob');
+      });
+
+      it('prefers the shared key, which is the later of the two', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1,
+          keys: {
+            [OPENROUTER_KEY_KEY]: 'sk-shared',
+            'resume-designer-data': JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }),
+          },
+        })).toBe('sk-shared');
+      });
+
+      // Presence beats truthiness, for the fifth time in this PR: an empty
+      // value means the previous install had CLEARED its key, and a replace
+      // adopts that state rather than skipping it.
+      it('returns an empty clear sentinel verbatim', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1, keys: { [OPENROUTER_KEY_KEY]: '' },
+        })).toBe('');
+      });
+
+      it('reports null when the envelope carries no credential', () => {
+        expect(credentialFromEnvelope({ backupFormat: 1, keys: {} })).toBeNull();
+        expect(credentialFromEnvelope({ backupFormat: 1, keys: { 'resume-designer-data': 'not json' } })).toBeNull();
+        expect(credentialFromEnvelope({
+          backupFormat: 1,
+          keys: { 'resume-designer-data': JSON.stringify({ settings: 'nope' }) },
+        })).toBeNull();
+        expect(credentialFromEnvelope(null)).toBeNull();
+      });
     });
 
     // Only into a GAP. An existing credential — including a deliberate '' —
