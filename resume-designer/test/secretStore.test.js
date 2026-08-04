@@ -1616,6 +1616,42 @@ describe('secretStore', () => {
       expect(invokeMock).toHaveBeenCalledTimes(1);
     });
 
+    // On DESKTOP the disk store can fall back to passthrough localStorage, where
+    // setItem throws synchronously on quota rather than queueing — so
+    // extraction's shared-key write leaves nothing behind and appStorage has no
+    // answer. Reading only appStorage concluded "no key", and secretStoreReady
+    // then stops getSettings serving the blob, so a credential the user still
+    // has readable became unusable. I had scoped the stranded value to the
+    // browser on the argument that a desktop failure survives in the
+    // write-behind cache — true in CACHED mode only.
+    it('serves a stranded credential when the keychain is empty', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);   // keychain reachable, no entry
+
+      await store.initSecretStore({ strandedPlaintext: 'sk-stranded' });
+
+      expect(store.getSecret()).toBe('sk-stranded');
+      // ...and it is migrated into the keychain rather than merely served.
+      expect(invokeMock).toHaveBeenCalledWith('secret_set', {
+        name: OPENROUTER_KEY_KEY, value: 'sk-stranded',
+      });
+    });
+
+    // A shared value present in appStorage still wins, INCLUDING the empty
+    // Clear sentinel — a stranded key must not overrule a deliberate clear.
+    it('prefers a stored clear sentinel over a stranded credential', async () => {
+      setPlaintext('');
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+
+      await store.initSecretStore({ strandedPlaintext: 'sk-stranded' });
+
+      expect(store.getSecret()).toBe('');
+      expect(invokeMock).not.toHaveBeenCalledWith('secret_set', {
+        name: OPENROUTER_KEY_KEY, value: 'sk-stranded',
+      });
+    });
+
     it('keeps serving the key the user already has', async () => {
       const store = await degraded('sk-legacy');
 

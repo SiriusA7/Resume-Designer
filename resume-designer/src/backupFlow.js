@@ -390,8 +390,18 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
     // migration of the user's own live data, not the restore of a backup file.
     // Without it the credential is stripped before extraction can move it into
     // the keychain, and the user loses the key by choosing a recovery path.
+    // MERGE carries the incoming credential only into a genuine gap. Its
+    // contract is "your current data wins on conflict", and the current key is
+    // current data — but keepCredential STAGES the old one in appStorage, where
+    // a later boot that cannot reach the keychain adopts it as the read-only
+    // fallback and starts spending on the previous installation's key. The
+    // merge said current wins and the staged value quietly disagreed.
+    //
+    // `=== null` and not falsiness: a stored '' is the user's Clear, which is
+    // also a decision the merge must not overrule.
+    const keepForMerge = previousCredential === null;
     const result = merging
-      ? importFullBackupMerge(envelope, { keepCredential: true })
+      ? importFullBackupMerge(envelope, { keepCredential: keepForMerge })
       : await importFullBackupDurably(envelope, { keepCredential: true });
 
     const skipped = result.historySkipped > 0
