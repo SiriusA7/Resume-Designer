@@ -94,13 +94,14 @@ function writeTool(index, value) {
 
 // Compact labeled field. Resume-data inputs stay UNCONTROLLED (defaultValue)
 // and write through writeField on change — never `value`.
-function Field({ label, type = 'text', path, defaultValue }) {
+function Field({ label, type = 'text', path, defaultValue, onBlur }) {
   return (
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}</Label>
       <Input
         type={type} className="h-8" data-field={path} defaultValue={defaultValue}
         onChange={(e) => writeField(path, e.target.value)}
+        onBlur={onBlur}
       />
     </div>
   );
@@ -315,7 +316,7 @@ function addRoleAtCompany(leadIndex) {
   store.update('experience', next);
 }
 
-function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }) {
+function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, onCompanyBlur }) {
   const [expanded, setExpanded] = useState(exp._expanded !== false);
   const toggle = () => {
     const next = !expanded;
@@ -365,6 +366,14 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }
             key={f} label={label}
             path={`experience[${index}].${f}`}
             defaultValue={exp[f] || ''}
+            // Company only: `writeField` suppresses the store-driven remount while
+            // typing, so the grouping gating (canLinkAbove, "Add role at this
+            // company") keeps whatever it computed BEFORE the rename — a disabled
+            // Link button can never be clicked, so the fresh-data revalidation
+            // inside the action never gets its chance. Blur forces a plain
+            // re-render (no key change, no remount, no caret loss) which re-reads
+            // store.getData() and re-gates against the typed company.
+            onBlur={f === 'company' ? onCompanyBlur : undefined}
           />
         ))}
         <div className="space-y-1.5">
@@ -441,6 +450,12 @@ export default function StructurePanel() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('header');
   const [dataVersion, bump] = useReducer((n) => n + 1, 0);
+  // A SECOND counter whose only job is to force a plain re-render. It must never
+  // reach the tab key below: putting it there would remount the tab on blur and
+  // unmount the grouping button before its click landed, which is exactly the
+  // "first click is swallowed" bug the profile editor had. Render re-reads
+  // store.getData(), so a re-render alone re-gates the grouping controls.
+  const [, bumpGrouping] = useReducer((n) => n + 1, 0);
   const [collapsed, setCollapsed] = useState({});
   const [renameOpen, setRenameOpen] = useState(false); // "Custom Section…" title dialog
   const [customTitle, setCustomTitle] = useState('');
@@ -754,6 +769,7 @@ export default function StructurePanel() {
                         isLead={!!meta.isLead}
                         isRunMember={isRunMember}
                         canLinkAbove={!!prev && !!prev.company && prev.company === exp.company}
+                        onCompanyBlur={bumpGrouping}
                       />
                     );
                   });

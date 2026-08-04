@@ -1,3 +1,4 @@
+import { useReducer } from 'react';
 import { Globe, Plus, Trash2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -271,6 +272,15 @@ function ItemList({ items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete,
 function ExperienceTab({ profile, scheduleSave, refresh }) {
   const items = profile.workExperience;
   const set = (i, field) => (v) => { items[i][field] = v; scheduleSave(); };
+  // Local re-render ONLY, for re-gating the grouping controls after a company
+  // edit. It must not go through `refresh`: that bumps the parent's `version`,
+  // which is the tab wrapper's React key, so blurring the company input
+  // remounted the tab and unmounted the button the user was pressing before its
+  // click fired — the first click did nothing but refresh. `set()` already calls
+  // scheduleSave() per keystroke, so the blur has nothing to persist, and
+  // `items` is the live array, so this re-render recomputes groupExperience
+  // against the current values.
+  const [, bumpGrouping] = useReducer((n) => n + 1, 0);
   return (
     <section>
       <SectionHeader
@@ -300,7 +310,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
           const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
           return (
             <>
-              <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} onBlur={refresh} />
+              <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} onBlur={bumpGrouping} />
               <Input placeholder="Dates (e.g., Jan 2020 - Present)" defaultValue={exp.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
               <Textarea
                 rows={4}
