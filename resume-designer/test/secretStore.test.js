@@ -1114,6 +1114,39 @@ describe('secretStore', () => {
       expect(after.getSecret()).toBe('sk-replacement');
     });
 
+    // A credential extraction could not move out of a data blob is still
+    // readable there. Reporting healthy `browser` mode over it told Settings to
+    // claim encrypted storage while getSettings served the plaintext blob value
+    // to every AI request — and nothing retries, so indefinitely.
+    it('reports degraded storage when a blob credential could not be moved', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+
+      await store.initSecretStore({ backend, strandedPlaintext: 'sk-stuck' });
+
+      // NOT `browser`: a readable copy exists, and the UI copy is derived from
+      // these predicates.
+      expect(store.isEncryptedInBrowser()).toBe(false);
+      expect(store.isBrowserDegraded()).toBe(true);
+      // ...and the key still works, which is why it is degraded and not broken.
+      expect(store.getSecret()).toBe('sk-stuck');
+    });
+
+    // Only when there is nothing of ours stored. A durable credential is the
+    // truth; a leftover blob copy is a cleanup problem, not a demotion.
+    it('ignores a stranded blob credential when a stored one exists', async () => {
+      const backend = makeBackend();
+      const first = await loadStore({ tauri: false });
+      await first.initSecretStore({ backend });
+      await first.setSecret('sk-stored');
+
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend, strandedPlaintext: 'sk-stuck' });
+
+      expect(next.isEncryptedInBrowser()).toBe(true);
+      expect(next.getSecret()).toBe('sk-stored');
+    });
+
     // The hole left in the fix above. Reading a version first is only ordering
     // if a FAILED read is refused: the one `unreadable` exit that carries no
     // version — the IndexedDB get itself throwing — fell through to an

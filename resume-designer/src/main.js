@@ -333,11 +333,15 @@ export async function init() {
     // exactly like a durable one through appStorage's cache. The second call
     // stripped the blob against it. extractSharedApiKey now proves durability
     // before every strip, not only the one it wrote.
-    await extractSharedApiKey();
+    const strandedPlaintext = await extractSharedApiKey();
     // AFTER the extraction above and BEFORE the gate opens, so React never
     // renders a settings state missing a key the user does have.
     // Swallows its own failures — a keychain problem must not block boot.
-    await initSecretStore();
+    //
+    // Handed whatever extraction could NOT move. A caught storage failure used
+    // to be indistinguishable from success here, so boot continued as though
+    // the credential were protected while a readable copy stayed in the blob.
+    await initSecretStore({ strandedPlaintext });
   } finally {
     markStorageReady();
   }

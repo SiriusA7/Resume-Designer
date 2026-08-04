@@ -170,52 +170,80 @@ function adoptionProfileName() {
 export async function extractSharedApiKey() {
   // The active profile, however it currently resolves: the mapped physical key
   // with mapping on, the unprefixed key with mapping off (adoption degraded).
-  await extractCredentialFromBlob('resume-designer-data');
+  // FIRST, and its result is the one kept: the active profile is the authority
+  // on the user's current intent, including an intent to have no key.
+  let stranded = await extractCredentialFromBlob('resume-designer-data');
   // Snapshot: the shared-key write below adds a key mid-sweep.
   for (const key of appStorage.keys()) {
     const split = splitPhysicalKey(key);
-    if (split?.logicalKey === 'resume-designer-data') await extractCredentialFromBlob(key);
+    if (split?.logicalKey === 'resume-designer-data') {
+      const left = await extractCredentialFromBlob(key);
+      if (stranded === null) stranded = left;
+    }
   }
+  return stranded;
 }
 
 /**
  * Move one blob's credential into the shared key and strip it. Per-blob rather
  * than per-sweep error handling, so one corrupt profile cannot stop the others
  * being sanitized.
+ *
+ * Returns a NON-EMPTY credential this call could not consolidate, or null. A
+ * caught failure used to look identical to success from outside, so boot went
+ * on to report protected storage while a readable copy sat in the blob and
+ * getSettings quietly served it — see main.js.
  */
 async function extractCredentialFromBlob(blobKey) {
+  let data;
   try {
     const raw = appStorage.getItem(blobKey);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (!data?.settings || !('openrouterKey' in data.settings)) return;
-    const inBlob = data?.settings?.openrouterKey;
-    if (inBlob) {
-      if (appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
-        appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
-      }
-      // Cached mode reports write failures only at flush time. Never strip
-      // the blob copy until the shared key is DURABLE — if the shared-key
-      // file write failed while the (smaller) blob rewrite succeeded, the
-      // only durable copy of the credential would vanish on restart. On a
-      // failed flush the blob keeps the key and the next boot retries.
-      //
-      // The barrier gates the STRIP, not the write, which is why it sits
-      // outside the `=== null` check. A shared value already present may be
-      // this boot's own PENDING write from an earlier call whose flush failed:
-      // getItem serves the write-behind cache, so a queued value and a durable
-      // one read identically. Gating only the branch that wrote made a second
-      // call skip the barrier and strip the blob against a value still sitting
-      // in the cache — the one durable copy gone if the retry never lands.
-      // Costs nothing in steady state: once extraction has run there is no
-      // `openrouterKey` in the blob and the function returns above.
-      if (!(await appStorage.flush())) return;
+    if (!raw) return null;
+    data = JSON.parse(raw);
+  } catch {
+    // Corrupt blob: leave it for loadFromStorage()'s own error handling. NOT a
+    // stranded credential — a blob this app cannot parse is not one it read a
+    // key out of.
+    return null;
+  }
+  if (!data?.settings || !('openrouterKey' in data.settings)) return null;
+  const inBlob = data.settings.openrouterKey;
+  try {
+    // PRESENCE, not truthiness. Reaching here means the field is present, so an
+    // empty value is the user's explicit Clear and has to become the shared
+    // masking sentinel. Skipping it deleted the Clear and left no shared entry
+    // — after which the sweep below reached an inactive blob holding an older
+    // paid key, found nothing stored, and resurrected the credential the user
+    // had deleted. The same truthiness assumption did the same damage on the
+    // keychain migration path earlier in this PR.
+    if (appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
+      appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
     }
+    // Cached mode reports write failures only at flush time. Never strip
+    // the blob copy until the shared key is DURABLE — if the shared-key
+    // file write failed while the (smaller) blob rewrite succeeded, the
+    // only durable copy of the credential would vanish on restart. On a
+    // failed flush the blob keeps the key and the next boot retries.
+    //
+    // The barrier gates the STRIP, not the write, which is why it sits
+    // outside the `=== null` check. A shared value already present may be
+    // this boot's own PENDING write from an earlier call whose flush failed:
+    // getItem serves the write-behind cache, so a queued value and a durable
+    // one read identically. Gating only the branch that wrote made a second
+    // call skip the barrier and strip the blob against a value still sitting
+    // in the cache — the one durable copy gone if the retry never lands.
+    // Costs nothing in steady state: once extraction has run there is no
+    // `openrouterKey` in the blob and the function returns above.
+    if (!(await appStorage.flush())) return inBlob || null;
     delete data.settings.openrouterKey;
     appStorage.setItem(blobKey, JSON.stringify(data));
   } catch {
-    // Corrupt blob: leave it for loadFromStorage()'s own error handling.
+    // A storage refusal, not a corrupt blob: passthrough setItem throws
+    // synchronously when localStorage is full. The blob still holds a readable
+    // credential, and saying so is the whole point of this return value.
+    return inBlob || null;
   }
+  return null;
 }
 
 /**

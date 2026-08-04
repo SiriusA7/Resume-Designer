@@ -553,13 +553,48 @@ describe('adoption migration', () => {
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
   });
 
-  it('extractSharedApiKey strips an empty blob key without creating a shared key', () => {
+  // CHANGED with the inactive-profile sweep. This used to assert that an empty
+  // blob key was stripped WITHOUT creating a shared entry, which was harmless
+  // while only the active blob was ever read. It is not harmless now: the
+  // stripped Clear left nothing masking, and the sweep then adopted an older
+  // paid key out of an inactive blob. Presence beats truthiness — an explicit
+  // '' is the user's Clear and has to survive as the shared sentinel.
+  it('extractSharedApiKey preserves an empty blob key as the shared sentinel', async () => {
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: '' } }));
 
-    extractSharedApiKey();
+    await extractSharedApiKey();
 
-    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('');
     expect(JSON.parse(appStorage.getItem('resume-designer-data')).settings.openrouterKey).toBeUndefined();
+  });
+
+  // The P1 the change above exists for: without the sentinel, the sweep reached
+  // an inactive blob's older key and handed back a credential the user deleted.
+  it('extractSharedApiKey never resurrects a cleared key from an inactive blob', async () => {
+    const backend = makeBackend({
+      'resume-designer-profiles': JSON.stringify([
+        { id: 'pactive', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+        { id: 'pother', name: 'Other', emoji: '🙂', createdAt: 'x' },
+      ]),
+      'resume-designer-active-profile': 'pactive',
+      // The user cleared their key here. Explicitly present, deliberately empty.
+      'resume-p--pactive--resume-designer-data': JSON.stringify({ settings: { openrouterKey: '' } }),
+      // An older profile still carrying the paid key they cleared.
+      'resume-p--pother--resume-designer-data': JSON.stringify({
+        settings: { openrouterKey: 'sk-paid-and-cleared' },
+      }),
+    });
+    await initAppStorage({ backend });
+    setProfileMapping('pactive');
+
+    await extractSharedApiKey();
+    await appStorage.flush();
+
+    // The Clear stands, as the masking sentinel.
+    expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('');
+    // ...and the stale paid key is gone from disk rather than promoted.
+    expect(JSON.stringify([...backend.files.values()])).not.toContain('sk-paid-and-cleared');
+    expect(getSettings().openrouterKey).toBe('');
   });
 
   it('extractSharedApiKey does not resurrect a stale key over an existing empty shared value', async () => {
@@ -637,6 +672,42 @@ describe('adoption migration', () => {
     expect(appStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-only-copy');
     expect(JSON.parse(backend.files.get('resume-p--pother--resume-designer-data'))
       .settings.openrouterKey).toBeUndefined();
+  });
+
+  // A caught storage failure looked identical to success from outside, so boot
+  // continued as though the credential were protected while a readable copy sat
+  // in the blob and getSettings served it to every AI request. Passthrough
+  // setItem throws SYNCHRONOUSLY once localStorage is full, which is the case
+  // extraction's catch was swallowing.
+  it('extractSharedApiKey reports a credential storage refused to move', async () => {
+    localStorage.setItem('resume-designer-data', JSON.stringify({
+      settings: { openrouterKey: 'sk-paid' },
+    }));
+    const realSetItem = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(k, v) {
+      if (k === OPENROUTER_KEY_KEY) throw new Error('QuotaExceededError');
+      return realSetItem.call(this, k, v);
+    });
+
+    try {
+      const stranded = await extractSharedApiKey();
+
+      expect(stranded).toBe('sk-paid');
+      // The blob is untouched, so it is still the only copy — which is exactly
+      // why the caller has to be told.
+      expect(JSON.parse(localStorage.getItem('resume-designer-data')).settings.openrouterKey)
+        .toBe('sk-paid');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // A corrupt blob is NOT a stranded credential — it is not one this app could
+  // have read a key out of, and reporting it would push boot into a degraded
+  // state over a value that does not exist.
+  it('extractSharedApiKey reports nothing for an unparseable blob', async () => {
+    localStorage.setItem('resume-designer-data', 'not json');
+    expect(await extractSharedApiKey()).toBeNull();
   });
 
   // main.js calls this a second time as a safety net for the adoption paths

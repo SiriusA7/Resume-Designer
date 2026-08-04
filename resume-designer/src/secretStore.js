@@ -697,7 +697,14 @@ async function initBrowserCredential() {
  * markStorageReady(), so React never renders a settings state that is missing
  * a key the user does have.
  */
-export async function initSecretStore({ backend = null, channel = null } = {}) {
+export async function initSecretStore({
+  backend = null,
+  channel = null,
+  // A credential extractSharedApiKey could NOT move out of a data blob, because
+  // storage refused the write. It is still readable there, so claiming
+  // protected storage over it breaks invariant 3 — see the use below.
+  strandedPlaintext = null,
+} = {}) {
   if (!IS_TAURI) {
     // Browser build. Encrypt at rest if the platform allows it, and fall back
     // to memory-only when it does not — never back to plaintext.
@@ -725,6 +732,26 @@ export async function initSecretStore({ backend = null, channel = null } = {}) {
     // broadcast that lands during boot simply runs after it and re-reads,
     // rather than being missed.
     await serializeCredentialOp(() => initBrowserCredential());
+
+    // Nothing of ours stored, but a readable credential is sitting in a data
+    // blob that extraction could not move — passthrough setItem throws
+    // synchronously once localStorage is full, and extraction catches it. Left
+    // alone, this tab reported healthy `browser` mode and Settings claimed
+    // encrypted storage, while getSettings went on serving the plaintext blob
+    // value to every AI request. Indefinitely: nothing retries.
+    //
+    // `browser-degraded` is that situation exactly — "the write failed, the
+    // credential is in ordinary readable browser storage, saving again will
+    // retry" — so its copy and its recovery both already fit.
+    //
+    // Guarded on `cached === null`, which also scopes this to the browser:
+    // on desktop the failed write stays in appStorage's cache, so
+    // adoptKeychainRead finds it as the legacy copy and migrates it, and
+    // `cached` is not null by the time anything gets here.
+    if (cached === null && strandedPlaintext) {
+      mode = 'browser-degraded';
+      cached = strandedPlaintext;
+    }
     return;
   }
 
