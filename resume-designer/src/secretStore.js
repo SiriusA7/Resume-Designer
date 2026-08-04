@@ -29,7 +29,7 @@
  */
 
 import { appStorage } from './appStorage.js';
-import { OPENROUTER_KEY_KEY, withoutLegacyCredential } from './profileKeys.js';
+import { OPENROUTER_KEY_KEY, withoutLegacyCredential, splitPhysicalKey } from './profileKeys.js';
 import { createIndexedDbBackend, readSecret, writeSecret } from './browserSecretStore.js';
 
 // Canonical Tauri sniff — same predicate as appStorage.js / native.js.
@@ -301,9 +301,26 @@ async function adoptRemoteChange() {
  * that Save recovers it and the field holds a value to write. The case table in
  * the tests is the guard against a fifth one, so add a row before a clause.
  *
- * @param {{edited: boolean, readOnly: boolean, memoryOnly?: boolean, value: string}} state
+ * `unreadable` is its own parameter rather than being folded into `readOnly` by
+ * the caller, which is how it went wrong: the two look alike — "something is
+ * stored, the field cannot be trusted to reflect it" — but they differ in the
+ * one respect this rule turns on. A read-only field holds the RECOVERED
+ * credential, so a non-empty untouched field is the recovery. An unreadable
+ * record leaves `cached` null, so a non-empty field can only be STALE — and
+ * with Settings already open when another tab clears the key, saving an
+ * unrelated setting wrote that stale value back over the Clear. Only a
+ * deliberate edit may replace an unreadable record, which is exactly what the
+ * UI asks for ("Enter your key again to replace it").
+ *
+ * The caller pre-computing `readOnly: isReadOnly() || isBrowserUnreadable()`
+ * put that decision back in the untested component, which is what extracting
+ * this function was meant to prevent.
+ *
+ * @param {{edited: boolean, readOnly: boolean, memoryOnly?: boolean,
+ *          unreadable?: boolean, value: string}} state
  */
-export function shouldWriteCredential({ edited, readOnly, memoryOnly, value }) {
+export function shouldWriteCredential({ edited, readOnly, memoryOnly, unreadable, value }) {
+  if (unreadable) return !!edited;
   return !!edited || ((!!readOnly || !!memoryOnly) && value !== '');
 }
 
@@ -439,6 +456,36 @@ export function isSecretStoreReady() {
  * retries the strip on every subsequent boot, so it self-heals as soon as one
  * flush succeeds. The exposure window is a degraded boot landing before that.
  */
+/**
+ * Remove `settings.openrouterKey` from the active profile's blob and from every
+ * other profile's physical blob. Returns whether anything changed, so the
+ * caller knows whether a flush is worth consulting.
+ *
+ * Mirrors extractSharedApiKey's sweep, and for the same reason: a credential in
+ * a profile the user never opens is still a readable credential on disk.
+ */
+function scrubEveryBlobCredential() {
+  let changed = false;
+  // The mapped key: the active physical blob with mapping on, the unprefixed
+  // one with it off.
+  const keys = [RESUME_DATA_KEY];
+  for (const key of appStorage.keys()) {
+    const split = splitPhysicalKey(key);
+    if (split?.logicalKey === RESUME_DATA_KEY) keys.push(key);
+  }
+  for (const key of keys) {
+    const blob = appStorage.getItem(key);
+    if (blob === null) continue;
+    // Always the LOGICAL key: withoutLegacyCredential matches on it, and every
+    // key in this list is a `resume-designer-data` blob by construction.
+    const scrubbed = withoutLegacyCredential(RESUME_DATA_KEY, blob);
+    if (scrubbed === blob) continue;
+    appStorage.setItem(key, scrubbed);
+    changed = true;
+  }
+  return changed;
+}
+
 // `scrubBlob` defaults to "a durable copy of ours exists" — true in every mode
 // but `session`. That default is load-bearing: in `session` a save is
 // memory-only, so scrubbing the blob would delete the user's ONLY durable
@@ -473,13 +520,13 @@ async function stripPlaintextCopy({ scrubBlob = mode !== 'session' } = {}) {
   // else, so it looked like it worked until the next boot read the same
   // plaintext blob and put the paid key straight back.
   //
-  // Only the ACTIVE profile's blob, which is what the mapped key resolves to.
-  // The other profiles are extraction's job on the next boot; this function
-  // runs at moments when there is a user waiting, not as a sweep.
-  const blob = scrubBlob ? appStorage.getItem(RESUME_DATA_KEY) : null;
-  const scrubbed = blob === null ? null : withoutLegacyCredential(RESUME_DATA_KEY, blob);
-  const blobQueued = scrubbed !== null && scrubbed !== blob;
-  if (blobQueued) appStorage.setItem(RESUME_DATA_KEY, scrubbed);
+  // EVERY profile's blob, not just the active one. "The rest are extraction's
+  // job on the next boot" is true in the modes that have a next boot to fix
+  // them — and false in exactly the mode this matters most for. In `session`
+  // there is no durable sentinel to write, so the next boot's sweep reaches an
+  // inactive profile's surviving credential and adopts it: a Clear the user
+  // performed, undone by a profile they never opened.
+  const blobQueued = scrubBlob && scrubEveryBlobCredential();
 
   const queued = sharedQueued || blobQueued;
 

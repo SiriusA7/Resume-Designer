@@ -106,6 +106,39 @@ describe('secretStore', () => {
     it('treats an omitted memoryOnly as false', () => {
       expect(shouldWriteCredential({ edited: false, readOnly: false, value: 'sk' })).toBe(false);
     });
+
+    // `unreadable` is its own input because the caller was OR-ing it into
+    // `readOnly`, and the two differ in the one respect this rule turns on. A
+    // read-only field holds the RECOVERED credential; an unreadable record
+    // leaves `cached` null, so a non-empty field can only be STALE. With
+    // Settings already open when another tab cleared the key, saving an
+    // unrelated setting wrote that stale value back over the Clear.
+    describe('unreadable browser record', () => {
+      it('never writes an untouched field, however non-empty', () => {
+        expect(shouldWriteCredential({
+          edited: false, readOnly: false, unreadable: true, value: 'sk-stale',
+        })).toBe(false);
+        // ...and the same value WOULD have been written if it were read-only,
+        // which is the conflation that caused this.
+        expect(shouldWriteCredential({
+          edited: false, readOnly: true, unreadable: false, value: 'sk-stale',
+        })).toBe(true);
+      });
+
+      it('honours a deliberate edit, which is what the UI asks for', () => {
+        expect(shouldWriteCredential({
+          edited: true, readOnly: false, unreadable: true, value: 'sk-typed',
+        })).toBe(true);
+      });
+
+      // It outranks the other degraded flags: whatever else is true, a record
+      // that cannot be read may only be replaced deliberately.
+      it('outranks readOnly and memoryOnly', () => {
+        expect(shouldWriteCredential({
+          edited: false, readOnly: true, memoryOnly: true, unreadable: true, value: 'sk-stale',
+        })).toBe(false);
+      });
+    });
   });
 
   // The browser build encrypts at rest under a non-exportable key, so the
@@ -1176,6 +1209,33 @@ describe('secretStore', () => {
       const after = await loadStore({ tauri: false });
       await after.initSecretStore({ backend: null });
       expect(after.getSecret()).not.toBe('sk-paid');
+    });
+
+    // "The rest are extraction's job on the next boot" holds in the modes that
+    // HAVE a next boot to fix them, and fails in the one this matters most for.
+    // In `session` there is no durable sentinel to write, so the next boot's
+    // sweep reaches an inactive profile's surviving credential and adopts it:
+    // a Clear undone by a profile the user never opened.
+    it('scrubs EVERY profile blob on a session-mode clear', async () => {
+      localStorage.setItem('resume-p--pactive--resume-designer-data', JSON.stringify({
+        settings: { openrouterKey: 'sk-paid', theme: 'dark' },
+      }));
+      localStorage.setItem('resume-p--pother--resume-designer-data', JSON.stringify({
+        settings: { openrouterKey: 'sk-paid', theme: 'light' },
+      }));
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend: null, strandedPlaintext: 'sk-paid' });
+
+      await store.setSecret('');
+
+      // Neither profile keeps a readable copy for the next boot to adopt.
+      expect(localStorage.getItem('resume-p--pactive--resume-designer-data'))
+        .not.toContain('sk-paid');
+      expect(localStorage.getItem('resume-p--pother--resume-designer-data'))
+        .not.toContain('sk-paid');
+      // Everything else in each blob is untouched.
+      expect(JSON.parse(localStorage.getItem('resume-p--pother--resume-designer-data'))
+        .settings.theme).toBe('light');
     });
 
     // The other half, and the reason the clear is gated rather than blanket:

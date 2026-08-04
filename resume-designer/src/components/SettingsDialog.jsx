@@ -378,10 +378,13 @@ export default function SettingsDialog() {
     // value then would overwrite the key recovery had only just read back.
     if (shouldWriteCredential({
       edited: keyDirty,
-      // An unreadable stored credential is the same shape as a degraded
-      // keychain: something is there, the field cannot be trusted to reflect
-      // it, so only a deliberate edit may write.
-      readOnly: isReadOnly() || isBrowserUnreadable(),
+      readOnly: isReadOnly(),
+      // Passed SEPARATELY, not OR'd into readOnly. They look alike — something
+      // is stored, the field cannot be trusted — but a read-only field holds
+      // the recovered credential while an unreadable one leaves `cached` null,
+      // so a non-empty field there is stale. OR'ing them let a Save for an
+      // unrelated setting write that stale key back over another tab's Clear.
+      unreadable: isBrowserUnreadable(),
       // A refused first save keeps the key in memory and the copy promises that
       // saving again retries the store. Reopening Settings reseeds the field and
       // clears keyDirty, so without this the promised retry did nothing at all.
