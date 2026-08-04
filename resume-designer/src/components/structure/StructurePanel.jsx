@@ -238,9 +238,18 @@ function linkToCompanyAbove(index) {
   // employer the user never worked for.
   if (!prev || !prev.company || prev.company !== cur.company) return;
   const id = prev._groupId || generateId('grp');
-  const next = experience.map((entry, i) => (
-    (i === index - 1 || i === index) ? { ...entry, _groupId: id } : entry
-  ));
+  const oldId = cur._groupId;
+  const next = [...experience];
+  next[index - 1] = { ...prev, _groupId: id };
+  next[index] = { ...cur, _groupId: id };
+  // The clicked entry may itself be the LEAD of a run: its trailing members come
+  // with it. Re-idding only this index would leave them on the old id, splitting
+  // them off as an orphaned singleton the user never asked to unlink.
+  for (let i = index + 1; i < next.length; i += 1) {
+    const entry = next[i];
+    if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+    next[i] = { ...entry, _groupId: id };
+  }
   store.setChangeMetadata('Linked roles at one company');
   store.update('experience', next);
 }
@@ -374,7 +383,10 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }
           </SortableList>
         </div>
         <div className="flex flex-wrap gap-1.5 border-t pt-2.5">
-          {isLead && group && group.roles.length > 1 && (
+          {/* Offered on the first member of ANY group, including a run of one:
+              "I was promoted here" starts from a single entry, and this is the
+              only path that adds the second role in place. */}
+          {isLead && group && (
             <Button
               variant="outline" size="sm" type="button" className="h-7 text-xs"
               onClick={() => addRoleAtCompany(index)}
@@ -383,7 +395,8 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }
             </Button>
           )}
           {/* A run LEAD has no run member above it, so separating it is a pure
-              no-op that still costs an undo entry — offer it the link action. */}
+              no-op that still costs an undo entry — offer it the link action.
+              At index 0 there is nothing above at all, so offer neither. */}
           {isRunMember && !isLead ? (
             <Button
               variant="outline" size="sm" type="button" className="h-7 text-xs"
@@ -391,7 +404,7 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }
             >
               Separate from company above
             </Button>
-          ) : (
+          ) : index > 0 ? (
             <Button
               variant="outline" size="sm" type="button" className="h-7 text-xs"
               disabled={!canLinkAbove}
@@ -400,7 +413,7 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove }
             >
               Link to company above
             </Button>
-          )}
+          ) : null}
         </div>
         <Button
           variant="ghost" size="sm" type="button"

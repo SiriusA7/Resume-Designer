@@ -292,6 +292,9 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
           const group = groups.find((g) => g.roles.some((r) => r.index === i));
           const isRunMember = !!group && group.roles.length > 1;
           const isLead = isRunMember && group.roles[0].index === i;
+          // First member of its own group, run of one included: the entry that
+          // can gain a second role in place.
+          const isGroupStart = !!group && group.roles[0].index === i;
           const prev = i > 0 ? items[i - 1] : null;
           const canLinkAbove = !!prev && !!prev.company && prev.company === exp.company;
           const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
@@ -311,7 +314,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                     {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
                   </span>
                 )}
-                {isLead && (
+                {isGroupStart && (
                   <Button
                     variant="outline" size="sm" type="button" className="h-7 text-xs"
                     onClick={() => {
@@ -371,23 +374,37 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                   >
                     Separate from company above
                   </Button>
-                ) : (
+                ) : i > 0 ? (
                   <Button
                     variant="outline" size="sm" type="button" className="h-7 text-xs"
                     disabled={!canLinkAbove}
                     title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
                     onClick={() => {
-                      const id = prev._groupId || generateId('grp');
-                      rewrite(items.map((entry, k) => {
-                        if (k === i - 1) return { ...entry, _groupId: id };
-                        if (k === i) return { ...entry, _groupId: id };
-                        return entry;
-                      }));
+                      // Read the CURRENT items at click time: the company input is
+                      // uncontrolled and writes through, so a render-time neighbour
+                      // check can be stale. Never write `company` here.
+                      const cur = items[i];
+                      const above = items[i - 1];
+                      if (!cur || !above || !above.company || above.company !== cur.company) return;
+                      const id = above._groupId || generateId('grp');
+                      const oldId = cur._groupId;
+                      const next = [...items];
+                      next[i - 1] = { ...above, _groupId: id };
+                      next[i] = { ...cur, _groupId: id };
+                      // The clicked entry may itself be the LEAD of a run: its
+                      // trailing members come with it, rather than being ejected
+                      // into an orphaned singleton on the old id.
+                      for (let k = i + 1; k < next.length; k += 1) {
+                        const entry = next[k];
+                        if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+                        next[k] = { ...entry, _groupId: id };
+                      }
+                      rewrite(next);
                     }}
                   >
                     Link to company above
                   </Button>
-                )}
+                ) : null}
               </div>
             </>
           );
