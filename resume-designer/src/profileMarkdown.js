@@ -1,8 +1,9 @@
 /**
  * User-profile ⇄ markdown conversion — framework-agnostic, pure functions
  * extracted from the former userProfilePanel.js so the React ProfileDialog (and
- * unit tests) can import them without the panel's DOM/import graph. No DOM, no
- * dependencies; the only shared value is DEFAULT_PROFILE (the empty shape).
+ * unit tests) can import them without the panel's DOM/import graph. No DOM, but
+ * not dependency-free: it imports store.js (for generateId) and
+ * experienceGroups.js (for assignGroupIds).
  */
 
 import { generateId } from './store.js';

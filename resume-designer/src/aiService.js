@@ -5,7 +5,7 @@
 
 import { getSettings, saveSettings, getUserProfile, saveUserProfile } from './persistence.js';
 import { store } from './store.js';
-import { groupExperience } from './experienceGroups.js';
+import { groupExperience, assignGroupIds } from './experienceGroups.js';
 import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
@@ -1564,7 +1564,14 @@ export function saveExtractedProfile(extractedProfile) {
       ];
     }
   }
-  
+
+  // Company-run grouping is never asked of the model — it's applied here, after
+  // extraction, by the same adjacency rule markdown import uses, so this is the
+  // only place a freshly-extracted (or re-merged) workExperience gets _groupId.
+  if (Array.isArray(mergedProfile.workExperience)) {
+    mergedProfile.workExperience = assignGroupIds(mergedProfile.workExperience);
+  }
+
   console.log('[Profile] Merged profile to save:', mergedProfile);
   saveUserProfile(mergedProfile);
   
