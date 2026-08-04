@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils';
 import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
-  isCleanupPending, recoverSecretStore, isBrowserDegraded,
+  isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable,
 } from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
@@ -239,6 +239,9 @@ export default function SettingsDialog() {
   // The browser equivalent: encryption is available but the credential is
   // still in the readable entry because a write failed.
   const degradedBrowser = isBrowserDegraded();
+  // A credential IS stored here but will not decrypt. Treated like read-only
+  // for the write decision: an untouched empty field must not overwrite it.
+  const unreadableBrowser = isBrowserUnreadable();
   // Three states, not two. A degraded DESKTOP session also reports
   // isKeychainAvailable() === false, but it is nothing like the browser one:
   // handleUnavailableKeychain kept serving the older credential from the
@@ -265,6 +268,10 @@ export default function SettingsDialog() {
       + ' and files copied off this machine are useless without it. The encryption key is non-exportable —'
       + ' it can’t be taken elsewhere, though anything running on this page can still use it.'
       + ' It’s sent only to OpenRouter — never share it.';
+  } else if (unreadableBrowser) {
+    credentialNote = 'A key is stored in this browser but couldn’t be read — it may have been saved by a'
+      + ' different browser profile, or the browser’s stored data was partly cleared. Enter your key again'
+      + ' to replace it. It’s sent only to OpenRouter — never share it.';
   } else if (degradedBrowser) {
     credentialNote = 'Your key couldn’t be encrypted for storage — this browser refused the write, so it’s'
       + ' being kept in ordinary browser storage where it’s readable. Saving it again will retry.'
@@ -311,7 +318,7 @@ export default function SettingsDialog() {
     // reachable through the credential write: the field is seeded empty on an
     // already-migrated install, and writing that unknown value is exactly what
     // shouldWriteCredential refuses.
-    if (readOnlyKeychain || degradedBrowser || isCleanupPending()) {
+    if (readOnlyKeychain || degradedBrowser || unreadableBrowser || isCleanupPending()) {
       try {
         await recoverSecretStore();
       } catch (err) {
@@ -324,7 +331,14 @@ export default function SettingsDialog() {
     // promoted us out of read-only and rehydrated the real credential, and the
     // field still holds whatever was seeded before that. Writing the stale
     // value then would overwrite the key recovery had only just read back.
-    if (shouldWriteCredential({ edited: keyDirty, readOnly: isReadOnly(), value: apiKey })) {
+    if (shouldWriteCredential({
+      edited: keyDirty,
+      // An unreadable stored credential is the same shape as a degraded
+      // keychain: something is there, the field cannot be trusted to reflect
+      // it, so only a deliberate edit may write.
+      readOnly: isReadOnly() || isBrowserUnreadable(),
+      value: apiKey,
+    })) {
       // The key goes to the OS keychain, so this can genuinely fail (locked or
       // access denied). Keep the dialog open and say so rather than closing on
       // a save that did not happen.

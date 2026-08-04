@@ -61,6 +61,10 @@ let cached = null;
  *                 under a non-exportable key. Persists properly, so it
  *                 survives the reloads the app does to itself on profile
  *                 switch and backup restore.
+ *  - `browser-unreadable`
+ *                 a credential IS stored here but will not decrypt. Nothing
+ *                 gets written over it, because absence was never established
+ *                 — see readSecret's three outcomes.
  *  - `browser-degraded`
  *                 IndexedDB opened but the encrypted write failed (quota, I/O,
  *                 a CryptoKey that would not clone). The credential is still in
@@ -162,6 +166,16 @@ export function isEncryptedInBrowser() {
  */
 export function isBrowserDegraded() {
   return mode === 'browser-degraded';
+}
+
+/**
+ * True when a credential IS stored in this browser but cannot be decrypted —
+ * a failed IndexedDB read, or a wrapping key cleared out from under the
+ * ciphertext. Distinct from "no key configured": nothing may be written over it
+ * blindly, and the user needs telling rather than silently losing AI.
+ */
+export function isBrowserUnreadable() {
+  return mode === 'browser-unreadable';
 }
 
 // Set whenever a strip fails to reach disk: the credential is durable in its
@@ -343,7 +357,21 @@ export async function initSecretStore({ backend = null } = {}) {
     browserBackend = backend || await createIndexedDbBackend();
     mode = browserBackend ? 'browser' : 'session';
 
-    if (mode === 'browser') cached = await readSecret(browserBackend);
+    if (mode === 'browser') {
+      const read = await readSecret(browserBackend);
+      if (read.status === 'found') {
+        cached = read.value;
+      } else if (read.status === 'unreadable') {
+        // Something IS stored and cannot be read right now. Absence was never
+        // established, so the migration below must not run: writing a legacy
+        // plaintext copy over this record would replace a newer credential, or
+        // resurrect one the user deliberately cleared. Leave it all alone.
+        mode = 'browser-unreadable';
+        cached = null;
+        return;
+      }
+      // 'missing' falls through to the migration — that one IS established.
+    }
 
     // Migrate a key an older version left in localStorage: adopt it so the
     // session keeps working, encrypt it if we can, then delete the readable
@@ -458,8 +486,22 @@ async function adoptKeychainRead(stored) {
  * Returns whether anything changed. Throws if the keychain is still unreachable
  * or the cleanup still fails, so the caller can keep showing why.
  */
+export const BROWSER_UNREADABLE_MESSAGE =
+  'The key stored in this browser could not be read. Enter it again to replace it.';
+
 export async function recoverSecretStore() {
   let changed = false;
+
+  // Retry the decrypt: an IndexedDB read can fail transiently. If it now says
+  // the record is genuinely gone, that is a settled answer and normal browser
+  // mode resumes — but a still-unreadable record stays untouched.
+  if (mode === 'browser-unreadable') {
+    const read = await readSecret(browserBackend);
+    if (read.status === 'unreadable') throw new Error(BROWSER_UNREADABLE_MESSAGE);
+    mode = 'browser';
+    cached = read.status === 'found' ? read.value : null;
+    changed = true;
+  }
 
   // Browser: the encrypted write failed at boot, so the credential is still in
   // the readable entry. Retrying is not reachable through the credential write

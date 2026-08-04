@@ -35,7 +35,7 @@ describe('browserSecretStore', () => {
   it('round-trips a credential', async () => {
     const backend = makeBackend();
     await writeSecret(backend, 'sk-or-v1-secret');
-    expect(await readSecret(backend)).toBe('sk-or-v1-secret');
+    expect(await readSecret(backend)).toEqual({ status: 'found', value: 'sk-or-v1-secret' });
   });
 
   // The point of the exercise: what lands in storage is not the credential.
@@ -73,7 +73,7 @@ describe('browserSecretStore', () => {
     const second = Array.from(new Uint8Array(backend.files.get(SECRET_ID).iv));
 
     expect(first).not.toEqual(second);
-    expect(await readSecret(backend)).toBe('sk-two');
+    expect(await readSecret(backend)).toEqual({ status: 'found', value: 'sk-two' });
   });
 
   // Clearing stores an empty ciphertext rather than deleting the record: an
@@ -81,7 +81,7 @@ describe('browserSecretStore', () => {
   it('round-trips an empty value as the cleared sentinel', async () => {
     const backend = makeBackend();
     await writeSecret(backend, '');
-    expect(await readSecret(backend)).toBe('');
+    expect(await readSecret(backend)).toEqual({ status: 'found', value: '' });
     expect(backend.files.has(SECRET_ID)).toBe(true);
   });
 
@@ -95,7 +95,9 @@ describe('browserSecretStore', () => {
     await Promise.all([writeSecret(backend, 'sk-a'), writeSecret(backend, 'sk-b')]);
 
     // Exactly one key exists, and whichever ciphertext won decrypts under it.
-    expect(await readSecret(backend)).toMatch(/^sk-[ab]$/);
+    const out = await readSecret(backend);
+    expect(out.status).toBe('found');
+    expect(out.value).toMatch(/^sk-[ab]$/);
   });
 
   // The cross-context case the in-flight guard cannot cover: another tab stored
@@ -112,12 +114,12 @@ describe('browserSecretStore', () => {
 
     // Their key survived, so their earlier ciphertext would still decrypt.
     expect(backend.files.get(WRAP_KEY_ID)).toBe(theirKey);
-    expect(await readSecret(backend)).toBe('sk-ours');
+    expect(await readSecret(backend)).toEqual({ status: 'found', value: 'sk-ours' });
   });
 
   describe('unreadable records', () => {
     it('reports nothing stored when there is no record', async () => {
-      expect(await readSecret(makeBackend())).toBeNull();
+      expect(await readSecret(makeBackend())).toEqual({ status: 'missing' });
     });
 
     // Generating a wrapping key during a READ would produce one that cannot
@@ -128,7 +130,9 @@ describe('browserSecretStore', () => {
       await writeSecret(backend, 'sk-secret');
       backend.files.delete(WRAP_KEY_ID);
 
-      expect(await readSecret(backend)).toBeNull();
+      // UNREADABLE, not missing: ciphertext is present, so absence was never
+      // established and nothing may be written over it.
+      expect(await readSecret(backend)).toEqual({ status: 'unreadable' });
       // Crucially, it did not replace the missing key.
       expect(backend.files.has(WRAP_KEY_ID)).toBe(false);
     });
@@ -139,13 +143,13 @@ describe('browserSecretStore', () => {
       backend.files.set(SECRET_ID, { iv: new Uint8Array(12), data: new Uint8Array(8) });
 
       // Boot must not die on a damaged record.
-      await expect(readSecret(backend)).resolves.toBeNull();
+      await expect(readSecret(backend)).resolves.toEqual({ status: 'unreadable' });
     });
 
     it('treats a malformed record as no credential', async () => {
       const backend = makeBackend();
       backend.files.set(SECRET_ID, { nonsense: true });
-      await expect(readSecret(backend)).resolves.toBeNull();
+      await expect(readSecret(backend)).resolves.toEqual({ status: 'unreadable' });
     });
   });
 });

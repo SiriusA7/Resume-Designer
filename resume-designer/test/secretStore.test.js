@@ -192,6 +192,56 @@ describe('secretStore', () => {
       expect(next.getSecret()).toBe('sk-legacy');
     });
 
+    // An unreadable record is NOT an absent one. Collapsing them would let the
+    // migration write a stale plaintext copy over a credential that is merely
+    // undecryptable right now — replacing a newer key, or resurrecting one the
+    // user deliberately cleared. Same rule commands/secret.rs states for the
+    // keychain's Ok(None) vs Err.
+    it('never migrates plaintext over a record it could not read', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      await store.setSecret('sk-current');
+      const ciphertext = backend.files.get('openrouter-key-v1');
+
+      // A stale copy survives from an old install, and the read now fails.
+      setPlaintext('sk-stale');
+      const broken = { ...backend, get: async () => { throw new Error('idb read failed'); } };
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend: broken });
+
+      expect(next.isBrowserUnreadable()).toBe(true);
+      expect(next.isEncryptedInBrowser()).toBe(false);
+      // The stored credential is untouched, and the stale copy was not adopted.
+      expect(backend.files.get('openrouter-key-v1')).toBe(ciphertext);
+      expect(next.getSecret()).toBeNull();
+    });
+
+    it('resumes normally once the record reads again', async () => {
+      const backend = makeBackend();
+      const store = await loadStore({ tauri: false });
+      await store.initSecretStore({ backend });
+      await store.setSecret('sk-current');
+
+      let failing = true;
+      const flaky = {
+        ...backend,
+        get: async (id) => {
+          if (failing) throw new Error('idb read failed');
+          return backend.get(id);
+        },
+      };
+      const next = await loadStore({ tauri: false });
+      await next.initSecretStore({ backend: flaky });
+      expect(next.isBrowserUnreadable()).toBe(true);
+
+      failing = false;
+      await next.recoverSecretStore();
+
+      expect(next.isBrowserUnreadable()).toBe(false);
+      expect(next.getSecret()).toBe('sk-current');
+    });
+
     it('clears to an empty value that still round-trips', async () => {
       const backend = makeBackend();
       const store = await loadStore({ tauri: false });

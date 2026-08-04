@@ -168,21 +168,51 @@ export function __resetBrowserSecretStoreForTests() {
 }
 
 /**
- * Decrypt the stored credential. Returns null when there is nothing stored, and
- * also when the record cannot be decrypted — a wrapping key cleared out from
- * under the ciphertext, or a corrupt record. Both mean "no usable credential",
- * and neither is worth failing boot over.
+ * Decrypt the stored credential.
+ *
+ * Reports THREE outcomes, and they are not interchangeable — the same rule
+ * commands/secret.rs states for the keychain, for the same reason:
+ *
+ *   { status: 'found', value }  a credential is stored and readable
+ *   { status: 'missing' }       nothing is stored
+ *   { status: 'unreadable' }    something IS stored but cannot be read now —
+ *                               a failed IndexedDB read, a wrapping key cleared
+ *                               out from under the ciphertext, a corrupt record
+ *
+ * Collapsing `unreadable` into `missing` is what makes it dangerous. The caller
+ * would read it as "the user has no key", disable AI for the session, and — far
+ * worse — let the migration branch write a legacy plaintext copy OVER the
+ * unreadable record, replacing a newer credential or resurrecting one the user
+ * deliberately cleared.
+ *
+ * Never throws: boot must not die on a damaged record.
  */
 export async function readSecret(backend) {
+  let record;
   try {
-    const record = await backend.get(SECRET_ID);
-    if (!record || !record.iv || !record.data) return null;
-    const key = await loadWrappingKey(backend);
-    if (!key) return null;
-    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv }, key, record.data);
-    return new TextDecoder().decode(plain);
+    record = await backend.get(SECRET_ID);
   } catch {
-    return null;
+    // The read itself failed. Absence was not established, so nothing may be
+    // written over this.
+    return { status: 'unreadable' };
+  }
+  if (!record) return { status: 'missing' };
+  if (!record.iv || !record.data) return { status: 'unreadable' };
+
+  let key;
+  try {
+    key = await loadWrappingKey(backend);
+  } catch {
+    return { status: 'unreadable' };
+  }
+  // Ciphertext with no key is stored-but-undecryptable, NOT absent.
+  if (!key) return { status: 'unreadable' };
+
+  try {
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv }, key, record.data);
+    return { status: 'found', value: new TextDecoder().decode(plain) };
+  } catch {
+    return { status: 'unreadable' };
   }
 }
 
