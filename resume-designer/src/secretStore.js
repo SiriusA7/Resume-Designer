@@ -100,20 +100,40 @@ export function getSecret() {
  * Drop any plaintext copy left in appStorage. Only ever called once the
  * keychain copy is known durable.
  *
- * Returns whether the strip reached disk. A failed flush is not an error the
- * user needs to see — the keychain already holds the credential, so the next
- * boot simply retries the strip.
+ * Returns whether the strip reached DISK, which callers must not ignore. A
+ * failed flush leaves the old credential durably readable, and every later boot
+ * that finds the keychain unavailable serves that file as the fallback — so a
+ * key the user replaced, or deleted outright, can come back.
+ *
+ * setSecret surfaces the failure, because there is a user standing there who
+ * can retry. The two boot-time callers deliberately do not: there is no such
+ * moment during startup, nothing is lost by waiting, and initSecretStore
+ * retries the strip on every subsequent boot, so it self-heals as soon as one
+ * flush succeeds. The exposure window is a degraded boot landing before that.
  */
 async function stripPlaintextCopy() {
   if (appStorage.getItem(OPENROUTER_KEY_KEY) === null) return true;
   appStorage.removeItem(OPENROUTER_KEY_KEY);
-  return appStorage.flush();
+  try {
+    return await appStorage.flush();
+  } catch {
+    return false;
+  }
 }
 
 /** Thrown when the keychain faulted, so the UI can explain rather than guess. */
 export const KEYCHAIN_READ_ONLY_MESSAGE =
   'Your system keychain could not be reached, so the key was not saved. '
   + 'Your existing key still works for now. Unlock your keychain and try again.';
+
+/**
+ * Thrown when the keychain took the new value but the older plaintext copy
+ * could not be deleted. Worded for both saving and clearing, since either can
+ * leave that copy behind.
+ */
+export const PLAINTEXT_CLEANUP_MESSAGE =
+  'Your system keychain was updated, but an older copy of your key could not be '
+  + 'removed from this app’s data folder. Try again.';
 
 /**
  * Write the credential, replacing whatever is stored.
@@ -159,7 +179,15 @@ export async function setSecret(value) {
   // A pre-migration plaintext copy can still exist if an earlier strip failed
   // to flush, or because this session started degraded. Now that a newer
   // credential is durable in the keychain, the stale one is pure liability.
-  await stripPlaintextCopy();
+  //
+  // Report a failed cleanup instead of resolving: the keychain genuinely holds
+  // the new value, but the old file still holds the OLD one, and that is not a
+  // detail the user can be left unaware of. CLEARING is the case that bites —
+  // the app would say the credential is gone while it stays durable on disk,
+  // ready to be served as the fallback on any later boot where the keychain is
+  // unavailable. The message says what actually happened rather than claiming
+  // nothing was saved.
+  if (!(await stripPlaintextCopy())) throw new Error(PLAINTEXT_CLEANUP_MESSAGE);
 }
 
 /**
@@ -197,7 +225,9 @@ export async function initSecretStore() {
   if (stored !== null) {
     cached = stored;
     // The keychain is authoritative once populated. A plaintext copy at this
-    // point is a leftover from a migration whose strip did not flush.
+    // point is a leftover from a migration whose strip did not flush. Result
+    // ignored on purpose — see stripPlaintextCopy: no user is present to retry,
+    // and this call IS the retry.
     await stripPlaintextCopy();
     return;
   }
@@ -229,6 +259,8 @@ export async function initSecretStore() {
     return;
   }
   cached = plaintext;
+  // Result ignored on purpose, as above: the migration succeeded, and a failed
+  // strip is retried by the hydration branch on the next boot.
   await stripPlaintextCopy();
 }
 

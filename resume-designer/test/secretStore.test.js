@@ -271,6 +271,45 @@ describe('secretStore', () => {
       expect(store.getSecret()).toBe('sk-old');
     });
 
+    // The keychain took the value, but the OLD one is still durably on disk and
+    // every later boot that finds the keychain unavailable serves that file as
+    // the fallback. Clearing is the case that bites: the app would report the
+    // credential gone while it waits on disk to come back.
+    it('reports a failed plaintext cleanup instead of claiming success', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+      await store.initSecretStore();
+
+      setPlaintext('sk-real');
+      const { appStorage } = await import('../src/appStorage.js');
+      vi.spyOn(appStorage, 'flush').mockResolvedValue(false);
+      invokeMock.mockResolvedValue(undefined);
+
+      // The user clears their key. The keychain accepts '', the strip does not
+      // reach disk, and that must not be reported as a clean success.
+      await expect(store.setSecret('')).rejects.toThrow(/older copy of your key/i);
+
+      // The surviving FILE cannot be observed here: appStorage runs in
+      // passthrough under jsdom, where removeItem hits localStorage
+      // synchronously and is durable whatever flush returns. The failure this
+      // guards is desktop cached mode, where the delete is queued and only the
+      // flush proves it landed. What is testable — and what actually regressed
+      // — is that a false flush is not swallowed.
+      expect(store.getSecret()).toBe('');
+    });
+
+    it('resolves normally when the cleanup lands', async () => {
+      const store = await loadStore();
+      invokeMock.mockResolvedValue(null);
+      await store.initSecretStore();
+
+      setPlaintext('sk-real');
+      invokeMock.mockResolvedValue(undefined);
+
+      await expect(store.setSecret('')).resolves.toBeUndefined();
+      expect(plaintext()).toBeNull();
+    });
+
     it('writes an empty value rather than deleting, so a stale blob key stays masked', async () => {
       const store = await loadStore();
       invokeMock.mockResolvedValue('sk-old');
