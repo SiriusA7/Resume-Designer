@@ -415,12 +415,19 @@ jobs:
 
             - 3 to 6 bullets total for a typical release; fewer when the
               release is small. Never pad with filler.
-            - Merge related bullets into one feature-level line stating the
-              user-visible outcome (e.g. "New: a Library to search your
-              resumes and track every application").
-            - Fold minor or internal-sounding fixes into one closing bullet
-              such as "Plus N smaller fixes and polish", using the real count
-              of bullets you folded.
+            - Every bullet opens with a SHORT BOLD LEAD: two to five words
+              naming the change, ending in a period, wrapped in double
+              asterisks. Then one or two plain sentences saying what it means
+              for the reader. Exactly this shape:
+              "- **A Library for your resumes.** Search everything you have
+              written and track where you applied."
+            - Bold ONLY that lead phrase. No other bold or italics anywhere,
+              and never headings, links, tables, or code formatting.
+            - Merge related changes into one feature-level bullet stating the
+              user-visible outcome, never the implementation.
+            - Fold minor or internal-sounding fixes into one closing bullet,
+              bolded in full: "- **Plus N smaller fixes and polish.**" — using
+              the real count of bullets you folded.
             - Plain, friendly language — no engineering jargon, no code
               identifiers, no commit-speak.
             - Stay truthful: describe only what the input states, never
