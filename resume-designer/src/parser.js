@@ -6,7 +6,7 @@
 import { generateId } from './store.js';
 import { assignGroupIds } from './experienceGroups.js';
 
-export function parseResume(markdown) {
+export function parseResume(markdown, { group = false } = {}) {
   const lines = markdown.split('\n');
   
   const resume = {
@@ -182,9 +182,11 @@ export function parseResume(markdown) {
     resume.experience.push(currentExperience);
   }
 
-  // Same predicate the renderer uses, so import and render agree by
-  // construction: consecutive entries at an identical company are one tenure.
-  resume.experience = assignGroupIds(resume.experience);
+  // Grouping is OPT-IN. The exported markdown carries no _groupId, so adjacency
+  // is the only signal here — and adjacency cannot tell a promotion from a
+  // return stint whose intervening job is simply absent from the file. The
+  // importer asks the user instead of guessing.
+  if (group) resume.experience = assignGroupIds(resume.experience);
 
   return resume;
 }

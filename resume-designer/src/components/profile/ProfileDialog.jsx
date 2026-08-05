@@ -8,10 +8,12 @@ import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { getUserProfile, saveUserProfile } from '../../persistence.js';
 import { DEFAULT_PROFILE, profileToMarkdown, markdownToProfile } from '../../profileMarkdown.js';
+import { assignGroupIds, groupExperience } from '../../experienceGroups.js';
 import { ProfileTabContent } from './ProfileTabs.jsx';
 
 const SAVE_DELAY = 500;
@@ -138,8 +140,22 @@ export default function ProfileDialog() {
   };
 
   const handleImport = (file) => {
-    file.text().then((text) => {
+    file.text().then(async (text) => {
       const imported = markdownToProfile(text);
+      const entries = Array.isArray(imported?.workExperience) ? imported.workExperience : [];
+      const grouped = assignGroupIds(entries);
+      const runCount = groupExperience(grouped).filter((g) => g.roles.length > 1).length;
+      if (runCount > 0) {
+        const ok = await confirmDestructive({
+          title: runCount === 1
+            ? '1 employer has more than one role'
+            : `${runCount} employers have more than one role`,
+          description: 'Group each employer’s roles under a single company heading? Keep them separate if any of them are return stints rather than promotions.',
+          actionLabel: 'Group',
+          destructive: false,
+        });
+        if (ok) imported.workExperience = grouped;
+      }
       profileRef.current = {
         ...DEFAULT_PROFILE,
         ...imported,

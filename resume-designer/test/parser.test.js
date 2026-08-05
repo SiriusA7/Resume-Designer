@@ -51,12 +51,12 @@ describe('parseResume — experience entries', () => {
     expect(r.tagline).not.toBe('2020 – Present');
   });
 
-  it('groups consecutive entries at an identical company', () => {
+  it('groups consecutive entries at an identical company when asked', () => {
     const r = parseResume(doc(
       '### Senior Dev — Acme Corporation\n**Mar 2022 – Jun 2024**\n- a\n\n'
       + '### Dev — Acme Corporation\n**Jan 2019 – Mar 2022**\n- b\n\n'
       + '### Intern — Initech\n**2018**\n- c\n',
-    ));
+    ), { group: true });
     expect(r.experience[0]._groupId).toBeTruthy();
     expect(r.experience[0]._groupId).toBe(r.experience[1]._groupId);
     expect(r.experience[2]._groupId).toBeUndefined();
@@ -67,8 +67,27 @@ describe('parseResume — experience entries', () => {
       '### Staff — Acme\n**2023 – 2024**\n- a\n\n'
       + '### Consultant — Initech\n**2021 – 2023**\n- b\n\n'
       + '### Dev — Acme\n**2018 – 2020**\n- c\n',
-    ));
+    ), { group: true });
     expect(r.experience[0]._groupId).toBeUndefined();
     expect(r.experience[2]._groupId).toBeUndefined();
+  });
+});
+
+describe('parseResume — grouping is opt-in', () => {
+  const twoAcme = doc(
+    '### Senior Dev — Acme Corporation\n**Mar 2022 – Jun 2024**\n- a\n\n'
+    + '### Dev — Acme Corporation\n**Jan 2019 – Mar 2022**\n- b\n',
+  );
+
+  it('does not group by default', () => {
+    const r = parseResume(twoAcme);
+    expect(r.experience[0]._groupId).toBeUndefined();
+    expect(r.experience[1]._groupId).toBeUndefined();
+  });
+
+  it('groups when asked', () => {
+    const r = parseResume(twoAcme, { group: true });
+    expect(r.experience[0]._groupId).toBeTruthy();
+    expect(r.experience[0]._groupId).toBe(r.experience[1]._groupId);
   });
 });

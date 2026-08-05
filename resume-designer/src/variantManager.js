@@ -15,6 +15,7 @@
 
 import { store, generateId, EMPTY_RESUME } from './store.js';
 import { storageErrorToast } from './storageToast.js';
+import { assignGroupIds, groupExperience } from './experienceGroups.js';
 import {
   getVariants,
   getCurrentVariantId,
@@ -218,9 +219,25 @@ export function renameCurrentVariant(newName) {
   return true;
 }
 
-export async function importVariant(file) {
+/**
+ * @param {File} file
+ * @param {{ confirmGrouping?: (runCount: number) => Promise<boolean> }} [options]
+ *   `confirmGrouping` is injected by the UI so this module stays free of React.
+ *   Omitted, nothing is ever grouped — the conservative default.
+ */
+export async function importVariant(file, { confirmGrouping = null } = {}) {
   try {
+    // Import WITHOUT grouping (parseResume's default), then work out whether
+    // grouping would change anything. No adjacent same-company entries means
+    // nothing to decide and no dialog: the question only appears when the
+    // answer matters.
     const data = await importFile(file);
+    const entries = Array.isArray(data?.experience) ? data.experience : [];
+    const grouped = assignGroupIds(entries);
+    const runCount = groupExperience(grouped).filter((g) => g.roles.length > 1).length;
+    if (runCount > 0 && confirmGrouping && await confirmGrouping(runCount)) {
+      data.experience = grouped;
+    }
     const name = file.name.replace(/\.(json|md|markdown)$/i, '');
     // createVariant returns null when the variant couldn't be persisted
     // (it already surfaced the storage error to the user).

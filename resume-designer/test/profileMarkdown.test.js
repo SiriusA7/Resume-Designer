@@ -21,11 +21,11 @@ describe('markdownToProfile — work experience', () => {
     });
   });
 
-  it('groups consecutive entries at an identical company', () => {
+  it('groups consecutive entries at an identical company when asked', () => {
     const p = markdownToProfile(md(
       '### Senior Dev at Acme Corporation\n**Dates:** Mar 2022 - Jun 2024\n\nLed things.\n\n'
       + '### Dev at Acme Corporation\n**Dates:** Jan 2019 - Mar 2022\n\nBuilt things.\n',
-    ));
+    ), { group: true });
     expect(p.workExperience[0]._groupId).toBeTruthy();
     expect(p.workExperience[0]._groupId).toBe(p.workExperience[1]._groupId);
   });
@@ -39,7 +39,7 @@ describe('markdownToProfile — work experience', () => {
   it('does not group different companies', () => {
     const p = markdownToProfile(md(
       '### Dev at Acme\n**Dates:** 2019 - 2022\n\nA.\n\n### Intern at Initech\n**Dates:** 2018\n\nB.\n',
-    ));
+    ), { group: true });
     expect(p.workExperience[0]._groupId).toBeUndefined();
   });
 
@@ -54,9 +54,29 @@ describe('profileToMarkdown', () => {
     const source = markdownToProfile(md(
       '### Senior Dev at Acme Corporation\n**Dates:** Mar 2022 - Jun 2024\n\nLed things.\n\n'
       + '### Dev at Acme Corporation\n**Dates:** Jan 2019 - Mar 2022\n\nBuilt things.\n',
-    ));
-    const reparsed = markdownToProfile(profileToMarkdown(source));
+    ), { group: true });
+    const reparsed = markdownToProfile(profileToMarkdown(source), { group: true });
     expect(reparsed.workExperience).toHaveLength(2);
+    expect(reparsed.workExperience[0]._groupId).toBeTruthy();
     expect(reparsed.workExperience[0]._groupId).toBe(reparsed.workExperience[1]._groupId);
+  });
+});
+
+describe('markdownToProfile — grouping is opt-in', () => {
+  const twoAcme = md(
+    '### Senior Dev at Acme Corporation\n**Dates:** Mar 2022 - Jun 2024\n\nLed things.\n\n'
+    + '### Dev at Acme Corporation\n**Dates:** Jan 2019 - Mar 2022\n\nBuilt things.\n',
+  );
+
+  it('does not group by default', () => {
+    const p = markdownToProfile(twoAcme);
+    expect(p.workExperience[0]._groupId).toBeUndefined();
+    expect(p.workExperience[1]._groupId).toBeUndefined();
+  });
+
+  it('groups when asked', () => {
+    const p = markdownToProfile(twoAcme, { group: true });
+    expect(p.workExperience[0]._groupId).toBeTruthy();
+    expect(p.workExperience[0]._groupId).toBe(p.workExperience[1]._groupId);
   });
 });

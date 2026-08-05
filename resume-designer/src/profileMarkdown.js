@@ -131,7 +131,7 @@ export function profileToMarkdown(profile) {
 }
 
 /** Parse a markdown document back into profile data. */
-export function markdownToProfile(markdown) {
+export function markdownToProfile(markdown, { group = false } = {}) {
   // Deep-ish copy: a shallow spread ALIASES DEFAULT_PROFILE's arrays, so a parser
   // that pushes would permanently mutate the module constant for the session.
   const profile = {
@@ -156,7 +156,9 @@ export function markdownToProfile(markdown) {
     } else if (sectionTitle.includes('industry knowledge')) {
       profile.industryKnowledge = cleanContent(sectionContent);
     } else if (sectionTitle.includes('work experience')) {
-      profile.workExperience = assignGroupIds(parseWorkExperience(sectionContent));
+      profile.workExperience = group
+        ? assignGroupIds(parseWorkExperience(sectionContent))
+        : parseWorkExperience(sectionContent);
     } else if (sectionTitle.includes('skills')) {
       profile.skills = parseSkillsTable(sectionContent);
     } else if (sectionTitle.includes('education')) {
