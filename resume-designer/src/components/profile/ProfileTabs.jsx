@@ -14,6 +14,7 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { shouldSpellcheck } from '../../spellcheck.js';
 import { groupExperience, companyKey } from '../../experienceGroups.js';
 import { generateId } from '../../store.js';
+import ExperienceDateField from '../experience/ExperienceDateField.jsx';
 
 // The profile editor's per-tab content, rebuilt on genuine shadcn primitives to
 // match SettingsDialog's idiom (Label + Input grids, SectionHeader, entry cards
@@ -279,7 +280,7 @@ function ItemList({ items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete,
 // One role inside an employer block. Deliberately has NO company field: the
 // block states the employer once, so there is nothing to repeat and nothing to
 // get out of sync.
-function RoleSubCard({ exp, index, set, onDelete, onDetach, canDetach }) {
+function RoleSubCard({ exp, index, set, setDates, onDelete, onDetach, canDetach }) {
   return (
     <div className="space-y-2.5 rounded-[8px] border bg-background/40 p-2.5">
       <div className="flex items-center gap-2.5">
@@ -297,11 +298,7 @@ function RoleSubCard({ exp, index, set, onDelete, onDetach, canDetach }) {
           <Trash2 className="h-4 w-4" />
         </Button>
       </div>
-      <Input
-        placeholder="Dates (e.g., Jan 2020 - Present)"
-        defaultValue={exp.dates || ''}
-        onChange={(e) => set(index, 'dates')(e.target.value)}
-      />
+      <ExperienceDateField entry={exp} onCommit={setDates(index)} />
       <Textarea
         rows={4}
         placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
@@ -324,7 +321,7 @@ function RoleSubCard({ exp, index, set, onDelete, onDetach, canDetach }) {
 
 // A run of 2+: the employer stated once, its roles beneath.
 function EmployerBlock({
-  group, set, onCompanyChange, onCompanyBlur, onAddRole, onDeleteRole, onDetachRole, onDeleteEmployer,
+  group, set, setDates, onCompanyChange, onCompanyBlur, onAddRole, onDeleteRole, onDetachRole, onDeleteEmployer,
   onLinkAbove, canLinkAbove, showLinkAbove,
 }) {
   const employerInputId = useId();
@@ -361,6 +358,7 @@ function EmployerBlock({
             exp={role.entry}
             index={role.index}
             set={set}
+            setDates={setDates}
             onDelete={() => onDeleteRole(role.index)}
             onDetach={() => onDetachRole(role.index)}
             canDetach={position > 0}
@@ -398,7 +396,7 @@ function EmployerBlock({
 
 // A run of ONE: today's flat card, unchanged in shape. It keeps its own company
 // field, because there is no block above it to state the employer.
-function SoloJobCard({ exp, index, set, onCompanyBlur, onAddRole, onDelete, onLinkAbove, canLinkAbove, showLinkAbove }) {
+function SoloJobCard({ exp, index, set, setDates, onCompanyBlur, onAddRole, onDelete, onLinkAbove, canLinkAbove, showLinkAbove }) {
   const canAddRole = !!(exp.company || '').trim();
   return (
     <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
@@ -432,11 +430,7 @@ function SoloJobCard({ exp, index, set, onCompanyBlur, onAddRole, onDelete, onLi
         onChange={(e) => set(index, 'company')(e.target.value)}
         onBlur={onCompanyBlur}
       />
-      <Input
-        placeholder="Dates (e.g., Jan 2020 - Present)"
-        defaultValue={exp.dates || ''}
-        onChange={(e) => set(index, 'dates')(e.target.value)}
-      />
+      <ExperienceDateField entry={exp} onCommit={setDates(index)} />
       <Textarea
         rows={4}
         placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
@@ -462,6 +456,12 @@ function SoloJobCard({ exp, index, set, onCompanyBlur, onAddRole, onDelete, onLi
 function ExperienceTab({ profile, scheduleSave, refresh }) {
   const items = profile.workExperience;
   const set = (i, field) => (v) => { items[i][field] = v; scheduleSave(); };
+  // Dates write THREE fields at once (the display string plus the
+  // machine-readable pair), so this cannot go through `set`, which writes one.
+  // The local bump re-renders the tab so the trigger label updates; it must NOT
+  // be `refresh`, which bumps the parent's `version` — the tab wrapper's React
+  // key — and would remount the tab mid-interaction.
+  const setDates = (i) => (fields) => { Object.assign(items[i], fields); scheduleSave(); bumpGrouping(); };
   // Local re-render ONLY, to re-derive the grouping after a company edit. It must
   // not go through `refresh`: that bumps the parent's `version`, which is the tab
   // wrapper's React key, so blurring the company input would remount the tab and
@@ -588,6 +588,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                   key={lead.entry.id || `emp-${lead.index}`}
                   group={group}
                   set={set}
+                  setDates={setDates}
                   onCompanyChange={setGroupCompany}
                   onCompanyBlur={bumpGrouping}
                   onAddRole={(g) => addRoleAt(g.roles[0].index)}
@@ -606,6 +607,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                 exp={lead.entry}
                 index={i}
                 set={set}
+                setDates={setDates}
                 onCompanyBlur={bumpGrouping}
                 onAddRole={addRoleAt}
                 onDelete={() => deleteEntry(i)}
