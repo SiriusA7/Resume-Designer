@@ -282,199 +282,300 @@ function ItemList({
   );
 }
 
+// ── Experience: employer blocks ─────────────────────────────────────────
+// The résumé prints several positions at one employer as a company header with
+// dated roles beneath. These render the same shape in the editor, so the two
+// surfaces agree. A run of ONE collapses to SoloJobCard — nesting appears only
+// where a progression exists, so it means something.
+
+// One role inside an employer block. Deliberately has NO company field: the
+// block states the employer once, so there is nothing to repeat and nothing to
+// get out of sync.
+function RoleSubCard({ exp, index, set, onDelete, onDetach, canDetach }) {
+  return (
+    <div className="space-y-2.5 rounded-[8px] border bg-background/40 p-2.5">
+      <div className="flex items-center gap-2.5">
+        <Input
+          className="font-medium" placeholder="Job title"
+          defaultValue={exp.title || ''}
+          onChange={(e) => set(index, 'title')(e.target.value)}
+        />
+        <Button
+          type="button" variant="ghost" size="icon"
+          title="Delete role" aria-label="Delete role"
+          className="shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <Input
+        placeholder="Dates (e.g., Jan 2020 - Present)"
+        defaultValue={exp.dates || ''}
+        onChange={(e) => set(index, 'dates')(e.target.value)}
+      />
+      <Textarea
+        rows={4}
+        placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
+        defaultValue={stripEmphasis(exp.details)}
+        onChange={(e) => set(index, 'details')(e.target.value)}
+      />
+      {canDetach && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
+          <Button
+            variant="outline" size="sm" type="button" className="h-7 text-xs"
+            onClick={onDetach}
+          >
+            Make this its own employer
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A run of 2+: the employer stated once, its roles beneath.
+function EmployerBlock({ group, set, onCompanyChange, onCompanyBlur, onAddRole, onDeleteRole, onDetachRole, onDeleteEmployer }) {
+  return (
+    <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
+      <div className="flex items-end gap-2.5">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Employer</Label>
+          <Input
+            className="font-semibold" placeholder="Company"
+            defaultValue={group.company}
+            onChange={(e) => onCompanyChange(group, e.target.value)}
+            onBlur={onCompanyBlur}
+          />
+        </div>
+        <span className="shrink-0 whitespace-nowrap pb-2 text-[11.5px] font-medium text-muted-foreground">
+          {group.roles.length} positions
+        </span>
+        <Button
+          type="button" variant="ghost" size="icon"
+          title="Delete employer" aria-label="Delete employer"
+          className="mb-0.5 shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={() => onDeleteEmployer(group)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {group.roles.map((role, position) => (
+          <RoleSubCard
+            key={role.entry.id || `role-${role.index}`}
+            exp={role.entry}
+            index={role.index}
+            set={set}
+            onDelete={() => onDeleteRole(role.index)}
+            onDetach={() => onDetachRole(role.index)}
+            canDetach={position > 0}
+          />
+        ))}
+      </div>
+      <Button
+        variant="outline" size="sm" type="button" className="h-7 w-full text-xs"
+        onClick={() => onAddRole(group)}
+      >
+        <Plus className="h-3.5 w-3.5" /> Add role at this company
+      </Button>
+    </div>
+  );
+}
+
+// A run of ONE: today's flat card, unchanged in shape. It keeps its own company
+// field, because there is no block above it to state the employer.
+function SoloJobCard({ exp, index, set, onCompanyBlur, onAddRole, onDelete, onLinkAbove, canLinkAbove, showLinkAbove }) {
+  const canAddRole = !!(exp.company || '').trim();
+  return (
+    <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
+      <div className="flex items-center gap-2.5">
+        <Input
+          className="font-medium" placeholder="Job title"
+          defaultValue={exp.title || ''}
+          onChange={(e) => set(index, 'title')(e.target.value)}
+        />
+        {canAddRole && (
+          <Button
+            variant="outline" size="sm" type="button" className="h-7 shrink-0 text-xs"
+            title="Add role at this company"
+            onClick={() => onAddRole(index)}
+          >
+            <Plus className="h-3.5 w-3.5" /> Add role
+          </Button>
+        )}
+        <Button
+          type="button" variant="ghost" size="icon"
+          title="Delete" aria-label="Delete"
+          className="shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <Input
+        placeholder="Company"
+        defaultValue={exp.company || ''}
+        onChange={(e) => set(index, 'company')(e.target.value)}
+        onBlur={onCompanyBlur}
+      />
+      <Input
+        placeholder="Dates (e.g., Jan 2020 - Present)"
+        defaultValue={exp.dates || ''}
+        onChange={(e) => set(index, 'dates')(e.target.value)}
+      />
+      <Textarea
+        rows={4}
+        placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
+        defaultValue={stripEmphasis(exp.details)}
+        onChange={(e) => set(index, 'details')(e.target.value)}
+      />
+      {showLinkAbove && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
+          <Button
+            variant="outline" size="sm" type="button" className="h-7 text-xs"
+            disabled={!canLinkAbove}
+            title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
+            onClick={() => onLinkAbove(index)}
+          >
+            Link to company above
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExperienceTab({ profile, scheduleSave, refresh }) {
   const items = profile.workExperience;
   const set = (i, field) => (v) => { items[i][field] = v; scheduleSave(); };
-  // Local re-render ONLY, for re-gating the grouping controls after a company
-  // edit. It must not go through `refresh`: that bumps the parent's `version`,
-  // which is the tab wrapper's React key, so blurring the company input
-  // remounted the tab and unmounted the button the user was pressing before its
-  // click fired — the first click did nothing but refresh. `set()` already calls
-  // scheduleSave() per keystroke, so the blur has nothing to persist, and
-  // `items` is the live array, so this re-render recomputes groupExperience
-  // against the current values.
+  // Local re-render ONLY, to re-derive the grouping after a company edit. It must
+  // not go through `refresh`: that bumps the parent's `version`, which is the tab
+  // wrapper's React key, so blurring the company input would remount the tab and
+  // unmount the button being pressed before its click fired.
   const [, bumpGrouping] = useReducer((n) => n + 1, 0);
-  // Computed once per render and shared by the header slot, the rail and the
-  // body: all three run inside this same render pass, so they see one snapshot.
   const groups = groupExperience(items);
-  const groupInfo = (i) => {
-    const group = groups.find((g) => g.roles.some((r) => r.index === i));
-    const isRunMember = !!group && group.roles.length > 1;
-    return {
-      group,
-      isRunMember,
-      isLead: isRunMember && group.roles[0].index === i,
-      // First member of its own group, run of one included: the entry that
-      // can gain a second role in place.
-      isGroupStart: !!group && group.roles[0].index === i,
-    };
-  };
   const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
+
+  // Splice a new role after the run's LAST member, carrying the run's id and
+  // company. Walks `items` at click time — the company input is uncontrolled, so
+  // a render-time bound can point past a boundary just typed into existence.
+  const addRoleAt = (leadIndex) => {
+    const lead = items[leadIndex];
+    if (!lead) return;
+    const company = (lead.company || '').trim();
+    if (!company) return;
+    const id = lead._groupId || generateId('grp');
+    let last = leadIndex;
+    if (lead._groupId) {
+      while (last + 1 < items.length) {
+        const entry = items[last + 1];
+        if (!entry || entry._groupId !== lead._groupId || entry.company !== lead.company) break;
+        last += 1;
+      }
+    }
+    const next = [...items];
+    if (!next[leadIndex]._groupId) next[leadIndex] = { ...next[leadIndex], _groupId: id };
+    next.splice(last + 1, 0, {
+      id: generateId('exp'), title: '', company: lead.company, dates: '', details: '', _groupId: id,
+    });
+    rewrite(next);
+  };
+
+  // Detach a role into its own employer. Trailing members of the SAME run follow
+  // it, so detaching the middle role of a 3-role block yields [A] + [B,C] rather
+  // than orphaning C.
+  const detachRole = (index) => {
+    const cur = items[index];
+    if (!cur) return;
+    const oldId = cur._groupId;
+    const freshId = generateId('grp');
+    const next = [...items];
+    next[index] = { ...next[index], _groupId: freshId };
+    for (let k = index + 1; k < next.length; k += 1) {
+      const entry = next[k];
+      if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+      next[k] = { ...entry, _groupId: freshId };
+    }
+    rewrite(next);
+  };
+
+  // Merge this entry into the employer above. Never writes `company` — copying a
+  // neighbour's name is how a role gets filed under an employer the user never
+  // worked for. The clicked entry's trailing run members come with it.
+  const linkAbove = (index) => {
+    const cur = items[index];
+    const above = items[index - 1];
+    if (!cur || !above || !above.company || above.company !== cur.company) return;
+    const id = above._groupId || generateId('grp');
+    const oldId = cur._groupId;
+    const next = [...items];
+    next[index - 1] = { ...above, _groupId: id };
+    next[index] = { ...cur, _groupId: id };
+    for (let k = index + 1; k < next.length; k += 1) {
+      const entry = next[k];
+      if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+      next[k] = { ...entry, _groupId: id };
+    }
+    rewrite(next);
+  };
+
+  const deleteEntry = (index) => { items.splice(index, 1); refresh(); };
+
   return (
     <section>
       <SectionHeader
         title="Detailed work experience"
-        description="Add details beyond what's on your resume - challenges faced, technologies used, team size, impact metrics, lessons learned. If you held several positions at one employer, link them so they appear under a single company heading."
+        description="Add details beyond what's on your resume - challenges faced, technologies used, team size, impact metrics, lessons learned. Several positions at one employer sit together under a single company heading."
       />
-      <ItemList
-        items={items}
-        emptyTitle="No experience entries yet"
-        emptySubtitle="Add detailed information about your work history"
-        addLabel="Add experience entry"
-        onAdd={() => { items.push({ id: generateId('exp'), title: '', company: '', dates: '', details: '' }); refresh(); }}
-        onDelete={(i) => { items.splice(i, 1); refresh(); }}
-        // A run of 2+ reads as ONE employer: an accented left rail down every
-        // member, inset from the ungrouped cards around it.
-        itemClassName={(exp, i) => (groupInfo(i).isRunMember ? 'ml-3 border-l-[3px] border-l-primary/40' : undefined)}
-        renderTitle={(exp, i) => (
-          <Input className="font-medium" placeholder="Job title" defaultValue={exp.title || ''} onChange={(e) => set(i, 'title')(e.target.value)} />
-        )}
-        // The add-role action and the run's label live in the card HEADER: at the
-        // bottom of a ~400px card nobody scrolled far enough to find them.
-        renderHeaderExtra={(exp, i) => {
-          const { isGroupStart } = groupInfo(i);
-          // Requires a company: a run needs a non-empty one to form, so without it
-          // this would duplicate the row without grouping it. Trimmed, because a
-          // whitespace-only name is not a company either.
-          const canAddRole = isGroupStart && !!(exp.company || '').trim();
-          if (!canAddRole) return null;
-          // ONLY the button belongs here. The header row is a flex line shared with
-          // the job-title input, and the title is the sole element that can shrink —
-          // so anything variable-width here is paid for out of the title. A group
-          // label of "International Business Machines Corporation · 2 positions"
-          // collapsed the title to 26px and pushed the delete button outside the
-          // card. The label lives in the body's wrapping row instead; the rail
-          // already carries the membership signal at a glance.
-          return (
-            <>
-              {(
-                <Button
-                  variant="outline" size="sm" type="button" className="h-7 shrink-0 text-xs"
-                  title="Add role at this company"
-                  onClick={() => {
-                    // The only other add action appends to the END of the list, so
-                    // without this a grouped employer followed by another employer
-                    // can never gain a position: the new entry lands non-adjacent
-                    // and "Link to company above" can only reach the last employer.
-                    // Walk the CURRENT items at click time — the company input is
-                    // uncontrolled and writes through, so a render-time bound can
-                    // point past a boundary the user just typed into existence.
-                    // Revalidate the company here too, not just in the gating:
-                    // the field is uncontrolled, so it can be cleared while the
-                    // already-rendered button stays visible, and a run cannot
-                    // form without a non-empty company.
-                    const company = exp.company || '';
-                    if (!company) return;
-                    const id = exp._groupId || generateId('grp');
-                    let last = i;
-                    if (exp._groupId && company) {
-                      while (last + 1 < items.length) {
-                        const entry = items[last + 1];
-                        if (!entry || entry._groupId !== exp._groupId || entry.company !== company) break;
-                        last += 1;
-                      }
-                    }
-                    const next = [...items];
-                    if (!next[i]._groupId) next[i] = { ...next[i], _groupId: id };
-                    next.splice(last + 1, 0, {
-                      id: generateId('exp'),
-                      title: '',
-                      company,
-                      dates: '',
-                      details: '',
-                      _groupId: id,
-                    });
-                    rewrite(next);
-                  }}
-                >
-                  <Plus className="h-3.5 w-3.5" /> Add role
-                </Button>
-              )}
-            </>
-          );
-        }}
-        renderBody={(exp, i) => {
-          const { group, isRunMember, isLead } = groupInfo(i);
-          const prev = i > 0 ? items[i - 1] : null;
-          const canLinkAbove = !!prev && !!prev.company && prev.company === exp.company;
-          return (
-            <>
-              <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} onBlur={bumpGrouping} />
-              <Input placeholder="Dates (e.g., Jan 2020 - Present)" defaultValue={exp.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
-              <Textarea
-                rows={4}
-                placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
-                defaultValue={stripEmphasis(exp.details)}
-                onChange={(e) => set(i, 'details')(e.target.value)}
+      <div className="space-y-3">
+        {items.length === 0 ? (
+          <Empty title="No experience entries yet" subtitle="Add detailed information about your work history" />
+        ) : (
+          groups.map((group) => {
+            const lead = group.roles[0];
+            if (group.roles.length > 1) {
+              return (
+                <EmployerBlock
+                  key={lead.entry.id || `emp-${lead.index}`}
+                  group={group}
+                  set={set}
+                  onCompanyChange={() => {}}
+                  onCompanyBlur={bumpGrouping}
+                  onAddRole={(g) => addRoleAt(g.roles[0].index)}
+                  onDeleteRole={deleteEntry}
+                  onDetachRole={detachRole}
+                  onDeleteEmployer={() => {}}
+                />
+              );
+            }
+            const i = lead.index;
+            const prev = i > 0 ? items[i - 1] : null;
+            return (
+              <SoloJobCard
+                key={lead.entry.id || `exp-${i}`}
+                exp={lead.entry}
+                index={i}
+                set={set}
+                onCompanyBlur={bumpGrouping}
+                onAddRole={addRoleAt}
+                onDelete={() => deleteEntry(i)}
+                onLinkAbove={linkAbove}
+                canLinkAbove={!!prev && !!prev.company && prev.company === lead.entry.company}
+                showLinkAbove={i > 0}
               />
-              <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
-                {/* The group label lives here, not in the header: this row WRAPS, so a
-                    long employer name costs a line here instead of eating the job-title
-                    input beside it. */}
-                {isRunMember && (
-                  <span className="text-[11.5px] font-semibold text-muted-foreground">
-                    {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
-                  </span>
-                )}
-                {/* A run LEAD has no run member above it, so separating it is a pure
-                    no-op that still costs an undo entry — offer it the link action. */}
-                {isRunMember && !isLead ? (
-                  <Button
-                    variant="outline" size="sm" type="button" className="h-7 text-xs"
-                    onClick={() => {
-                      const oldId = exp._groupId;
-                      const freshId = generateId('grp');
-                      const next = [...items];
-                      next[i] = { ...next[i], _groupId: freshId };
-                      // Trailing members of the SAME run follow the detached entry, so
-                      // separating the middle role of a 3-role run yields [A] + [B,C]
-                      // rather than orphaning C too.
-                      for (let k = i + 1; k < next.length; k += 1) {
-                        const entry = next[k];
-                        if (!oldId || entry._groupId !== oldId || entry.company !== exp.company) break;
-                        next[k] = { ...entry, _groupId: freshId };
-                      }
-                      rewrite(next);
-                    }}
-                  >
-                    Separate from company above
-                  </Button>
-                ) : i > 0 ? (
-                  <Button
-                    variant="outline" size="sm" type="button" className="h-7 text-xs"
-                    disabled={!canLinkAbove}
-                    title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
-                    onClick={() => {
-                      // Read the CURRENT items at click time: the company input is
-                      // uncontrolled and writes through, so a render-time neighbour
-                      // check can be stale. Never write `company` here.
-                      const cur = items[i];
-                      const above = items[i - 1];
-                      if (!cur || !above || !above.company || above.company !== cur.company) return;
-                      const id = above._groupId || generateId('grp');
-                      const oldId = cur._groupId;
-                      const next = [...items];
-                      next[i - 1] = { ...above, _groupId: id };
-                      next[i] = { ...cur, _groupId: id };
-                      // The clicked entry may itself be the LEAD of a run: its
-                      // trailing members come with it, rather than being ejected
-                      // into an orphaned singleton on the old id.
-                      for (let k = i + 1; k < next.length; k += 1) {
-                        const entry = next[k];
-                        if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
-                        next[k] = { ...entry, _groupId: id };
-                      }
-                      rewrite(next);
-                    }}
-                  >
-                    Link to company above
-                  </Button>
-                ) : null}
-              </div>
-            </>
-          );
-        }}
-      />
+            );
+          })
+        )}
+        <AddButton
+          onClick={() => {
+            items.push({ id: generateId('exp'), title: '', company: '', dates: '', details: '' });
+            refresh();
+          }}
+        >
+          Add experience entry
+        </AddButton>
+      </div>
     </section>
   );
 }
