@@ -380,13 +380,71 @@ it would then appear on every future release.
 Use "On Paper, formerly Resume Designer" in copy for a short transition period,
 then retire it (§10).
 
-**4. macOS keeps the old folder name.** The updater unpacks onto the running
-bundle's path, so an auto-updated install stays at
-`/Applications/Resume Designer.app` while Finder, Dock, and Spotlight all show
-"On Paper" (those read `CFBundleDisplayName`). Gatekeeper validates contents, not
-the folder name, so this is cosmetic. Only a fresh DMG install produces
-`/Applications/On Paper.app`. Mention it; do not try to rename the bundle from
-inside the updater — it races the running process.
+**4. macOS keeps the old folder name — and the app now fixes it at startup.**
+
+The updater unpacks onto the running bundle's path, so an auto-updated install
+stays at `/Applications/Resume Designer.app`. This is by design, not a bug:
+`tauri-plugin-updater` re-roots the archive with
+`entry.path()?.iter().skip(1)`, deliberately discarding the archive's top-level
+folder name so an update lands wherever the user actually put the app. **No
+updater configuration can change the folder name.**
+
+> An earlier version of this section claimed Finder, Dock, and Spotlight would
+> still show "On Paper" because they read `CFBundleDisplayName`, and concluded
+> the mismatch was cosmetic. **Both halves were wrong**, and the error was only
+> caught after the rename shipped. macOS resolves a bundle's displayed name from
+> its **filename**; `CFBundleDisplayName` drives the app menu and the About box
+> only. Verified with `NSFileManager.displayName(atPath:)`, which returns the
+> filename whether `CFBundleDisplayName` is set or not, and whether or not a
+> localized `Contents/Resources/<lang>.lproj/InfoPlist.strings` supplies it.
+> Renaming the directory on disk is the only thing that changes what users see.
+
+It is also not merely cosmetic. Because the folder name never changes, a user
+who auto-updated and *later* downloads the DMG ends up with **two bundles
+sharing one identifier** — `Resume Designer.app` and `On Paper.app`, both
+resolving to the same app-data directory, with LaunchServices free to pick
+either. The one named "Resume Designer" is typically the *newer* install, which
+makes cleaning up by name actively dangerous.
+
+[`src-tauri/src/commands/bundle_name.rs`](src-tauri/src/commands/bundle_name.rs)
+handles this. It renames the bundle when — and only when — the name is exactly
+`Resume Designer.app`, the parent is `/Applications` or `~/Applications`, no
+`On Paper.app` already sits beside it, and no update is waiting to relaunch.
+Every other case is left alone, including a bundle the user renamed themselves,
+a build under `target/`, a copy running from a mounted DMG, and an install that
+already has both (there, picking a winner is the user's call, not ours).
+
+> [!IMPORTANT]
+> **It runs from `RunEvent::Exit`, never at startup, and that is load-bearing.**
+> macOS resolves the executable path once at exec time; `std::env::current_exe()`
+> keeps returning that original string forever. It does **not** follow a rename,
+> and it returns `Ok(stale_path)` rather than an error — so nothing downstream
+> notices. Renaming a *live* process's own bundle therefore breaks two things
+> for the rest of that session:
+>
+> - `tauri-plugin-updater` derives `extract_path` from it, so installing an
+>   update fails; and
+> - `tauri::process::restart` spawns from it, so the app **quits without coming
+>   back** — an update that looks like it uninstalled the app.
+>
+> Renaming on the way out avoids both: the path stays valid for the whole life
+> of the process, and the next launch starts from the new name with a correct
+> `current_exe()`. For the same reason `install_pending_update` calls
+> `suppress_until_next_launch()` — after an install a relaunch is imminent, so
+> the rename waits for the next clean exit.
+
+The rename itself is safe and does not race the process: it moves a directory
+inode and the kernel's image handle follows it — confirmed by renaming a bundle
+out from under a live Mach-O process and watching its `lsof` `txt` handle track
+to the new path. Gatekeeper validates contents, not the folder name.
+
+`RunEvent::Exit` **does** fire on Cmd+Q — verified by installing a build under
+the old name in `~/Applications`, quitting with Cmd+Q, and watching the rename
+happen. Do not confuse this with the window's *close-requested* hook, which
+Cmd+Q genuinely does bypass (see the storage-flush caveat under "Data storage").
+They are different events, and the shared trigger makes them easy to conflate.
+
+Users who already have both bundles keep both; the app will not delete one.
 
 **5. Re-capture the screenshots.** `website/hero.jpg`, `docs/screenshots/hero.png`,
 **and the GitHub repo social-preview image** (Settings → Social preview — a

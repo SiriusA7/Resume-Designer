@@ -4,7 +4,7 @@
 // impossible (any consolidation looked like truncation). This validator
 // checks the digest CONTRACT instead: version heading, 1–8 flat bullets, and
 // a trailing sentinel whose absence catches a truncated response (a
-// truncated stream is still a "successful" actions/ai-inference step).
+// truncated response is still a "successful" call, whatever the provider).
 //
 // CLI: `node validate-digest.mjs <digest-file> <version>` — prints the
 // cleaned notes (sentinel stripped) to stdout and exits 0, or a reason to

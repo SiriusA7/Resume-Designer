@@ -56,6 +56,11 @@ pub mod bridge;
 #[cfg(desktop)]
 pub mod updater;
 
+// macOS-only: renames a bundle still called `Resume Designer.app`. The updater
+// cannot do this itself — it re-roots onto the running bundle's path by design.
+#[cfg(target_os = "macos")]
+pub mod bundle_name;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]

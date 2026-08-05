@@ -116,6 +116,19 @@ pub fn run() {
                     }
                 }
             }
+
+            // Users who auto-updated through the rename still run from a bundle
+            // called "Resume Designer.app": the updater re-roots onto the
+            // running bundle's path and cannot rename it. Fix it on the way OUT,
+            // never at startup — macOS resolves the executable path at exec time
+            // and `current_exe()` never follows a rename, so renaming a live
+            // process's bundle breaks both the updater and the relaunch for the
+            // rest of the session. See commands/bundle_name.rs.
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Exit) {
+                commands::bundle_name::heal();
+            }
+
             let _ = (app_handle, event);
         });
 }
