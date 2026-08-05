@@ -20,6 +20,11 @@ let hideButtonTimeout = null;
 let isMenuVisible = false;
 let resumeScroller = null;
 
+// True while the month-range picker is open. The AI button is fixed-position
+// like the picker, so without this it paints over the panel when the pointer
+// crosses the resume on its way there.
+let dateEditorOpen = false;
+
 // Check if hint was previously dismissed
 const HINT_DISMISSED_KEY = 'resume-edit-hint-dismissed';
 
@@ -52,6 +57,7 @@ export function initInlineEditor() {
   // Handle hover for AI button using mouseover/mouseout for better stability
   resumeContainer.addEventListener('mouseover', handleMouseOver, true);
   resumeContainer.addEventListener('mouseout', handleMouseOut, true);
+  window.addEventListener('rd:date-editor-closed', () => { dateEditorOpen = false; });
 
   // Hide the (fixed-position) AI button when the resume scrolls or the window
   // resizes — otherwise it orphans at a stale coordinate, floating over other UI.
@@ -622,6 +628,9 @@ function scheduleHideButton() {
 // The button/menu use fixed positioning, so a scroll or resize leaves them at a
 // stale coordinate over unrelated UI — hide immediately; the next hover re-shows.
 function handleResumeScroll() {
+  // The picker is anchored to a rect captured at click time, so a scroll leaves
+  // it floating over unrelated content. Close it, the way the AI button hides.
+  if (dateEditorOpen) window.dispatchEvent(new Event('rd:close-date-editor'));
   if (hoveredElement || isMenuVisible) {
     hideAIButton();
     hoveredElement = null;
@@ -638,7 +647,7 @@ function handleEditorKeydown(e) {
 
 // Show the AI button on an element
 function showAIButton(element) {
-  if (!aiButton || !element) return;
+  if (!aiButton || !element || dateEditorOpen) return;
   
   const container = aiButton.container || aiButton;
   
@@ -737,10 +746,29 @@ function handleClick(e) {
   
   const editable = e.target.closest('[data-editable]');
   if (!editable) return;
-  
+
   // Don't start editing if already editing
   if (editable.isContentEditable) return;
-  
+
+  // Dates open a month-range picker instead of a contenteditable, so the
+  // machine-readable startDate/endDate stay in step with the display string.
+  // This module stays free of React: it dispatches, and a host mounted in App
+  // renders the panel and performs the store write — the same arrangement
+  // confirmDestructive uses. Both renderer variants carry this path (the <time>
+  // in the default layout and the <span> in the timeline one).
+  const path = editable.dataset.editable;
+  if (/^experience\[\d+\]\.dates$/.test(path)) {
+    // Commit any contenteditable still open, or its blur would land after ours.
+    if (activeElement) finishEditing(activeElement);
+    hideAIButton();
+    dateEditorOpen = true;
+    const rect = editable.getBoundingClientRect();
+    window.dispatchEvent(new CustomEvent('rd:edit-dates', {
+      detail: { path, rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height } },
+    }));
+    return;
+  }
+
   startEditing(editable);
 }
 
