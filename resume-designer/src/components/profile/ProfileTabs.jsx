@@ -332,19 +332,22 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
         // The add-role action and the run's label live in the card HEADER: at the
         // bottom of a ~400px card nobody scrolled far enough to find them.
         renderHeaderExtra={(exp, i) => {
-          const { group, isRunMember, isLead, isGroupStart } = groupInfo(i);
-          const canAddRole = isGroupStart && !!exp.company;
-          if (!isRunMember && !canAddRole) return null;
+          const { isGroupStart } = groupInfo(i);
+          // Requires a company: a run needs a non-empty one to form, so without it
+          // this would duplicate the row without grouping it. Trimmed, because a
+          // whitespace-only name is not a company either.
+          const canAddRole = isGroupStart && !!(exp.company || '').trim();
+          if (!canAddRole) return null;
+          // ONLY the button belongs here. The header row is a flex line shared with
+          // the job-title input, and the title is the sole element that can shrink —
+          // so anything variable-width here is paid for out of the title. A group
+          // label of "International Business Machines Corporation · 2 positions"
+          // collapsed the title to 26px and pushed the delete button outside the
+          // card. The label lives in the body's wrapping row instead; the rail
+          // already carries the membership signal at a glance.
           return (
-            <div className="flex shrink-0 items-center gap-2">
-              {isRunMember && (
-                <span className="whitespace-nowrap text-[11.5px] font-semibold text-muted-foreground">
-                  {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
-                </span>
-              )}
-              {/* Requires a company: a run needs a non-empty one to form, so
-                  without it this would duplicate the row without grouping it. */}
-              {canAddRole && (
+            <>
+              {(
                 <Button
                   variant="outline" size="sm" type="button" className="h-7 shrink-0 text-xs"
                   title="Add role at this company"
@@ -387,11 +390,11 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                   <Plus className="h-3.5 w-3.5" /> Add role
                 </Button>
               )}
-            </div>
+            </>
           );
         }}
         renderBody={(exp, i) => {
-          const { isRunMember, isLead } = groupInfo(i);
+          const { group, isRunMember, isLead } = groupInfo(i);
           const prev = i > 0 ? items[i - 1] : null;
           const canLinkAbove = !!prev && !!prev.company && prev.company === exp.company;
           return (
@@ -405,6 +408,14 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                 onChange={(e) => set(i, 'details')(e.target.value)}
               />
               <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
+                {/* The group label lives here, not in the header: this row WRAPS, so a
+                    long employer name costs a line here instead of eating the job-title
+                    input beside it. */}
+                {isRunMember && (
+                  <span className="text-[11.5px] font-semibold text-muted-foreground">
+                    {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
+                  </span>
+                )}
                 {/* A run LEAD has no run member above it, so separating it is a pure
                     no-op that still costs an undo entry — offer it the link action. */}
                 {isRunMember && !isLead ? (
