@@ -9,6 +9,7 @@ import { getSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { SortableList, SortableItem, DragHandle } from '../Sortable.jsx';
 import { PanelSection } from './PanelSection.jsx';
 import DesignTab from './DesignTab.jsx';
+import ExperienceDateField from '../experience/ExperienceDateField.jsx';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -73,6 +74,18 @@ let localEdit = false;
 function writeField(path, value) {
   localEdit = true;
   try { store.update(path, value); } finally { localEdit = false; }
+}
+// Dates write three fields at once, so this cannot use writeField, which takes
+// one path. One array write is one undo step and one re-render, matching the
+// company-rename fan-out in inlineEditor.js. No `localEdit` guard: that exists
+// to keep an uncontrolled input's caret while typing, and this writes on a
+// popover commit, where a full re-render is exactly what we want.
+function writeExperienceDates(index, fields) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience) || !experience[index]) return;
+  const next = experience.map((entry, i) => (i === index ? { ...entry, ...fields } : entry));
+  store.setChangeMetadata('Edited dates');
+  store.update('experience', next);
 }
 function writeTool(index, value) {
   // Split WITHOUT dropping blanks (and join the same way) so the index space stays
@@ -362,7 +375,7 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, 
           CSS expand/collapse — its uncontrolled inputs must keep their DOM
           values across toggles without a remount. */}
       <div className={cn('space-y-3 border-t bg-muted/40 p-2.5', !expanded && 'hidden')}>
-        {[['title', 'Job title'], ['company', 'Company'], ['dates', 'Dates']].map(([f, label]) => (
+        {[['title', 'Job title'], ['company', 'Company']].map(([f, label]) => (
           <Field
             key={f} label={label}
             path={`experience[${index}].${f}`}
@@ -377,6 +390,10 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, 
             onBlur={f === 'company' ? onCompanyBlur : undefined}
           />
         ))}
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Dates</Label>
+          <ExperienceDateField entry={exp} onCommit={(fields) => writeExperienceDates(index, fields)} />
+        </div>
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Bullets</Label>
           <SortableList
