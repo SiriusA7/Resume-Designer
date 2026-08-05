@@ -151,23 +151,34 @@ export function resolveAnchoredPath(change, readArray) {
  * Enforced here rather than in each caller because this is the choke point the
  * chat flow (useChat) and job recommendations (JobsDialog) already share.
  */
-function writeScalar(path, value) {
-  const match = /^experience\[(\d+)\]\.dates$/.exec(path);
-  if (match) {
-    const experience = store.get('experience');
-    const index = Number(match[1]);
-    if (Array.isArray(experience) && experience[index]) {
-      const fields = freeformDateFields(value);
-      // An unchanged value is not an edit. Clearing on one would destroy a
-      // structured pair — and burn an undo step — for a change that says
-      // nothing, which is exactly the silent contradiction being avoided.
-      if (experience[index].dates === fields.dates) return;
-      store.update('experience', experience.map(
-        (entry, i) => (i === index ? { ...entry, ...fields } : entry),
-      ));
-      return;
-    }
-    // No entry to carry the pair — fall through so the generic write creates it.
+/**
+ * The `experience` array a scalar write at `path` produces, for the two paths
+ * whose write touches more than the leaf they name.
+ *
+ * Exported because the REVIEW PROJECTION must call it too. `changePreview`
+ * projects pending changes with a plain `setByPath`, and its own header states
+ * the contract: the preview and the apply path must agree, "or the user reviews
+ * something other than what accepting produces". A rename previewed as a split
+ * run that applies as an intact one is exactly that.
+ *
+ * @returns the next array; the SAME reference when the write is a no-op (the
+ *   caller must then write nothing); or `null` when `path` is an ordinary
+ *   single-value assignment the caller should perform itself.
+ */
+export function experienceScalarWrite(experience, path, value) {
+  if (!Array.isArray(experience)) return null;
+
+  const dates = /^experience\[(\d+)\]\.dates$/.exec(path);
+  if (dates) {
+    const index = Number(dates[1]);
+    // No entry to carry the pair — let the generic write create it.
+    if (!experience[index]) return null;
+    const fields = freeformDateFields(value);
+    // An unchanged value is not an edit. Clearing on one would destroy a
+    // structured pair — and burn an undo step — for a change that says
+    // nothing, which is exactly the silent contradiction being avoided.
+    if (experience[index].dates === fields.dates) return experience;
+    return experience.map((entry, i) => (i === index ? { ...entry, ...fields } : entry));
   }
 
   // A grouped employer exposes exactly ONE company path — the run lead's, on the
@@ -181,26 +192,31 @@ function writeScalar(path, value) {
   // Derive the run from the data instead and rename every member in one write.
   // Only entries already in a run of 2+ fan out; a solo entry, or one whose
   // company already differs from its neighbours (an already-split run being
-  // healed), takes the plain write below.
+  // healed), takes the ordinary write.
   const company = /^experience\[(\d+)\]\.company$/.exec(path);
   if (company) {
-    const experience = store.get('experience');
     const index = Number(company[1]);
-    if (Array.isArray(experience) && experience[index]) {
-      const run = groupExperience(experience).find(
-        (g) => g.roles.length > 1 && g.roles.some((role) => role.index === index),
-      );
-      // An unchanged value is not an edit — don't burn an undo step on it.
-      if (run && experience[index].company !== value) {
-        const members = new Set(run.roles.map((role) => role.index));
-        store.update('experience', experience.map(
-          (entry, i) => (members.has(i) ? { ...entry, company: value } : entry),
-        ));
-        return;
-      }
-    }
+    if (!experience[index]) return null;
+    const run = groupExperience(experience).find(
+      (g) => g.roles.length > 1 && g.roles.some((role) => role.index === index),
+    );
+    if (!run) return null;
+    // An unchanged value is not an edit — don't burn an undo step on it.
+    if (experience[index].company === value) return experience;
+    const members = new Set(run.roles.map((role) => role.index));
+    return experience.map((entry, i) => (members.has(i) ? { ...entry, company: value } : entry));
   }
 
+  return null;
+}
+
+function writeScalar(path, value) {
+  const experience = store.get('experience');
+  const next = experienceScalarWrite(experience, path, value);
+  if (next) {
+    if (next !== experience) store.update('experience', next);
+    return;
+  }
   store.update(path, value);
 }
 

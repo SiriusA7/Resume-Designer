@@ -38,6 +38,71 @@ describe('applyPendingToData', () => {
   });
 });
 
+// The preview must show what accepting produces — this module's own contract.
+// Two experience writes touch more than the leaf they name, so projecting them
+// as plain scalars showed something the apply path would never produce.
+describe('applyPendingToData — writes that touch more than their leaf', () => {
+  const run = (company) => ([
+    { id: 'a', company, title: 'Senior Engineer', dates: 'Mar 2022 – Present', _groupId: 'g1', bullets: [] },
+    { id: 'b', company, title: 'Engineer', dates: 'Jan 2020 – Mar 2022', _groupId: 'g1', bullets: [] },
+  ]);
+
+  it('previews a grouped rename across the whole run, not a split one', () => {
+    const next = applyPendingToData(
+      { experience: run('Acme') },
+      { changes: [{ path: 'experience[0].company', type: 'modify', oldValue: 'Acme', newValue: 'Acme Corp' }] },
+      new Map(),
+    );
+
+    // A plain setByPath left this as ['Acme Corp', 'Acme'] — the user reviewed a
+    // run split down the middle that accepting would never produce.
+    expect(next.experience.map((e) => e.company)).toEqual(['Acme Corp', 'Acme Corp']);
+  });
+
+  it('previews the R2 clear beside a dates edit', () => {
+    const next = applyPendingToData(
+      { experience: [{ id: 'a', company: 'Acme', dates: 'Jan 2020 – Mar 2022', startDate: '2020-01', endDate: '2022-03', bullets: [] }] },
+      { changes: [{ path: 'experience[0].dates', type: 'modify', oldValue: 'Jan 2020 – Mar 2022', newValue: '2019 – 2024' }] },
+      new Map(),
+    );
+
+    expect(next.experience[0].dates).toBe('2019 – 2024');
+    expect(next.experience[0].startDate).toBe('');
+    expect(next.experience[0].endDate).toBe('');
+  });
+
+  it('leaves a rejected grouped rename entirely alone', () => {
+    const next = applyPendingToData(
+      { experience: run('Acme') },
+      { changes: [{ path: 'experience[0].company', type: 'modify', oldValue: 'Acme', newValue: 'Acme Corp' }] },
+      new Map([['experience[0].company', 'rejected']]),
+    );
+
+    expect(next.experience.map((e) => e.company)).toEqual(['Acme', 'Acme']);
+  });
+
+  it('does not fan a solo employer out over its neighbours', () => {
+    const next = applyPendingToData(
+      { experience: [...run('Acme'), { id: 'c', company: 'Globex', title: 'Analyst', dates: '2018 – 2020', bullets: [] }] },
+      { changes: [{ path: 'experience[2].company', type: 'modify', oldValue: 'Globex', newValue: 'Globex Inc' }] },
+      new Map(),
+    );
+
+    expect(next.experience.map((e) => e.company)).toEqual(['Acme', 'Acme', 'Globex Inc']);
+  });
+
+  it('does not mutate the caller\'s data', () => {
+    const data = { experience: run('Acme') };
+    applyPendingToData(
+      data,
+      { changes: [{ path: 'experience[0].company', type: 'modify', oldValue: 'Acme', newValue: 'Acme Corp' }] },
+      new Map(),
+    );
+
+    expect(data.experience.map((e) => e.company)).toEqual(['Acme', 'Acme']);
+  });
+});
+
 describe('applyPendingToData with container-keyed proposals', () => {
   // The model has no leaf "delete" syntax: a removal arrives as the whole
   // shortened array (proposedChanges keyed by the CONTAINER path). The diff
