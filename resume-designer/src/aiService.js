@@ -5,7 +5,7 @@
 
 import { getSettings, saveSettings, getUserProfile, saveUserProfile } from './persistence.js';
 import { store } from './store.js';
-import { groupExperience, assignGroupIds } from './experienceGroups.js';
+import { groupExperience } from './experienceGroups.js';
 import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
@@ -1569,20 +1569,20 @@ export function saveExtractedProfile(extractedProfile) {
   const arrayFields = ['workExperience', 'skills', 'education', 'projects', 'certifications', 'achievements', 'customSections'];
   for (const field of arrayFields) {
     if (extractedProfile[field] && extractedProfile[field].length > 0) {
-      // Company-run grouping is never asked of the model, so it is derived here by
-      // the same adjacency rule markdown import uses — but ONLY over the entries
-      // this extraction produced. Deriving it across the MERGED array would
-      // re-decide grouping for history the user has already curated: two adjacent
-      // same-company cards they deliberately left unlinked would silently fuse
-      // into one employer, and it would happen on any save, even one that only
-      // touched skills. Existing entries keep whatever grouping they were given.
-      const incoming = field === 'workExperience'
-        ? assignGroupIds(extractedProfile[field])
-        : extractedProfile[field];
+      // Company-run grouping is deliberately NOT derived here. An interview can
+      // report two separate stints at one employer with no intervening role
+      // ("Acme 2015-2018", "Acme 2021-Present"), and adjacency alone cannot tell
+      // that return from a promotion — it would mint one id spanning both and
+      // print a single header asserting continuous employment that never
+      // happened. The date gate that saves the generation path is unavailable:
+      // the profile entry shape is { title, company, dates, details }, `dates` is
+      // a freeform string, and there is no machine-readable signal to gate on.
+      // So extracted work experience arrives ungrouped and the user links roles
+      // with the Profile tab's "Link to company above" — plainer, never false.
       // Simple merge: add new items to existing
       mergedProfile[field] = [
         ...(existingProfile[field] || []),
-        ...incoming
+        ...extractedProfile[field]
       ];
     }
   }
