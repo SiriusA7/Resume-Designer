@@ -67,6 +67,31 @@ jobs:
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
           echo "Decision: skip=$skip"
 
+      # What is live on this channel RIGHT NOW, so the next step can refuse to
+      # publish something older. Read from the updater manifest rather than from
+      # tags or the release list, because the manifest is literally what the
+      # installed app compares against — anything else measures a proxy.
+      #
+      # Failure to read it is NOT failure of the guard: `published` stays empty,
+      # compute-version warns and proceeds. Blocking every release on a
+      # transient GitHub outage is worse than the rare miss.
+      - name: Read the currently published version
+        id: published
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          MANIFEST: ${{ github.ref_name == 'next' && 'https://github.com/ashproto/Resume-Designer/releases/download/next/latest.json' || 'https://github.com/ashproto/Resume-Designer/releases/latest/download/latest.json' }}
+        run: |
+          v=""
+          if body=$(curl -fsSL --max-time 30 "$MANIFEST" 2>/dev/null); then
+            v=$(printf '%s' "$body" | node -e "
+              let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+                try { process.stdout.write(String(JSON.parse(s).version || '')); }
+                catch { process.stdout.write(''); }
+              });" 2>/dev/null || echo "")
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Currently published on this channel: ${v:-<unreadable>}"
+
       - name: Compute version and channel
         id: ver
         if: steps.gate.outputs.skip != 'true'
@@ -74,6 +99,9 @@ jobs:
           # push to next -> beta channel; anything else -> stable
           RELEASE_CHANNEL: ${{ github.ref_name == 'next' && 'next' || 'stable' }}
           RELEASE_VERSION_OVERRIDE: ${{ github.event.inputs.version }}
+          # Regression guard: refuse to publish a version the updater would
+          # reject as a downgrade. See compute-version.mjs#regressionReason.
+          PUBLISHED_VERSION: ${{ steps.published.outputs.version }}
         run: node resume-designer/scripts/ci/compute-version.mjs >> "$GITHUB_OUTPUT"
 
   build-macos:

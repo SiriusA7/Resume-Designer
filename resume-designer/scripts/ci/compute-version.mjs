@@ -42,6 +42,72 @@ function bumpVersion(version, bumpType) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
 }
 
+// Semver precedence, enough of it for the shapes this pipeline emits
+// (`X.Y.Z` and `X.Y.Z-next.N`). Returns -1 / 0 / 1.
+//
+// Written out rather than pulled from a dependency because this script runs in
+// CI with only Node builtins, and because the one comparison that matters here
+// — 1.16.0-next.125 vs 2.0.0-next.116 — is exactly the one a naive string or
+// build-number comparison gets wrong.
+export function compareSemver(a, b) {
+  const split = (v) => {
+    const [core, pre = ''] = String(v).replace(/^v/, '').split('-', 2);
+    return {
+      nums: core.split('.').map((n) => Number(n) || 0),
+      pre: pre ? pre.split('.') : [],
+    };
+  };
+  const x = split(a);
+  const y = split(b);
+
+  for (let i = 0; i < 3; i += 1) {
+    if ((x.nums[i] || 0) !== (y.nums[i] || 0)) return (x.nums[i] || 0) > (y.nums[i] || 0) ? 1 : -1;
+  }
+  // A version WITHOUT a prerelease outranks one with: 2.0.0 > 2.0.0-next.9.
+  if (!x.pre.length && y.pre.length) return 1;
+  if (x.pre.length && !y.pre.length) return -1;
+
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i += 1) {
+    const p = x.pre[i];
+    const q = y.pre[i];
+    if (p === undefined) return -1;   // shorter set is lower when all else equal
+    if (q === undefined) return 1;
+    const pn = /^\d+$/.test(p);
+    const qn = /^\d+$/.test(q);
+    // Numeric identifiers compare numerically and always rank below alphanumeric.
+    if (pn && qn) { if (Number(p) !== Number(q)) return Number(p) > Number(q) ? 1 : -1; continue; }
+    if (pn !== qn) return pn ? -1 : 1;
+    if (p !== q) return p > q ? 1 : -1;
+  }
+  return 0;
+}
+
+/**
+ * Why publishing `computed` would be a regression against what is already
+ * live, or null when it is safe.
+ *
+ * This exists because the pipeline shipped NINE beta builds that no user could
+ * install. A manual dispatch had published 2.0.0-next.116; every automatic run
+ * afterwards derived its base from the latest `v*` tag (still v1.15.0) and
+ * published 1.16.0-next.N — a DOWNGRADE, which the updater correctly refused.
+ * Every job was green each time, because nothing in the pipeline knew what the
+ * previous run had published.
+ *
+ * An unreadable `published` is NOT treated as a regression. Being unable to
+ * compare is not evidence of one, and blocking every release on a transient
+ * GitHub outage is worse than the rare miss — the caller warns instead.
+ */
+export function regressionReason(computed, published) {
+  if (!published) return null;
+  const cmp = compareSemver(computed, published);
+  if (cmp > 0) return null;
+  return cmp === 0
+    ? `computed version ${computed} is ALREADY published — the update would be a no-op`
+    : `computed version ${computed} is LOWER than the published ${published} — `
+      + 'publishing it would be a downgrade, which the updater refuses, so the '
+      + 'release would succeed and reach nobody';
+}
+
 function detectBumpType(logText) {
   const text = (logText || '').toLowerCase();
 
@@ -92,6 +158,29 @@ function main() {
     tag = `v${version}`;
   }
 
+  // THE GUARD. `PUBLISHED_VERSION` is what is live on this channel right now,
+  // fetched by the workflow. Failing here is deliberate: a downgrade published
+  // successfully is worse than a red run, because it reaches nobody and says
+  // nothing — which is how nine builds went out unnoticed.
+  const published = (process.env.PUBLISHED_VERSION || '').trim();
+  const reason = regressionReason(version, published);
+  if (reason) {
+    process.stderr.write(`::error::Refusing to publish: ${reason}.\n`);
+    process.stderr.write(
+      '::error::Fix the BASE version, not this check. Either tag the stable '
+      + 'release so the base derives from it, or re-run with the '
+      + '`version` input set to the intended base.\n',
+    );
+    process.exit(1);
+  }
+  if (!published) {
+    process.stderr.write(
+      '::warning::No published version to compare against — the regression '
+      + 'guard did not run. Being unable to read it is not evidence of a '
+      + 'regression, so the release proceeds.\n',
+    );
+  }
+
   process.stdout.write(`version=${version}\n`);
   process.stdout.write(`tag=${tag}\n`);
   process.stdout.write(`channel=${channel}\n`);
@@ -99,4 +188,8 @@ function main() {
   process.stdout.write(`bump=${bumpType}\n`);
 }
 
-main();
+// Guarded so the exported helpers above can be imported by tests without this
+// script computing a version (and calling process.exit) as a side effect.
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main();
+}
