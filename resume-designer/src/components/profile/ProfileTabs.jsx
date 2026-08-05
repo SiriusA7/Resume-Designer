@@ -323,8 +323,12 @@ function RoleSubCard({ exp, index, set, onDelete, onDetach, canDetach }) {
 }
 
 // A run of 2+: the employer stated once, its roles beneath.
-function EmployerBlock({ group, set, onCompanyChange, onCompanyBlur, onAddRole, onDeleteRole, onDetachRole, onDeleteEmployer }) {
+function EmployerBlock({
+  group, set, onCompanyChange, onCompanyBlur, onAddRole, onDeleteRole, onDetachRole, onDeleteEmployer,
+  onLinkAbove, canLinkAbove, showLinkAbove,
+}) {
   const employerInputId = useId();
+  const canAddRole = !!(group.company || '').trim();
   return (
     <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
       <div className="flex items-end gap-2.5">
@@ -363,13 +367,30 @@ function EmployerBlock({ group, set, onCompanyChange, onCompanyBlur, onAddRole, 
           />
         ))}
       </div>
-      {!!(group.company || '').trim() && (
-        <Button
-          variant="outline" size="sm" type="button" className="h-7 w-full text-xs"
-          onClick={() => onAddRole(group)}
-        >
-          <Plus className="h-3.5 w-3.5" /> Add role at this company
-        </Button>
+      {(canAddRole || showLinkAbove) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {canAddRole && (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 flex-1 text-xs"
+              onClick={() => onAddRole(group)}
+            >
+              <Plus className="h-3.5 w-3.5" /> Add role at this company
+            </Button>
+          )}
+          {/* A detached role leaves [solo Acme] + [Acme block]; without this the
+              block's lead has no way back. linkAbove never writes `company`, and
+              it carries the lead's trailing run members with it. */}
+          {showLinkAbove && (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              disabled={!canLinkAbove}
+              title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
+              onClick={() => onLinkAbove(group.roles[0].index)}
+            >
+              Link to company above
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -556,6 +577,11 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
         ) : (
           groups.map((group) => {
             const lead = group.roles[0];
+            const i = lead.index;
+            const prev = i > 0 ? items[i - 1] : null;
+            const canLinkAbove = !!prev
+              && !!companyKey(prev.company)
+              && companyKey(prev.company) === companyKey(lead.entry.company);
             if (group.roles.length > 1) {
               return (
                 <EmployerBlock
@@ -568,11 +594,12 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                   onDeleteRole={deleteEntry}
                   onDetachRole={detachRole}
                   onDeleteEmployer={deleteEmployer}
+                  onLinkAbove={linkAbove}
+                  canLinkAbove={canLinkAbove}
+                  showLinkAbove={i > 0}
                 />
               );
             }
-            const i = lead.index;
-            const prev = i > 0 ? items[i - 1] : null;
             return (
               <SoloJobCard
                 key={lead.entry.id || `exp-${i}`}
@@ -583,7 +610,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                 onAddRole={addRoleAt}
                 onDelete={() => deleteEntry(i)}
                 onLinkAbove={linkAbove}
-                canLinkAbove={!!prev && !!companyKey(prev.company) && companyKey(prev.company) === companyKey(lead.entry.company)}
+                canLinkAbove={canLinkAbove}
                 showLinkAbove={i > 0}
               />
             );
