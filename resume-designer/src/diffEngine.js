@@ -55,6 +55,63 @@ export function diffLines(oldText, newText) {
 }
 
 /**
+ * A copy of `value` with the machine-readable date pair removed at every depth.
+ *
+ * The key-level skip below only runs while diffing MATCHED object keys, so it
+ * never sees inside an ADDITION: diffArray emits one `ADD experience[n]`
+ * carrying the whole item, and applyChangeToStore splices that object in
+ * verbatim. The change-generation prompt does not ask for startDate/endDate,
+ * but it does serialise the current resume WITH them — so a model templating a
+ * new role off an existing entry brings that entry's pair, stamping a
+ * brand-new job with someone else's start month for `datesAreContinuous` to
+ * trust.
+ *
+ * An added entry therefore arrives unstructured, exactly as a hand-added one
+ * does: the gate fails closed on it, and the picker supplies the pair.
+ */
+function withoutMachineDates(value) {
+  if (Array.isArray(value)) return value.map(withoutMachineDates);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === 'startDate' || key === 'endDate') continue;
+    out[key] = withoutMachineDates(nested);
+  }
+  return out;
+}
+
+/**
+ * The same, for a WHOLE-OBJECT REWRITE of an item that already exists.
+ *
+ * Here the pair must be carried over rather than dropped: applying a MODIFY
+ * writes `newValue` over the entry, so a scrubbed object would DELETE a pair
+ * the picker owns. An addition has no prior entry, so `withoutMachineDates` is
+ * right there and this is right here.
+ */
+function withStoredMachineDates(oldItem, newItem) {
+  const rewritable = newItem && typeof newItem === 'object' && !Array.isArray(newItem)
+    && oldItem && typeof oldItem === 'object' && !Array.isArray(oldItem);
+  if (!rewritable) return withoutMachineDates(newItem);
+
+  // Substitute the stored values IN PLACE rather than stripping and re-appending.
+  // The caller decides "did anything actually change?" with JSON.stringify, which
+  // is key-order sensitive: rebuilding with the pair moved to the end made an
+  // otherwise identical entry compare as different and emitted a phantom change.
+  const out = {};
+  for (const [key, nested] of Object.entries(newItem)) {
+    if (key === 'startDate' || key === 'endDate') {
+      if (key in oldItem) out[key] = oldItem[key];
+      continue;
+    }
+    out[key] = withoutMachineDates(nested);
+  }
+  // A pair the stored entry carries but the proposal omitted must survive too.
+  if ('startDate' in oldItem && !('startDate' in out)) out.startDate = oldItem.startDate;
+  if ('endDate' in oldItem && !('endDate' in out)) out.endDate = oldItem.endDate;
+  return out;
+}
+
+/**
  * Compute structured diff for resume data
  * Handles nested objects and arrays properly
  * @param {Object} oldData - Original resume data
@@ -69,13 +126,14 @@ export function diffResumeData(oldData, newData, basePath = '') {
   
   // Handle case where one is null/undefined
   if (!oldData) {
+    const added = withoutMachineDates(newData);
     changes.push({
       path: basePath,
       type: DIFF_TYPES.ADD,
       oldValue: null,
-      newValue: newData,
+      newValue: added,
       displayOld: '',
-      displayNew: JSON.stringify(newData, null, 2)
+      displayNew: JSON.stringify(added, null, 2)
     });
     return changes;
   }
@@ -234,27 +292,38 @@ function diffArray(oldArray, newArray, basePath) {
       // For objects, recursively diff them as modifications
       const itemChanges = diffResumeData(oldEntry.item, newEntry.item, `${basePath}[${oldEntry.index}]`);
       if (itemChanges.length === 0) {
-        // Objects are same structure but may have small differences
-        changes.push({
-          path: `${basePath}[${oldEntry.index}]`,
-          type: DIFF_TYPES.MODIFY,
-          oldValue: oldEntry.item,
-          newValue: newEntry.item,
-          displayOld: formatArrayItemDisplay(oldEntry.item),
-          displayNew: formatArrayItemDisplay(newEntry.item)
-        });
+        // Objects are same structure but may have small differences.
+        //
+        // diffResumeData now SKIPS the machine date pair, so an item whose only
+        // difference is that pair reaches here with nothing to report — and a
+        // whole-object MODIFY carrying newEntry.item verbatim would smuggle the
+        // pair straight back in, reopening the very route the skip closes. Carry
+        // the STORED pair over instead (the picker owns it), and when nothing
+        // else differs, emit no change at all rather than a phantom one.
+        const nextItem = withStoredMachineDates(oldEntry.item, newEntry.item);
+        if (JSON.stringify(nextItem) !== JSON.stringify(oldEntry.item)) {
+          changes.push({
+            path: `${basePath}[${oldEntry.index}]`,
+            type: DIFF_TYPES.MODIFY,
+            oldValue: oldEntry.item,
+            newValue: nextItem,
+            displayOld: formatArrayItemDisplay(oldEntry.item),
+            displayNew: formatArrayItemDisplay(nextItem)
+          });
+        }
       } else {
         changes.push(...itemChanges);
       }
     } else {
       // Mixed types - treat as remove + add
+      const nextItem = withStoredMachineDates(oldEntry.item, newEntry.item);
       changes.push({
         path: `${basePath}[${oldEntry.index}]`,
         type: DIFF_TYPES.MODIFY,
         oldValue: oldEntry.item,
-        newValue: newEntry.item,
+        newValue: nextItem,
         displayOld: formatArrayItemDisplay(oldEntry.item),
-        displayNew: formatArrayItemDisplay(newEntry.item)
+        displayNew: formatArrayItemDisplay(nextItem)
       });
     }
     
@@ -276,13 +345,17 @@ function diffArray(oldArray, newArray, basePath) {
   
   // Remaining items added (more new than old)
   for (const newEntry of unmatchedNew.filter(n => !n.matched)) {
+    // Scrubbed at EMISSION, not at apply: the change object is what the review
+    // preview projects and what the diff dialog shows, so scrubbing later would
+    // put the two out of step again.
+    const added = withoutMachineDates(newEntry.item);
     changes.push({
       path: `${basePath}[${newEntry.index}]`,
       type: DIFF_TYPES.ADD,
       oldValue: null,
-      newValue: newEntry.item,
+      newValue: added,
       displayOld: '',
-      displayNew: formatArrayItemDisplay(newEntry.item)
+      displayNew: formatArrayItemDisplay(added)
     });
   }
   

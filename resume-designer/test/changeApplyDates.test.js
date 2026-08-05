@@ -212,3 +212,98 @@ describe('container proposals cannot smuggle the date pair through', () => {
     expect(entry().endDate).toBe('');
   });
 });
+
+// An ADDITION carries a whole object, so the key-level skip never sees inside
+// it. The change prompt serialises the current resume WITH the pair, so a model
+// templating a new role off an existing entry brings that entry's start month.
+describe('added and wholesale-rewritten entries cannot carry the pair', () => {
+  const paths = (changeSet) => changeSet.changes.map((c) => c.path);
+  const added = (changeSet) => changeSet.changes.find((c) => c.type === 'add');
+
+  it('strips the pair from an inserted experience item', () => {
+    const changeSet = createChangeSet(
+      { name: 'Ada', experience: [{ ...ROLE }] },
+      {
+        experience: [
+          { ...ROLE },
+          { id: 'new', company: 'Globex', title: 'Staff Engineer', dates: 'Apr 2024 – Present', startDate: '2020-01', endDate: 'Present', bullets: [] },
+        ],
+      },
+    );
+
+    const add = added(changeSet);
+    expect(add, 'the diff should emit an ADD for the new item').toBeDefined();
+    expect(add.newValue.dates).toBe('Apr 2024 – Present');
+    expect(add.newValue).not.toHaveProperty('startDate');
+    expect(add.newValue).not.toHaveProperty('endDate');
+  });
+
+  it('leaves an inserted entry unstructured once applied', () => {
+    store.setData({ name: 'Ada', experience: [{ ...ROLE }] }, true, null);
+    const changeSet = createChangeSet(store.getData(), {
+      experience: [
+        { ...ROLE },
+        { id: 'new', company: 'Globex', title: 'Staff Engineer', dates: 'Apr 2024 – Present', startDate: '2020-01', endDate: 'Present', bullets: [] },
+      ],
+    });
+    changeSet.changes.forEach(applyChangeToStore);
+
+    const inserted = store.get('experience').find((e) => e.id === 'new');
+    expect(inserted.dates).toBe('Apr 2024 – Present');
+    expect(inserted.startDate).toBeUndefined();
+    expect(inserted.endDate).toBeUndefined();
+  });
+
+  it('emits nothing at all when only the pair differs', () => {
+    // Entries carrying an `id` match in diffArray's first pass, which pushes
+    // diffResumeData's leaf changes directly — so the key-level skip alone
+    // already makes this empty.
+    const changeSet = createChangeSet(
+      { name: 'Ada', experience: [{ ...ROLE }] },
+      { experience: [{ ...ROLE, startDate: '1999-01', endDate: '1999-12' }] },
+    );
+
+    expect(paths(changeSet)).toEqual([]);
+  });
+
+  it('emits nothing for a pair-only difference on an id-less entry either', () => {
+    // Without an `id` the item falls to diffArray's POSITIONAL pass, where a
+    // recursion that reports no leaf changes falls back to a whole-object
+    // MODIFY. That fallback carried newEntry.item verbatim, smuggling the pair
+    // straight back past the key-level skip.
+    const noId = { company: 'Acme', title: 'Engineer', dates: 'Jan 2020 – Mar 2022', startDate: '2020-01', endDate: '2022-03', bullets: ['x'] };
+    const changeSet = createChangeSet(
+      { experience: [{ ...noId }] },
+      { experience: [{ ...noId, startDate: '1999-01', endDate: '1999-12' }] },
+    );
+
+    expect(paths(changeSet)).toEqual([]);
+  });
+
+  // Guard, not coverage of the fallback: adding a field produces a leaf change,
+  // so diffResumeData reports work and the whole-object branch never runs. It
+  // pins that the ordinary leaf route leaves the pair alone.
+  it('leaves the stored pair alone when a field is added to an id-less entry', () => {
+    const noId = { company: 'Acme', title: 'Engineer', dates: 'Jan 2020 – Mar 2022', startDate: '2020-01', endDate: '2022-03', bullets: ['x'] };
+    store.setData({ experience: [{ ...noId }] }, true, null);
+    const changeSet = createChangeSet(store.getData(), {
+      experience: [{ ...noId, bullets: ['x'], location: 'Remote', startDate: '1999-01', endDate: '1999-12' }],
+    });
+    changeSet.changes.forEach(applyChangeToStore);
+
+    expect(entry().startDate).toBe('2020-01');
+    expect(entry().endDate).toBe('2022-03');
+  });
+
+  it('carries the stored pair over a wholesale entry rewrite rather than deleting it', () => {
+    store.setData({ name: 'Ada', experience: [{ ...ROLE }] }, true, null);
+    const changeSet = createChangeSet(store.getData(), {
+      experience: [{ ...ROLE, title: 'Staff Engineer', startDate: '1999-01', endDate: '1999-12' }],
+    });
+    changeSet.changes.forEach(applyChangeToStore);
+
+    expect(entry().title).toBe('Staff Engineer');
+    expect(entry().startDate).toBe('2020-01');
+    expect(entry().endDate).toBe('2022-03');
+  });
+});
