@@ -10,6 +10,15 @@ import {
   MONTH_NAMES, buildDateFields, freeformDateFields, readEntryDates,
 } from '../../experienceDates.js';
 
+// The picker's whole justification is that every value it emits is readable by
+// the run gate, which is why buildDateFields carries no range guard. An
+// unbounded stepper breaks that at the edge: formatMonthField({ year: -1 })
+// pads to '00-1', and parseYearMonth (^\d{4}-) refuses it. Bound the stepper
+// instead — the constraint belongs at the UI, where a year outside a working
+// life is meaningless anyway.
+const MIN_YEAR = 1900;
+const MAX_YEAR = 2100;
+
 // Twelve months in a 3-column grid, with a year stepper above. Deliberately NOT
 // shadcn's Calendar: that is a day grid (and would pull in react-day-picker),
 // while resume dates are month-granular. Popover, Button, Input and Separator
@@ -22,7 +31,8 @@ function MonthGrid({ label, year, onYearChange, selected, isDisabled, onPick }) 
         <Button
           type="button" variant="ghost" size="icon" className="size-6"
           aria-label={`Previous year, ${label.toLowerCase()}`}
-          onClick={() => onYearChange(year - 1)}
+          disabled={year <= MIN_YEAR}
+          onClick={() => onYearChange(Math.max(MIN_YEAR, year - 1))}
         >
           <ChevronLeft className="size-3.5" />
         </Button>
@@ -30,7 +40,8 @@ function MonthGrid({ label, year, onYearChange, selected, isDisabled, onPick }) 
         <Button
           type="button" variant="ghost" size="icon" className="size-6"
           aria-label={`Next year, ${label.toLowerCase()}`}
-          onClick={() => onYearChange(year + 1)}
+          disabled={year >= MAX_YEAR}
+          onClick={() => onYearChange(Math.min(MAX_YEAR, year + 1))}
         >
           <ChevronRight className="size-3.5" />
         </Button>
@@ -74,7 +85,7 @@ function MonthGrid({ label, year, onYearChange, selected, isDisabled, onPick }) 
  * refuses a half pair, and a half pair is exactly the contradiction R2 exists
  * to prevent.
  */
-export function ExperienceDatePanel({ entry, onCommit }) {
+export function ExperienceDatePanel({ entry, onCommit, onClose }) {
   const initial = readEntryDates(entry);
   const thisYear = new Date().getFullYear();
   const [draft, setDraft] = useState({ start: initial.start, end: initial.end, ongoing: initial.ongoing });
@@ -153,7 +164,21 @@ export function ExperienceDatePanel({ entry, onCommit }) {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
+            // Enter during an IME composition CONFIRMS a candidate; it is not a
+            // submit. isComposing is the standard signal, keyCode 229 the legacy
+            // one — the app ships on WKWebView and WebView2, whose composition
+            // behaviour differs from Chromium's, so honour both.
+            if (e.nativeEvent?.isComposing || e.nativeEvent?.keyCode === 229) return;
             e.preventDefault();
+            // Text unchanged from what the field was seeded with is not an edit.
+            // Committing it would run the R2 clear and silently destroy
+            // startDate/endDate while the visible string stays byte-identical —
+            // and Enter here is a natural "close this" reflex, actively invited
+            // by the caption below. Close instead.
+            if (text === (entry?.dates || '')) {
+              onClose();
+              return;
+            }
             onCommit(freeformDateFields(text));
           }}
         />
@@ -184,7 +209,7 @@ export default function ExperienceDateField({ entry, onCommit, placeholder = 'Ad
       {/* PopoverContent has no forceMount, so Radix unmounts it on close and the
           panel re-seeds its draft from the entry on every open. */}
       <PopoverContent className="w-[320px]" align="start">
-        <ExperienceDatePanel entry={entry} onCommit={handleCommit} />
+        <ExperienceDatePanel entry={entry} onCommit={handleCommit} onClose={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
   );

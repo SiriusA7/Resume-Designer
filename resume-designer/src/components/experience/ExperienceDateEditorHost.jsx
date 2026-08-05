@@ -25,10 +25,10 @@ export function ExperienceDateEditorHost() {
   useEffect(() => {
     // Resolve the index (and confirm the entry exists) here, at open time, rather
     // than during render. If the entry can't be resolved, the popover never opens —
-    // so dispatch the "closed" signal immediately (nothing else will: target never
-    // goes from truthy to falsy, so the effect below won't fire) and leave dateEditorOpen
-    // stuck suppressing the AI button. The index is stored on target so render doesn't
-    // have to re-parse the path.
+    // so dispatch the "closed" signal immediately, because nothing else will (target
+    // never goes from truthy to falsy, so the effect below won't fire) and without it
+    // dateEditorOpen would stay stuck suppressing the AI button. The index is stored
+    // on target so render doesn't have to re-parse the path.
     const onOpen = (e) => {
       const { path, rect } = e.detail;
       const match = /^experience\[(\d+)\]\.dates$/.exec(path);
@@ -110,7 +110,7 @@ export function ExperienceDateEditorHost() {
         <div style={{ position: 'fixed', top, left, width, height, pointerEvents: 'none' }} />
       </PopoverAnchor>
       <PopoverContent className="w-[320px]" align="start">
-        <ExperienceDatePanel entry={entry} onCommit={commit} />
+        <ExperienceDatePanel entry={entry} onCommit={commit} onClose={() => setTarget(null)} />
       </PopoverContent>
     </Popover>
   );

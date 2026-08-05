@@ -1273,6 +1273,32 @@ export async function improveSummary(modelId, options = {}) {
   return chat(modelId, messages, true, { feature: 'generate', ...options });
 }
 
+// `experience[i].dates` is the AI-addressable date path; the machine-readable
+// startDate/endDate pair is NOT, matching `_groupId`. Nothing else enforces
+// that: the edit prompt serialises the whole resume JSON, pair included, and
+// the documented path grammar is open-ended ("And similar nested paths using
+// dot notation and array indices"). A model that wrote one half would persist
+// exactly the contradiction the picker's R1/R2 rules exist to prevent — the
+// pair only ever moves as a unit, written by a picker commit or cleared by a
+// freeform edit.
+const UNADDRESSABLE_DATE_PATH = /(^|\.)(startDate|endDate)$/;
+
+/**
+ * Drop model-proposed paths that address the structured date pair directly.
+ * Skip, don't throw — the rest of the change set is still good — but warn, the
+ * way setByPath's unsafe-path guard does, so a model that keeps trying leaves a
+ * trace instead of no evidence.
+ */
+export function stripUnaddressableDatePaths(changes) {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return {};
+  const entries = Object.entries(changes);
+  const kept = entries.filter(([path]) => !UNADDRESSABLE_DATE_PATH.test(path));
+  if (kept.length !== entries.length) {
+    console.warn('[aiService] ignoring model-proposed startDate/endDate paths; only `dates` is addressable');
+  }
+  return Object.fromEntries(kept);
+}
+
 /**
  * Generate structured resume changes that can be displayed in a diff view
  * @param {string} modelId - Model to use
@@ -1344,7 +1370,7 @@ export async function generateResumeChanges(modelId, instruction, targetPath = n
     
     const result = JSON.parse(jsonStr);
     return {
-      changes: result.changes || {},
+      changes: stripUnaddressableDatePaths(result.changes),
       explanation: result.explanation || 'Changes generated successfully'
     };
   } catch {

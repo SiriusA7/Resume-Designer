@@ -744,41 +744,11 @@ function handleClick(e) {
     return;
   }
   
-  let editable = e.target.closest('[data-editable]');
+  const editable = e.target.closest('[data-editable]');
   if (!editable) return;
 
   // Don't start editing if already editing
   if (editable.isContentEditable) return;
-
-  // Dates open a month-range picker instead of a contenteditable, so the
-  // machine-readable startDate/endDate stay in step with the display string.
-  // This module stays free of React: it dispatches, and a host mounted in App
-  // renders the panel and performs the store write — the same arrangement
-  // confirmDestructive uses. Both renderer variants carry this path (the <time>
-  // in the default layout and the <span> in the timeline one).
-  const path = editable.dataset.editable;
-  if (/^experience\[\d+\]\.dates$/.test(path)) {
-    // Commit any contenteditable still open, or its blur would land after ours.
-    if (activeElement) {
-      finishEditing(activeElement);
-      // finishEditing() calls store.update(), which SYNCHRONOUSLY triggers a full
-      // renderCurrentResume() that replaces every node inside #resume — so `editable`
-      // is now detached, and a detached node's rect is all zeros. Re-resolve it the
-      // same way startEditing() does for this exact hazard. An experience[N].dates
-      // path matches exactly one element, so no index bookkeeping is needed (unlike
-      // the tool-chip case in startEditing). Fall back to the original element if the
-      // query somehow finds nothing, rather than crashing on a null rect.
-      const refreshed = document.querySelector(`[data-editable="${path}"]`);
-      if (refreshed) editable = refreshed;
-    }
-    hideAIButton();
-    dateEditorOpen = true;
-    const rect = editable.getBoundingClientRect();
-    window.dispatchEvent(new CustomEvent('rd:edit-dates', {
-      detail: { path, rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height } },
-    }));
-    return;
-  }
 
   startEditing(editable);
 }
@@ -815,10 +785,37 @@ function startEditing(element) {
   hideAIButton();
   hideAIMenu();
   hoveredElement = null;
-  
-  activeElement = element;
 
   const path = element.dataset.editable;
+
+  // Dates open a month-range picker instead of a contenteditable, so the
+  // machine-readable startDate/endDate stay in step with the display string.
+  //
+  // Intercepted HERE, not in handleClick, because startEditing is the one funnel
+  // both entry points share: handleKeyDown's Tab branch calls it directly, and a
+  // dates node is an ordinary [data-editable] in that cycle (both renderer
+  // variants — the <time> in the default layout and the <span> in the timeline
+  // one). A click-only guard let Tab make the node contentEditable and write
+  // `dates` alone, leaving the machine pair describing the old range.
+  //
+  // Returns BEFORE activeElement is set: the node never becomes contentEditable,
+  // so nothing may point at it as the active edit. The re-resolution above has
+  // already run, so `element` is the freshly-rendered node and its rect is real.
+  //
+  // This module stays free of React: it dispatches, and a host mounted in App
+  // renders the panel and performs the store write — the same arrangement
+  // confirmDestructive uses.
+  if (/^experience\[\d+\]\.dates$/.test(path)) {
+    dateEditorOpen = true;
+    const rect = element.getBoundingClientRect();
+    window.dispatchEvent(new CustomEvent('rd:edit-dates', {
+      detail: { path, rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height } },
+    }));
+    return;
+  }
+
+  activeElement = element;
+
   // Tool chips — inline (.tool-token/.skill-tag) OR bulleted (.highlight-bullet) —
   // all share data-editable="tools" because `tools` is a single `•`-joined string.
   // Treat a click on one chip as editing JUST that chip: skip the whole-field

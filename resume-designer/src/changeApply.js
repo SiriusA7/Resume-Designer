@@ -31,6 +31,7 @@
 
 import { store } from './store.js';
 import { DIFF_TYPES } from './diffEngine.js';
+import { freeformDateFields } from './experienceDates.js';
 
 // The diff engine's own equality idiom (it detects change the same way).
 function sameValue(a, b) {
@@ -130,6 +131,46 @@ export function resolveAnchoredPath(change, readArray) {
   return path;
 }
 
+/**
+ * A scalar field write, with one exception: `experience[i].dates`.
+ *
+ * `experience[i].dates` is an AI-addressable path (CHANGE_GENERATION_PROMPT
+ * documents the experience paths and the grammar is open-ended), so a proposal
+ * can rewrite the human display string. Written as a plain scalar it leaves the
+ * machine-readable startDate/endDate beside it still describing the OLD range —
+ * the contradiction R2 exists to prevent, and one `datesAreContinuous` would
+ * then act on when it decides whether two roles are one continuous run.
+ *
+ * So a dates write clears the pair, in the SAME store write (R1): one array
+ * update carrying all three fields, one undo step, one re-render — the
+ * company-rename fan-out precedent, and what the picker's own commit does.
+ * Clearing returns the entry to unstructured, which `interval()` handles by
+ * failing closed.
+ *
+ * Enforced here rather than in each caller because this is the choke point the
+ * chat flow (useChat) and job recommendations (JobsDialog) already share.
+ */
+function writeScalar(path, value) {
+  const match = /^experience\[(\d+)\]\.dates$/.exec(path);
+  if (match) {
+    const experience = store.get('experience');
+    const index = Number(match[1]);
+    if (Array.isArray(experience) && experience[index]) {
+      const fields = freeformDateFields(value);
+      // An unchanged value is not an edit. Clearing on one would destroy a
+      // structured pair — and burn an undo step — for a change that says
+      // nothing, which is exactly the silent contradiction being avoided.
+      if (experience[index].dates === fields.dates) return;
+      store.update('experience', experience.map(
+        (entry, i) => (i === index ? { ...entry, ...fields } : entry),
+      ));
+      return;
+    }
+    // No entry to carry the pair — fall through so the generic write creates it.
+  }
+  store.update(path, value);
+}
+
 /** Apply one change object (from a changeSet's `changes[]`) to the store. */
 export function applyChangeToStore(rawChange) {
   // Everything below works on the resolved path, so a stale proposed-array
@@ -155,7 +196,7 @@ export function applyChangeToStore(rawChange) {
       }
       // No array at that path yet — fall through so the generic write creates it.
     }
-    store.update(change.path, change.newValue);
+    writeScalar(change.path, change.newValue);
     return;
   }
 
@@ -171,7 +212,7 @@ export function applyChangeToStore(rawChange) {
     store.update(change.path, undefined);
     return;
   }
-  store.update(change.path, change.newValue);
+  writeScalar(change.path, change.newValue);
 }
 
 /** Array-index structural op (`experience[2]`), i.e. one that shifts indices. */
