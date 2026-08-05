@@ -6,6 +6,7 @@
 import { getSettings, saveSettings, getUserProfile, saveUserProfile } from './persistence.js';
 import { store } from './store.js';
 import { groupExperience } from './experienceGroups.js';
+import { formatIntervalHint } from './experienceDates.js';
 import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
@@ -542,6 +543,8 @@ IMPORTANT:
   machine-readable startDate/endDate as "YYYY-MM" (a bare year is not enough —
   the app uses the month to decide whether two roles at one employer were one
   continuous tenure)
+  Where a role in the profile carries a bracketed interval like [2020-01 → present],
+  copy those values into startDate/endDate verbatim rather than inferring them.
 - If the profile shows SEVERAL POSITIONS AT ONE EMPLOYER (a promotion, a lateral
   move, or two roles held at once), emit them as separate entries that are
   CONSECUTIVE and share the identical "company" string, most recent first. Never
@@ -667,6 +670,7 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
         for (const { entry } of group.roles) {
           profileContext += `- **${entry.title || 'Position'}**`;
           if (entry.dates) profileContext += ` (${entry.dates})`;
+          profileContext += formatIntervalHint(entry);
           profileContext += `\n`;
           if (entry.details) profileContext += `${entry.details}\n`;
         }
@@ -674,6 +678,7 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
         const exp = group.roles[0].entry;
         profileContext += `\n**${exp.title || 'Position'}** at **${exp.company || 'Company'}**`;
         if (exp.dates) profileContext += ` (${exp.dates})`;
+        profileContext += formatIntervalHint(exp);
         profileContext += `\n`;
         if (exp.details) profileContext += `${exp.details}\n`;
       }
@@ -758,8 +763,10 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
 }
 
 // Get user profile context for AI
-function getUserProfileContext() {
-  const profile = getUserProfile();
+// Exported with an optional profile so the serialisation is unit-testable
+// without seeding storage. Every existing caller passes nothing and gets the
+// stored profile exactly as before.
+export function getUserProfileContext(profile = getUserProfile()) {
   console.log('[AI Context] User profile loaded:', profile);
   
   if (!profile || isProfileEmpty(profile)) {
@@ -811,6 +818,7 @@ function getUserProfileContext() {
           if (!entry.title && !entry.company) continue;
           context += `- **${entry.title || 'Untitled'}**`;
           if (entry.dates) context += ` (${entry.dates})`;
+          context += formatIntervalHint(entry);
           context += `\n`;
           if (entry.details) context += `${entry.details}\n`;
         }
@@ -819,6 +827,7 @@ function getUserProfileContext() {
         if (exp.title || exp.company) {
           context += `\n**${exp.title || 'Untitled'}** at ${exp.company || 'Unknown Company'}`;
           if (exp.dates) context += ` (${exp.dates})`;
+          context += formatIntervalHint(exp);
           context += `\n`;
           if (exp.details) context += `${exp.details}\n`;
         }
