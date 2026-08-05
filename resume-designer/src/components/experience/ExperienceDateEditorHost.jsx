@@ -23,7 +23,24 @@ export function ExperienceDateEditorHost() {
   const [target, setTarget] = useState(null);
 
   useEffect(() => {
-    const onOpen = (e) => setTarget(e.detail);
+    // Resolve the index (and confirm the entry exists) here, at open time, rather
+    // than during render. If the entry can't be resolved, the popover never opens —
+    // so dispatch the "closed" signal immediately (nothing else will: target never
+    // goes from truthy to falsy, so the effect below won't fire) and leave dateEditorOpen
+    // stuck suppressing the AI button. The index is stored on target so render doesn't
+    // have to re-parse the path.
+    const onOpen = (e) => {
+      const { path, rect } = e.detail;
+      const match = /^experience\[(\d+)\]\.dates$/.exec(path);
+      const index = match ? Number(match[1]) : -1;
+      const experience = store.get('experience');
+      const entry = Array.isArray(experience) ? experience[index] : null;
+      if (!entry) {
+        window.dispatchEvent(new Event('rd:date-editor-closed'));
+        return;
+      }
+      setTarget({ path, rect, index });
+    };
     const onClose = () => setTarget(null);
     window.addEventListener('rd:edit-dates', onOpen);
     window.addEventListener('rd:close-date-editor', onClose);
@@ -40,21 +57,44 @@ export function ExperienceDateEditorHost() {
     window.dispatchEvent(new Event('rd:date-editor-closed'));
   }, [target]);
 
+  // Close on any concurrent store change while the popover is open, rather than
+  // race it. Undo is bound at document level and guarded only against
+  // INPUT/TEXTAREA/contentEditable targets — the picker's month cells are
+  // <button>s, so Cmd+Z fires right through it. Without this, `commit` below
+  // would write its closed-over (now stale) `entry`/index back over whatever
+  // undo just restored. Same philosophy as closing on scroll.
+  useEffect(() => {
+    if (!target) return undefined;
+    return store.subscribe((event) => {
+      if (event === 'change' || event === 'dataLoaded') setTarget(null);
+    });
+  }, [target]);
+
   if (!target) return null;
 
-  const match = /^experience\[(\d+)\]\.dates$/.exec(target.path);
-  const index = match ? Number(match[1]) : -1;
+  // Render-time lookup stays live (the entry can change while the popover is
+  // open, e.g. between mount and the first paint) but can now assume
+  // target.index is valid — onOpen already confirmed the entry resolves.
   const experience = store.get('experience');
-  const entry = Array.isArray(experience) ? experience[index] : null;
+  const entry = Array.isArray(experience) ? experience[target.index] : null;
   if (!entry) return null;
 
   // One array write with all three fields set — the company-rename precedent —
   // not three separate scalar updates. Close BEFORE writing: the update
   // re-renders and re-paginates the resume, replacing the node we are anchored
   // to.
+  //
+  // Re-read the array instead of using the `experience` closed over above: while
+  // the popover was open a store change could have replaced it wholesale (see the
+  // subscribe effect), and writing back a stale array would resurrect whatever it
+  // held at that render. setTarget(null) above is synchronous-enough that the
+  // subscribe effect is still attached when store.update's 'change' fires below —
+  // it sets target to null again, a harmless no-op.
   const commit = (fields) => {
     setTarget(null);
-    const next = experience.map((it, i) => (i === index ? { ...it, ...fields } : it));
+    const current = store.get('experience');
+    if (!Array.isArray(current) || !current[target.index]) return;
+    const next = current.map((it, i) => (i === target.index ? { ...it, ...fields } : it));
     store.setChangeMetadata('Edited dates');
     store.update('experience', next);
   };

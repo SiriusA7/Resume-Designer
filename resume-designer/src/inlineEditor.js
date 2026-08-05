@@ -744,7 +744,7 @@ function handleClick(e) {
     return;
   }
   
-  const editable = e.target.closest('[data-editable]');
+  let editable = e.target.closest('[data-editable]');
   if (!editable) return;
 
   // Don't start editing if already editing
@@ -759,7 +759,18 @@ function handleClick(e) {
   const path = editable.dataset.editable;
   if (/^experience\[\d+\]\.dates$/.test(path)) {
     // Commit any contenteditable still open, or its blur would land after ours.
-    if (activeElement) finishEditing(activeElement);
+    if (activeElement) {
+      finishEditing(activeElement);
+      // finishEditing() calls store.update(), which SYNCHRONOUSLY triggers a full
+      // renderCurrentResume() that replaces every node inside #resume — so `editable`
+      // is now detached, and a detached node's rect is all zeros. Re-resolve it the
+      // same way startEditing() does for this exact hazard. An experience[N].dates
+      // path matches exactly one element, so no index bookkeeping is needed (unlike
+      // the tool-chip case in startEditing). Fall back to the original element if the
+      // query somehow finds nothing, rather than crashing on a null rect.
+      const refreshed = document.querySelector(`[data-editable="${path}"]`);
+      if (refreshed) editable = refreshed;
+    }
     hideAIButton();
     dateEditorOpen = true;
     const rect = editable.getBoundingClientRect();
