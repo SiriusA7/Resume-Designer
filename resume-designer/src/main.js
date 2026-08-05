@@ -829,7 +829,18 @@ function handleDesignChange(change) {
       // to re-split.
       if (getPageSetup().pageSize !== 'continuous') renderCurrentResume();
       break;
-    
+
+    case 'groupPositions':
+      // Absence means grouped, so only an explicit false turns it off.
+      currentGroupPositions = change.value !== false;
+      saveSettings({ groupPositions: currentGroupPositions });
+      // Unconditional, unlike 'spacing': collapsing a run into flat cards changes
+      // the rendered CONTENT, not only its height, so continuous mode must
+      // re-render too — and with a fixed page size this also re-splits the
+      // sheets, which is what stops content clipping out of the exported PDF.
+      renderCurrentResume();
+      break;
+
     case 'accent':
       // Accent settings are handled by structurePanel and saved automatically
       break;
