@@ -19,6 +19,16 @@
 import { generateId } from './store.js';
 
 /**
+ * The canonical company key for the run rule. A run needs a non-empty employer,
+ * and "   " is not one — it forms a run whose header prints blank. Trimming here
+ * rather than at each comparison keeps the rule in one place; every site that
+ * decides run membership must use this.
+ */
+export function companyKey(value) {
+  return String(value ?? '').trim();
+}
+
+/**
  * Partition a flat experience array into company runs.
  * @param {Array<object>} entries
  * @returns {Array<{ groupId: string|null, company: string, roles: Array<{ entry: object, index: number }> }>}
@@ -29,7 +39,7 @@ export function groupExperience(entries) {
 
   (Array.isArray(entries) ? entries : []).forEach((entry, index) => {
     const groupId = entry && entry._groupId ? entry._groupId : null;
-    const company = entry && entry.company ? entry.company : '';
+    const company = companyKey(entry && entry.company);
     const joins = current && groupId && company
       && current.groupId === groupId
       && current.company === company;
@@ -62,10 +72,10 @@ export function assignGroupIds(entries, makeId = () => generateId('grp')) {
 
   let i = 0;
   while (i < out.length) {
-    const company = out[i].company;
+    const company = companyKey(out[i].company);
     let j = i + 1;
     if (company) {
-      while (j < out.length && out[j].company === company) j += 1;
+      while (j < out.length && companyKey(out[j].company) === company) j += 1;
     }
     if (company && j - i > 1) {
       const existing = out.slice(i, j).find((x) => x._groupId);

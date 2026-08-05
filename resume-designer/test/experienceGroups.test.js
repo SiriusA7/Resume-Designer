@@ -66,6 +66,27 @@ describe('groupExperience', () => {
     expect(groups).toHaveLength(2);
   });
 
+  it('ignores a whitespace-only company even when ids match', () => {
+    // "   " is truthy, but it prints a blank company header with roles beneath it
+    // and no employer named anywhere. It is not an employer.
+    const groups = groupExperience([
+      e('Senior Dev', '   ', '2022 – 2024', { _groupId: 'g1' }),
+      e('Dev', '   ', '2019 – 2022', { _groupId: 'g1' }),
+    ]);
+    expect(groups).toHaveLength(2);
+    expect(groups.every((g) => g.roles.length === 1)).toBe(true);
+  });
+
+  it('joins a run across a stray trailing space and prints the trimmed name', () => {
+    const groups = groupExperience([
+      e('Senior Dev', 'Acme', '2022 – 2024', { _groupId: 'g1' }),
+      e('Dev', 'Acme ', '2019 – 2022', { _groupId: 'g1' }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].roles).toHaveLength(2);
+    expect(groups[0].company).toBe('Acme');
+  });
+
   it('returns an empty array for empty or missing input', () => {
     expect(groupExperience([])).toEqual([]);
     expect(groupExperience(undefined)).toEqual([]);
@@ -130,6 +151,17 @@ describe('assignGroupIds', () => {
   it('never groups a blank company', () => {
     const out = assignGroupIds([e('A', '', '2022'), e('B', '', '2021')], () => 'g1');
     expect(out.every((x) => x._groupId === undefined)).toBe(true);
+  });
+
+  it('mints no id for two adjacent whitespace-only companies', () => {
+    const out = assignGroupIds([e('A', '   ', '2022'), e('B', '   ', '2021')], () => 'g1');
+    expect(out.every((x) => x._groupId === undefined)).toBe(true);
+  });
+
+  it('mints one id across a trailing-space company and leaves the stored strings alone', () => {
+    const out = assignGroupIds([e('Senior Dev', 'Acme', '2022 – 2024'), e('Dev', 'Acme ', '2019 – 2022')], () => 'g1');
+    expect(out.map((x) => x._groupId)).toEqual(['g1', 'g1']);
+    expect(out.map((x) => x.company)).toEqual(['Acme', 'Acme ']);
   });
 });
 

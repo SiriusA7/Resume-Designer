@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
 
 import { store, generateId, experienceSortValue } from '../../store.js';
-import { sortRunAware, groupExperience } from '../../experienceGroups.js';
+import { sortRunAware, groupExperience, companyKey } from '../../experienceGroups.js';
 import { SINGLE_COLUMN_LAYOUTS } from '../../renderer.js';
 import { getSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { SortableList, SortableItem, DragHandle } from '../Sortable.jsx';
@@ -237,7 +237,7 @@ function linkToCompanyAbove(index) {
   // stale and this entry's company may have just changed. Never write `company`
   // here — copying the neighbour's name is how a role gets filed under an
   // employer the user never worked for.
-  if (!prev || !prev.company || prev.company !== cur.company) return;
+  if (!prev || !companyKey(prev.company) || companyKey(prev.company) !== companyKey(cur.company)) return;
   const id = prev._groupId || generateId('grp');
   const oldId = cur._groupId;
   const next = [...experience];
@@ -248,7 +248,7 @@ function linkToCompanyAbove(index) {
   // them off as an orphaned singleton the user never asked to unlink.
   for (let i = index + 1; i < next.length; i += 1) {
     const entry = next[i];
-    if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+    if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
     next[i] = { ...entry, _groupId: id };
   }
   store.setChangeMetadata('Linked roles at one company');
@@ -268,7 +268,7 @@ function separateFromCompanyAbove(index) {
   // middle role of a 3-role run yields [A] + [B,C] rather than orphaning C too.
   for (let i = index + 1; i < next.length; i += 1) {
     const entry = next[i];
-    if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+    if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
     next[i] = { ...entry, _groupId: freshId };
   }
   store.setChangeMetadata('Separated role from company');
@@ -285,7 +285,7 @@ function addRoleAtCompany(leadIndex) {
   // already-rendered button stays visible. A run needs a non-empty company, so
   // proceeding would insert a second blank row and id both entries into a "run"
   // the grouping rule then refuses to form.
-  if (!lead.company) return;
+  if (!companyKey(lead.company)) return;
   const id = lead._groupId || generateId('grp');
   // Recompute the run's end from FRESH store data rather than trusting a bound
   // that was computed at render time: the panel suppresses re-renders while a
@@ -293,10 +293,11 @@ function addRoleAtCompany(leadIndex) {
   // the run without the render ever hearing about it. Splicing at a stale end
   // would drop the new role outside the run it belongs to.
   let lastIndexOfRun = leadIndex;
-  if (lead._groupId && lead.company) {
+  if (lead._groupId && companyKey(lead.company)) {
     while (lastIndexOfRun + 1 < experience.length) {
       const nextEntry = experience[lastIndexOfRun + 1];
-      if (!nextEntry || nextEntry._groupId !== lead._groupId || nextEntry.company !== lead.company) break;
+      if (!nextEntry || nextEntry._groupId !== lead._groupId
+        || companyKey(nextEntry.company) !== companyKey(lead.company)) break;
       lastIndexOfRun += 1;
     }
   }
@@ -589,8 +590,10 @@ export default function StructurePanel() {
     // and re-linked with one click.
     const before = next[to - 1];
     const after = next[to + 1];
-    const stillAdjacent = (before && before._groupId && before._groupId === moved._groupId && before.company === moved.company)
-      || (after && after._groupId && after._groupId === moved._groupId && after.company === moved.company);
+    const stillAdjacent = (before && before._groupId && before._groupId === moved._groupId
+        && companyKey(before.company) === companyKey(moved.company))
+      || (after && after._groupId && after._groupId === moved._groupId
+        && companyKey(after.company) === companyKey(moved.company));
     if (moved._groupId && !stillAdjacent) {
       next[to] = { ...moved, _groupId: undefined };
     }
@@ -768,7 +771,7 @@ export default function StructurePanel() {
                         group={meta.group}
                         isLead={!!meta.isLead}
                         isRunMember={isRunMember}
-                        canLinkAbove={!!prev && !!prev.company && prev.company === exp.company}
+                        canLinkAbove={!!prev && !!companyKey(prev.company) && companyKey(prev.company) === companyKey(exp.company)}
                         onCompanyBlur={bumpGrouping}
                       />
                     );

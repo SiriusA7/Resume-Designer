@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 import { confirmDestructive } from '@/components/ui/confirm';
 
 import { shouldSpellcheck } from '../../spellcheck.js';
-import { groupExperience } from '../../experienceGroups.js';
+import { groupExperience, companyKey } from '../../experienceGroups.js';
 import { generateId } from '../../store.js';
 
 // The profile editor's per-tab content, rebuilt on genuine shadcn primitives to
@@ -455,14 +455,14 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
   const addRoleAt = (leadIndex) => {
     const lead = items[leadIndex];
     if (!lead) return;
-    const company = (lead.company || '').trim();
+    const company = companyKey(lead.company);
     if (!company) return;
     const id = lead._groupId || generateId('grp');
     let last = leadIndex;
     if (lead._groupId) {
       while (last + 1 < items.length) {
         const entry = items[last + 1];
-        if (!entry || entry._groupId !== lead._groupId || entry.company !== lead.company) break;
+        if (!entry || entry._groupId !== lead._groupId || companyKey(entry.company) !== company) break;
         last += 1;
       }
     }
@@ -486,7 +486,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
     next[index] = { ...next[index], _groupId: freshId };
     for (let k = index + 1; k < next.length; k += 1) {
       const entry = next[k];
-      if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+      if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
       next[k] = { ...entry, _groupId: freshId };
     }
     rewrite(next);
@@ -498,7 +498,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
   const linkAbove = (index) => {
     const cur = items[index];
     const above = items[index - 1];
-    if (!cur || !above || !above.company || above.company !== cur.company) return;
+    if (!cur || !above || !companyKey(above.company) || companyKey(above.company) !== companyKey(cur.company)) return;
     const id = above._groupId || generateId('grp');
     const oldId = cur._groupId;
     const next = [...items];
@@ -506,7 +506,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
     next[index] = { ...cur, _groupId: id };
     for (let k = index + 1; k < next.length; k += 1) {
       const entry = next[k];
-      if (!oldId || entry._groupId !== oldId || entry.company !== cur.company) break;
+      if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
       next[k] = { ...entry, _groupId: id };
     }
     rewrite(next);
@@ -583,7 +583,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                 onAddRole={addRoleAt}
                 onDelete={() => deleteEntry(i)}
                 onLinkAbove={linkAbove}
-                canLinkAbove={!!prev && !!prev.company && prev.company === lead.entry.company}
+                canLinkAbove={!!prev && !!companyKey(prev.company) && companyKey(prev.company) === companyKey(lead.entry.company)}
                 showLinkAbove={i > 0}
               />
             );
