@@ -240,23 +240,39 @@ git commit -m "feat(design): let grouped positions be turned off"
 
 **Files:**
 - Modify: `resume-designer/src/components/structure/DesignTab.jsx`
+- Modify: `resume-designer/src/main.js` (`handleDesignChange`)
 
 **Interfaces:**
-- Consumes: the `groupPositions` setting Task 1 taught `main.js` to read, and the existing `Segmented`, `ControlGroup`, `getSettings` and `dispatchDesignChange` already in this file.
+- Consumes: `currentGroupPositions` and the settings read Task 1 added to `main.js`; the existing `Segmented`, `getSettings` and `dispatchDesignChange` already in `DesignTab.jsx`.
 - Produces: nothing other tasks consume.
 
-- [ ] **Step 1: Confirm how a sibling control persists**
+- [ ] **Step 1: Read the sibling control's idiom**
 
-`DesignTab` seeds state from `getSettings()` on mount and pushes changes out through `dispatchDesignChange`. Read the orientation control and its handler so you follow the same idiom:
+`DesignTab` seeds state from `getSettings()` on mount and pushes changes out through `dispatchDesignChange`. Read the orientation control and its handler so you follow the same shape:
 
 Run: `grep -n "handleSetOrientation" -B 2 -A 6 src/components/structure/DesignTab.jsx`
 Expected: a `useState` seeded from `initialSettings.orientation`, and a handler that sets state then dispatches.
 
-Then find how `main.js` consumes those events, so you know which `type` actually persists and re-renders:
+- [ ] **Step 1b: Add the `main.js` case that persists and re-renders**
 
-Run: `grep -n "rd:design-change" -A 25 src/main.js | head -40`
+`handleDesignChange` in `resume-designer/src/main.js:803` is a `switch (change.type)` with one explicit case per type — there is NO generic persistence, so a dispatched event with no matching case is silently dropped and the setting never saves. Add a case beside the existing `spacing` case:
 
-Report what you find. If `main.js` does not persist arbitrary detail types to settings, you must ALSO add a case for `groupPositions` there that writes the setting and re-renders — say so and do it, rather than dispatching an event nothing listens for.
+```js
+    case 'groupPositions':
+      // Absence means grouped, so only an explicit false turns it off.
+      currentGroupPositions = change.value !== false;
+      saveSettings({ groupPositions: currentGroupPositions });
+      // Unconditional, unlike 'spacing': collapsing a run into flat cards changes
+      // the rendered CONTENT, not only its height, so continuous mode must
+      // re-render too — and with a fixed page size this also re-splits the
+      // sheets, which is what stops content clipping out of the exported PDF.
+      renderCurrentResume();
+      break;
+```
+
+Confirm `saveSettings` is already imported in `main.js` before relying on it:
+
+Run: `grep -n "saveSettings" src/main.js | head -3`
 
 - [ ] **Step 2: Add the state**
 
@@ -319,7 +335,7 @@ Report: the control renders with two options; "Grouped" is selected by default; 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/components/structure/DesignTab.jsx
+git add src/components/structure/DesignTab.jsx src/main.js
 git commit -m "feat(design): add a grouped-positions control"
 ```
 
