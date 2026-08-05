@@ -74,7 +74,7 @@ export function groupExperience(entries) {
  * Returns year*12+month, or null when the value is not strictly "YYYY-MM"
  * (an optional trailing day is tolerated).
  */
-function parseYearMonth(value) {
+export function parseYearMonth(value) {
   const raw = String(value ?? '').trim();
   const m = raw.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
   if (!m) return null;
@@ -85,7 +85,7 @@ function parseYearMonth(value) {
 
 // Vocabulary copied deliberately from store.js#experienceSortValue so the sort key
 // and the run gate agree on what "ongoing" means. Applied to endDate ONLY.
-function isOpenEnded(value) {
+export function isOpenEnded(value) {
   return /\b(present|current|currently|ongoing|now|to date|till date)\b/i.test(String(value ?? ''));
 }
 
