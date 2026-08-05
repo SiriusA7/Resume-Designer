@@ -515,7 +515,7 @@ Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in t
       "title": "Job Title",
       "company": "Company Name",
       "location": "City, State",
-      "startDate": "YYYY-MM (machine-readable; YYYY ok if month unknown)",
+      "startDate": "YYYY-MM (machine-readable; the month is required)",
       "endDate": "YYYY-MM or Present (machine-readable)",
       "dates": "Human-readable range shown on the resume, e.g. Jan 2022 - Jun 2024",
       "bullets": [

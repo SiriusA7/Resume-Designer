@@ -85,8 +85,9 @@ export async function parseResumeWithAI(text) {
       "title": "Job Title",
       "company": "Company Name",
       "location": "Location",
-      "startDate": "Start Date",
-      "endDate": "End Date or Present",
+      "dates": "Human-readable range as printed on the resume, e.g. Jan 2022 - Jun 2024",
+      "startDate": "YYYY-MM (machine-readable; the month is required)",
+      "endDate": "YYYY-MM or Present (machine-readable)",
       "bullets": ["Achievement 1", "Achievement 2"]
     }
   ],
@@ -100,6 +101,16 @@ export async function parseResumeWithAI(text) {
   "skills": ["Skill 1", "Skill 2"],
   "sections": []
 }
+
+IMPORTANT:
+- "dates" is what the resume prints; startDate/endDate are what the app computes
+  with. Emit BOTH for every role.
+- startDate/endDate must be "YYYY-MM" (or "Present" for endDate). A bare year is
+  not enough: the app uses the month to decide whether two roles at one employer
+  were one continuous tenure or two separate stints, and a year-only value makes
+  it treat a promotion as two unrelated jobs.
+- If one employer appears with several roles, emit them as separate entries that
+  are CONSECUTIVE and share the identical "company" string.
 
 Resume text:
 ${text}`,
