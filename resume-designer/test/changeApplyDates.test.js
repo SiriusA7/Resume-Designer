@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { applyChangeToStore } from '../src/changeApply.js';
 import { stripUnaddressableDatePaths } from '../src/aiService.js';
 import { diffResumeData, createChangeSet } from '../src/diffEngine.js';
-import { datesAreContinuous } from '../src/experienceGroups.js';
+import { datesAreContinuous, groupExperience } from '../src/experienceGroups.js';
 import { store } from '../src/store.js';
 
 // `experience[i].dates` is an AI-addressable path, so a model proposal rewrites
@@ -305,5 +305,52 @@ describe('added and wholesale-rewritten entries cannot carry the pair', () => {
     expect(entry().title).toBe('Staff Engineer');
     expect(entry().startDate).toBe('2020-01');
     expect(entry().endDate).toBe('2022-03');
+  });
+});
+
+// `_groupId` is the other internal the change prompt leaks: it serialises the
+// resume with `JSON.stringify(resumeData)`, so a model templating a new role off
+// an existing entry brings that run's id — and groupExperience folds the new
+// role into the employer's tenure the moment it lands adjacent to it.
+describe('added entries cannot inherit a group id', () => {
+  const LEAD = { id: 'a', company: 'Acme', title: 'Senior Engineer', dates: 'Mar 2022 – Present', _groupId: 'g1', bullets: [] };
+  const proposedRole = { id: 'new', company: 'Acme', title: 'Engineer', dates: 'Jan 2020 – Mar 2022', _groupId: 'g1', bullets: [] };
+
+  it('strips _groupId from an inserted item', () => {
+    const changeSet = createChangeSet(
+      { experience: [{ ...LEAD }] },
+      { experience: [{ ...LEAD }, { ...proposedRole }] },
+    );
+
+    const add = changeSet.changes.find((c) => c.type === 'add');
+    expect(add.newValue).not.toHaveProperty('_groupId');
+    // `id` must survive — applyChangeToStore reads it to make re-applying an ADD
+    // a no-op rather than a duplicate.
+    expect(add.newValue.id).toBe('new');
+  });
+
+  it('does not silently fold the new role into the employer run', () => {
+    store.setData({ experience: [{ ...LEAD }] }, true, null);
+    const changeSet = createChangeSet(store.getData(), {
+      experience: [{ ...LEAD }, { ...proposedRole }],
+    });
+    changeSet.changes.forEach(applyChangeToStore);
+
+    const groups = groupExperience(store.get('experience'));
+    expect(groups).toHaveLength(2);
+    expect(store.get('experience')[1]._groupId).toBeUndefined();
+  });
+
+  it('keeps the stored _groupId across a wholesale entry rewrite', () => {
+    // Dropping it here would be the mirror-image bug: a rewrite must not
+    // dissolve a run the user built.
+    store.setData({ experience: [{ ...LEAD }, { ...proposedRole, id: 'b' }] }, true, null);
+    const changeSet = createChangeSet(store.getData(), {
+      'experience[0]': { ...LEAD, title: 'Staff Engineer', _groupId: 'someone-elses-id' },
+    });
+    changeSet.changes.forEach(applyChangeToStore);
+
+    expect(store.get('experience')[0].title).toBe('Staff Engineer');
+    expect(store.get('experience')[0]._groupId).toBe('g1');
   });
 });

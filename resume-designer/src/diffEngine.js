@@ -55,27 +55,47 @@ export function diffLines(oldText, newText) {
 }
 
 /**
- * A copy of `value` with the machine-readable date pair removed at every depth.
+ * Fields a model may never author, and the two helpers that enforce it on
+ * WHOLE-OBJECT changes.
  *
- * The key-level skip below only runs while diffing MATCHED object keys, so it
- * never sees inside an ADDITION: diffArray emits one `ADD experience[n]`
- * carrying the whole item, and applyChangeToStore splices that object in
- * verbatim. The change-generation prompt does not ask for startDate/endDate,
- * but it does serialise the current resume WITH them — so a model templating a
- * new role off an existing entry brings that entry's pair, stamping a
- * brand-new job with someone else's start month for `datesAreContinuous` to
- * trust.
+ * The key-level skip further down only runs while diffing MATCHED object keys,
+ * so it never sees inside an addition or a wholesale rewrite: diffArray emits
+ * one `ADD experience[n]` carrying the entire item, and applyChangeToStore
+ * splices that object in verbatim. The change-generation prompt asks for none
+ * of these fields, but it does serialise the current resume WITH them
+ * (`JSON.stringify(resumeData)`), so a model templating a new role off an
+ * existing entry carries that entry's internals along for the ride.
  *
- * An added entry therefore arrives unstructured, exactly as a hand-added one
- * does: the gate fails closed on it, and the picker supplies the pair.
+ * Two failures, both silent:
+ *  - the date pair stamps a brand-new job with someone else's start month, for
+ *    `datesAreContinuous` to trust;
+ *  - `_groupId` folds the new role into an existing employer run the moment it
+ *    lands adjacent to the same company, asserting a continuous tenure that no
+ *    grouping action and no date gate approved.
+ *
+ * So an ADDED entry arrives clean, exactly as a hand-added one does, and a
+ * REWRITTEN one keeps whatever the store already holds.
  */
-function withoutMachineDates(value) {
-  if (Array.isArray(value)) return value.map(withoutMachineDates);
+function isUnproposable(key) {
+  // `_`-prefixed keys are internal, and `_groupId` is the one that bites: the
+  // change prompt serialises the current resume WITH it, so a model templating a
+  // new role off an existing entry brings that run's id. The moment the new role
+  // lands adjacent to the same company, groupExperience folds it into the
+  // employer's tenure — asserting continuous employment that no grouping action
+  // and no date gate ever approved.
+  //
+  // `id` is deliberately NOT here: applyChangeToStore's idempotency check reads
+  // it to make re-applying an ADD a no-op instead of a duplicate.
+  return key === 'startDate' || key === 'endDate' || key.startsWith('_');
+}
+
+function withoutInternalFields(value) {
+  if (Array.isArray(value)) return value.map(withoutInternalFields);
   if (!value || typeof value !== 'object') return value;
   const out = {};
   for (const [key, nested] of Object.entries(value)) {
-    if (key === 'startDate' || key === 'endDate') continue;
-    out[key] = withoutMachineDates(nested);
+    if (isUnproposable(key)) continue;
+    out[key] = withoutInternalFields(nested);
   }
   return out;
 }
@@ -85,29 +105,30 @@ function withoutMachineDates(value) {
  *
  * Here the pair must be carried over rather than dropped: applying a MODIFY
  * writes `newValue` over the entry, so a scrubbed object would DELETE a pair
- * the picker owns. An addition has no prior entry, so `withoutMachineDates` is
+ * the picker owns. An addition has no prior entry, so `withoutInternalFields` is
  * right there and this is right here.
  */
-function withStoredMachineDates(oldItem, newItem) {
+function withStoredInternals(oldItem, newItem) {
   const rewritable = newItem && typeof newItem === 'object' && !Array.isArray(newItem)
     && oldItem && typeof oldItem === 'object' && !Array.isArray(oldItem);
-  if (!rewritable) return withoutMachineDates(newItem);
+  if (!rewritable) return withoutInternalFields(newItem);
 
   // Substitute the stored values IN PLACE rather than stripping and re-appending.
   // The caller decides "did anything actually change?" with JSON.stringify, which
-  // is key-order sensitive: rebuilding with the pair moved to the end made an
+  // is key-order sensitive: rebuilding with these keys moved to the end made an
   // otherwise identical entry compare as different and emitted a phantom change.
   const out = {};
   for (const [key, nested] of Object.entries(newItem)) {
-    if (key === 'startDate' || key === 'endDate') {
+    if (isUnproposable(key)) {
       if (key in oldItem) out[key] = oldItem[key];
       continue;
     }
-    out[key] = withoutMachineDates(nested);
+    out[key] = withoutInternalFields(nested);
   }
-  // A pair the stored entry carries but the proposal omitted must survive too.
-  if ('startDate' in oldItem && !('startDate' in out)) out.startDate = oldItem.startDate;
-  if ('endDate' in oldItem && !('endDate' in out)) out.endDate = oldItem.endDate;
+  // Internals the stored entry carries but the proposal omitted must survive too.
+  for (const key of Object.keys(oldItem)) {
+    if (isUnproposable(key) && !(key in out)) out[key] = oldItem[key];
+  }
   return out;
 }
 
@@ -126,7 +147,7 @@ export function diffResumeData(oldData, newData, basePath = '') {
   
   // Handle case where one is null/undefined
   if (!oldData) {
-    const added = withoutMachineDates(newData);
+    const added = withoutInternalFields(newData);
     changes.push({
       path: basePath,
       type: DIFF_TYPES.ADD,
@@ -300,7 +321,7 @@ function diffArray(oldArray, newArray, basePath) {
         // pair straight back in, reopening the very route the skip closes. Carry
         // the STORED pair over instead (the picker owns it), and when nothing
         // else differs, emit no change at all rather than a phantom one.
-        const nextItem = withStoredMachineDates(oldEntry.item, newEntry.item);
+        const nextItem = withStoredInternals(oldEntry.item, newEntry.item);
         if (JSON.stringify(nextItem) !== JSON.stringify(oldEntry.item)) {
           changes.push({
             path: `${basePath}[${oldEntry.index}]`,
@@ -316,7 +337,7 @@ function diffArray(oldArray, newArray, basePath) {
       }
     } else {
       // Mixed types - treat as remove + add
-      const nextItem = withStoredMachineDates(oldEntry.item, newEntry.item);
+      const nextItem = withStoredInternals(oldEntry.item, newEntry.item);
       changes.push({
         path: `${basePath}[${oldEntry.index}]`,
         type: DIFF_TYPES.MODIFY,
@@ -348,7 +369,7 @@ function diffArray(oldArray, newArray, basePath) {
     // Scrubbed at EMISSION, not at apply: the change object is what the review
     // preview projects and what the diff dialog shows, so scrubbing later would
     // put the two out of step again.
-    const added = withoutMachineDates(newEntry.item);
+    const added = withoutInternalFields(newEntry.item);
     changes.push({
       path: `${basePath}[${newEntry.index}]`,
       type: DIFF_TYPES.ADD,
