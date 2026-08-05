@@ -247,7 +247,12 @@ export function buildColumnRecursive(targetEl, units) {
  * clip its bottom-most block — but only then, since that class also drives the
  * exported page height.
  *
- * @param {Array<Element>} pages
+ * MUST be called with the pages already ATTACHED to the document. The overflow
+ * check reads scrollHeight/clientHeight, and a detached element reports both as
+ * 0 — so calling this before `resumeEl.replaceChildren(pages)` silently reduces
+ * the check to a no-op and lets a wrapped header clip.
+ *
+ * @param {Array<Element>} pages Connected `.resume-page` sheets, in page order.
  */
 export function revealGroupContinuations(pages) {
   if (!Array.isArray(pages)) return;
@@ -377,8 +382,11 @@ function paginateSingle(resumeEl, cfg, widthPx, heightPx, scale) {
     page.appendChild(bodyClone);
     pages.appendChild(page);
   }
-  revealGroupContinuations(Array.from(pages.children));
+  // AFTER the attach: the pass measures whether revealing wrapped the header, and
+  // a detached sheet reports scrollHeight/clientHeight as 0, so measuring here
+  // before replaceChildren would never detect overflow.
   resumeEl.replaceChildren(pages);
+  revealGroupContinuations(Array.from(pages.children));
 }
 
 // Two-column: paginate the sidebar and main columns INDEPENDENTLY, then build
@@ -440,6 +448,8 @@ function paginateTwo(resumeEl, cfg, widthPx, heightPx, scale) {
     mount.appendChild(gridClone);
     pages.appendChild(page);
   }
-  revealGroupContinuations(Array.from(pages.children));
+  // AFTER the attach — see paginateSingle: a detached sheet measures as 0, so the
+  // overflow check only means anything once the pages are in the document.
   resumeEl.replaceChildren(pages);
+  revealGroupContinuations(Array.from(pages.children));
 }
