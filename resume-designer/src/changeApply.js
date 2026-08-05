@@ -32,6 +32,7 @@
 import { store } from './store.js';
 import { DIFF_TYPES } from './diffEngine.js';
 import { freeformDateFields } from './experienceDates.js';
+import { groupExperience } from './experienceGroups.js';
 
 // The diff engine's own equality idiom (it detects change the same way).
 function sameValue(a, b) {
@@ -168,6 +169,38 @@ function writeScalar(path, value) {
     }
     // No entry to carry the pair — fall through so the generic write creates it.
   }
+
+  // A grouped employer exposes exactly ONE company path — the run lead's, on the
+  // header (renderGroupHeader); the trailing roles render their company with no
+  // data-editable at all. finishEditing fans a rename across the run using
+  // data-editable-group, but that is DOM metadata this module cannot see, so an
+  // AI-applied rename wrote the lead alone and the run silently SPLIT: a run
+  // requires an identical company as well as a shared _groupId, so one header
+  // became two over entries that still share an id.
+  //
+  // Derive the run from the data instead and rename every member in one write.
+  // Only entries already in a run of 2+ fan out; a solo entry, or one whose
+  // company already differs from its neighbours (an already-split run being
+  // healed), takes the plain write below.
+  const company = /^experience\[(\d+)\]\.company$/.exec(path);
+  if (company) {
+    const experience = store.get('experience');
+    const index = Number(company[1]);
+    if (Array.isArray(experience) && experience[index]) {
+      const run = groupExperience(experience).find(
+        (g) => g.roles.length > 1 && g.roles.some((role) => role.index === index),
+      );
+      // An unchanged value is not an edit — don't burn an undo step on it.
+      if (run && experience[index].company !== value) {
+        const members = new Set(run.roles.map((role) => role.index));
+        store.update('experience', experience.map(
+          (entry, i) => (members.has(i) ? { ...entry, company: value } : entry),
+        ));
+        return;
+      }
+    }
+  }
+
   store.update(path, value);
 }
 
