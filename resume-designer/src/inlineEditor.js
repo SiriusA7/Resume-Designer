@@ -1029,16 +1029,45 @@ function handleKeyDown(e) {
   // Tab moves to next editable
   if (e.key === 'Tab') {
     e.preventDefault();
+
+    // finishEditing() calls store.update(), which SYNCHRONOUSLY triggers a full
+    // renderCurrentResume() that replaces every node inside #resume — and
+    // store.update pushes history and emits even when the value is unchanged, so
+    // the re-render is unconditional. `editable` is therefore always detached by
+    // the time the fresh list below exists, and indexOf() always returned -1:
+    // forward Tab landed on editables[0] and Shift+Tab on editables[length - 2],
+    // never the adjacent field.
+    //
+    // So capture the element's identity BEFORE finishing — its path plus its
+    // position among same-path siblings, the same bookkeeping startEditing does,
+    // because tool chips all share data-editable="tools" and a bare re-query
+    // would resolve to the first chip. Then locate the fresh node and step from
+    // ITS index. (#11)
+    const path = editable.dataset.editable;
+    const samePathIndex = path
+      ? Math.max(0, [...document.querySelectorAll(`[data-editable="${path}"]`)].indexOf(editable))
+      : 0;
+
     finishEditing(editable);
-    
+
     const editables = Array.from(
       document.querySelectorAll('[data-editable]')
     );
-    const currentIndex = editables.indexOf(editable);
-    const nextIndex = e.shiftKey 
-      ? (currentIndex - 1 + editables.length) % editables.length
-      : (currentIndex + 1) % editables.length;
-    
+    if (editables.length === 0) return;
+
+    const refreshed = path ? document.querySelectorAll(`[data-editable="${path}"]`) : null;
+    const current = refreshed ? (refreshed[samePathIndex] || refreshed[0]) : null;
+    const currentIndex = current ? editables.indexOf(current) : -1;
+
+    // The field genuinely vanished across the re-render (nothing renders it any
+    // more). Start the cycle from the end the user was heading towards rather
+    // than silently doing nothing.
+    const nextIndex = currentIndex === -1
+      ? (e.shiftKey ? editables.length - 1 : 0)
+      : (e.shiftKey
+        ? (currentIndex - 1 + editables.length) % editables.length
+        : (currentIndex + 1) % editables.length);
+
     if (editables[nextIndex]) {
       startEditing(editables[nextIndex]);
     }
