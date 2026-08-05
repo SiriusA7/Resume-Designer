@@ -9,6 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { confirmDestructive } from '@/components/ui/confirm';
 
 import { shouldSpellcheck } from '../../spellcheck.js';
 import { groupExperience } from '../../experienceGroups.js';
@@ -522,6 +523,31 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
 
   const deleteEntry = (index) => { items.splice(index, 1); refresh(); };
 
+  // The block shows ONE company field for the whole employer, so an edit applies
+  // to every role in it. Mutates in place like `set` does — the inputs are
+  // uncontrolled, so no re-render is needed per keystroke, and the run rule stays
+  // satisfied because every member changes together.
+  const setGroupCompany = (group, value) => {
+    for (const role of group.roles) items[role.index].company = value;
+    scheduleSave();
+  };
+
+  // Removes several entries at once, so it asks first. Splices by descending
+  // index so earlier removals cannot shift the ones still to come.
+  const deleteEmployer = async (group) => {
+    const count = group.roles.length;
+    const ok = await confirmDestructive({
+      title: `Delete ${group.company || 'this employer'}?`,
+      description: `All ${count} positions at this employer will be permanently removed from your profile.`,
+      actionLabel: 'Delete',
+    });
+    if (!ok) return;
+    const next = [...items];
+    const indices = group.roles.map((r) => r.index).sort((a, b) => b - a);
+    for (const idx of indices) next.splice(idx, 1);
+    rewrite(next);
+  };
+
   return (
     <section>
       <SectionHeader
@@ -540,12 +566,12 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                   key={lead.entry.id || `emp-${lead.index}`}
                   group={group}
                   set={set}
-                  onCompanyChange={() => {}}
+                  onCompanyChange={setGroupCompany}
                   onCompanyBlur={bumpGrouping}
                   onAddRole={(g) => addRoleAt(g.roles[0].index)}
                   onDeleteRole={deleteEntry}
                   onDetachRole={detachRole}
-                  onDeleteEmployer={() => {}}
+                  onDeleteEmployer={deleteEmployer}
                 />
               );
             }
