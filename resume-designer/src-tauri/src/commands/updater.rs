@@ -197,5 +197,12 @@ pub async fn install_pending_update(
         .await
         .map_err(|e| e.to_string())?;
 
+    // A relaunch is imminent, and it spawns from the path this process was
+    // exec'd with. Hold off the pending bundle rename so the app can actually
+    // come back — it runs on the next clean exit instead. See
+    // commands/bundle_name.rs.
+    #[cfg(target_os = "macos")]
+    crate::commands::bundle_name::suppress_until_next_launch();
+
     Ok(())
 }
