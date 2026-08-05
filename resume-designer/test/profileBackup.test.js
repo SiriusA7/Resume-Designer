@@ -57,7 +57,11 @@ describe('format-2 export/restore', () => {
     expect(envelope).toMatchObject({ backupFormat: 2, kind: 'full', activeProfile: ashId });
     expect(Object.keys(envelope.profiles).sort()).toEqual([ashId, partnerId].sort());
     expect(envelope.shared['resume-designer-theme']).toBe('dark');
-    expect(envelope.shared[OPENROUTER_KEY_KEY]).toBe('sk-shared');
+    // The credential is deliberately NOT backup data any more: it lives in the
+    // OS keychain, and a backup JSON is clear-text storage of exactly the kind
+    // it was moved out of — a file people email and sync, so more exposed than
+    // app_data_dir, not less.
+    expect(envelope.shared[OPENROUTER_KEY_KEY]).toBeUndefined();
 
     localStorage.clear();
     __resetAppStorageForTests();
@@ -230,12 +234,100 @@ describe('format-2 export/restore', () => {
     const readDownload = captureDownload();
     exportFullBackup();
     const envelope = await readDownload();
-    const existingKeyCount = localStorage.length;
+    // Every stored key EXCEPT the credential, which the wipe deliberately
+    // spares — nothing would restore it, so wiping it would let an import
+    // silently destroy a working key.
+    const wipeable = localStorage.length - 1;
 
     const result = importFullBackupFromEnvelope(envelope);
 
-    expect(existingKeyCount).toBeGreaterThan(0);
-    expect(result.removedExistingKeys).toBe(existingKeyCount);
+    expect(wipeable).toBeGreaterThan(0);
+    expect(result.removedExistingKeys).toBe(wipeable);
+  });
+
+  it('leaves an existing credential alone across a restore', async () => {
+    await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    importFullBackupFromEnvelope(envelope);
+
+    // Restoring a backup must never cost the user their API key.
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared');
+  });
+
+  // Backups written before the keychain move still carry the credential. They
+  // have to keep importing — the validator rejects shared keys it does not
+  // recognise, so simply dropping the name would have made every backup a user
+  // already holds fail outright.
+  it('imports a pre-keychain backup without restoring its credential', async () => {
+    await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+    // Forge the older shape: shared section still carrying an API key.
+    envelope.shared[OPENROUTER_KEY_KEY] = 'sk-from-old-backup';
+
+    expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
+
+    // Accepted, but not written back into plaintext storage — and the key the
+    // install already had is untouched.
+    expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared');
+  });
+
+  // Dropping the shared key is not enough on its own. getSettings still reads
+  // `settings.openrouterKey` as the pre-extraction fallback, and
+  // extractSharedApiKey only clears it for the ACTIVE profile, once its flush is
+  // durable — so an inactive profile can still be carrying the credential
+  // inside its blob. Exporting that verbatim would put the paid key straight
+  // into the file the Settings copy promises excludes it.
+  it('strips a legacy credential out of an exported profile blob', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    appStorage.setItem(
+      `resume-p--${partnerId}--resume-designer-data`,
+      JSON.stringify({ variants: { v2: {} }, settings: { openrouterKey: 'sk-in-blob', theme: 'dark' } }),
+    );
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    const blob = JSON.parse(envelope.profiles[partnerId].keys['resume-designer-data']);
+    expect(blob.settings.openrouterKey).toBeUndefined();
+    // Only the credential goes — the rest of the blob round-trips untouched.
+    expect(blob.settings.theme).toBe('dark');
+    expect(blob.variants).toEqual({ v2: {} });
+    // And nothing anywhere in the serialized file still carries it.
+    expect(JSON.stringify(envelope)).not.toContain('sk-in-blob');
+  });
+
+  it('strips a legacy credential out of an imported profile blob', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+    // Forge a pre-strip backup: the credential still inside the blob.
+    envelope.profiles[partnerId].keys['resume-designer-data'] =
+      JSON.stringify({ variants: {}, settings: { openrouterKey: 'sk-in-old-blob' } });
+
+    importFullBackupFromEnvelope(envelope);
+
+    // Otherwise the next boot's extractSharedApiKey would promote this into the
+    // keychain — a backup restoring a credential through the back door.
+    const restored = JSON.parse(
+      localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`),
+    );
+    expect(restored.settings.openrouterKey).toBeUndefined();
+  });
+
+  it('leaves an unparseable blob alone rather than dropping the user data', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    appStorage.setItem(`resume-p--${partnerId}--resume-designer-data`, 'not json{{');
+    const readDownload = captureDownload();
+    exportFullBackup();
+    const envelope = await readDownload();
+
+    expect(envelope.profiles[partnerId].keys['resume-designer-data']).toBe('not json{{');
   });
 
   it('writes critical data for every profile before best-effort history', () => {
@@ -304,6 +396,42 @@ describe('per-profile export/import', () => {
     expect(imported.id).not.toBe(partnerId);
     expect(loadRegistry()).toHaveLength(3);
     expect(localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+  });
+
+  // This is the WORST case for a blob-held credential: a per-profile export
+  // names a profile, usually an inactive one, and extractSharedApiKey only ever
+  // clears that field for the ACTIVE profile.
+  it('strips a legacy credential from a per-profile export', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    appStorage.setItem(
+      `resume-p--${partnerId}--resume-designer-data`,
+      JSON.stringify({ variants: {}, settings: { openrouterKey: 'sk-in-blob', theme: 'dark' } }),
+    );
+    const readDownload = captureDownload();
+    await exportProfileBackup(partnerId);
+    const envelope = await readDownload();
+
+    const blob = JSON.parse(envelope.keys['resume-designer-data']);
+    expect(blob.settings.openrouterKey).toBeUndefined();
+    expect(blob.settings.theme).toBe('dark');
+    expect(JSON.stringify(envelope)).not.toContain('sk-in-blob');
+  });
+
+  it('strips a legacy credential from a per-profile import', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    const readDownload = captureDownload();
+    await exportProfileBackup(partnerId);
+    const envelope = await readDownload();
+    // Forge a profile export written before the strip existed.
+    envelope.keys['resume-designer-data'] =
+      JSON.stringify({ variants: {}, settings: { openrouterKey: 'sk-in-old-profile' } });
+
+    const imported = await importProfileBackup(envelope);
+
+    const restored = JSON.parse(
+      localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`),
+    );
+    expect(restored.settings.openrouterKey).toBeUndefined();
   });
 
   it('exports the active profile\'s unprefixed live data in the recovery state', async () => {

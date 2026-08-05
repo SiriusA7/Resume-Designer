@@ -77,12 +77,27 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
     }
     setValidating(true);
 
-    const valid = await onValidate(k);
-    setStatus(valid
-      ? { message: 'API key validated. AI features are ready to use.', success: true }
-      : { message: 'Could not validate your key. We saved it — you can re-check it later in Settings.', success: false });
+    const result = await onValidate(k);
 
-    setTimeout(() => goTo(1), valid ? 1000 : 1200);
+    // The key never reached storage, so nothing downstream would work. Stay put
+    // and say why — advancing here promises AI that is about to fail.
+    if (!result.saved) {
+      setStatus({ message: result.error, success: false });
+      setValidating(false);
+      return;
+    }
+
+    // `warning` means the key works now but could not be stored — say so
+    // rather than claiming it is ready, which would be true only until reload.
+    if (result.warning) {
+      setStatus({ message: result.warning, success: false });
+    } else {
+      setStatus(result.valid
+        ? { message: 'API key validated. AI features are ready to use.', success: true }
+        : { message: 'Could not validate your key. We saved it — you can re-check it later in Settings.', success: false });
+    }
+
+    setTimeout(() => goTo(1), result.valid ? 1000 : 1200);
   };
 
   return (

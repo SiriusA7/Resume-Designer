@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { importFullBackupFromEnvelope } from '../src/persistence.js';
+import {
+  importFullBackupFromEnvelope, importFullBackupMerge, credentialFromEnvelope,
+} from '../src/persistence.js';
+import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 
 beforeEach(() => {
   localStorage.clear();
@@ -18,6 +21,259 @@ describe('importFullBackupFromEnvelope', () => {
         keys: { 'resume-designer-data': 123 },
       })
     ).toThrow(/must be a string/i);
+  });
+
+  // Format-1 envelopes predate the keychain move entirely, so they are the
+  // likeliest carriers of a credential inside the data blob. Both merge writes
+  // are reachable: the wholesale adopt takes the incoming blob verbatim, and
+  // the merge keeps incomingData.settings whenever the existing blob has no
+  // settings key of its own to shadow it.
+  describe('legacy credentials in a format-1 merge', () => {
+    const withKey = (extra = {}) => JSON.stringify({
+      variants: { v1: {} },
+      settings: { openrouterKey: 'sk-legacy-blob', theme: 'dark' },
+      ...extra,
+    });
+
+    it('strips it when adopting the incoming blob wholesale', () => {
+      importFullBackupMerge({ backupFormat: 1, keys: { 'resume-designer-data': withKey() } });
+
+      const stored = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(stored.settings.openrouterKey).toBeUndefined();
+      // Only the credential goes.
+      expect(stored.settings.theme).toBe('dark');
+      expect(stored.variants).toEqual({ v1: {} });
+    });
+
+    it('strips it when the existing blob has no settings to shadow it', () => {
+      // No `settings` key locally, so the incoming one survives the spread.
+      localStorage.setItem('resume-designer-data', JSON.stringify({ variants: { v9: {} } }));
+
+      importFullBackupMerge({ backupFormat: 1, keys: { 'resume-designer-data': withKey() } });
+
+      const stored = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(stored.settings?.openrouterKey).toBeUndefined();
+      expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-legacy-blob');
+    });
+  });
+
+  // The Replace path writes through normalizeImportedValue — which handled only
+  // job descriptions until the credential strip moved into it. On a fresh
+  // install with an empty keychain the key would land in plaintext, go live
+  // immediately, and be promoted into the keychain on the next boot: an old
+  // backup quietly restoring a credential the exclusion policy says it must not.
+  //
+  // The automatic Electron upgrade shares this code path and is the ONE case
+  // that must not strip — see the keepCredential tests below.
+  it('strips a legacy credential on a format-1 REPLACE import', () => {
+    importFullBackupFromEnvelope({
+      backupFormat: 1,
+      keys: {
+        'resume-designer-data': JSON.stringify({
+          variants: { v1: {} },
+          settings: { openrouterKey: 'sk-legacy-replace', theme: 'dark' },
+        }),
+      },
+    });
+
+    const stored = localStorage.getItem('resume-designer-data');
+    expect(stored).not.toContain('sk-legacy-replace');
+    const parsed = JSON.parse(stored);
+    expect(parsed.settings.openrouterKey).toBeUndefined();
+    expect(parsed.settings.theme).toBe('dark');
+    expect(parsed.variants).toEqual({ v1: {} });
+  });
+
+  // The automatic Electron upgrade carries the user's own LIVE data across an
+  // in-place install on the same machine — it is not a backup file being
+  // restored. Stripping there deleted the key outright, and main.js then stamps
+  // the migration flag one-shot, so the migration never ran again and the user
+  // came up permanently without the AI credential they had configured.
+  describe('keepCredential (automatic Electron upgrade)', () => {
+    const envelope = () => ({
+      backupFormat: 1,
+      keys: {
+        'resume-designer-data': JSON.stringify({
+          variants: { v1: {} },
+          settings: { openrouterKey: 'sk-electron-live', theme: 'dark' },
+        }),
+      },
+    });
+
+    it('carries the credential across so extraction can migrate it', () => {
+      importFullBackupFromEnvelope(envelope(), { keepCredential: true });
+
+      const parsed = JSON.parse(localStorage.getItem('resume-designer-data'));
+      // Left in the blob, which is exactly where extractSharedApiKey looks —
+      // it then moves to the shared key and on into the keychain.
+      expect(parsed.settings.openrouterKey).toBe('sk-electron-live');
+      expect(parsed.settings.theme).toBe('dark');
+    });
+
+    // The exemption must be opt-in, or it silently reopens the backup hole it
+    // is carved out of.
+    it('still strips when the flag is absent', () => {
+      importFullBackupFromEnvelope(envelope());
+
+      expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-electron-live');
+    });
+
+    // backupFlow's manual "import from previous installation" reads the SAME
+    // LevelDB store on the same machine, and offers a merge as well as a
+    // replace. Fixing only the automatic path left a user who chose the manual
+    // recovery losing their key — the exemption belongs to the data's origin,
+    // not to one caller.
+    it('carries the credential through the MERGE path too', () => {
+      importFullBackupMerge(envelope(), { keepCredential: true });
+
+      const parsed = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(parsed.settings.openrouterKey).toBe('sk-electron-live');
+    });
+
+    it('merge still strips when the flag is absent', () => {
+      importFullBackupMerge(envelope());
+
+      expect(localStorage.getItem('resume-designer-data')).not.toContain('sk-electron-live');
+    });
+
+    // Keeping the credential in the incoming blob is not enough on its own:
+    // with existing data present, the merge replaces `settings` WHOLESALE with
+    // the current one, so a user who already had Tauri-side data but no key and
+    // chose "Merge previous data" still lost the Electron credential before the
+    // reload-time extraction could migrate it.
+    it('carries the credential into a merge with existing data', () => {
+      localStorage.setItem('resume-designer-data', JSON.stringify({
+        variants: { mine: {} },
+        settings: { theme: 'light' },   // existing settings, no key of their own
+      }));
+
+      importFullBackupMerge(envelope(), { keepCredential: true });
+
+      const parsed = JSON.parse(localStorage.getItem('resume-designer-data'));
+      expect(parsed.settings.openrouterKey).toBe('sk-electron-live');
+      // Current settings still win everywhere else.
+      expect(parsed.settings.theme).toBe('light');
+      expect(parsed.variants.mine).toBeDefined();
+    });
+
+    // The credential can arrive in the SHARED key rather than the blob — the
+    // previous app stored it there once extraction had run. That key is no
+    // longer "owned" (which is how it left backups), so the replace path's
+    // owned-key filter dropped it, and the one-shot migration then reported
+    // success with no credential.
+    it('carries a shared-key credential through a REPLACE migration', () => {
+      importFullBackupFromEnvelope({
+        backupFormat: 1,
+        keys: {
+          'resume-designer-data': JSON.stringify({ variants: {}, settings: { theme: 'dark' } }),
+          [OPENROUTER_KEY_KEY]: 'sk-shared-electron',
+        },
+      }, { keepCredential: true });
+
+      // Present for extraction/initSecretStore to migrate into the keychain.
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared-electron');
+    });
+
+    it('drops a shared-key credential from a backup FILE', () => {
+      importFullBackupFromEnvelope({
+        backupFormat: 1,
+        keys: {
+          'resume-designer-data': JSON.stringify({ variants: {}, settings: {} }),
+          [OPENROUTER_KEY_KEY]: 'sk-shared-electron',
+        },
+      });
+
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
+    });
+
+    // The merge path had the same rule wrong in the OPPOSITE direction: it
+    // writes every key it is handed, so an older backup carrying the shared
+    // credential put it back in plaintext.
+    it('drops a shared-key credential from a backup FILE merge', () => {
+      importFullBackupMerge({
+        backupFormat: 1,
+        keys: { [OPENROUTER_KEY_KEY]: 'sk-shared-electron' },
+      });
+
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBeNull();
+    });
+
+    it('carries a shared-key credential through a MERGE migration', () => {
+      importFullBackupMerge({
+        backupFormat: 1,
+        keys: { [OPENROUTER_KEY_KEY]: 'sk-shared-electron' },
+      }, { keepCredential: true });
+
+      expect(localStorage.getItem(OPENROUTER_KEY_KEY)).toBe('sk-shared-electron');
+    });
+
+    // A same-machine REPLACE has to put the credential in the KEYCHAIN, not
+    // just in storage: adoptKeychainRead treats an existing entry as
+    // authoritative at the next boot and the cleanup then strips the imported
+    // copy, so the replace came up with the current key — or with none, when
+    // that entry is the empty Clear sentinel. backupFlow does the write; this
+    // pins the part that decides WHAT it writes.
+    describe('credentialFromEnvelope', () => {
+      it('finds it in the shared key', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1, keys: { [OPENROUTER_KEY_KEY]: 'sk-shared' },
+        })).toBe('sk-shared');
+      });
+
+      it('falls back to the data blob, where pre-extraction installs kept it', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1,
+          keys: {
+            'resume-designer-data': JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }),
+          },
+        })).toBe('sk-blob');
+      });
+
+      it('prefers the shared key, which is the later of the two', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1,
+          keys: {
+            [OPENROUTER_KEY_KEY]: 'sk-shared',
+            'resume-designer-data': JSON.stringify({ settings: { openrouterKey: 'sk-blob' } }),
+          },
+        })).toBe('sk-shared');
+      });
+
+      // Presence beats truthiness, for the fifth time in this PR: an empty
+      // value means the previous install had CLEARED its key, and a replace
+      // adopts that state rather than skipping it.
+      it('returns an empty clear sentinel verbatim', () => {
+        expect(credentialFromEnvelope({
+          backupFormat: 1, keys: { [OPENROUTER_KEY_KEY]: '' },
+        })).toBe('');
+      });
+
+      it('reports null when the envelope carries no credential', () => {
+        expect(credentialFromEnvelope({ backupFormat: 1, keys: {} })).toBeNull();
+        expect(credentialFromEnvelope({ backupFormat: 1, keys: { 'resume-designer-data': 'not json' } })).toBeNull();
+        expect(credentialFromEnvelope({
+          backupFormat: 1,
+          keys: { 'resume-designer-data': JSON.stringify({ settings: 'nope' }) },
+        })).toBeNull();
+        expect(credentialFromEnvelope(null)).toBeNull();
+      });
+    });
+
+    // Only into a GAP. An existing credential — including a deliberate '' —
+    // is the user's current intent and must not be overwritten by an older one.
+    it('never overwrites an existing credential during a merge', () => {
+      for (const existing of ['sk-current', '']) {
+        localStorage.clear();
+        localStorage.setItem('resume-designer-data', JSON.stringify({
+          variants: {}, settings: { openrouterKey: existing },
+        }));
+
+        importFullBackupMerge(envelope(), { keepCredential: true });
+
+        expect(JSON.parse(localStorage.getItem('resume-designer-data')).settings.openrouterKey)
+          .toBe(existing);
+      }
+    });
   });
 
   it('writes owned keys and silently skips foreign keys', () => {

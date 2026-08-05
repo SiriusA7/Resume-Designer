@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Sun, Moon, Monitor, Eye, EyeOff, X,
   SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3, UserCircle,
@@ -21,7 +21,12 @@ import {
 import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
-import { getSettings, saveSettings } from '../persistence.js';
+import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
+import {
+  isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
+  isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable, hasUsableSecret,
+  isMemoryOnlyFallback,
+} from '../secretStore.js';
 import { refreshChatPanel } from '../chatPanel.js';
 import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
@@ -141,6 +146,38 @@ export default function SettingsDialog() {
 
   // Form/display state, seeded from the services each time the dialog opens.
   const [apiKey, setApiKey] = useState('');
+  // Whether the user actually TYPED in the key field this time round. Saving
+  // must not write the credential otherwise: if the keychain was unreadable at
+  // startup the field seeds empty, and an unconditional save — triggered by
+  // changing some unrelated option — would write '' over a perfectly good key
+  // the moment the keychain came back. Blank-but-untouched means "unknown",
+  // not "clear it".
+  const [keyDirty, setKeyDirty] = useState(false);
+  // True while a credential write is in flight. A keychain write can sit for a
+  // long time behind an OS permission prompt, and with the controls live the
+  // user could start Save and then Clear: two native writes finishing in either
+  // order, so a late Save can restore the credential they just cleared. The
+  // handlers also both assign apiKey/keyDirty, which would interleave.
+  const [keyBusy, setKeyBusy] = useState(false);
+  // The state drives the disabled attributes; the REF is the actual guard.
+  // Re-reading `keyBusy` after an await would see the render-time closure
+  // value, not the update — so the second click would sail past the check it
+  // was supposed to hit.
+  const keyBusyRef = useRef(false);
+
+  const beginKeyAction = () => {
+    if (keyBusyRef.current) return false;
+    keyBusyRef.current = true;
+    setKeyBusy(true);
+    return true;
+  };
+  const endKeyAction = () => {
+    keyBusyRef.current = false;
+    setKeyBusy(false);
+  };
+  // Set when the OS keychain refuses a write, so the dialog can stay open and
+  // explain rather than closing on a save that did not happen.
+  const [keyError, setKeyError] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [showBridgeToken, setShowBridgeToken] = useState(false);
   const [copiedBridgeToken, setCopiedBridgeToken] = useState(false);
@@ -160,6 +197,7 @@ export default function SettingsDialog() {
   const seed = useCallback(() => {
     const s = getSettings();
     setApiKey(s.openrouterKey || '');
+    setKeyDirty(false);
     setAutoFallback(!!s.autoFallback);
     setThemeState(getTheme());
     if (isTauri) {
@@ -190,22 +228,219 @@ export default function SettingsDialog() {
 
   const pickTheme = (value) => { setTheme(value); setThemeState(value); };
 
-  const handleSaveKeys = () => {
-    saveSettings({ openrouterKey: apiKey, autoFallback });
+  // Describe where the key actually lands, rather than claiming a keychain the
+  // browser build does not have. Deliberately platform-neutral on desktop: this
+  // reads the same whether the backend is the macOS Keychain or Windows
+  // Credential Manager. In the browser there is no keychain, so the key is held
+  // for the session and never written down — say that plainly, since it means
+  // the user has to enter it again next time.
+  // Say so up front when the keychain faulted. Otherwise the first the user
+  // hears of it is a failed save after they have typed a key in.
+  const readOnlyKeychain = isReadOnly();
+  // The browser equivalent: encryption is available but the credential is
+  // still in the readable entry because a write failed.
+  const degradedBrowser = isBrowserDegraded();
+  // A credential IS stored here but will not decrypt. Treated like read-only
+  // for the write decision: an untouched empty field must not overwrite it.
+  const unreadableBrowser = isBrowserUnreadable();
+  // A save the browser refused: the key works now but was not stored, and the
+  // next save retries the store.
+  const memoryOnly = isMemoryOnlyFallback();
+  // Whether a credential is actually usable right now. On an already-migrated
+  // install a failed keychain read leaves NO fallback, so the read-only banner
+  // must not promise that an existing key still works.
+  // USABLE, not merely present: a stored '' is the user's Clear, so AI is
+  // unconfigured and no copy may claim their existing key still works. The rule
+  // lives in secretStore so this and keychainReadOnlyMessage cannot drift.
+  const hasUsableCredential = hasUsableSecret();
+  // A failed strip leaves a readable copy behind. Surfaced here rather than
+  // only on the next Save, which is the one moment the user might never reach.
+  const cleanupPending = isCleanupPending();
+  // Where the key lives, per mode. Each gets its own sentence rather than a
+  // substituted noun — "kept in your browser session… so it isn't stored at
+  // all" read as a contradiction, and the encrypted case needs to say what is
+  // actually protecting it.
+  let credentialNote;
+  if (isKeychainAvailable()) {
+    credentialNote = 'Your key is kept in your system keychain and is sent only to OpenRouter'
+      + ' — never share it.';
+  } else if (readOnlyKeychain && hasUsableCredential) {
+    // A degraded DESKTOP session is nothing like the browser one, and the two
+    // read-only cases differ from each other too. There is only one reason a
+    // read-only session HAS a usable key: a pre-migration plaintext copy in the
+    // app data folder, which is exactly where the banner says it is.
+    credentialNote = 'Your key is kept in your app data folder and is sent only to OpenRouter'
+      + ' — never share it.';
+  } else if (readOnlyKeychain) {
+    // Already migrated, and the keychain read failed. Nothing readable exists
+    // on disk to point at, so naming the app data folder here both contradicted
+    // the banner directly above and claimed the credential was somewhere it is
+    // not.
+    credentialNote = 'Your key is in your system keychain, which couldn’t be reached — so it can’t be'
+      + ' read right now, and nothing readable is stored anywhere else. Unlock your keychain and save'
+      + ' again to recover it.';
+  } else if (isEncryptedInBrowser()) {
+    // Says "non-exportable", not "no script can get it". Any same-origin script
+    // can fetch the CryptoKey handle and ask the browser to decrypt; what it
+    // cannot do is take the key elsewhere. This protects the files at rest, and
+    // claiming more than that would be a false assurance about the one case
+    // users would most want it to cover.
+    credentialNote = 'Your key is encrypted before it’s stored in this browser, so it’s still here next time'
+      + ' and never written down in readable form. The encryption key is non-exportable, so it can’t be'
+      + ' read out through the browser’s crypto API — but a copy of this whole browser profile would carry'
+      + ' both halves, so treat profile backups as containing your key.'
+      + ' It’s sent only to OpenRouter — never share it.';
+  } else if (memoryOnly) {
+    credentialNote = 'Your key couldn’t be stored in this browser, so it’s being kept for this session only'
+      + ' — saving again will retry. It’s sent only to OpenRouter — never share it.';
+  } else if (unreadableBrowser) {
+    credentialNote = 'A key is stored in this browser but couldn’t be read — it may have been saved by a'
+      + ' different browser profile, or the browser’s stored data was partly cleared. Enter your key again'
+      + ' to replace it. It’s sent only to OpenRouter — never share it.';
+  } else if (degradedBrowser) {
+    credentialNote = 'Your key couldn’t be encrypted for storage — this browser refused the write, so it’s'
+      + ' being kept in ordinary browser storage where it’s readable. Saving it again will retry.'
+      + ' It’s sent only to OpenRouter — never share it.';
+  } else {
+    credentialNote = 'Your key is held in memory only and is sent only to OpenRouter — never share it.'
+      + ' This browser doesn’t allow encrypted storage (private browsing, or an insecure connection), and'
+      + ' saving it unencrypted isn’t something On Paper will do — so you’ll enter it again next time.';
+  }
+
+  // What excluding the credential from backups actually means for this user.
+  // The desktop wording ("it stays in your keychain") is false in the browser,
+  // where the key is session-only AND a restore reloads the page — so it does
+  // not merely fail to travel with the backup, it does not survive the restore
+  // at all. Promising otherwise here also contradicted the credential text in
+  // the AI tab, which already says the browser build stores nothing.
+  const backupKeyNote = isKeychainAvailable()
+    ? 'Your API key isn’t included — it stays in your system keychain, so you’ll enter it again on a new machine.'
+    : readOnlyKeychain
+      ? 'Your API key isn’t included — it stays on this machine, so you’ll enter it again on a new one.'
+      : isEncryptedInBrowser()
+        ? 'Your API key isn’t included — it stays encrypted in this browser, so you’ll enter it again in a different one.'
+        // Degraded is NOT memory-only: the key persists, just unencrypted. It
+        // was falling through to the "this browser can't store it" text, which
+        // got both the lifecycle and the security story backwards for the one
+        // state where a readable copy actually survives restarts.
+        : degradedBrowser
+          ? 'Your API key isn’t included. It’s currently saved unencrypted in this browser and will persist'
+            + ' between visits — save it again from the AI tab to encrypt it.'
+          // Unreadable is NOT "can't store it" either: a record IS stored, it
+          // just won't decrypt, and a restore neither removes it nor repairs
+          // it. The fallthrough promised the opposite on both counts.
+          : unreadableBrowser
+            ? 'Your API key isn’t included. A key is already stored in this browser but can’t be read —'
+              + ' restoring a backup won’t remove it or repair it. Enter your key again from the AI tab'
+              + ' to replace it.'
+            : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
+
+  const handleSaveKeys = async () => {
+    // Guard as well as disabling the controls: a keypress can land between the
+    // click and the re-render that disables them.
+    if (!beginKeyAction()) return;
+    try {
+      await runSaveKeys();
+    } finally {
+      endKeyAction();
+    }
+  };
+
+  const runSaveKeys = async () => {
+    // The rule itself lives in secretStore, where vitest can reach it — it has
+    // to avoid BOTH writing an unknown empty value over a good key and skipping
+    // the read-only recovery the banner tells the user to perform, and it got
+    // each of those wrong in turn while living here untested.
+    // First, finish anything a degraded startup left outstanding — re-read a
+    // keychain that has since unlocked, and re-run a cleanup that never reached
+    // disk. Both are what the banner promises Save will do, and neither is
+    // reachable through the credential write: the field is seeded empty on an
+    // already-migrated install, and writing that unknown value is exactly what
+    // shouldWriteCredential refuses.
+    // An explicit, non-empty edit IS the fix — the unreadable-record copy tells
+    // the user to enter their key again, and recovery throws while the record
+    // is still unreadable, so running it first made that instruction
+    // impossible. Let the write go straight through instead.
+    const replacing = keyDirty && apiKey !== '';
+    if (!replacing
+      && (readOnlyKeychain || degradedBrowser || unreadableBrowser || isCleanupPending())) {
+      try {
+        await recoverSecretStore();
+      } catch (err) {
+        setKeyError(err?.message || 'Could not reach your system keychain.');
+        return;
+      }
+    }
+
+    // isReadOnly() live, not the render-time snapshot: recovery may have just
+    // promoted us out of read-only and rehydrated the real credential, and the
+    // field still holds whatever was seeded before that. Writing the stale
+    // value then would overwrite the key recovery had only just read back.
+    if (shouldWriteCredential({
+      edited: keyDirty,
+      readOnly: isReadOnly(),
+      // Passed SEPARATELY, not OR'd into readOnly. They look alike — something
+      // is stored, the field cannot be trusted — but a read-only field holds
+      // the recovered credential while an unreadable one leaves `cached` null,
+      // so a non-empty field there is stale. OR'ing them let a Save for an
+      // unrelated setting write that stale key back over another tab's Clear.
+      unreadable: isBrowserUnreadable(),
+      // A refused first save keeps the key in memory and the copy promises that
+      // saving again retries the store. Reopening Settings reseeds the field and
+      // clears keyDirty, so without this the promised retry did nothing at all.
+      memoryOnly: isMemoryOnlyFallback(),
+      value: apiKey,
+    })) {
+      // The key goes to the OS keychain, so this can genuinely fail (locked or
+      // access denied). Keep the dialog open and say so rather than closing on
+      // a save that did not happen.
+      try {
+        await saveApiKey(apiKey);
+      } catch (err) {
+        setKeyError(err?.message || 'Could not save your key to the system keychain.');
+        return;
+      }
+      setKeyDirty(false);
+    }
+    setKeyError('');
+    saveSettings({ autoFallback });
     refreshChatPanel();
     setOpen(false);
   };
 
   const handleClearKeys = async () => {
+    if (keyBusyRef.current) return;
     const ok = await confirmDestructive({
       title: 'Clear all API keys?',
       description: 'Are you sure you want to clear all API keys?',
       actionLabel: 'Clear all keys',
     });
     if (!ok) return;
-    saveSettings({ openrouterKey: '' });
+    // Claim AFTER the confirmation, not before: the dialog is asynchronous, and
+    // a Save begun while it was open could still be sitting behind an OS
+    // prompt. beginKeyAction re-checks the ref, so this loses that race rather
+    // than clearing a credential the in-flight Save is about to restore.
+    if (!beginKeyAction()) return;
+    try {
+      await runClearKeys();
+    } finally {
+      endKeyAction();
+    }
+  };
+
+  const runClearKeys = async () => {
+    // Writes an empty value rather than deleting the entry — see secretStore.
+    try {
+      await saveApiKey('');
+    } catch (err) {
+      setKeyError(err?.message || 'Could not clear your key from the system keychain.');
+      return;
+    }
+    setKeyError('');
     refreshChatPanel();
     setApiKey('');
+    // Already committed, so a following Save must not write it a second time.
+    setKeyDirty(false);
   };
 
   const handleExportUsage = () => {
@@ -363,7 +598,8 @@ export default function SettingsDialog() {
                       type={showKey ? 'text' : 'password'}
                       placeholder="sk-or-v1-..."
                       value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
+                      onChange={(e) => { setApiKey(e.target.value); setKeyDirty(true); }}
+                      disabled={keyBusy}
                       spellCheck={shouldSpellcheck('identifier')}
                     />
                     <Button
@@ -377,9 +613,32 @@ export default function SettingsDialog() {
                       {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
                   </div>
+                  {keyError && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {keyError}
+                    </p>
+                  )}
+                  {readOnlyKeychain && !keyError && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {hasUsableCredential
+                        ? 'Your system keychain couldn’t be reached when On Paper started, so saving is unavailable'
+                          + ' right now. The key you already had still works — it’s being read from an older'
+                          + ' unencrypted copy in this app’s data folder. Unlock your keychain and save again to move'
+                          + ' it back into the keychain and remove that copy; no need to restart.'
+                        : 'Your system keychain couldn’t be reached when On Paper started, so your saved key can’t be'
+                          + ' read and AI features are unavailable. Unlock your keychain and save again to recover it;'
+                          + ' no need to restart.'}
+                    </p>
+                  )}
+                  {cleanupPending && !keyError && !readOnlyKeychain && (
+                    <p className="text-sm text-destructive" role="alert">
+                      An older, unencrypted copy of your key is still in this app&rsquo;s data folder &mdash; removing
+                      it didn&rsquo;t finish. Your current key is stored properly. Save again to retry the cleanup.
+                    </p>
+                  )}
                   <p className="text-sm text-muted-foreground">
-                    Your key is stored locally and is sent only to OpenRouter — never share it. One key covers Claude,
-                    GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
+                    {credentialNote}{' '}
+                    One key covers Claude, GPT, Gemini and 300+ models. Get a key at openrouter.ai/keys
                   </p>
                 </section>
 
@@ -396,8 +655,10 @@ export default function SettingsDialog() {
 
                 <Separator />
                 <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={handleClearKeys}>Clear all keys</Button>
-                  <Button type="button" onClick={handleSaveKeys}>Save settings</Button>
+                  <Button type="button" variant="outline" disabled={keyBusy} onClick={handleClearKeys}>Clear all keys</Button>
+                  <Button type="button" disabled={keyBusy} onClick={handleSaveKeys}>
+                    {keyBusy ? 'Saving…' : 'Save settings'}
+                  </Button>
                 </div>
               </div>
             )}
@@ -446,7 +707,7 @@ export default function SettingsDialog() {
               <section>
                 <SectionHeader
                   title="Backup & restore"
-                  description="Save or restore all resumes, settings, job descriptions, and history as a single JSON file."
+                  description={`Save or restore all resumes, settings, job descriptions, and history as a single JSON file. ${backupKeyNote}`}
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={exportFullBackupWithFeedback}>Export full backup</Button>

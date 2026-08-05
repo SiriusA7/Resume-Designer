@@ -5,8 +5,10 @@
 
 import { store } from './store.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
+import { initSecretStore } from './secretStore.js';
 import {
-  ensureProfilesInitialized, loadRegistry, isAdoptionPending, hasProfileNamespaces,
+  ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
+  hasProfileNamespaces, stripDeadProviderCredentials,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -220,7 +222,14 @@ async function maybeAutoMigrateLegacyData() {
     const envelope = await importLegacyElectronData();
     // Durable variant: a disk-full flush failure rolls the (empty-ish) store
     // back and throws into the catch below — flag 'failed', boot continues.
-    const result = await importFullBackupDurably(envelope);
+    // keepCredential: this is the user's own live data being carried across an
+    // in-place upgrade on the same machine, NOT a backup file being restored.
+    // The credential exclusion exists to stop an old backup reintroducing a key;
+    // applied here it DELETED the key, and the flag stamped below is one-shot,
+    // so the user came up permanently without their configured AI credential.
+    // Left in place it goes through the normal upgrade path — extraction to the
+    // shared key, then initSecretStore into the keychain, then stripped.
+    const result = await importFullBackupDurably(envelope, { keepCredential: true });
     // Non-reloading caller: importFullBackupDurably keeps the restore guard armed
     // on success (interactive callers rely on continuous ownership), but this boot
     // path continues WITHOUT a reload — release it now, or the migration flag and
@@ -316,6 +325,36 @@ export async function init() {
     await initAppStorage();
     await maybeAutoMigrateLegacyData();
     await ensureProfilesInitialized();   // profiles resolve BEFORE the React gate opens
+    // ensureProfilesInitialized runs extractSharedApiKey on its HAPPY paths
+    // only: an adoption that cannot finish (browser quota, a Tauri disk
+    // failure) returns early without it. Left to that, a credential still
+    // inside the per-profile blob is never consolidated, initSecretStore finds
+    // nothing to migrate and reports healthy storage, and getSettings quietly
+    // goes on serving the readable blob value — Settings claiming keychain or
+    // encrypted storage while the paid key sits in clear text, indefinitely if
+    // adoption keeps failing.
+    //
+    // Safe to repeat, but that took a fix to be true: "an existing shared key
+    // wins" was read as "a second call is free", and a shared value that is
+    // merely PENDING — an earlier call this boot whose flush failed — reads
+    // exactly like a durable one through appStorage's cache. The second call
+    // stripped the blob against it. extractSharedApiKey now proves durability
+    // before every strip, not only the one it wrote.
+    const strandedPlaintext = await extractSharedApiKey();
+    // Dead pre-OpenRouter provider credentials, carried in by the Electron
+    // migration and read by nothing since. Import-time sanitising only covers
+    // future migrations; this is what reaches the installs that already took
+    // one. Synchronous, best-effort, and safe to run every boot — it is a no-op
+    // once the blobs are clean.
+    stripDeadProviderCredentials();
+    // AFTER the extraction above and BEFORE the gate opens, so React never
+    // renders a settings state missing a key the user does have.
+    // Swallows its own failures — a keychain problem must not block boot.
+    //
+    // Handed whatever extraction could NOT move. A caught storage failure used
+    // to be indistinguishable from success here, so boot continued as though
+    // the credential were protected while a readable copy stayed in the blob.
+    await initSecretStore({ strandedPlaintext });
   } finally {
     markStorageReady();
   }

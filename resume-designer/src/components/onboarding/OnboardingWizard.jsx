@@ -28,7 +28,7 @@ import {
   fetchModelCatalog,
   checkProfileHasData,
 } from '../../aiService.js';
-import { getSettings, saveSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
+import { getSettings, saveSettings, saveApiKey, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { refreshChatPanel } from '../../chatPanel.js';
 import { initWindowDrag } from '../../tauriDrag.js';
 import {
@@ -198,9 +198,28 @@ export default function OnboardingWizard() {
 
   const validateKey = useCallback(async (key) => {
     // Persist immediately so every AI entry point can use it, then validate.
-    saveSettings({ openrouterKey: key });
+    //
+    // A keychain refusal has to STOP here. setSecret updates its in-memory copy
+    // only after a confirmed write, so on failure the app holds the old key or
+    // none at all — advancing would show "AI features are ready" and then fail
+    // every call in the steps that follow, with nothing connecting the two.
+    // Better to keep the user on key setup with something they can act on.
+    try {
+      await saveApiKey(key);
+    } catch (err) {
+      console.error('[onboarding] could not persist the API key', err);
+      // `retainedInMemory` means the browser refused to store it but the key IS
+      // live for this session, so AI works and blocking setup here would strand
+      // the user over a warning. Anything else genuinely leaves no usable
+      // credential, and advancing would promise AI that is about to fail.
+      if (!err?.retainedInMemory) {
+        return { saved: false, error: err?.message || 'Could not save your API key.' };
+      }
+      refreshChatPanel();
+      return { saved: true, warning: err.message, valid: await validateOpenRouterKey(key) };
+    }
     refreshChatPanel();
-    return validateOpenRouterKey(key);
+    return { saved: true, valid: await validateOpenRouterKey(key) };
   }, []);
 
   const chooseMode = useCallback((m) => {

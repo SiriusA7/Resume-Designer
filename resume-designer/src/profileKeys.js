@@ -75,6 +75,113 @@ export function isSharedKey(key) {
   return SHARED_KEYS.has(key);
 }
 
+// The per-profile data blob. Named here because the backup sanitizer below has
+// to recognise it, and this module is the one both exporters can reach.
+const RESUME_DATA_KEY = 'resume-designer-data';
+
+/**
+ * Strip a legacy credential out of a `resume-designer-data` blob crossing a
+ * backup boundary — used by BOTH the full-backup paths in persistence.js and
+ * the per-profile paths in profiles.js.
+ *
+ * It lives here rather than beside either exporter because persistence.js
+ * already imports profiles.js, so a helper owned by one of them cannot be
+ * reached by the other without an import cycle. This module is below both by
+ * construction (see the file header).
+ *
+ * The API key moved to the OS keychain and is deliberately no longer backup
+ * data. Dropping it from the shared-key list is not enough on its own:
+ * getSettings still reads `settings.openrouterKey` as the pre-extraction
+ * fallback, and extractSharedApiKey only clears that field for the ACTIVE
+ * profile, and only once its flush is durable. So an INACTIVE profile — exactly
+ * the kind a per-profile export targets — can still carry the key inside this
+ * blob, and copying it verbatim puts the paid credential into clear-text JSON.
+ *
+ * Applied on import too, so restoring an older backup cannot reintroduce a
+ * plaintext credential that the next boot's extraction would promote into the
+ * keychain.
+ *
+ * Returns the value untouched when there is nothing to strip, including when
+ * the blob will not parse: that is still the user's data and has to round-trip,
+ * and an unparseable blob is not one this app could have read a key out of.
+ */
+export function withoutLegacyCredential(logicalKey, value) {
+  if (logicalKey !== RESUME_DATA_KEY || typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || !parsed.settings) return value;
+    if (!('openrouterKey' in parsed.settings)) return value;
+    delete parsed.settings.openrouterKey;
+    return JSON.stringify(parsed);
+  } catch {
+    return value;
+  }
+}
+
+// Pre-OpenRouter provider credentials. The app moved to OpenRouter on
+// 2026-05-30 (7a9e6d6), five days AFTER the Electron app was deleted
+// (535b24c, 2026-05-25) — so any blob carrying these came from that app, and
+// nothing in the current codebase reads them: grepping the tree for these three
+// names matches comments only. They are dead weight, and the kind of dead
+// weight that is a paid credential in clear text under app_data_dir.
+const DEAD_PROVIDER_CREDENTIALS = ['anthropicKey', 'openaiKey', 'geminiKey'];
+
+/**
+ * Strip the pre-OpenRouter provider credentials out of a `resume-designer-data`
+ * blob. Same shape as withoutLegacyCredential, and deliberately NOT part of it.
+ *
+ * That function is skipped whenever `keepCredential` is set, because the
+ * OpenRouter key is one the current app still USES and a same-machine migration
+ * has to carry it. These have no such claim: no code path reads them, so there
+ * is nothing to preserve and no reason to exempt any caller. Folding them in
+ * would have meant the Electron migration — the one path that actually carries
+ * them — was the one path that skipped removing them.
+ *
+ * Deletes only the fields it knows about, leaving the rest of `settings`
+ * untouched: this runs over the user's live data, not just over backups.
+ */
+export function withoutDeadProviderCredentials(logicalKey, value) {
+  if (logicalKey !== RESUME_DATA_KEY || typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    const settings = parsed?.settings;
+    // Object check before `in`, which throws on a string operand — a
+    // hand-edited or imported blob can hold `settings: "…"`.
+    if (!settings || typeof settings !== 'object') return value;
+    const present = DEAD_PROVIDER_CREDENTIALS.filter((k) => k in settings);
+    if (!present.length) return value;
+    for (const k of present) delete settings[k];
+    return JSON.stringify(parsed);
+  } catch {
+    // Unparseable: still the user's data, and not a blob this app could have
+    // read a credential out of. Round-trips untouched, as above.
+    return value;
+  }
+}
+
+/**
+ * Strip every stored credential out of a `resume-designer-data` blob crossing a
+ * boundary — export, import, restore, or migration. THE function to call at a
+ * boundary; the two below are its parts and exist for the paths that genuinely
+ * need only one.
+ *
+ * There were two, chained by hand at eight call sites, and the EXPORT paths are
+ * where the second was forgotten — so a blob the boot sweep could not clean
+ * (quota) was serialised into clear-text backup JSON. Eight sites times two
+ * helpers is eight chances to write one and not the other. One helper with a
+ * flag is none, which is the difference that has actually held in this module.
+ *
+ * `keepOpenRouterKey` exempts ONLY that credential, and only for a same-machine
+ * migration, which has to carry it because the current app still uses it. The
+ * dead provider keys have no such claim — nothing reads them — so no caller may
+ * keep them. That asymmetry is exactly why this is one function with a flag
+ * rather than two functions a caller has to remember to compose.
+ */
+export function withoutStoredCredentials(logicalKey, value, { keepOpenRouterKey = false } = {}) {
+  const withoutActive = keepOpenRouterKey ? value : withoutLegacyCredential(logicalKey, value);
+  return withoutDeadProviderCredentials(logicalKey, withoutActive);
+}
+
 export function isPhysicalKey(key) {
   return typeof key === 'string' && key.startsWith(PHYSICAL_PREFIX);
 }
