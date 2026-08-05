@@ -69,6 +69,9 @@ export function readEntryDates(entry) {
   if (start === null || (!ongoing && end === null)) {
     return { start: null, end: null, ongoing: false, freeform: true };
   }
+  if (!ongoing && monthKey(end) < monthKey(start)) {
+    return { start: null, end: null, ongoing: false, freeform: true };
+  }
   return { start, end, ongoing, freeform: false };
 }
 

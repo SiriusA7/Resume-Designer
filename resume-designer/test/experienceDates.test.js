@@ -71,6 +71,10 @@ describe('readEntryDates', () => {
   it('never recovers a month from the display string', () => {
     expect(readEntryDates({ dates: 'Jan 2020 – Mar 2022' }).freeform).toBe(true);
   });
+
+  it('reports freeform for a reversed closed pair, which interval() would refuse', () => {
+    expect(readEntryDates({ startDate: '2022-03', endDate: '2020-01' }).freeform).toBe(true);
+  });
 });
 
 describe('buildDateFields', () => {
@@ -134,6 +138,9 @@ describe('agreement with the run gate', () => {
 
   it('treats a real gap as a separate stint', () => {
     expect(datesAreContinuous(built(2015, 1, 2018, 6), built(2021, 3, null))).toBe(false);
+    // Pin the false to the gap, not to unreadability — datesAreContinuous also
+    // fails closed to false when a pair can't be read at all.
+    expect(readEntryDates(built(2015, 1, 2018, 6)).freeform).toBe(false);
   });
 
   it('leaves a freeform entry unjoinable', () => {
@@ -152,5 +159,9 @@ describe('formatIntervalHint', () => {
 
   it('emits nothing for a freeform entry', () => {
     expect(formatIntervalHint({ dates: 'Summer 2019' })).toBe('');
+  });
+
+  it('emits nothing for a reversed pair', () => {
+    expect(formatIntervalHint({ startDate: '2022-03', endDate: '2020-01' })).toBe('');
   });
 });
