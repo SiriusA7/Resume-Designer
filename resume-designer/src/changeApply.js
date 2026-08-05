@@ -148,8 +148,11 @@ export function resolveAnchoredPath(change, readArray) {
  * Clearing returns the entry to unstructured, which `interval()` handles by
  * failing closed.
  *
- * Enforced here rather than in each caller because this is the choke point the
- * chat flow (useChat) and job recommendations (JobsDialog) already share.
+ * Enforced in this module rather than in each caller so every surface writing a
+ * resume scalar shares one definition. Note that "the callers already share a
+ * choke point" was NOT true when this was written: job recommendations reached
+ * the store through their own `store.update`, and had to be routed through
+ * `writeScalarToStore` below before the claim held.
  */
 /**
  * The `experience` array a scalar write at `path` produces, for the two paths
@@ -210,7 +213,17 @@ export function experienceScalarWrite(experience, path, value) {
   return null;
 }
 
-function writeScalar(path, value) {
+/**
+ * Write one scalar to the store with the semantics above applied.
+ *
+ * Exported because this is NOT only the change-set path. Job-analysis
+ * recommendations reach the store through
+ * `jobRecommendations.applyRecommendationToStore`, whose experience branch can
+ * resolve to `experience[i].company` — a direct `store.update` there renamed
+ * the run lead alone and split the employer, the same defect the change-set
+ * path had. Any surface writing a resume scalar should come through here.
+ */
+export function writeScalarToStore(path, value) {
   const experience = store.get('experience');
   const next = experienceScalarWrite(experience, path, value);
   if (next) {
@@ -245,7 +258,7 @@ export function applyChangeToStore(rawChange) {
       }
       // No array at that path yet — fall through so the generic write creates it.
     }
-    writeScalar(change.path, change.newValue);
+    writeScalarToStore(change.path, change.newValue);
     return;
   }
 
@@ -261,7 +274,7 @@ export function applyChangeToStore(rawChange) {
     store.update(change.path, undefined);
     return;
   }
-  writeScalar(change.path, change.newValue);
+  writeScalarToStore(change.path, change.newValue);
 }
 
 /** Array-index structural op (`experience[2]`), i.e. one that shifts indices. */
