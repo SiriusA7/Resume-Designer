@@ -42,16 +42,17 @@ guess about the user's history.
 
 ### Storage
 
-A new per-résumé field `groupPositions` on the résumé data object, following the
-existing `toolsDisplay` precedent exactly: written with
-`store.update('groupPositions', …)`, read by a small renderer helper.
+A **global** preference `groupPositions`, stored in settings alongside `layout`,
+`colorPalette`, `pageSize` and `orientation` — every control in the Design tab
+is global, seeded from `getSettings()` on mount.
 
-Read as `data?.groupPositions !== false`. **Absence means grouped**, so there is
-no migration, no new storage key, and no existing résumé changes behaviour.
-Only an explicit `false` turns grouping off.
+Read as `!== false`. **Absence means grouped**, so there is no migration and no
+existing résumé changes behaviour. Only an explicit `false` turns grouping off.
 
-Per-résumé, not global — matching layout, accent and `toolsDisplay`. One résumé
-may group while another does not.
+*(An earlier draft of this section called the field per-résumé "matching layout
+and accent". That was wrong: layout and accent are global settings; only
+`toolsDisplay` is per-résumé, and it is controlled from the Main tab. Corrected
+after checking `DesignTab`, and confirmed with the owner.)*
 
 ### Rendering
 
