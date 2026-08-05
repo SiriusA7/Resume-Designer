@@ -229,11 +229,14 @@ function SummaryTab({ profile, scheduleSave }) {
 
 // One entry card: a title Input + ghost-destructive trash in the header row,
 // then the body fields beneath. Mirrors the spec's `rounded-lg border bg-card`.
-function EntryCard({ titleInput, onDelete, children }) {
+// `headerExtra` and `className` are OPT-IN slots: callers that omit them render
+// exactly as before (`cn` drops undefined, and a nullish child renders nothing).
+function EntryCard({ titleInput, headerExtra, onDelete, className, children }) {
   return (
-    <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
+    <div className={cn('space-y-2.5 rounded-[10px] border bg-card p-[13px]', className)}>
       <div className="flex items-center gap-2.5">
         {titleInput}
+        {headerExtra}
         <Button
           type="button"
           variant="ghost"
@@ -251,15 +254,25 @@ function EntryCard({ titleInput, onDelete, children }) {
   );
 }
 
-// Generic add/delete list of entry cards.
-function ItemList({ items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete, renderTitle, renderBody }) {
+// Generic add/delete list of entry cards. `renderHeaderExtra` and `itemClassName`
+// are optional: omit them and every card renders as it did before.
+function ItemList({
+  items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete,
+  renderTitle, renderHeaderExtra, renderBody, itemClassName,
+}) {
   return (
     <div className="space-y-3">
       {items.length === 0 ? (
         <Empty title={emptyTitle} subtitle={emptySubtitle} />
       ) : (
         items.map((item, i) => (
-          <EntryCard key={item.id || `row-${i}`} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
+          <EntryCard
+            key={item.id || `row-${i}`}
+            className={itemClassName ? itemClassName(item, i) : undefined}
+            titleInput={renderTitle(item, i)}
+            headerExtra={renderHeaderExtra ? renderHeaderExtra(item, i) : null}
+            onDelete={() => onDelete(i)}
+          >
             {renderBody(item, i)}
           </EntryCard>
         ))
@@ -281,11 +294,27 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
   // `items` is the live array, so this re-render recomputes groupExperience
   // against the current values.
   const [, bumpGrouping] = useReducer((n) => n + 1, 0);
+  // Computed once per render and shared by the header slot, the rail and the
+  // body: all three run inside this same render pass, so they see one snapshot.
+  const groups = groupExperience(items);
+  const groupInfo = (i) => {
+    const group = groups.find((g) => g.roles.some((r) => r.index === i));
+    const isRunMember = !!group && group.roles.length > 1;
+    return {
+      group,
+      isRunMember,
+      isLead: isRunMember && group.roles[0].index === i,
+      // First member of its own group, run of one included: the entry that
+      // can gain a second role in place.
+      isGroupStart: !!group && group.roles[0].index === i,
+    };
+  };
+  const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
   return (
     <section>
       <SectionHeader
         title="Detailed work experience"
-        description="Add details beyond what's on your resume - challenges faced, technologies used, team size, impact metrics, lessons learned."
+        description="Add details beyond what's on your resume - challenges faced, technologies used, team size, impact metrics, lessons learned. If you held several positions at one employer, link them so they appear under a single company heading."
       />
       <ItemList
         items={items}
@@ -294,20 +323,77 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
         addLabel="Add experience entry"
         onAdd={() => { items.push({ id: generateId('exp'), title: '', company: '', dates: '', details: '' }); refresh(); }}
         onDelete={(i) => { items.splice(i, 1); refresh(); }}
+        // A run of 2+ reads as ONE employer: an accented left rail down every
+        // member, inset from the ungrouped cards around it.
+        itemClassName={(exp, i) => (groupInfo(i).isRunMember ? 'ml-3 border-l-[3px] border-l-primary/40' : undefined)}
         renderTitle={(exp, i) => (
           <Input className="font-medium" placeholder="Job title" defaultValue={exp.title || ''} onChange={(e) => set(i, 'title')(e.target.value)} />
         )}
+        // The add-role action and the run's label live in the card HEADER: at the
+        // bottom of a ~400px card nobody scrolled far enough to find them.
+        renderHeaderExtra={(exp, i) => {
+          const { group, isRunMember, isLead, isGroupStart } = groupInfo(i);
+          const canAddRole = isGroupStart && !!exp.company;
+          if (!isRunMember && !canAddRole) return null;
+          return (
+            <div className="flex shrink-0 items-center gap-2">
+              {isRunMember && (
+                <span className="whitespace-nowrap text-[11.5px] font-semibold text-muted-foreground">
+                  {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
+                </span>
+              )}
+              {/* Requires a company: a run needs a non-empty one to form, so
+                  without it this would duplicate the row without grouping it. */}
+              {canAddRole && (
+                <Button
+                  variant="outline" size="sm" type="button" className="h-7 shrink-0 text-xs"
+                  title="Add role at this company"
+                  onClick={() => {
+                    // The only other add action appends to the END of the list, so
+                    // without this a grouped employer followed by another employer
+                    // can never gain a position: the new entry lands non-adjacent
+                    // and "Link to company above" can only reach the last employer.
+                    // Walk the CURRENT items at click time — the company input is
+                    // uncontrolled and writes through, so a render-time bound can
+                    // point past a boundary the user just typed into existence.
+                    // Revalidate the company here too, not just in the gating:
+                    // the field is uncontrolled, so it can be cleared while the
+                    // already-rendered button stays visible, and a run cannot
+                    // form without a non-empty company.
+                    const company = exp.company || '';
+                    if (!company) return;
+                    const id = exp._groupId || generateId('grp');
+                    let last = i;
+                    if (exp._groupId && company) {
+                      while (last + 1 < items.length) {
+                        const entry = items[last + 1];
+                        if (!entry || entry._groupId !== exp._groupId || entry.company !== company) break;
+                        last += 1;
+                      }
+                    }
+                    const next = [...items];
+                    if (!next[i]._groupId) next[i] = { ...next[i], _groupId: id };
+                    next.splice(last + 1, 0, {
+                      id: generateId('exp'),
+                      title: '',
+                      company,
+                      dates: '',
+                      details: '',
+                      _groupId: id,
+                    });
+                    rewrite(next);
+                  }}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add role
+                </Button>
+              )}
+            </div>
+          );
+        }}
         renderBody={(exp, i) => {
-          const groups = groupExperience(items);
-          const group = groups.find((g) => g.roles.some((r) => r.index === i));
-          const isRunMember = !!group && group.roles.length > 1;
-          const isLead = isRunMember && group.roles[0].index === i;
-          // First member of its own group, run of one included: the entry that
-          // can gain a second role in place.
-          const isGroupStart = !!group && group.roles[0].index === i;
+          const { isRunMember, isLead } = groupInfo(i);
           const prev = i > 0 ? items[i - 1] : null;
           const canLinkAbove = !!prev && !!prev.company && prev.company === exp.company;
-          const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
           return (
             <>
               <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} onBlur={bumpGrouping} />
@@ -319,55 +405,6 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                 onChange={(e) => set(i, 'details')(e.target.value)}
               />
               <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
-                {isRunMember && (
-                  <span className="text-[11px] font-medium text-muted-foreground">
-                    {isLead ? `${group.company} · ${group.roles.length} positions` : 'Same company as above'}
-                  </span>
-                )}
-                {/* Requires a company: a run needs a non-empty one to form, so
-                    without it this would duplicate the row without grouping it. */}
-                {isGroupStart && !!exp.company && (
-                  <Button
-                    variant="outline" size="sm" type="button" className="h-7 text-xs"
-                    onClick={() => {
-                      // The only other add action appends to the END of the list, so
-                      // without this a grouped employer followed by another employer
-                      // can never gain a position: the new entry lands non-adjacent
-                      // and "Link to company above" can only reach the last employer.
-                      // Walk the CURRENT items at click time — the company input is
-                      // uncontrolled and writes through, so a render-time bound can
-                      // point past a boundary the user just typed into existence.
-                      // Revalidate the company here too, not just in the gating:
-                      // the field is uncontrolled, so it can be cleared while the
-                      // already-rendered button stays visible, and a run cannot
-                      // form without a non-empty company.
-                      const company = exp.company || '';
-                      if (!company) return;
-                      const id = exp._groupId || generateId('grp');
-                      let last = i;
-                      if (exp._groupId && company) {
-                        while (last + 1 < items.length) {
-                          const entry = items[last + 1];
-                          if (!entry || entry._groupId !== exp._groupId || entry.company !== company) break;
-                          last += 1;
-                        }
-                      }
-                      const next = [...items];
-                      if (!next[i]._groupId) next[i] = { ...next[i], _groupId: id };
-                      next.splice(last + 1, 0, {
-                        id: generateId('exp'),
-                        title: '',
-                        company,
-                        dates: '',
-                        details: '',
-                        _groupId: id,
-                      });
-                      rewrite(next);
-                    }}
-                  >
-                    <Plus className="h-3.5 w-3.5" /> Add role at this company
-                  </Button>
-                )}
                 {/* A run LEAD has no run member above it, so separating it is a pure
                     no-op that still costs an undo entry — offer it the link action. */}
                 {isRunMember && !isLead ? (
