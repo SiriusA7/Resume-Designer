@@ -1,4 +1,4 @@
-import { useReducer } from 'react';
+import { useId, useReducer } from 'react';
 import { Globe, Plus, Trash2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -324,12 +324,14 @@ function RoleSubCard({ exp, index, set, onDelete, onDetach, canDetach }) {
 
 // A run of 2+: the employer stated once, its roles beneath.
 function EmployerBlock({ group, set, onCompanyChange, onCompanyBlur, onAddRole, onDeleteRole, onDetachRole, onDeleteEmployer }) {
+  const employerInputId = useId();
   return (
     <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
       <div className="flex items-end gap-2.5">
         <div className="min-w-0 flex-1 space-y-1.5">
-          <Label className="text-xs text-muted-foreground">Employer</Label>
+          <Label htmlFor={employerInputId} className="text-xs text-muted-foreground">Employer</Label>
           <Input
+            id={employerInputId}
             className="font-semibold" placeholder="Company"
             defaultValue={group.company}
             onChange={(e) => onCompanyChange(group, e.target.value)}
@@ -361,12 +363,14 @@ function EmployerBlock({ group, set, onCompanyChange, onCompanyBlur, onAddRole, 
           />
         ))}
       </div>
-      <Button
-        variant="outline" size="sm" type="button" className="h-7 w-full text-xs"
-        onClick={() => onAddRole(group)}
-      >
-        <Plus className="h-3.5 w-3.5" /> Add role at this company
-      </Button>
+      {!!(group.company || '').trim() && (
+        <Button
+          variant="outline" size="sm" type="button" className="h-7 w-full text-xs"
+          onClick={() => onAddRole(group)}
+        >
+          <Plus className="h-3.5 w-3.5" /> Add role at this company
+        </Button>
+      )}
     </div>
   );
 }
