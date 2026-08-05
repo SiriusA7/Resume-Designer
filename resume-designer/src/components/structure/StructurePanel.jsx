@@ -348,7 +348,7 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, 
         <span className="min-w-0 flex-1">
           {isLead && group && group.roles.length > 1 && (
             <span className="block truncate text-[11.5px] font-semibold text-muted-foreground">
-              {exp.company} · {group.roles.length} roles
+              {group.company} · {group.roles.length} roles
             </span>
           )}
           <span className="block truncate text-[13px] font-semibold">{exp.title || 'Untitled position'}</span>
@@ -404,7 +404,7 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, 
               only path that adds the second role in place. Requires a company —
               a run needs a non-empty one to form, so without it the action would
               duplicate the row without producing a visible group. */}
-          {isLead && group && !!exp.company && (
+          {isLead && group && !!companyKey(exp.company) && (
             <Button
               variant="outline" size="sm" type="button" className="h-7 text-xs"
               onClick={() => addRoleAtCompany(index)}
