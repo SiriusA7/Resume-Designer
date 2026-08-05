@@ -77,6 +77,13 @@ inputs are uncontrolled and render-time state can be stale.
 | **Make this its own employer** | every role except the block's first | Mints a fresh id for that role **and every trailing member of the same run**, so detaching the middle role of a three-role block yields `[A]` + `[B,C]` rather than orphaning C. |
 | **Delete role** | each role sub-block | Removes that entry. Removing the last remaining role removes the employer with it. |
 | **Delete employer** | employer block header | Goes through `confirmDestructive` naming the count — "Delete Magic Leap and its 2 positions?" — because it removes several entries at once. Requires adding the `confirmDestructive` import to `ProfileTabs.jsx`; it is already used this way in `StructurePanel.jsx`. |
+| **Link to company above** | collapsed single-role card, when not the first entry | Merges this entry into the employer above, carrying its own trailing run members with it. Never writes `company` — copying a neighbour's name is how a role gets filed under an employer the user never worked for; the action instead requires the two companies to already match, revalidated at click time. |
+
+**On that last row:** an earlier draft of this table omitted it, which would have
+left two separate single-role cards at the same employer with no way to merge —
+"+ Add role" creates a *blank* role rather than absorbing the existing card. It
+is the only path from two imported-but-ungrouped entries to one block, so it
+stays.
 
 **Company edits fan out.** The single company field writes to every role in the
 run in one write. This matches the résumé's company header, which already
