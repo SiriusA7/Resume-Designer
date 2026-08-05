@@ -536,8 +536,13 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
   // index so earlier removals cannot shift the ones still to come.
   const deleteEmployer = async (group) => {
     const count = group.roles.length;
+    // Read the company from `items` at click time, not from the render-time
+    // `group`: the field is uncontrolled and setGroupCompany deliberately skips
+    // the re-render, so a just-typed name would not be reflected here and this
+    // dialog would name the wrong employer while asking to destroy it.
+    const liveCompany = items[group.roles[0]?.index]?.company || group.company;
     const ok = await confirmDestructive({
-      title: `Delete ${group.company || 'this employer'}?`,
+      title: `Delete ${liveCompany || 'this employer'}?`,
       description: `All ${count} positions at this employer will be permanently removed from your profile.`,
       actionLabel: 'Delete',
     });
