@@ -230,14 +230,11 @@ function SummaryTab({ profile, scheduleSave }) {
 
 // One entry card: a title Input + ghost-destructive trash in the header row,
 // then the body fields beneath. Mirrors the spec's `rounded-lg border bg-card`.
-// `headerExtra` and `className` are OPT-IN slots: callers that omit them render
-// exactly as before (`cn` drops undefined, and a nullish child renders nothing).
-function EntryCard({ titleInput, headerExtra, onDelete, className, children }) {
+function EntryCard({ titleInput, onDelete, children }) {
   return (
-    <div className={cn('space-y-2.5 rounded-[10px] border bg-card p-[13px]', className)}>
+    <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
       <div className="flex items-center gap-2.5">
         {titleInput}
-        {headerExtra}
         <Button
           type="button"
           variant="ghost"
@@ -255,25 +252,15 @@ function EntryCard({ titleInput, headerExtra, onDelete, className, children }) {
   );
 }
 
-// Generic add/delete list of entry cards. `renderHeaderExtra` and `itemClassName`
-// are optional: omit them and every card renders as it did before.
-function ItemList({
-  items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete,
-  renderTitle, renderHeaderExtra, renderBody, itemClassName,
-}) {
+// Generic add/delete list of entry cards.
+function ItemList({ items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete, renderTitle, renderBody }) {
   return (
     <div className="space-y-3">
       {items.length === 0 ? (
         <Empty title={emptyTitle} subtitle={emptySubtitle} />
       ) : (
         items.map((item, i) => (
-          <EntryCard
-            key={item.id || `row-${i}`}
-            className={itemClassName ? itemClassName(item, i) : undefined}
-            titleInput={renderTitle(item, i)}
-            headerExtra={renderHeaderExtra ? renderHeaderExtra(item, i) : null}
-            onDelete={() => onDelete(i)}
-          >
+          <EntryCard key={item.id || `row-${i}`} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
             {renderBody(item, i)}
           </EntryCard>
         ))
