@@ -539,11 +539,15 @@ Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in t
 IMPORTANT:
 - Only include sections that have relevant content from the profile
 - Order experience by relevance (most relevant first); ALWAYS include
-  machine-readable startDate/endDate so the app can offer a chronological view
+  machine-readable startDate/endDate as "YYYY-MM" (a bare year is not enough —
+  the app uses the month to decide whether two roles at one employer were one
+  continuous tenure)
 - If the profile shows SEVERAL POSITIONS AT ONE EMPLOYER (a promotion, a lateral
   move, or two roles held at once), emit them as separate entries that are
   CONSECUTIVE and share the identical "company" string, most recent first. Never
   place a role at a different employer between them, even if relevance would.
+  A RETURN to a former employer after time elsewhere is NOT one tenure: keep the
+  two stints as separate entries and do not present them as continuous.
   The app groups one employer's roles under a single company heading by that
   adjacency, so splitting them prints the employer twice as unrelated jobs
 - Put concrete tools/software/platforms (e.g. Figma, Git, Docker, Excel) in

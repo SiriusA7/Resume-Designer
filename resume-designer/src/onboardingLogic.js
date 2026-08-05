@@ -7,7 +7,7 @@
  * the necessary store/persistence/AI side effects); no document access.
  */
 import { generateId, experienceSortValue } from './store.js';
-import { sortRunAware, assignGroupIds } from './experienceGroups.js';
+import { sortRunAware, assignGroupIds, datesAreContinuous } from './experienceGroups.js';
 import { getDefaultModelId, chat, generateResumeFromProfileForJob, getAllModels, getCustomModels, isConfigured, GROUNDING_RULES } from './aiService.js';
 import { generateUniqueVariantName, saveVariant } from './persistence.js';
 import { parseResumeText } from './resumeParser.js';
@@ -311,13 +311,21 @@ export function buildResumeData(resume) {
   // shredding that run apart — without this nothing the AI produces is ever grouped.
   //
   // This depends on the model emitting one employer's roles CONSECUTIVELY, which
-  // buildGenerateResumePrompt now requires explicitly — the prompt otherwise asks
-  // for relevance ordering, which can legitimately place a different employer
-  // between two roles at the same one, leaving nothing for adjacency to find. The
-  // output schema deliberately carries no _groupId (the model is never asked to
-  // author grouping), so ordering is the only channel that can carry it. If a
-  // response ignores the constraint the resume simply renders ungrouped, as before.
-  const grouped = assignGroupIds(experience);
+  // buildGenerateResumePrompt requires explicitly — the prompt otherwise asks for
+  // relevance ordering, which can legitimately place a different employer between
+  // two roles at the same one, leaving nothing for adjacency to find. The output
+  // schema deliberately carries no _groupId (the model is never asked to author
+  // grouping), so ordering plus the dates are the only channels available.
+  //
+  // Adjacency alone is NOT sufficient here, because this input may be INCOMPLETE:
+  // the generator omits jobs irrelevant to the target role, and a pasted resume
+  // omits jobs the user chose to leave out, so two separate stints at one employer
+  // can arrive adjacent. Fusing them would print one company header spanning both,
+  // asserting continuous employment that never happened. datesAreContinuous
+  // requires the two roles' machine-readable, month-precise ranges to overlap or
+  // abut (<= 1 month) before they may share a header; anything missing, year-only,
+  // or gapped renders ungrouped — the pre-feature rendering: plainer, never false.
+  const grouped = assignGroupIds(experience, undefined, datesAreContinuous);
   experience = sortRunAware(
     grouped,
     (run) => Math.max(...run.map(experienceSortValue)),
