@@ -1565,19 +1565,22 @@ export function saveExtractedProfile(extractedProfile) {
   const arrayFields = ['workExperience', 'skills', 'education', 'projects', 'certifications', 'achievements', 'customSections'];
   for (const field of arrayFields) {
     if (extractedProfile[field] && extractedProfile[field].length > 0) {
+      // Company-run grouping is never asked of the model, so it is derived here by
+      // the same adjacency rule markdown import uses — but ONLY over the entries
+      // this extraction produced. Deriving it across the MERGED array would
+      // re-decide grouping for history the user has already curated: two adjacent
+      // same-company cards they deliberately left unlinked would silently fuse
+      // into one employer, and it would happen on any save, even one that only
+      // touched skills. Existing entries keep whatever grouping they were given.
+      const incoming = field === 'workExperience'
+        ? assignGroupIds(extractedProfile[field])
+        : extractedProfile[field];
       // Simple merge: add new items to existing
       mergedProfile[field] = [
         ...(existingProfile[field] || []),
-        ...extractedProfile[field]
+        ...incoming
       ];
     }
-  }
-
-  // Company-run grouping is never asked of the model — it's applied here, after
-  // extraction, by the same adjacency rule markdown import uses, so this is the
-  // only place a freshly-extracted (or re-merged) workExperience gets _groupId.
-  if (Array.isArray(mergedProfile.workExperience)) {
-    mergedProfile.workExperience = assignGroupIds(mergedProfile.workExperience);
   }
 
   console.log('[Profile] Merged profile to save:', mergedProfile);
