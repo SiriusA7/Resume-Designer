@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { applyChangeToStore } from '../src/changeApply.js';
 import { stripUnaddressableDatePaths } from '../src/aiService.js';
-import { diffResumeData } from '../src/diffEngine.js';
+import { diffResumeData, createChangeSet } from '../src/diffEngine.js';
 import { datesAreContinuous } from '../src/experienceGroups.js';
 import { store } from '../src/store.js';
 
@@ -149,5 +149,66 @@ describe('stripUnaddressableDatePaths', () => {
     expect(stripUnaddressableDatePaths(null)).toEqual({});
     expect(stripUnaddressableDatePaths('experience[0].dates')).toEqual({});
     expect(stripUnaddressableDatePaths([{ path: 'summary' }])).toEqual({});
+  });
+});
+
+// A path filter only sees KEYS. A model that proposes a whole container —
+// `experience[0]`, or the entire `experience` array — carries startDate/endDate
+// inside the VALUE, where the filter cannot reach; createChangeSet then re-diffs
+// that container into leaves and re-creates exactly the writes the filter
+// rejects. The diff engine skips the pair for that reason, the same way it
+// already skips `_groupId`.
+describe('container proposals cannot smuggle the date pair through', () => {
+  const CURRENT = {
+    name: 'Ada',
+    experience: [{ ...ROLE }],
+  };
+
+  const paths = (changeSet) => changeSet.changes.map((c) => c.path);
+
+  it('emits no leaf change for a whole-entry proposal carrying the pair', () => {
+    const changeSet = createChangeSet(CURRENT, {
+      'experience[0]': {
+        ...ROLE, dates: 'Jan 2020 – Mar 2024', startDate: '1999-01', endDate: '1999-12',
+      },
+    });
+
+    expect(paths(changeSet)).toContain('experience[0].dates');
+    expect(paths(changeSet).filter((p) => /startDate|endDate/.test(p))).toEqual([]);
+  });
+
+  it('emits no leaf change for a whole-array proposal carrying the pair', () => {
+    const changeSet = createChangeSet(CURRENT, {
+      experience: [{ ...ROLE, dates: 'Jan 2020 – Mar 2024', startDate: '1999-01', endDate: '1999-12' }],
+    });
+
+    expect(paths(changeSet).filter((p) => /startDate|endDate/.test(p))).toEqual([]);
+  });
+
+  it('leaves the stored pair intact rather than blanking it', () => {
+    // Skipping — not scrubbing — is what makes this true. Removing the keys from
+    // the proposal would leave them in oldData and absent from newData, and the
+    // key walk unions both sides, so the diff would emit a change blanking them.
+    store.setData({ ...CURRENT, experience: [{ ...ROLE }] }, true, null);
+    const changeSet = createChangeSet(store.getData(), {
+      'experience[0]': { ...ROLE, title: 'Staff Engineer', startDate: '1999-01', endDate: '1999-12' },
+    });
+    changeSet.changes.forEach(applyChangeToStore);
+
+    expect(entry().title).toBe('Staff Engineer');
+    expect(entry().startDate).toBe('2020-01');
+    expect(entry().endDate).toBe('2022-03');
+  });
+
+  it('still lets a dates edit inside a container clear the pair (R2)', () => {
+    store.setData({ ...CURRENT, experience: [{ ...ROLE }] }, true, null);
+    const changeSet = createChangeSet(store.getData(), {
+      'experience[0]': { ...ROLE, dates: '2019 – 2024' },
+    });
+    changeSet.changes.forEach(applyChangeToStore);
+
+    expect(entry().dates).toBe('2019 – 2024');
+    expect(entry().startDate).toBe('');
+    expect(entry().endDate).toBe('');
   });
 });

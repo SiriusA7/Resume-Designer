@@ -100,8 +100,25 @@ export function diffResumeData(oldData, newData, basePath = '') {
     const oldValue = oldData[key];
     const newValue = newData[key];
     
-    // Skip internal fields
-    if (key.startsWith('_') || key === 'id') continue;
+    // Skip fields a model may never address. `_`-prefixed keys and `id` are
+    // internal; startDate/endDate are the machine-readable date pair, which only
+    // ever moves as a UNIT — written by a picker commit, or cleared beside a
+    // freeform edit to `dates` (R1/R2). A half-written pair is the contradiction
+    // those rules exist to prevent.
+    //
+    // Skipping here, and not only at the proposal boundary, is what closes the
+    // container route: a proposal keyed `experience[0]` — or the whole
+    // `experience` array — carries the pair inside its VALUE, where a path
+    // filter cannot see it, and createChangeSet re-diffs that container into
+    // leaves, re-creating the very `experience[n].startDate` change the filter
+    // rejects. diffArray delegates object items back here, so this one skip
+    // covers the leaf, container and whole-array routes alike.
+    //
+    // Skipping is also the only safe shape. Scrubbing the keys out of the
+    // proposal instead would leave them present in oldData and absent from
+    // newData — and `allKeys` above is the UNION — so the diff would emit a
+    // change that BLANKS the pair rather than preserving it.
+    if (key.startsWith('_') || key === 'id' || key === 'startDate' || key === 'endDate') continue;
     
     // Both values are the same
     if (JSON.stringify(oldValue) === JSON.stringify(newValue)) continue;
