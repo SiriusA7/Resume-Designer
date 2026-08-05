@@ -234,7 +234,12 @@ export async function importVariant(file, { confirmGrouping = null } = {}) {
     const data = await importFile(file);
     const entries = Array.isArray(data?.experience) ? data.experience : [];
     const grouped = assignGroupIds(entries);
-    const runCount = groupExperience(grouped).filter((g) => g.roles.length > 1).length;
+    // Count only the runs grouping would NEWLY form. A re-imported JSON résumé
+    // carries its own _groupId values, so counting every run in the grouped
+    // output would raise a dialog whose answers are indistinguishable — and
+    // "keep separate" would not separate anything.
+    const runCount = groupExperience(grouped)
+      .filter((g) => g.roles.length > 1 && g.roles.some((r) => !entries[r.index]?._groupId)).length;
     if (runCount > 0 && confirmGrouping && await confirmGrouping(runCount)) {
       data.experience = grouped;
     }

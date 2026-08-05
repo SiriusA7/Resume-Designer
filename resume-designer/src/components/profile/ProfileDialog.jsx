@@ -152,6 +152,7 @@ export default function ProfileDialog() {
             : `${runCount} employers have more than one role`,
           description: 'Group each employer’s roles under a single company heading? Keep them separate if any of them are return stints rather than promotions.',
           actionLabel: 'Group',
+          cancelLabel: 'Keep separate',
           destructive: false,
         });
         if (ok) imported.workExperience = grouped;

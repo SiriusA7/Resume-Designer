@@ -10,8 +10,9 @@
  * photo preview) keep inline styles — that's content, not theme; all chrome
  * colors are semantic token classes.
  *
- * Only palette / layout / customColor dispatch `rd:design-change` for main.js
- * to consume — every other control just applies + saves through its service.
+ * Only palette / layout / customColor / pageSize / orientation / pageWidthIn /
+ * groupPositions dispatch `rd:design-change` for main.js to consume — every
+ * other control just applies + saves through its service.
  */
 
 import { useState } from 'react';
