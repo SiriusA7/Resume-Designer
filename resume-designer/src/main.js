@@ -154,6 +154,7 @@ const COLOR_PALETTES = {
 
 let currentPalette = 'terracotta';
 let currentLayout = 'sidebar';
+let currentGroupPositions = true;
 let customColor = '#c45c3e';
 
 // appStorage flag set by `maybeAutoMigrateLegacyData` to remember
@@ -443,6 +444,7 @@ export async function init() {
   const settings = getSettings();
   currentPalette = settings.colorPalette || 'terracotta';
   currentLayout = settings.layout || 'sidebar';
+  currentGroupPositions = settings.groupPositions !== false;
   customColor = settings.customColor || '#c45c3e';
   
   // Migrate built-in variants to storage on first run
@@ -682,6 +684,7 @@ export async function initPrintMode() {
     const settings = getSettings();
     currentPalette = settings.colorPalette || 'terracotta';
     currentLayout = settings.layout || 'sidebar';
+    currentGroupPositions = settings.groupPositions !== false;
     customColor = settings.customColor || '#c45c3e';
     await step('settings-loaded', { palette: currentPalette, layout: currentLayout });
 
@@ -1446,7 +1449,7 @@ function renderCurrentResume() {
     : data;
 
   // Render based on current layout
-  container.innerHTML = renderResumeForLayout(viewData, currentLayout);
+  container.innerHTML = renderResumeForLayout(viewData, currentLayout, { groupPositions: currentGroupPositions });
   // viewData, not the store data: anchored changes can land at a different
   // index in the projection, and the markers must follow the render.
   decorateRenderedResume(container, viewData);

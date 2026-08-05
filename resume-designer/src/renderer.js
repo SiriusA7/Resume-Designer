@@ -277,7 +277,7 @@ export function renderResume(data) {
         ${data.experience && data.experience.length > 0 ? `
           <div class="section experience-section">
             <h2 class="section-title">Experience</h2>
-            ${renderExperienceEntries(data.experience)}
+            ${renderExperienceEntries(data)}
           </div>
         ` : ''}
         
@@ -322,7 +322,7 @@ export function renderResumeStacked(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Experience</h2>
-          ${renderExperienceEntries(data.experience)}
+          ${renderExperienceEntries(data)}
         </div>
       ` : ''}
       
@@ -366,7 +366,7 @@ export function renderResumeStackedVertical(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Experience</h2>
-          ${renderExperienceEntries(data.experience)}
+          ${renderExperienceEntries(data)}
         </div>
       ` : ''}
       
@@ -600,18 +600,33 @@ function renderSidebar(data) {
 /**
  * Render every experience entry, grouping consecutive roles at one employer.
  *
+ * Takes the whole résumé data object, not just the entries, so it can read the
+ * `groupPositions` display preference alongside them. Absence means grouped:
+ * only an explicit `false` turns it off, so no existing résumé changes.
+ *
+ * With grouping OFF every entry renders as a run of one — the pre-feature
+ * output, each role carrying its own editable company. `_groupId` is never
+ * read, written or cleared here, so turning it back on restores every group
+ * exactly as it was.
+ *
  * There is deliberately NO wrapper element around a run. Run members stay sibling
  * .experience-item nodes so that pagination's direct-child itemSel keeps matching
  * them, :last-child still finds the real last entry, the timeline marker gutter
  * keeps its geometry, and the Structure panel's drag indices stay 1:1 with the
  * array. The nesting the reader sees is CSS indentation on .is-grouped.
  *
- * @param {Array<object>} experience
+ * @param {object} data Résumé data: `{ experience, groupPositions? }`
  * @param {'default'|'timeline'} variant
  * @returns {string} HTML
  */
-export function renderExperienceEntries(experience, variant = 'default') {
-  return groupExperience(experience)
+export function renderExperienceEntries(data, variant = 'default') {
+  const entries = data?.experience;
+  const groups = data?.groupPositions === false
+    ? (Array.isArray(entries) ? entries : []).map((entry, index) => ({
+      groupId: null, company: '', roles: [{ entry, index }],
+    }))
+    : groupExperience(entries);
+  return groups
     .map((group) => group.roles
       .map((role, position) => {
         const isLead = position === 0;
@@ -726,7 +741,7 @@ export function renderResumeRightSidebar(data) {
         ${data.experience && data.experience.length > 0 ? `
           <div class="section experience-section">
             <h2 class="section-title">Experience</h2>
-            ${renderExperienceEntries(data.experience)}
+            ${renderExperienceEntries(data)}
           </div>
         ` : ''}
         
@@ -775,7 +790,7 @@ export function renderResumeCompact(data) {
           ${data.experience && data.experience.length > 0 ? `
             <div class="section experience-section">
               <h2 class="section-title">Experience</h2>
-              ${renderExperienceEntries(data.experience)}
+              ${renderExperienceEntries(data)}
             </div>
           ` : ''}${renderMainSections(data)}
         </section>
@@ -838,7 +853,7 @@ export function renderResumeExecutive(data) {
           ${data.experience && data.experience.length > 0 ? `
             <div class="section experience-section">
               <h2 class="section-title">Professional Experience</h2>
-              ${renderExperienceEntries(data.experience)}
+              ${renderExperienceEntries(data)}
             </div>
           ` : ''}${renderMainSections(data)}
         </div>
@@ -886,7 +901,7 @@ export function renderResumeClassic(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Professional Experience</h2>
-          ${renderExperienceEntries(data.experience)}
+          ${renderExperienceEntries(data)}
         </div>
       ` : ''}
       
@@ -962,7 +977,7 @@ export function renderResumeClassicFeatured(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section">
           <h2 class="section-title">Professional Experience</h2>
-          ${renderExperienceEntries(data.experience)}
+          ${renderExperienceEntries(data)}
         </div>
       ` : ''}
       
@@ -1060,7 +1075,7 @@ export function renderResumeModern(data) {
         ${data.experience && data.experience.length > 0 ? `
           <div class="section experience-section">
             <h2 class="section-title">Experience</h2>
-            ${renderExperienceEntries(data.experience)}
+            ${renderExperienceEntries(data)}
           </div>
         ` : ''}${renderMainSections(data)}
       </main>
@@ -1107,7 +1122,7 @@ export function renderResumeTimeline(data) {
           <div class="section experience-section timeline-experience">
             <h2 class="section-title">Experience</h2>
             <div class="timeline-container">
-              ${renderExperienceEntries(data.experience, 'timeline')}
+              ${renderExperienceEntries(data, 'timeline')}
             </div>
           </div>
         ` : ''}
@@ -1209,7 +1224,7 @@ export function renderResumeCreative(data) {
       ${data.experience && data.experience.length > 0 ? `
         <div class="section experience-section creative-experience">
           <h2 class="section-title">Experience</h2>
-          ${renderExperienceEntries(data.experience)}
+          ${renderExperienceEntries(data)}
         </div>
       ` : ''}
       
@@ -1258,6 +1273,10 @@ const LAYOUT_RENDERERS = {
 };
 
 /** Render resume data with the renderer for `layout` (unknown → sidebar). */
-export function renderResumeForLayout(data, layout) {
-  return (LAYOUT_RENDERERS[layout] || renderResume)(data);
+export function renderResumeForLayout(data, layout, opts = {}) {
+  // Decorate a COPY. `viewData` in main.js is the store's own object whenever no
+  // AI change session is in flight, so writing the flag onto it would persist a
+  // display preference into the résumé's saved data.
+  const view = opts.groupPositions === false ? { ...data, groupPositions: false } : data;
+  return (LAYOUT_RENDERERS[layout] || renderResume)(view);
 }
