@@ -175,7 +175,7 @@ export function AccountSection() {
   const onDelete = async (p) => {
     const ok = await confirmDestructive({
       title: `Delete profile "${p.name}"?`,
-      description: 'Their résumés, job descriptions, applications, and chats are permanently removed. Export the profile first if you might need it again.',
+      description: 'Their resumes, job descriptions, applications, and chats are permanently removed. Export the profile first if you might need it again.',
       actionLabel: 'Delete profile',
     });
     if (!ok) return;
@@ -222,7 +222,7 @@ export function AccountSection() {
       <section>
         <SectionHeader
           title="Profiles"
-          description="Separate workspaces — each keeps its own résumés, job descriptions, applications, and chats. Switch to help someone else apply without mixing your data."
+          description="Separate workspaces — each keeps its own resumes, job descriptions, applications, and chats. Switch to help someone else apply without mixing your data."
         />
         {current && (
           <div>
@@ -391,7 +391,7 @@ export function AccountSection() {
       <section>
         <SectionHeader title="This profile" description="A snapshot of the active workspace." />
         <div className="grid grid-cols-3 gap-2.5">
-          <StatTile value={resumeCount} label={resumeCount === 1 ? 'Résumé' : 'Résumés'} />
+          <StatTile value={resumeCount} label={resumeCount === 1 ? 'Resume' : 'Resumes'} />
           <StatTile value={jdCount} label={jdCount === 1 ? 'Job description' : 'Job descriptions'} />
           <StatTile value={appStats.sent} label="Applications" hint="sent" />
         </div>

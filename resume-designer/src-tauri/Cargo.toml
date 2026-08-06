@@ -1,14 +1,18 @@
 [package]
 name = "resume-designer"
 version = "1.0.0"
-description = "Creative resume designer and generator."
+description = "A private career workspace for resumes and job applications."
 authors = ["Ash Shah"]
 license = "CC-BY-NC-SA-4.0"
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "resume_designer_lib"
+# NB: `package.name` above stays `resume-designer` on purpose — with no
+# `bundle.mainBinaryName` set it becomes CFBundleExecutable / the installed
+# Windows .exe name, and renaming it would add a second moving part to the
+# Windows upgrade path. Only the lib name is branded.
+name = "on_paper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -44,6 +48,18 @@ dirs = "5"
 # Loopback HTTP listener for the companion-extension bridge (commands/bridge.rs).
 # Requests are forwarded to the webview as events; JS answers via bridge_respond.
 tiny_http = "0.12"
+# OS credential store for the OpenRouter API key (commands/secret.rs), so the
+# key is encrypted at rest instead of sitting in plaintext under app_data_dir.
+# The two native features are the only ones enabled: `apple-native` is the
+# macOS Security framework, `windows-native` is wincred, and each is cfg-gated
+# inside the crate so naming both is correct for our two shipping targets.
+# No Linux feature on purpose — this app ships macOS + Windows, and pulling in
+# secret-service would drag D-Bus into the tree for a platform we don't build.
+#
+# Held at 3.x deliberately: keyring 4.x requires rustc 1.88 and this crate pins
+# `rust-version = "1.77"`, so cargo declines the upgrade rather than silently
+# raising our toolchain floor. Revisit together with that pin, not before.
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
 
 [dev-dependencies]
 # Isolated temp dirs for the storage-command filesystem tests. Already in the

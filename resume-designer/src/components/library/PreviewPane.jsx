@@ -13,7 +13,10 @@ import { pageDimsIn } from '../../pageSetup.js';
 export default function PreviewPane({ variant }) {
   const settings = getSettings();
   const layout = settings.layout || 'sidebar';
-  const html = useMemo(() => renderResumeForLayout(variant.data, layout), [variant, layout]);
+  const html = useMemo(
+    () => renderResumeForLayout(variant.data, layout, { groupPositions: settings.groupPositions !== false }),
+    [variant, layout, settings.groupPositions],
+  );
 
   const dims = pageDimsIn(settings); // settings carries pageSize/orientation/pageWidthIn
   const pageW = dims.widthIn * 96;

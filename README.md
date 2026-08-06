@@ -1,30 +1,32 @@
 <div align="center">
 
-# Resume Designer
+# On Paper
 
-**An AI-assisted résumé builder that turns one master profile into polished, job-tailored résumés — privately, on your own machine.**
+**Your career, clearly put.**
 
-[![Website](https://img.shields.io/badge/website-ashproto.github.io-c45c3e.svg)](https://ashproto.github.io/Resume-Designer/)
+**A private career workspace for resumes and job applications — on your own machine.**
+
+[![Website](https://img.shields.io/badge/website-onpaper.pro-c45c3e.svg)](https://onpaper.pro)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-lightgrey.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/ashproto/Resume-Designer?label=download)](https://github.com/ashproto/Resume-Designer/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/ashproto/Resume-Designer/total?label=downloads&color=c45c3e)](https://github.com/ashproto/Resume-Designer/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#download)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg)](https://v2.tauri.app/)
 
-![Resume Designer — editing a résumé in the liquid-glass desktop UI](docs/screenshots/hero.png)
+![On Paper — editing a resume in the liquid-glass desktop UI](docs/screenshots/hero.png)
 
 </div>
 
 ## What it is
 
-Resume Designer is a desktop app for building résumés. You keep **one master profile** — your full work history, skills, education, and projects — and spin off as many **tailored variants** as you need, each pointed at a specific role. An optional AI assistant (powered by your own [OpenRouter](https://openrouter.ai) key) helps you draft, rewrite, and tailor content to a job description, and every AI edit is shown as an inline diff you approve or reject.
+**On Paper, formerly Resume Designer**, is a private career workspace for resumes and job applications. You keep **one profile** — your full work history, skills, education, and projects — and shape it into a focused resume for each role you go after. An optional AI assistant (powered by your own [OpenRouter](https://openrouter.ai) key) helps you draft, rewrite, and tailor content to a job description, and every AI edit is shown as an inline diff you approve or reject.
 
-Your résumé data never leaves your machine except for the AI calls you explicitly make — there's no account, no backend, and no telemetry.
+Your resume data never leaves your machine except for the AI calls you explicitly make — there's no account, no backend, and no telemetry.
 
 ## Features
 
 **Build**
-- One **master profile** → many **tailored résumé variants**.
+- One **master profile** → many **tailored resume variants**.
 - **11 layouts** — Sidebar, Stacked, Stacked Vertical, Right Sidebar, Compact, Executive, Classic, Classic Featured, Modern, Timeline, and Creative.
 - Click-to-edit **inline editing**, drag-to-reorder sections, add/remove/restructure from a structure panel.
 - **Version history** so you can step back through changes, plus zoom and live text-formatting tools.
@@ -32,13 +34,13 @@ Your résumé data never leaves your machine except for the AI calls you explici
 
 **AI assistant (bring your own key)**
 - One [OpenRouter](https://openrouter.ai) key → many models (Claude, GPT, Gemini, and more), with a model picker and per-model reasoning-effort control.
-- **Generate a résumé for a job**: paste a posting and the assistant builds a brand-new tailored variant from your master profile.
-- **Tailor an existing résumé**: the assistant rewrites it for a posting — applied as **inline diffs you review** before they land.
+- **Generate a resume for a job**: paste a posting and the assistant builds a brand-new tailored variant from your master profile.
+- **Tailor an existing resume**: the assistant rewrites it for a posting — applied as **inline diffs you review** before they land.
 - Responses **stream live, including the model's reasoning**, with a stop control, web-search **citations**, and per-run token/cost stats.
-- A chat panel for free-form drafting/feedback with **per-résumé conversation threads**, plus **token-usage and cost tracking** across every feature.
+- A chat panel for free-form drafting/feedback with **per-resume conversation threads**, plus **token-usage and cost tracking** across every feature.
 
 **Import & export**
-- **Import an existing résumé** from PDF or Word (`.docx`) to bootstrap your profile.
+- **Import an existing resume** from PDF or Word (`.docx`) to bootstrap your profile.
 - **Export to PDF** — true vector, multi-page PDF with per-page sizing (native print-to-PDF on the desktop app; image-based fallback in the browser).
 - **Back up and restore** all your data as a JSON file.
 
@@ -57,9 +59,9 @@ Grab the latest installer from the [**Releases page**](https://github.com/ashpro
 
 | Platform | File | Notes |
 | --- | --- | --- |
-| macOS (Apple Silicon) | `Resume Designer_<version>_aarch64.dmg` | Signed & notarized |
-| macOS (Intel) | `Resume Designer_<version>_x64.dmg` | Signed & notarized |
-| Windows | `Resume Designer_<version>_x64-setup.exe` | Currently unsigned — see note below |
+| macOS (Apple Silicon) | `On-Paper_<version>_aarch64.dmg` | Signed & notarized |
+| macOS (Intel) | `On-Paper_<version>_x64.dmg` | Signed & notarized |
+| Windows | `On-Paper_<version>_x64-setup.exe` | Currently unsigned — see note below |
 
 The app updates itself: when a new release is published, it prompts you to download and restart.
 
@@ -67,22 +69,22 @@ The app updates itself: when a new release is published, it prompts you to downl
 
 > **Windows note:** the installer is not yet code-signed, so Windows SmartScreen may warn on first launch. Choose **More info → Run anyway** to proceed.
 
-Prefer not to install anything? You can also run it in a browser — see [Run from source](#run-from-source).
+Prefer not to install anything? You can also run it in a browser — see [Run from source](#run-from-source). A browser has no system keychain, so your API key is encrypted before it's stored there, under a key that can't be read out through the browser's crypto API. Note that a copy of the whole browser profile carries both the encrypted key and the key that unlocks it, so treat profile backups as containing your API key.
 
 ## Using the AI features
 
 The AI features are optional and **use your own [OpenRouter](https://openrouter.ai) API key**:
 
 1. Create a free OpenRouter account and generate an API key.
-2. Paste it into Resume Designer when prompted (or in Settings).
+2. Paste it into On Paper when prompted (or in Settings).
 3. Pick a model and start chatting or tailoring.
 
 Your key is stored locally on your device and is sent only to OpenRouter to make the AI requests you trigger. You only pay OpenRouter for what you use; everything else in the app works without a key.
 
 ## Privacy & data
 
-- **Local-first:** résumés, profile, and settings live on your device — the desktop app stores them as plain files under its application-support folder; the browser build uses browser local storage.
-- **No account, no backend, no analytics.** Network use is limited to three things: the AI requests you make to OpenRouter; the desktop app's automatic update check on launch (GitHub Releases); and **web fonts for the résumé document** — a Google-Fonts typography pairing loads from `fonts.googleapis.com` / `fonts.gstatic.com` only while it's the selected style. Choose a **system-font pairing** in Settings and the app makes zero font requests; its own UI fonts (Geist) are always bundled. (The desktop update check runs regardless; the browser build checks for neither updates nor telemetry.)
+- **Local-first:** resumes, profile, and settings live on your device — the desktop app stores them as plain files under its application-support folder; the browser build uses browser local storage.
+- **No account, no backend, no analytics.** Network use is limited to three things: the AI requests you make to OpenRouter; the desktop app's automatic update check on launch (GitHub Releases); and **web fonts for the resume document** — a Google-Fonts typography pairing loads from `fonts.googleapis.com` / `fonts.gstatic.com` only while it's the selected style. Choose a **system-font pairing** in Settings and the app makes zero font requests; its own UI fonts (Geist) are always bundled. (The desktop update check runs regardless; the browser build checks for neither updates nor telemetry.)
 - Export a full **JSON backup** any time, and import it on another machine.
 
 ## Run from source
@@ -128,10 +130,10 @@ Issues and pull requests are welcome. For anything substantial, please open an i
 
 ## License
 
-**Free · source-available · noncommercial** — Resume Designer is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0). See [`LICENSE`](LICENSE) for the full terms.
+**Free · source-available · noncommercial** — **On Paper** is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0). See [`LICENSE`](LICENSE) for the full terms.
 
 - **Use it for anything, including at work.** Creating resumes, profiles, exports, and other application materials — personal or commercial — is fine. The noncommercial term is about the app itself, not the work you produce with it.
-- **Your documents are yours.** Resumes, PDFs, backups, profile data, and other outputs you create with Resume Designer are not licensed by this project license.
+- **Your documents are yours.** Resumes, PDFs, backups, profile data, and other outputs you create with the app are not licensed by this project license.
 - **Don't commercialize the app.** No reselling, repackaging-and-selling, or offering it as a paid hosted service.
 - **ShareAlike.** Distribute modified versions under these same terms.
 

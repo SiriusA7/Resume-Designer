@@ -4,6 +4,13 @@
  */
 
 import { appStorage } from './appStorage.js';
+// The ONE guarded path-write primitive. store.update is reachable with
+// AI-supplied paths (applyChangeToStore routes every accepted change here), so
+// the __proto__/constructor/prototype segment guard must hold at this layer
+// too — not only in createChangeSet's pre-filter. diffEngine imports nothing
+// from this module (only the npm `diff` package), so sharing creates no cycle.
+import { setByPath } from './diffEngine.js';
+import { BACKUP_HISTORY_PREFIX } from './profileKeys.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -70,36 +77,10 @@ function getByPath(obj, path) {
   }, obj);
 }
 
-// Set nested value by path
-function setByPath(obj, path, value) {
-  const keys = path.split('.');
-  const lastKey = keys.pop();
-  
-  let current = obj;
-  for (const key of keys) {
-    // Handle array index notation
-    const match = key.match(/^(\w+)\[(\d+)\]$/);
-    if (match) {
-      current = current[match[1]][parseInt(match[2])];
-    } else {
-      if (current[key] === undefined) {
-        current[key] = {};
-      }
-      current = current[key];
-    }
-  }
-  
-  // Handle array index in last key
-  const lastMatch = lastKey.match(/^(\w+)\[(\d+)\]$/);
-  if (lastMatch) {
-    current[lastMatch[1]][parseInt(lastMatch[2])] = value;
-  } else {
-    current[lastKey] = value;
-  }
-}
-
-// History persistence key prefix
-const HISTORY_KEY_PREFIX = 'resume-designer-history-';
+// History persistence key prefix. Re-exported from profileKeys.js rather than
+// re-declared: isOwnedKey() keys off the same constant, so a second literal
+// here would have to stay byte-identical with nothing enforcing it.
+const HISTORY_KEY_PREFIX = BACKUP_HISTORY_PREFIX;
 
 // Change type constants
 export const CHANGE_TYPES = {
@@ -112,6 +93,24 @@ export const CHANGE_TYPES = {
   REMOVE: 'remove'
 };
 
+// Sections gained an `area` in 2026-07. Every pre-existing section is a sidebar
+// section by definition, so stamping 'sidebar' keeps rendered output identical.
+// Additive on purpose: the array, its indices and every sections[i].content[j]
+// path are untouched, so AI change paths, data-editable attributes, saved
+// variants and backups keep working without their own migration.
+const SECTION_AREAS = new Set(['main', 'sidebar']);
+
+export function migrateSectionAreas(data) {
+  if (!data || !Array.isArray(data.sections)) return data;
+  return {
+    ...data,
+    sections: data.sections.map((section) => ({
+      ...section,
+      area: SECTION_AREAS.has(section && section.area) ? section.area : 'sidebar',
+    })),
+  };
+}
+
 // Create the store
 function createStore() {
   let data = null;
@@ -121,7 +120,7 @@ function createStore() {
   let saveTimeout = null;
   // Latched off before a destructive restore reloads the window. Between the
   // restore writing appStorage and the reload booting from it, the in-memory
-  // `data` is the STALE pre-import résumé; a save in that window (the
+  // `data` is the STALE pre-import resume; a save in that window (the
   // visibilitychange/close handlers call saveNow) would write it back into the
   // freshly-restored profile — corrupting the backup. Once suspended it stays
   // suspended: the only path forward from a restore is the reload.
@@ -151,7 +150,7 @@ function createStore() {
 
     // Set entire data object
     setData(newData, skipSave = false, variantId = null) {
-      data = deepClone(newData);
+      data = deepClone(migrateSectionAreas(newData));
       isDirty = false;
       
       // Track current variant for history persistence
@@ -412,6 +411,25 @@ function createStore() {
       }
     },
 
+    // Insert an item at a specific index. addToArray only appends, so applying
+    // a proposed insertion (`[A,B]` -> `[A,X,B]`) had to go through the generic
+    // path-write, which ASSIGNS `arr[1] = X` and destroys B. Index is clamped
+    // rather than rejected: a change set numbers its additions against the
+    // proposed array, so an index can legitimately sit one past the current end.
+    insertIntoArray(path, index, item) {
+      if (!data) return;
+
+      const arr = getByPath(data, path);
+      if (!Array.isArray(arr)) return;
+      const at = Math.max(0, Math.min(index, arr.length));
+      arr.splice(at, 0, item);
+      isDirty = true;
+      if (!isUndoRedoAction) this.pushHistory();
+      this.emit('arrayItemAdded', { path, item, index: at });
+      this.emit('change', data);
+      this.scheduleSave();
+    },
+
     // Remove item from array by index
     removeFromArray(path, index) {
       if (!data) return;
@@ -477,7 +495,7 @@ function createStore() {
     },
 
     // Latch saving off ahead of a destructive import (see savesSuspended).
-    // Called BEFORE the import runs, so the store can't write its stale résumé
+    // Called BEFORE the import runs, so the store can't write its stale resume
     // over the imported data during the import's own async flush. Cancels any
     // pending debounce so it can't fire either.
     //
@@ -569,6 +587,7 @@ export const EMPTY_RESUME = {
       id: generateId('section'),
       title: 'Skills',
       type: 'list',
+      area: 'sidebar',
       content: ['Skill 1', 'Skill 2', 'Skill 3']
     }
   ],

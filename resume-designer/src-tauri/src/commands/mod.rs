@@ -43,6 +43,11 @@ pub mod migration;
 // webview localStorage). Not platform-gated: every build needs it.
 pub mod storage;
 
+// OS keychain for credentials, which must NOT live in `storage`'s plaintext
+// files (that directory ends up in backups). Not platform-gated: the commands
+// compile everywhere, and keyring itself cfg-selects the native backend.
+pub mod secret;
+
 /// Loopback HTTP bridge for the companion browser extension.
 pub mod bridge;
 
@@ -50,6 +55,11 @@ pub mod bridge;
 // `tauri-plugin-updater` is itself a cfg(desktop) dependency.
 #[cfg(desktop)]
 pub mod updater;
+
+// macOS-only: renames a bundle still called `Resume Designer.app`. The updater
+// cannot do this itself — it re-roots onto the running bundle's path by design.
+#[cfg(target_os = "macos")]
+pub mod bundle_name;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,7 +202,7 @@ pub async fn capture_pdf_from_window(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let temp_path = std::env::temp_dir().join(format!(
-        "resume-designer-preview-{}-{}.pdf",
+        "on-paper-preview-{}-{}.pdf",
         std::process::id(),
         nanos
     ));

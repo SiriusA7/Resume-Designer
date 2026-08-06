@@ -1,8 +1,10 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { ArrowRightLeft, Check, KeyRound, Loader2, MessageCircle, Pencil, Settings2, Square } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+
+import * as changeSession from '../../changeSession.js';
 
 import { Markdown, StreamingMarkdown } from './Markdown.jsx';
 import { LiveReasoning } from './LiveReasoning.jsx';
@@ -80,13 +82,19 @@ function StreamingBubble({ msg, onStop, onRender }) {
 }
 
 function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants, currentVariantId }) {
+  // Re-render on any change-session transition so the action buttons below
+  // stand down the moment this message's changes are decided from ANY surface
+  // (inline preview, diff dialog) — msg.pendingChanges alone cannot know that.
+  const [, setSessionRev] = useState(0);
+  useEffect(() => changeSession.subscribe(() => setSessionRev((n) => n + 1)), []);
+
   // Context-switch divider: a "Now discussing «Name»" row whose button makes that
-  // résumé active WITHOUT leaving this thread (onJumpVariant pins it). The name is
+  // resume active WITHOUT leaving this thread (onJumpVariant pins it). The name is
   // resolved live from the variant list so it tracks renames and so older markers
-  // — which mis-stamped the person's name instead of the résumé label — read right.
+  // — which mis-stamped the person's name instead of the resume label — read right.
   if (msg.role === 'context') {
     const name =
-      variants?.find((v) => v.id === msg.variantId)?.name || msg.variantName || 'this résumé';
+      variants?.find((v) => v.id === msg.variantId)?.name || msg.variantName || 'this resume';
     return (
       <div className="my-2 flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span className="h-px flex-1 bg-border" />
@@ -115,11 +123,18 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
   }
 
   const isUser = msg.role === 'user';
-  const hasActions = msg.applyData || msg.pendingChanges;
-  // Apply/Review mutate or diff the ACTIVE résumé (store-wide), but in a
-  // cross-résumé thread this message may have been generated against another
+  // This message's changes are reviewable only while they are the change set
+  // the shared session is still deciding. Identity-scoped on purpose: a later
+  // proposal's pending session must not resurrect an older message's buttons
+  // over its stale diff.
+  const changesStillPending = msg.pendingChanges
+    ? changeSession.getChangeSet() === msg.pendingChanges && changeSession.hasPending()
+    : false;
+  const hasActions = msg.applyData || changesStillPending;
+  // Apply/Review mutate or diff the ACTIVE resume (store-wide), but in a
+  // cross-resume thread this message may have been generated against another
   // one. When the stamps disagree, offer the switch instead of the actions —
-  // jumpToVariant keeps this thread open, and once the origin résumé is active
+  // jumpToVariant keeps this thread open, and once the origin resume is active
   // the real buttons render. Messages predating variant stamping (no
   // msg.variantId) keep the old behavior; we can't know their origin.
   const actionsForeign =
@@ -159,7 +174,7 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
               </Button>
             ) : (
               <span className="text-[11px] text-muted-foreground">
-                These edits were for a résumé that no longer exists.
+                These edits were for a resume that no longer exists.
               </span>
             )
           ) : (
@@ -171,10 +186,10 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
                   onClick={() => onApply(msg.applyData.action, msg.applyData.value)}
                 >
                   <Check className="size-3.5" />
-                  Apply to Resume
+                  Apply to resume
                 </Button>
               )}
-              {msg.pendingChanges && (
+              {changesStillPending && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -182,7 +197,7 @@ function MessageBubble({ msg, onReviewChanges, onApply, onJumpVariant, variants,
                   onClick={() => onReviewChanges(msg.id)}
                 >
                   <Pencil className="size-3.5" />
-                  Review Changes
+                  Review changes
                 </Button>
               )}
             </>
@@ -197,13 +212,13 @@ function ApiKeyPrompt({ onConfigure }) {
   return (
     <div className="my-auto flex flex-col items-center gap-1 px-6 py-14 text-center">
       <KeyRound className="mb-3 size-10 text-muted-foreground/40" />
-      <p className="text-sm font-medium">Setup Required</p>
+      <p className="text-sm font-medium">Setup required</p>
       <p className="text-sm text-muted-foreground">
-        To use the AI Assistant, add your OpenRouter API key — one key for Claude, GPT, Gemini &amp; 300+ models.
+        To use the AI assistant, add your OpenRouter API key — one key for Claude, GPT, Gemini &amp; 300+ models.
       </p>
       <Button className="mt-4" onClick={onConfigure}>
         <Settings2 className="size-4" />
-        Configure API Keys
+        Configure API keys
       </Button>
     </div>
   );
@@ -213,7 +228,7 @@ function Welcome() {
   return (
     <div className="my-auto flex flex-col items-center gap-1 px-6 py-14 text-center">
       <MessageCircle className="mb-3 size-10 text-muted-foreground/40" />
-      <p className="text-sm font-medium">Welcome to AI Assistant</p>
+      <p className="text-sm font-medium">Welcome to the AI assistant</p>
       <p className="text-sm text-muted-foreground">I can help you improve your resume. Try asking me to:</p>
       <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
         <li>Rewrite a bullet point to be more impactful</li>

@@ -15,6 +15,17 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+// THESE ARE THE ENDPOINTS THAT SHIP. `plugins.updater.endpoints` in
+// tauri.conf.json is inert at runtime — the JS `plugin-updater` check() can't
+// override an endpoint, so native.js routes through `check_update_on_channel`,
+// which builds its own updater from `endpoints_for()` below. If you change the
+// release location, change it HERE (test/updaterEndpoints.test.js enforces that
+// the config value tracks this one, so the two can't silently diverge).
+//
+// Both URLs hardcode the repo slug, and they are compiled into every shipped
+// binary — so a repo rename strands the installed base on GitHub's 301 forever.
+// See "Preparing for a repo rename" in TAURI.md before touching the slug.
+//
 // GitHub's `/releases/latest` redirect excludes pre-releases, so stable users
 // never see beta builds; the beta channel reads the rolling `next` pre-release.
 const STABLE_ENDPOINT: &str =
@@ -185,6 +196,13 @@ pub async fn install_pending_update(
         )
         .await
         .map_err(|e| e.to_string())?;
+
+    // A relaunch is imminent, and it spawns from the path this process was
+    // exec'd with. Hold off the pending bundle rename so the app can actually
+    // come back — it runs on the next clean exit instead. See
+    // commands/bundle_name.rs.
+    #[cfg(target_os = "macos")]
+    crate::commands::bundle_name::suppress_until_next_launch();
 
     Ok(())
 }

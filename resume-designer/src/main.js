@@ -1,12 +1,14 @@
 /**
- * Resume Designer - Main Application
+ * On Paper - Main Application
  * Integrates all components: store, header bar, chat panel, inline editor, structure panel
  */
 
 import { store } from './store.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
+import { initSecretStore } from './secretStore.js';
 import {
-  ensureProfilesInitialized, loadRegistry, isAdoptionPending, hasProfileNamespaces,
+  ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
+  hasProfileNamespaces, stripDeadProviderCredentials,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -16,7 +18,9 @@ import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from '
 import { initVariants } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
-import { initInlineChanges } from './inlineChanges.js';
+import { initInlineChanges, decorateRenderedResume, isPreviewSuppressed } from './inlineChanges.js';
+import { applyPendingToData } from './changePreview.js';
+import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
 import { initZoomControls } from './zoomControls.js';
 import { initWindowDrag } from './tauriDrag.js';
@@ -150,6 +154,7 @@ const COLOR_PALETTES = {
 
 let currentPalette = 'terracotta';
 let currentLayout = 'sidebar';
+let currentGroupPositions = true;
 let customColor = '#c45c3e';
 
 // appStorage flag set by `maybeAutoMigrateLegacyData` to remember
@@ -218,7 +223,14 @@ async function maybeAutoMigrateLegacyData() {
     const envelope = await importLegacyElectronData();
     // Durable variant: a disk-full flush failure rolls the (empty-ish) store
     // back and throws into the catch below — flag 'failed', boot continues.
-    const result = await importFullBackupDurably(envelope);
+    // keepCredential: this is the user's own live data being carried across an
+    // in-place upgrade on the same machine, NOT a backup file being restored.
+    // The credential exclusion exists to stop an old backup reintroducing a key;
+    // applied here it DELETED the key, and the flag stamped below is one-shot,
+    // so the user came up permanently without their configured AI credential.
+    // Left in place it goes through the normal upgrade path — extraction to the
+    // shared key, then initSecretStore into the keychain, then stripped.
+    const result = await importFullBackupDurably(envelope, { keepCredential: true });
     // Non-reloading caller: importFullBackupDurably keeps the restore guard armed
     // on success (interactive callers rely on continuous ownership), but this boot
     // path continues WITHOUT a reload — release it now, or the migration flag and
@@ -314,6 +326,36 @@ export async function init() {
     await initAppStorage();
     await maybeAutoMigrateLegacyData();
     await ensureProfilesInitialized();   // profiles resolve BEFORE the React gate opens
+    // ensureProfilesInitialized runs extractSharedApiKey on its HAPPY paths
+    // only: an adoption that cannot finish (browser quota, a Tauri disk
+    // failure) returns early without it. Left to that, a credential still
+    // inside the per-profile blob is never consolidated, initSecretStore finds
+    // nothing to migrate and reports healthy storage, and getSettings quietly
+    // goes on serving the readable blob value — Settings claiming keychain or
+    // encrypted storage while the paid key sits in clear text, indefinitely if
+    // adoption keeps failing.
+    //
+    // Safe to repeat, but that took a fix to be true: "an existing shared key
+    // wins" was read as "a second call is free", and a shared value that is
+    // merely PENDING — an earlier call this boot whose flush failed — reads
+    // exactly like a durable one through appStorage's cache. The second call
+    // stripped the blob against it. extractSharedApiKey now proves durability
+    // before every strip, not only the one it wrote.
+    const strandedPlaintext = await extractSharedApiKey();
+    // Dead pre-OpenRouter provider credentials, carried in by the Electron
+    // migration and read by nothing since. Import-time sanitising only covers
+    // future migrations; this is what reaches the installs that already took
+    // one. Synchronous, best-effort, and safe to run every boot — it is a no-op
+    // once the blobs are clean.
+    stripDeadProviderCredentials();
+    // AFTER the extraction above and BEFORE the gate opens, so React never
+    // renders a settings state missing a key the user does have.
+    // Swallows its own failures — a keychain problem must not block boot.
+    //
+    // Handed whatever extraction could NOT move. A caught storage failure used
+    // to be indistinguishable from success here, so boot continued as though
+    // the credential were protected while a readable copy stayed in the blob.
+    await initSecretStore({ strandedPlaintext });
   } finally {
     markStorageReady();
   }
@@ -402,6 +444,7 @@ export async function init() {
   const settings = getSettings();
   currentPalette = settings.colorPalette || 'terracotta';
   currentLayout = settings.layout || 'sidebar';
+  currentGroupPositions = settings.groupPositions !== false;
   customColor = settings.customColor || '#c45c3e';
   
   // Migrate built-in variants to storage on first run
@@ -455,7 +498,7 @@ export async function init() {
   // the diff/inline-change hosts it drives and wires them with the resume
   // re-render callback (both apply through the store, which re-renders anyway).
   initDiffView(handleChatApply);
-  initInlineChanges();
+  initInlineChanges(renderCurrentResume);
   
   // Initialize zoom controls
   initZoomControls();
@@ -563,7 +606,7 @@ export async function init() {
   renderCurrentResume();
 
   // Pagination measures block heights; on a cold start the first render can run
-  // before the résumé's webfonts finish loading, so it splits pages against
+  // before the resume's webfonts finish loading, so it splits pages against
   // fallback metrics and the live view stays mis-paginated until the next
   // re-render. Re-paginate once the real fonts are ready so the on-screen sheets
   // match the exported PDF (the print window already does this).
@@ -641,6 +684,7 @@ export async function initPrintMode() {
     const settings = getSettings();
     currentPalette = settings.colorPalette || 'terracotta';
     currentLayout = settings.layout || 'sidebar';
+    currentGroupPositions = settings.groupPositions !== false;
     customColor = settings.customColor || '#c45c3e';
     await step('settings-loaded', { palette: currentPalette, layout: currentLayout });
 
@@ -785,7 +829,18 @@ function handleDesignChange(change) {
       // to re-split.
       if (getPageSetup().pageSize !== 'continuous') renderCurrentResume();
       break;
-    
+
+    case 'groupPositions':
+      // Absence means grouped, so only an explicit false turns it off.
+      currentGroupPositions = change.value !== false;
+      saveSettings({ groupPositions: currentGroupPositions });
+      // Unconditional, unlike 'spacing': collapsing a run into flat cards changes
+      // the rendered CONTENT, not only its height, so continuous mode must
+      // re-render too — and with a fixed page size this also re-splits the
+      // sheets, which is what stops content clipping out of the exported PDF.
+      renderCurrentResume();
+      break;
+
     case 'accent':
       // Accent settings are handled by structurePanel and saved automatically
       break;
@@ -1336,7 +1391,7 @@ const EMPTY_STATE_BTN =
   'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-xs font-medium transition-colors ' +
   'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring h-8 px-3';
 
-// Empty canvas state: no variant loaded (fresh profile, or every résumé
+// Empty canvas state: no variant loaded (fresh profile, or every resume
 // deleted). Tailwind's content glob covers src/**/*.js, so these utilities
 // all resolve even though the markup is an innerHTML string. The template is
 // fully static — nothing user-provided is interpolated (EMPTY_STATE_BTN is a
@@ -1351,10 +1406,10 @@ function renderEmptyState(container) {
         <path d="M16 13H8"/>
         <path d="M16 17H8"/>
       </svg>
-      <p class="text-[15px] font-semibold text-foreground">No r&eacute;sum&eacute; loaded</p>
-      <p class="mt-1 max-w-[36ch] text-[13px] leading-relaxed text-muted-foreground">Create a new r&eacute;sum&eacute; from scratch, or open one from your library.</p>
+      <p class="text-[15px] font-semibold text-foreground">No resume loaded</p>
+      <p class="mt-1 max-w-[36ch] text-[13px] leading-relaxed text-muted-foreground">Create a new resume from scratch, or open one from your library.</p>
       <div class="mt-5 flex items-center gap-2">
-        <button type="button" id="empty-state-create" class="${EMPTY_STATE_BTN} bg-primary text-primary-foreground shadow hover:bg-primary/90">Create r&eacute;sum&eacute;</button>
+        <button type="button" id="empty-state-create" class="${EMPTY_STATE_BTN} bg-primary text-primary-foreground shadow hover:bg-primary/90">Create resume</button>
         <button type="button" id="empty-state-library" class="${EMPTY_STATE_BTN} border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground">Open library</button>
       </div>
     </div>
@@ -1378,7 +1433,7 @@ function renderCurrentResume() {
   // renderCurrentResume() replaces #resume's innerHTML and paginate() then
   // replaceChildren()s the sheets — a destructive rebuild of the scrolled
   // subtree of #resume-scroller. Chromium retains scrollTop through this, but
-  // WebKit/WKWebView (the macOS Tauri build) drops it to 0, so the résumé
+  // WebKit/WKWebView (the macOS Tauri build) drops it to 0, so the resume
   // snaps to the top on every re-render — most noticeably when toggling the
   // Tools bulleted/inline view. Capture now; restore after paginate().
   const scroller = document.getElementById('resume-scroller');
@@ -1392,9 +1447,24 @@ function renderCurrentResume() {
     return;
   }
   
+  // Project still-pending AI proposals onto a COPY of the data so the preview
+  // renders through the normal pipeline (markdown, pagination, every layout);
+  // the store itself is untouched until a change is applied. With no session
+  // in flight this is a plain render of the store data.
+  // Suppressed during a browser PDF export: that path captures the live DOM, so
+  // a render carrying the projection would bake never-applied content into the
+  // file (see withPreviewSuppressed).
+  const changeSet = isPreviewSuppressed() ? null : changeSession.getChangeSet();
+  const viewData = changeSet
+    ? applyPendingToData(data, changeSet, changeSession.statusMap())
+    : data;
+
   // Render based on current layout
-  container.innerHTML = renderResumeForLayout(data, currentLayout);
-  
+  container.innerHTML = renderResumeForLayout(viewData, currentLayout, { groupPositions: currentGroupPositions });
+  // viewData, not the store data: anchored changes can land at a different
+  // index in the projection, and the markers must follow the render.
+  decorateRenderedResume(container, viewData);
+
   // Add layout class to resume for CSS targeting
   const resume = container.querySelector('.resume');
   if (resume) {
@@ -1413,7 +1483,7 @@ function renderCurrentResume() {
   // Re-apply photo settings after render
   initPhotoService();
   
-  // Paginate the just-rendered résumé into page "sheets". Screen and PDF share
+  // Paginate the just-rendered resume into page "sheets". Screen and PDF share
   // this path (continuous = one open-height sheet); the print window calls the
   // same renderCurrentResume(), so the exported PDF matches what's on screen.
   paginate(container, getPageSetup(), currentLayout);

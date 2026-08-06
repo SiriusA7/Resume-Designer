@@ -66,7 +66,7 @@ export function JobSelectionDialog({ open, onOpenChange, jobs, models, defaultMo
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between border-b p-6">
           <div className="space-y-1">
-            <DialogTitle>Analyze Resume Fit</DialogTitle>
+            <DialogTitle>Analyze resume fit</DialogTitle>
             <p className="text-sm text-muted-foreground">Pick the jobs and model to compare against.</p>
           </div>
           <button
@@ -114,10 +114,10 @@ export function JobSelectionDialog({ open, onOpenChange, jobs, models, defaultMo
           <Separator />
 
           <div className="flex items-center justify-between">
-            <Label>Job Description(s)</Label>
+            <Label>Jobs</Label>
             <div className="flex items-center gap-3">
               <span className="text-sm text-muted-foreground">{selectedIds.size} selected</span>
-              <Button variant="link" size="sm" className="h-auto p-0" onClick={selectAll}>Select All</Button>
+              <Button variant="link" size="sm" className="h-auto p-0" onClick={selectAll}>Select all</Button>
               <Button variant="link" size="sm" className="h-auto p-0 text-muted-foreground" onClick={clearAll}>Clear</Button>
             </div>
           </div>

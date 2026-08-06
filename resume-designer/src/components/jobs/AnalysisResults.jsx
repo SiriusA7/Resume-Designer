@@ -19,7 +19,7 @@ function getImpactPriority(impact) {
 }
 
 function getImpactLabel(impact) {
-  return ({ high: 'High Impact', medium: 'Medium Impact', low: 'Low Impact' })[impact] || 'Medium Impact';
+  return ({ high: 'High impact', medium: 'Medium impact', low: 'Low impact' })[impact] || 'Medium impact';
 }
 
 // Per-impact presentation: leading icon, the impact Badge's tint, and the
@@ -99,9 +99,9 @@ export function AnalysisResults({ results, appliedIndexes, onApply }) {
   const impactCounts = { high: highImpact.length, medium: mediumImpact.length, low: lowImpact.length };
 
   const groups = [
-    { key: 'high', items: highImpact, label: 'High Impact Changes', hint: 'Address these first for maximum improvement' },
-    { key: 'medium', items: mediumImpact, label: 'Medium Impact Changes', hint: 'Important improvements to consider' },
-    { key: 'low', items: lowImpact, label: 'Low Impact Changes', hint: 'Nice-to-have optimizations' },
+    { key: 'high', items: highImpact, label: 'High impact changes', hint: 'Address these first' },
+    { key: 'medium', items: mediumImpact, label: 'Medium impact changes', hint: 'Worth considering next' },
+    { key: 'low', items: lowImpact, label: 'Low impact changes', hint: 'Nice-to-have changes' },
   ];
 
   const score = Number(results.matchScore) || 0;
@@ -122,7 +122,7 @@ export function AnalysisResults({ results, appliedIndexes, onApply }) {
         </div>
         <div className="min-w-0 flex-1 space-y-[9px]">
           <div className="space-y-1.5">
-            <div className="text-[12px] font-semibold">Matching Keywords</div>
+            <div className="text-[12px] font-semibold">Matching keywords</div>
             {(results.keywordMatches || []).length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {(results.keywordMatches || []).map((k, i) => (
@@ -134,7 +134,7 @@ export function AnalysisResults({ results, appliedIndexes, onApply }) {
             )}
           </div>
           <div className="space-y-1.5">
-            <div className="text-[12px] font-semibold">Missing Keywords</div>
+            <div className="text-[12px] font-semibold">Missing keywords</div>
             {(results.missingKeywords || []).length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {(results.missingKeywords || []).map((k, i) => (
@@ -159,7 +159,7 @@ export function AnalysisResults({ results, appliedIndexes, onApply }) {
         </ul>
       </Section>
 
-      <Section title="Gaps to Address">
+      <Section title="Gaps to address">
         <ul className="space-y-2">
           {(results.gaps || []).map((g, i) => (
             <li key={i} className="text-sm text-muted-foreground">
@@ -175,7 +175,7 @@ export function AnalysisResults({ results, appliedIndexes, onApply }) {
           <Separator />
           <section className="space-y-4">
             <div className="flex items-center justify-between gap-2">
-              <h4 className="text-sm font-semibold">Recommended Changes</h4>
+              <h4 className="text-sm font-semibold">Recommended changes</h4>
               <div className="flex items-center gap-1.5">
                 {impactCounts.high > 0 && <Badge className="border-transparent bg-destructive-bg text-destructive">{impactCounts.high} high</Badge>}
                 {impactCounts.medium > 0 && <Badge className="border-transparent bg-warning-bg text-warning">{impactCounts.medium} medium</Badge>}

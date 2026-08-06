@@ -8,6 +8,10 @@ import { parseResume } from './parser.js';
 import { isTauri } from './native.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
+// The API key lives in the OS keychain, not beside the resume data on disk.
+import {
+  getSecret, setSecret, isSecretStoreReady, setCredentialChangeNotifier,
+} from './secretStore.js';
 
 const STORAGE_KEY = 'resume-designer-data';
 export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
@@ -224,12 +228,18 @@ export function clearVariantAnalysis(variantId) {
   }
 }
 
-// Save settings. openrouterKey is machine-level (shared across profiles) and
-// routes to its own key; everything else merges into the per-profile blob.
+// Save settings. The credential does NOT come through here — it lives in the
+// OS keychain and its write is async, so it has its own entry point
+// (saveApiKey). Everything else merges into the per-profile blob.
+//
+// Throwing rather than silently delegating: this function is synchronous, so a
+// delegated keychain write could only be fire-and-forget, and a failed one
+// would leave the user believing a key was saved that never reached the
+// keychain. A loud error at the call site is the correct signal.
 export function saveSettings(settings) {
   const { openrouterKey, ...rest } = settings;
   if (openrouterKey !== undefined) {
-    appStorage.setItem(OPENROUTER_KEY_KEY, openrouterKey);
+    throw new Error('saveSettings cannot write openrouterKey — use saveApiKey()');
   }
   const storage = loadFromStorage();
   storage.settings = { ...storage.settings, ...rest };
@@ -242,27 +252,87 @@ export function saveSettings(settings) {
   // stale blob value stays masked by the shared-key overlay in getSettings.
   saveToStorage(storage);
 
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
-      detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
-    }));
+  notifySettingsUpdated();
+}
+
+/**
+ * Tell the UI that settings — including the credential — may have changed.
+ *
+ * Every listener re-reads through getSettings() rather than trusting `detail`,
+ * so the payload is informational and a notification is never wrong, only
+ * sometimes redundant. That is what makes it safe to fire from the failure
+ * paths in saveApiKey and from a remote credential adoption.
+ */
+function notifySettingsUpdated() {
+  if (typeof window === 'undefined') return;
+  const storage = loadFromStorage();
+  window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
+    detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
+  }));
+}
+
+// A remote credential adoption has no local caller to announce it, so
+// secretStore calls back here. Wired at import time; persistence.js is imported
+// by every entry point that has a UI.
+setCredentialChangeNotifier(notifySettingsUpdated);
+
+/**
+ * Persist the API key. Async because it goes to the OS keychain rather than
+ * to disk beside the resume data.
+ *
+ * Rejects if the keychain refuses the write, so the caller can tell the user
+ * their key was NOT saved. Callers must await this — a dropped promise here is
+ * a silently lost credential.
+ */
+export async function saveApiKey(value) {
+  // `finally`, not "after the await". setSecret() has three paths that change
+  // the effective credential and THEN throw: the memory-only fallback (caches
+  // the value, reports it was not saved), the write-conflict path (adopts the
+  // winner's value, then reports the conflict), and a plaintext-cleanup failure
+  // after the ciphertext write has landed. Dispatching only on success left
+  // getSettings() returning a new key while the UI kept the old enabled state
+  // until reload. Listeners re-read state rather than trusting the payload, so
+  // firing on a total failure too is harmless — it just recomputes to what is
+  // already on screen.
+  try {
+    await setSecret(value);
+  } finally {
+    notifySettingsUpdated();
   }
 }
 
-// Get settings. The shared machine-level key is authoritative when PRESENT
+// Get settings. The machine-level key is authoritative when PRESENT
 // (null-check, not truthiness: an existing empty value means the user cleared
 // the key and must mask any stale blob value); the blob is only a fallback
 // for pre-extraction installs (adoption strips it on the next boot).
+//
+// The credential comes from secretStore's synchronous in-memory copy, hydrated
+// at boot from the OS keychain or the encrypted browser store.
+//
+// The blob fallback is gated on the store not having ANSWERED yet, not merely
+// on it answering null. Those were the same observation while null could only
+// mean "nothing stored" — but this PR gave the store states where null is a
+// DELIBERATE refusal: `browser-unreadable` returns null precisely so a
+// credential it cannot verify stops being used. Falling back there handed the
+// stale blob key straight to aiService and undid the safeguard, keeping a
+// superseded or revoked credential in service. An older comment here still
+// claimed the browser build has no keychain and always falls back; that stopped
+// being true when the browser gained an encrypted store.
 export function getSettings() {
   const storage = loadFromStorage();
   const s = storage.settings || DEFAULT_STORAGE.settings;
-  const shared = appStorage.getItem(OPENROUTER_KEY_KEY);
+  const shared = getSecret();
+  // Boot, and the print window (which never initialises the store) — the blob
+  // is genuinely the only source there, and it is a migration source.
+  const beforeStoreAnswered = !isSecretStoreReady();
   // Legacy OpenRouter-era guarantees preserved (see original comment).
   return {
     autoFallback: false,
     customModels: [],
     ...s,
-    openrouterKey: shared !== null ? shared : (s.openrouterKey || ''),
+    openrouterKey: shared !== null
+      ? shared
+      : (beforeStoreAnswered ? (s.openrouterKey || '') : ''),
   };
 }
 
@@ -345,23 +415,38 @@ import {
   isValidProfileId,
   splitPhysicalKey,
   physicalKey,
+  withoutStoredCredentials,
 } from './profileKeys.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
 // Shared machine-level keys that belong in a backup (parity with the old
-// BACKUP_FIXED_KEYS entries for theme/updates, plus the shared api key and the
-// companion-bridge pairing token — one loopback server per install, so the
-// token is not per-profile. model-catalog and migration flags stay
-// cache/flag-only, never backed up).
+// BACKUP_FIXED_KEYS entries for theme/updates, plus the companion-bridge
+// pairing token — one loopback server per install, so the token is not
+// per-profile. model-catalog and migration flags stay cache/flag-only, never
+// backed up).
 const BACKUP_SHARED_KEYS = [
   'resume-designer-theme',
   'resume-designer-update-channel',
   'resume-designer-auto-update-check',
   'resume-designer-bridge-token',
-  OPENROUTER_KEY_KEY,
 ];
+
+// The API key USED to be a backed-up shared key. It lives in the OS keychain
+// now (secretStore.js), and putting it back in a backup would undo that: a
+// backup JSON is clear-text storage of exactly the kind the credential was
+// moved out of, and it is a file people deliberately email and sync — more
+// exposed than app_data_dir ever was, not less.
+//
+// So the credential is no longer backup data at all: not exported, not wiped on
+// import, not restored. Restoring onto a new machine means entering the key
+// once, from Settings.
+//
+// Listed here rather than deleted because older backup files still carry it and
+// the validator below rejects shared keys it does not recognise — dropping the
+// name outright would make every backup a user already holds fail to import.
+const BACKUP_LEGACY_SHARED_KEYS = [OPENROUTER_KEY_KEY];
 
 /**
  * Recognize a localStorage QuotaExceededError across browser engines.
@@ -449,7 +534,7 @@ function collectActiveOwnedKeys() {
  * (mapping left off after a quota/disk failure) the live workspace still lives
  * under UNPREFIXED owned keys — those are captured under the active profile
  * below, so a backup taken on the storage-failure guidance still contains the
- * user's résumés, not just registry/settings.
+ * user's resumes, not just registry/settings.
  * Returns { keysExported, filename } for the caller to surface in UI.
  */
 export function exportFullBackup(filename) {
@@ -468,7 +553,10 @@ export function exportFullBackup(filename) {
     const split = splitPhysicalKey(k);
     if (split && isOwnedKey(split.logicalKey)) {
       const v = appStorage.getItem(k);
-      if (v !== null) ((profiles[split.profileId] ||= { keys: {} }).keys)[split.logicalKey] = v;
+      if (v !== null) {
+        ((profiles[split.profileId] ||= { keys: {} }).keys)[split.logicalKey] =
+          withoutStoredCredentials(split.logicalKey, v);
+      }
     } else if (BACKUP_SHARED_KEYS.includes(k)) {
       const v = appStorage.getItem(k);
       if (v !== null) shared[k] = v;
@@ -481,7 +569,7 @@ export function exportFullBackup(filename) {
   // state (the very first marker write failed: no registry, no pointer,
   // activeId null) they are captured under a synthesized recovery id instead —
   // otherwise the escape-hatch backup the storage-failure guidance tells the
-  // user to take would contain an empty registry and NO résumés, and the
+  // user to take would contain an empty registry and NO resumes, and the
   // importer would reject the file outright. The orphan reconciliation below
   // then synthesizes the matching registry entry.
   const unprefixedOwned = appStorage.keys().filter(
@@ -495,7 +583,7 @@ export function exportFullBackup(filename) {
   if (recoveryId) {
     for (const k of unprefixedOwned) {
       const v = appStorage.getItem(k);
-      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = v;
+      if (v !== null) ((profiles[recoveryId] ||= { keys: {} }).keys)[k] = withoutStoredCredentials(k, v);
     }
   }
   // Reconcile orphan namespaces with the exported registry: a partial
@@ -525,7 +613,7 @@ export function exportFullBackup(filename) {
     profiles,
   };
   const stamp = new Date().toISOString().slice(0, 10);
-  const name = filename || `resume-designer-backup-${stamp}.json`;
+  const name = filename || `on-paper-backup-${stamp}.json`;
   downloadFile(JSON.stringify(backup, null, 2), name, 'application/json');
   const keysExported = Object.values(profiles)
     .reduce((n, p) => n + Object.keys(p.keys).length, Object.keys(shared).length);
@@ -543,23 +631,57 @@ export function exportFullBackup(filename) {
  * store re-reads from storage (via reload, or by running this
  * BEFORE the store first reads).
  */
-// Legacy Electron stores can hold job descriptions as an id-keyed OBJECT map —
-// a shape the Rust migration probe explicitly counts as valid and the envelope
-// passes through verbatim — but jobDescriptions.js requires an array (it
-// spreads/filters the parsed value). Canonicalize on import; anything else
-// (already an array, unparseable) is written unchanged.
-function normalizeImportedValue(key, value) {
-  if (key !== 'resume-designer-job-descriptions') return value;
+// The single fix-up point for a value arriving from a backup envelope. Both
+// import formats route their owned-key writes through here, so anything that
+// must be true of EVERY imported value belongs in this function rather than at
+// one of the call sites — the credential strip was originally applied per-site
+// and the format-1 replacement path was simply missed.
+//
+// Two jobs:
+//
+// 1. Legacy Electron stores can hold job descriptions as an id-keyed OBJECT map
+//    — a shape the Rust migration probe explicitly counts as valid and the
+//    envelope passes through verbatim — but jobDescriptions.js requires an
+//    array (it spreads/filters the parsed value). Canonicalize on import;
+//    anything else (already an array, unparseable) is written unchanged.
+//
+// 2. Strip a legacy `settings.openrouterKey` out of the data blob. Backups
+//    written before the keychain move still carry it, and on a fresh install
+//    with an empty keychain it would land in plaintext, go live immediately,
+//    and be promoted into the keychain on the next boot — an old backup quietly
+//    restoring a credential the exclusion policy says it must not.
+//
+//    `keepCredential` exempts BOTH Electron paths — the automatic upgrade in
+//    main.js and the manual "import from previous installation" in
+//    backupFlow.js. Each is a MIGRATION of the user's own live data on this
+//    machine, not the restore of a backup FILE. The test is where the data came
+//    from, not which function is calling: a file could have come from any
+//    machine, the LevelDB store next door could not. Stripping deleted the key
+//    outright, and on the automatic path it then stamped
+//    the migration flag `imported`, so it never ran again and the user came up
+//    permanently without the AI credential they had configured. Kept, it flows
+//    through the ordinary upgrade pipeline instead — extractSharedApiKey moves
+//    it to the shared key, initSecretStore moves that into the keychain and
+//    strips the plaintext — the same path every pre-keychain user already takes
+//    on first launch of this version. The plaintext hop is momentary and on the
+//    same disk the Electron app was already keeping the key on in the clear, so
+//    it exposes nothing that was not already exposed.
+function normalizeImportedValue(key, value, keepCredential = false) {
+  // One call, and the flag carries the exemption. `keepCredential` spares the
+  // OpenRouter key for a same-machine migration; the dead provider keys are
+  // never spared, which the helper enforces rather than leaving to this caller.
+  const sanitized = withoutStoredCredentials(key, value, { keepOpenRouterKey: keepCredential });
+  if (key !== 'resume-designer-job-descriptions') return sanitized;
   try {
-    const jd = JSON.parse(value);
+    const jd = JSON.parse(sanitized);
     if (jd && typeof jd === 'object' && !Array.isArray(jd)) {
       return JSON.stringify(Object.values(jd));
     }
   } catch { /* leave malformed JSON as-is; initJobDescriptions handles it */ }
-  return value;
+  return sanitized;
 }
 
-function importFullBackupV2(parsed) {
+function importFullBackupV2(parsed, keepCredential = false) {
   const registry = parsed.registry;
   // A PRESENT emoji must be a string: the switcher renders it directly as a
   // React child, so a non-string (e.g. {}) would throw and blank the app after
@@ -632,6 +754,8 @@ function importFullBackupV2(parsed) {
       profileEntries.push({
         physicalKey: physicalKey(pid, logicalKey),
         logicalKey,
+        // Sanitized on write, by normalizeImportedValue — see its note on why
+        // that lives in one chokepoint rather than at each call site.
         value,
       });
     }
@@ -654,7 +778,11 @@ function importFullBackupV2(parsed) {
     // corrupt, hand-edited, or from a newer format — and the restore loop
     // below would silently DROP it after the wipe, reporting success while
     // not restoring a setting the file plainly represents.
-    if (!BACKUP_SHARED_KEYS.includes(k)) {
+    //
+    // The legacy list is the one exception, and it is safe for the exact reason
+    // that rule exists: the credential is deliberately not restored, and the
+    // wipe below no longer removes it, so nothing the file represents is lost.
+    if (!BACKUP_SHARED_KEYS.includes(k) && !BACKUP_LEGACY_SHARED_KEYS.includes(k)) {
       throw new Error(`Invalid format-2 backup: unrecognized shared key "${k}".`);
     }
     if (typeof v !== 'string') {
@@ -672,7 +800,11 @@ function importFullBackupV2(parsed) {
   for (const k of appStorage.keys()) {
     const split = splitPhysicalKey(k);
     const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
-    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY || k === OPENROUTER_KEY_KEY) {
+    // OPENROUTER_KEY_KEY is deliberately NOT wiped. The credential is no longer
+    // backup data, so nothing would restore it — wiping it here would let an
+    // import silently destroy a working key. (Post-migration it is not in
+    // appStorage at all; this matters for an install that has not migrated yet.)
+    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY) {
       priorValues.set(k, appStorage.getItem(k));
       appStorage.removeItem(k);
     }
@@ -708,7 +840,7 @@ function importFullBackupV2(parsed) {
       ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
     );
     for (const { physicalKey: key, logicalKey, value } of nonHistory) {
-      writeTracked(key, normalizeImportedValue(logicalKey, value));
+      writeTracked(key, normalizeImportedValue(logicalKey, value, keepCredential));
       keysImported++;
     }
     for (const { physicalKey: key, value } of history) {
@@ -737,14 +869,40 @@ function importFullBackupV2(parsed) {
   };
 }
 
-export function importFullBackupFromEnvelope(parsed) {
+/**
+ * The credential a format-1 envelope carries, or null when it carries none.
+ *
+ * Looks in BOTH places it can be, because the previous app used both: the
+ * shared key once its own extraction had run, and `settings.openrouterKey` in
+ * the data blob before that. Shared key first — it is the later of the two.
+ *
+ * Returns `''` verbatim when that is what is stored. An empty value means the
+ * user had CLEARED their key in the previous installation, and on a
+ * same-machine replace that is a state to adopt, not an absence to skip.
+ */
+export function credentialFromEnvelope(parsed) {
+  const keys = parsed?.keys;
+  if (!keys || typeof keys !== 'object') return null;
+  if (typeof keys[OPENROUTER_KEY_KEY] === 'string') return keys[OPENROUTER_KEY_KEY];
+  const blob = keys[STORAGE_KEY];
+  if (typeof blob !== 'string') return null;
+  try {
+    const settings = JSON.parse(blob)?.settings;
+    if (!settings || typeof settings !== 'object') return null;
+    return typeof settings.openrouterKey === 'string' ? settings.openrouterKey : null;
+  } catch {
+    return null;
+  }
+}
+
+export function importFullBackupFromEnvelope(parsed, { keepCredential = false } = {}) {
   if (parsed && parsed.backupFormat === 2 && parsed.kind === 'full') {
-    return importFullBackupV2(parsed);
+    return importFullBackupV2(parsed, keepCredential);
   }
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
+      'Not an On Paper backup envelope (missing "backupFormat: 1" or a format-2 "kind: full").'
     );
   }
   // Every value must be a string — that's what `appStorage.setItem`
@@ -793,7 +951,23 @@ export function importFullBackupFromEnvelope(parsed) {
   // file is corrupt or hostile, so we skip it rather than writing arbitrary
   // storage entries for this origin.
   const allEntries = Object.entries(parsed.keys);
-  const entries = allEntries.filter(([k]) => isOwnedKey(k));
+  // `resume-designer-openrouter-key` is no longer an owned key — that is how the
+  // credential was taken out of backups — so this filter drops it. Correct for a
+  // backup FILE, and wrong for a same-machine migration, where a credential
+  // arriving in the shared key would be lost before initSecretStore could move
+  // it to the keychain, with the one-shot flag then reporting success.
+  //
+  // DEFENSIVE, not observed. The shipped Electron app cannot have written this
+  // key: `electron/` was deleted 2026-05-25 (535b24c), OpenRouter arrived
+  // 2026-05-30 (7a9e6d6), and the shared key itself only on 2026-07-15
+  // (9c46406). That app stored anthropicKey/openaiKey/geminiKey and had no
+  // OpenRouter credential of any kind. Kept anyway because it costs nothing
+  // when the key is absent, and because this reads a database that already
+  // exists on users' disks — being wrong about it loses a paid credential
+  // behind a flag that never retries.
+  const entries = allEntries.filter(
+    ([k]) => isOwnedKey(k) || (keepCredential && k === OPENROUTER_KEY_KEY)
+  );
   if (entries.length !== allEntries.length) {
     console.warn(
       `[backup] Ignored ${allEntries.length - entries.length} unrecognized key(s) in imported backup.`
@@ -806,7 +980,7 @@ export function importFullBackupFromEnvelope(parsed) {
   let historySkipped = 0;
   try {
     for (const [k, v] of nonHistory) {
-      appStorage.setItem(k, normalizeImportedValue(k, v));
+      appStorage.setItem(k, normalizeImportedValue(k, v, keepCredential));
       written.push(k);
     }
     for (const [k, v] of history) {
@@ -841,14 +1015,14 @@ export function importFullBackupFromEnvelope(parsed) {
  * when durability fails. The sync core stays exported for validation and
  * for the merge path.
  */
-export async function importFullBackupDurably(parsed) {
+export async function importFullBackupDurably(parsed, { keepCredential = false } = {}) {
   // Serialize restores: if one is already mid-flight (guard armed during its
   // flush await / success modal), bail before writing — otherwise these
   // synchronous writes get deferred by the active guard and then cleared.
   if (appStorage.isRestoreGuardActive()) {
     throw new Error('Another restore is already in progress — wait for it to finish before importing again.');
   }
-  const { rollback, preRestore, writtenKeys, ...result } = importFullBackupFromEnvelope(parsed);
+  const { rollback, preRestore, writtenKeys, ...result } = importFullBackupFromEnvelope(parsed, { keepCredential });
   // The synchronous restore writes are done. Block every OTHER appStorage writer
   // from here until the reload, so a late async completion (chat/AI reply, tailor
   // draft, design-setting edit) can't clobber the just-restored keys during the
@@ -935,7 +1109,7 @@ export async function importFullBackup(file) {
  * so the caller can build a precise "merged in X resumes, Y JDs"
  * confirmation toast.
  */
-export function importFullBackupMerge(parsed) {
+export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
   // Serialize restores (see importFullBackupDurably): don't run a merge while
   // another restore's guard is active, or its writes would be deferred + cleared.
   if (appStorage.isRestoreGuardActive()) {
@@ -944,7 +1118,7 @@ export function importFullBackupMerge(parsed) {
   if (!parsed || parsed.backupFormat !== 1 ||
       !parsed.keys || typeof parsed.keys !== 'object') {
     throw new Error(
-      'Not a Resume Designer backup envelope (missing "backupFormat: 1").'
+      'Not an On Paper backup envelope (missing "backupFormat: 1").'
     );
   }
   for (const [k, v] of Object.entries(parsed.keys)) {
@@ -962,7 +1136,13 @@ export function importFullBackupMerge(parsed) {
   // reasoning as importFullBackupFromEnvelope: critical data gets
   // written while there's quota; history (the bulky stuff) goes
   // last and is allowed to fall off the end if it doesn't fit.
-  const sortedEntries = Object.entries(parsed.keys).sort(([a], [b]) => {
+  // The mirror of the replace path's filter, and it was wrong in the OPPOSITE
+  // direction: merge writes every key it is given, so an older backup carrying
+  // `resume-designer-openrouter-key` would put the credential back in plaintext.
+  // Kept only for a same-machine migration, dropped for a backup file.
+  const sortedEntries = Object.entries(parsed.keys)
+    .filter(([k]) => keepCredential || k !== OPENROUTER_KEY_KEY)
+    .sort(([a], [b]) => {
     const aHist = a.startsWith(BACKUP_HISTORY_PREFIX);
     const bHist = b.startsWith(BACKUP_HISTORY_PREFIX);
     if (aHist === bHist) return 0;
@@ -973,15 +1153,24 @@ export function importFullBackupMerge(parsed) {
     const existingValue = appStorage.getItem(key);
 
     if (key === 'resume-designer-data') {
+      // Strip a legacy credential from the INCOMING blob before either branch
+      // below can put it in storage. Format-1 envelopes predate the keychain
+      // move entirely, so they are the likeliest carriers — and both writes are
+      // reachable: the wholesale adopt takes the blob verbatim, and the merge
+      // keeps `incomingData.settings` whenever the existing blob has no
+      // `settings` key of its own to shadow it.
+      const incomingClean = withoutStoredCredentials(key, incomingValue, {
+        keepOpenRouterKey: keepCredential,
+      });
       // Merge the data blob: variants union (current wins on
       // collision), all top-level singletons preserved from current.
       let incomingData;
-      try { incomingData = JSON.parse(incomingValue); }
+      try { incomingData = JSON.parse(incomingClean); }
       catch { continue; }  // malformed incoming — skip, don't poison existing
 
       if (!existingValue) {
         // No current data — just adopt the incoming wholesale.
-        appStorage.setItem(key, incomingValue);
+        appStorage.setItem(key, incomingClean);
         variantsAdded += Object.keys(incomingData?.variants || {}).length;
         continue;
       }
@@ -1005,6 +1194,22 @@ export function importFullBackupMerge(parsed) {
                                           //   userProfile, settings, etc.
         variants: mergedVariants,
       };
+      // `settings` is replaced WHOLESALE by the current one just above, so
+      // keeping the credential in the incoming blob was not enough on its own:
+      // a user with existing Tauri-side data but no key, choosing "Merge
+      // previous data", still lost the Electron credential before the
+      // reload-time extraction could migrate it. Carry just that one field, and
+      // only into a gap — current settings win everywhere else, and an existing
+      // `openrouterKey` (including a deliberate '') is never overwritten.
+      if (keepCredential) {
+        const incomingKey = incomingData?.settings?.openrouterKey;
+        const mergedSettings = merged.settings;
+        if (incomingKey !== undefined
+            && mergedSettings && typeof mergedSettings === 'object'
+            && !('openrouterKey' in mergedSettings)) {
+          merged.settings = { ...mergedSettings, openrouterKey: incomingKey };
+        }
+      }
       appStorage.setItem(key, JSON.stringify(merged));
     } else if (key === 'resume-designer-job-descriptions') {
       // Union job descriptions, dedupe by id. Handles both array and
@@ -1114,7 +1319,10 @@ function generateMarkdown(data) {
   if (data.experience && data.experience.length > 0) {
     md += `## Experience\n\n`;
     for (const exp of data.experience) {
-      md += `### ${exp.title} — ${exp.company} **${exp.dates}**\n\n`;
+      // Dates go on their own bold line — the grammar the reader and
+      // Templates/RESUME-TEMPLATE.md both document — so the round trip is lossless.
+      md += `### ${exp.title} — ${exp.company}\n`;
+      md += `**${exp.dates}**\n\n`;
       if (exp.bullets && exp.bullets.length > 0) {
         for (const bullet of exp.bullets) {
           md += `- ${bullet}\n`;

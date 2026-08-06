@@ -289,7 +289,7 @@ export default function JobsDialog() {
         },
       );
       // The pinned variant may have been DELETED during the long generation
-      // await (the dialog can be dismissed and the résumé deleted from the
+      // await (the dialog can be dismissed and the resume deleted from the
       // Library). Bail before recording drafts — otherwise recordTailorDrafts
       // creates application records for a variant that no longer exists, leaving
       // orphan timeline lanes that can't be opened. The loadVariant guard below
@@ -306,7 +306,7 @@ export default function JobsDialog() {
         // The changes were generated for the pinned variant. If the user
         // switched resumes mid-generation (the dialog can be dismissed while
         // the request runs), switch back before diffing — otherwise the diff
-        // is computed and applied against the wrong resume. Same cross-résumé
+        // is computed and applied against the wrong resume. Same cross-resume
         // guard as the chat apply flow.
         if (variantId && getCurrentId() !== variantId) {
           if (!loadVariant(variantId)) {
@@ -319,7 +319,7 @@ export default function JobsDialog() {
         setOpen(false);
         showDiffView(changeSet);
       } else {
-        toast.info('No changes suggested. Your resume may already be well-tailored!');
+        toast.info('No changes suggested. Your resume may already be well-tailored.');
       }
     } catch (error) {
       toast.error(`Failed to generate changes: ${error.message}`);
@@ -362,7 +362,7 @@ export default function JobsDialog() {
           {/* Header — mockup .dlg-head.bordered: 20px 22px 16px. */}
           <div className="flex shrink-0 items-start justify-between gap-3 border-b px-[22px] pb-4 pt-5">
             <div className="space-y-1">
-              <DialogTitle>Target Job Descriptions</DialogTitle>
+              <DialogTitle>Jobs</DialogTitle>
               <p className="text-[13px] text-muted-foreground">Save target jobs and analyze how well your resume fits.</p>
             </div>
             <button
@@ -380,11 +380,11 @@ export default function JobsDialog() {
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-[22px] py-[18px]">
               {/* Add form */}
               <section>
-                <SectionHeader title="Add New Job Description" />
+                <SectionHeader title="Add a job" />
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
-                    <Input ref={titleRef} placeholder="Job Title (e.g., Senior Designer)" />
-                    <Input ref={companyRef} placeholder="Company Name" />
+                    <Input ref={titleRef} placeholder="Job title (e.g., Senior Designer)" />
+                    <Input ref={companyRef} placeholder="Company name" />
                   </div>
                   <Textarea
                     ref={descRef}
@@ -398,11 +398,11 @@ export default function JobsDialog() {
                   <div className="flex justify-end gap-2">
                     <Button variant="outline" onClick={handlePaste}>
                       <Clipboard className="h-4 w-4" />
-                      Paste from Clipboard
+                      Paste from clipboard
                     </Button>
                     <Button onClick={handleAdd}>
                       <Plus className="h-4 w-4" />
-                      Add Job Description
+                      Add job
                     </Button>
                   </div>
                 </div>
@@ -413,7 +413,7 @@ export default function JobsDialog() {
               {/* JD list */}
               <section>
                 <SectionHeader
-                  title={`Your Job Descriptions${countLabel}`}
+                  title={`Your jobs${countLabel}`}
                   actions={
                     <div className="flex items-center gap-2">
                       {/* Recent / All filter — mockup .seg.xs. */}
@@ -430,10 +430,10 @@ export default function JobsDialog() {
                       <div className="flex items-center gap-1">
                         {jobs.length > 1 && (
                           <>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Collapse All" aria-label="Collapse All" onClick={collapseAll}>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Collapse all" aria-label="Collapse all" onClick={collapseAll}>
                               <ChevronsDownUp className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Expand All" aria-label="Expand All" onClick={expandAll}>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Expand all" aria-label="Expand all" onClick={expandAll}>
                               <ChevronsUpDown className="h-4 w-4" />
                             </Button>
                           </>
@@ -476,15 +476,15 @@ export default function JobsDialog() {
                 <>
                   <Separator />
                   <section>
-                    <SectionHeader title="Resume Analysis" />
+                    <SectionHeader title="Resume analysis" />
                     <div className="flex flex-wrap items-center gap-2">
                       <Button disabled={!configured || isAnalyzing} onClick={() => setSelectionOpen(true)}>
                         <Search className="h-4 w-4" />
-                        {isAnalyzing ? 'Working…' : 'Analyze Resume Fit'}
+                        {isAnalyzing ? 'Working…' : 'Analyze resume fit'}
                       </Button>
                       <Button variant="outline" disabled={!configured || isAnalyzing || activeJDs.length === 0} onClick={() => setTailorSelectionOpen(true)}>
                         <Wand2 className="h-4 w-4" />
-                        Tailor Resume
+                        Tailor resume
                       </Button>
                     </div>
                     {!configured && (
@@ -531,9 +531,9 @@ export default function JobsDialog() {
       {isAnalyzing && (
         <AnalysisLoadingOverlay
           reasoning={genReasoning}
-          title={genOp === 'tailor' ? 'Tailoring Your Resume' : 'Analyzing Resume Fit'}
+          title={genOp === 'tailor' ? 'Tailoring your resume' : 'Analyzing resume fit'}
           subtitle={genOp === 'tailor'
-            ? 'Optimizing your resume for the target jobs…'
+            ? 'Tailoring your resume for the target jobs…'
             : 'Comparing your resume against job requirements…'}
         />
       )}

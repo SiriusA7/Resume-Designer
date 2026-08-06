@@ -14,9 +14,9 @@ import { getThreadDisplayName, groupThreadsByHome } from '../../chatThreads.js';
  * matching the old behavior. Rows are styled after shadcn's DropdownMenuItem
  * source; the per-row delete reveals on hover.
  *
- * Threads are grouped relative to the active résumé: the current résumé's threads
+ * Threads are grouped relative to the active resume: the current resume's threads
  * first, then a "General" group (legacy / unhomed threads), then a section per
- * other résumé. Rows outside the current résumé get a "Move here" affordance.
+ * other resume. Rows outside the current resume get a "Move here" affordance.
  */
 export function ThreadSelector({
   threads, currentThreadId, currentVariantId, variants,
@@ -60,8 +60,8 @@ export function ThreadSelector({
           variant="ghost"
           size="icon"
           className="size-5 shrink-0 opacity-0 group-hover:opacity-100"
-          title="Move to this résumé"
-          aria-label="Move to this résumé"
+          title="Move to this resume"
+          aria-label="Move to this resume"
           onClick={(e) => { e.stopPropagation(); onMoveToCurrent(t.id); }}
         >
           <CornerUpLeft className="size-3.5" />
@@ -100,7 +100,7 @@ export function ThreadSelector({
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-[260px] p-1">
         <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium text-muted-foreground">
-          <span>Chat Threads</span>
+          <span>Chat threads</span>
           <Button
             variant="ghost"
             size="icon"

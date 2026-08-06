@@ -3,6 +3,7 @@ import {
   chat, generateBullets, getFeedback, improveSummary, isConfigured, getConfiguredProviders,
   generateResumeChanges, getDefaultModelId, validateModelId, isSafeModelSlug, getAllModels,
   modelSupportsReasoning, getCustomModels, removeCustomModel, fetchModelCatalog,
+  getAllCatalogModels, refreshCatalogIfStale, CATALOG_UPDATED_EVENT,
   profileInterviewChat, extractProfileFromInterview, saveExtractedProfile,
 } from '../../aiService.js';
 import { getSettings, saveSettings, getUserProfile, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
@@ -16,13 +17,16 @@ import {
 } from '../../chatThreads.js';
 import { getCurrentId, loadVariant, getVariantList } from '../../variantManager.js';
 
-// AI model catalog, derived from aiService's curated MODELS (single source of
-// truth). Shape: [{ group, options: [{ value: slug, label }] }]. Custom slugs
-// typed into the dropdown aren't listed here but are still selectable.
-export const AI_MODELS = Object.entries(getAllModels()).map(([group, models]) => ({
-  group,
-  options: models.map((m) => ({ value: m.id, label: m.label })),
-}));
+// AI model catalog for the picker's Featured section. This MUST be a function,
+// not a module constant: the catalog refreshes at runtime, and a constant
+// evaluated at import time could never reflect it.
+// Shape: [{ group, options: [{ value: slug, label }] }]
+export function getAIModels() {
+  return Object.entries(getAllModels()).map(([group, models]) => ({
+    group,
+    options: models.map((m) => ({ value: m.id, label: m.label })),
+  }));
+}
 
 const FALLBACK_MODEL = 'anthropic/claude-sonnet-4.6';
 
@@ -40,12 +44,14 @@ const CHANGE_KEYWORDS = [
 
 export function getModelLabel(value) {
   if (!value) return 'Select Model';
-  for (const group of AI_MODELS) {
+  for (const group of getAIModels()) {
     for (const opt of group.options) {
       if (opt.value === value) return opt.label;
     }
   }
-  // Custom slug not in the curated list — prettify the model part of the slug.
+  const fromCatalog = getAllCatalogModels().find((m) => m.id === value);
+  if (fromCatalog) return fromCatalog.name;
+  // Custom slug not in the catalog — prettify the model part of the slug.
   // e.g. "anthropic/claude-opus-4.8" -> "Claude Opus 4.8"
   const modelPart = String(value).split('/').pop() || String(value);
   const pretty = modelPart
@@ -157,9 +163,9 @@ export function useChat() {
   // funnel an unrelated thread's chat into the interview or let /done save from it.
   const interviewThreadIdRef = useRef(null);
   const idCounterRef = useRef(0);
-  // Set by jumpToVariant() to the thread to KEEP open across the imminent résumé
+  // Set by jumpToVariant() to the thread to KEEP open across the imminent resume
   // switch, so the variant-follow effect re-selects it instead of the target
-  // résumé's home thread. One-shot: the follow effect reads then clears it.
+  // resume's home thread. One-shot: the follow effect reads then clears it.
   const pinThreadIdRef = useRef(null);
 
   // Settings/catalog-derived values, held as state and refreshed explicitly at
@@ -170,6 +176,26 @@ export function useChat() {
   const [configuredProviders, setConfiguredProviders] = useState(() => getConfiguredProviders());
   const [customModels, setCustomModels] = useState(() => (isConfigured() ? getCustomModels() : []));
   const [reasoningSupported, setReasoningSupported] = useState(() => modelSupportsReasoning(getInitialModel()));
+
+  // Bumped whenever a catalog refresh lands, so every model picker re-renders
+  // with the new list. Mirrors the SETTINGS_UPDATED_EVENT pattern.
+  const [catalogRev, setCatalogRev] = useState(0);
+  useEffect(() => {
+    const onCatalog = () => {
+      setCatalogRev((n) => n + 1);
+      // Recompute reasoning support too. modelSupportsReasoning() reads the
+      // catalog cache, and callOpenRouter re-reads it at send time — so if a
+      // revalidation changes the selected model's supported_parameters and this
+      // state stays stale, the two disagree silently: the composer keeps
+      // offering reasoning that the request then omits, or keeps the control
+      // disabled after support was added. The initial fetch and the
+      // model-selection paths already do this; only later revalidations (the
+      // picker's 5-minute stale-while-revalidate) reached here without it.
+      setReasoningSupported(modelSupportsReasoning(modelRef.current));
+    };
+    window.addEventListener(CATALOG_UPDATED_EVENT, onCatalog);
+    return () => window.removeEventListener(CATALOG_UPDATED_EVENT, onCatalog);
+  }, [modelRef]);
 
   const refreshCustomModels = () => setCustomModels(isConfigured() ? getCustomModels() : []);
 
@@ -196,12 +222,12 @@ export function useChat() {
     appendMessage({ id: uid(), role, content, applyData, variantId: getCurrentId(), timestamp: new Date().toISOString() });
 
   // Insert a context-switch divider into the current thread when the active
-  // résumé differs from the thread's last turn (no-op otherwise). Called at the
+  // resume differs from the thread's last turn (no-op otherwise). Called at the
   // start of send() and handleCommand() so every flow is preceded by a divider
-  // when the résumé changed.
+  // when the resume changed.
   // The active variant's LABEL (e.g. "Backend SWE") for the context divider — NOT
-  // store.getData()?.name, which is the person's NAME printed on the résumé and so
-  // mislabelled every divider with the candidate's name instead of the résumé.
+  // store.getData()?.name, which is the person's NAME printed on the resume and so
+  // mislabelled every divider with the candidate's name instead of the resume.
   const activeVariantLabel = () =>
     getVariantList().find((v) => v.id === getCurrentId())?.name || '';
 
@@ -231,8 +257,8 @@ export function useChat() {
   };
 
   // Commit a non-streamed helper turn (/feedback, /improve, /generate, interview)
-  // to the thread + résumé active when the flow STARTED (captured by the caller),
-  // so a mid-request thread/résumé switch can't misroute or mis-stamp it — the same
+  // to the thread + resume active when the flow STARTED (captured by the caller),
+  // so a mid-request thread/resume switch can't misroute or mis-stamp it — the same
   // guarantee the streamed flows already get.
   const commitHelperTurn = (startThreadId, startVariantId, role, content, applyData = null) =>
     commitToThread(startThreadId, {
@@ -245,7 +271,7 @@ export function useChat() {
   // like the streamed ones: beginThinking records the origin thread (so the
   // ThinkingBlock renders only there and the background banner covers it
   // elsewhere) and arms an AbortController (so the banner's Stop and the
-  // thread/résumé delete paths can cancel it). Returns the signal for the flow
+  // thread/resume delete paths can cancel it). Returns the signal for the flow
   // to pass into its aiService call.
   const beginThinking = (originThreadId = null) => {
     setLoading(true);
@@ -348,11 +374,11 @@ export function useChat() {
   const getAIResponse = async (userMessage, hasExplicitContext = false) => {
     const modelId = modelRef.current;
     const startThreadId = currentThreadIdRef.current;
-    // Capture the active résumé at request START. The reply commits to
+    // Capture the active resume at request START. The reply commits to
     // startThreadId, so it must also be stamped with the variant that thread
     // belongs to — using getCurrentId() at completion would mis-stamp the turn
     // (and corrupt lastTurnVariantId/context dividers) if the user switched
-    // résumés mid-stream.
+    // resumes mid-stream.
     const startVariantId = getCurrentId();
     setLoading(true);
     const controller = new AbortController();
@@ -434,15 +460,15 @@ export function useChat() {
     try {
       addThinkingStep('Reading current summary...');
       await new Promise((r) => setTimeout(r, 200));
-      // improveSummary builds its prompt from the ACTIVE résumé only now — if
-      // the user switched résumés during the wait, generating would produce the
-      // other résumé's summary stamped (and Apply-gated) as this one's, and
-      // applying it would overwrite this résumé with the other's summary. Bail
-      // to a note instead, matching the change-request cross-résumé pattern.
+      // improveSummary builds its prompt from the ACTIVE resume only now — if
+      // the user switched resumes during the wait, generating would produce the
+      // other resume's summary stamped (and Apply-gated) as this one's, and
+      // applying it would overwrite this resume with the other's summary. Bail
+      // to a note instead, matching the change-request cross-resume pattern.
       if (getCurrentId() !== startVariantId) {
         endThinking(signal);
         commitHelperTurn(startThreadId, startVariantId, 'assistant',
-          'The active résumé changed while I was reading the summary — switch back to the résumé you want improved and resend /improve summary.');
+          'The active resume changed while I was reading the summary — switch back to the resume you want improved and resend /improve summary.');
         return;
       }
       completeThinkingStep('Writing improved summary...');
@@ -491,7 +517,7 @@ export function useChat() {
 
   const requestAIChanges = async (instruction, targetPath = null) => {
     const startThreadId = currentThreadIdRef.current;
-    // Stamp the committed turns with the résumé active at request START (the one
+    // Stamp the committed turns with the resume active at request START (the one
     // startThreadId belongs to), not getCurrentId() at completion — see getAIResponse.
     const startVariantId = getCurrentId();
     setLoading(true);
@@ -532,14 +558,14 @@ export function useChat() {
       }
 
       const count = Object.keys(result.changes).length;
-      // The edits were generated for the résumé active at request START. If the
-      // user switched résumés before it returned, building the diff against the
+      // The edits were generated for the resume active at request START. If the
+      // user switched resumes before it returned, building the diff against the
       // now-current store.getData() (and showing/applying it) would write the old
-      // résumé's edits into the new one — so don't; tell them to switch back.
+      // resume's edits into the new one — so don't; tell them to switch back.
       if (getCurrentId() !== startVariantId) {
         commitToThread(startThreadId, {
           id: uid(), role: 'assistant',
-          content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''}`}\n\nThese edits are for the résumé you started from — switch back to it and resend to apply them.`,
+          content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''}`}\n\nThese edits are for the resume you started from — switch back to it and resend to apply them.`,
           reasoning: capturedReasoning || null, run: capturedRun,
           variantId: startVariantId, timestamp: new Date().toISOString(),
         });
@@ -551,7 +577,7 @@ export function useChat() {
 
       commitToThread(startThreadId, {
         id: uid(), role: 'assistant',
-        content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''} to your resume.`}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review Changes" below for a detailed diff view.`,
+        content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''} to your resume.`}\n\nChanges are highlighted on your resume. Use the buttons to apply or reject individual changes, or click "Review changes" below for a detailed diff view.`,
         reasoning: capturedReasoning || null, run: capturedRun,
         variantId: startVariantId, timestamp: new Date().toISOString(),
         pendingChanges: changeSet,
@@ -896,8 +922,8 @@ Let's begin!`);
       endThinking();
     }
     if (threadId === currentThreadIdRef.current) {
-      // Keep selection within the active résumé — open its most-recent remaining
-      // thread or create a fresh homed one, never an unrelated General/other-résumé
+      // Keep selection within the active resume — open its most-recent remaining
+      // thread or create a fresh homed one, never an unrelated General/other-resume
       // thread (and never an empty panel).
       const { threads: next, currentThreadId: pick } =
         chooseThreadAfterDelete(threadsRef.current, threadId, getCurrentId());
@@ -914,19 +940,19 @@ Let's begin!`);
       persistThreads(next);
     }
   };
-  // Switch the active résumé from inside a thread (the context divider or the
-  // cross-résumé banner) WITHOUT losing the open thread. Pin the current thread so
+  // Switch the active resume from inside a thread (the context divider or the
+  // cross-resume banner) WITHOUT losing the open thread. Pin the current thread so
   // the variant-follow effect re-selects it instead of the target's home thread.
   const jumpToVariant = (variantId) => {
     if (!variantId) return;
     pinThreadIdRef.current = currentThreadIdRef.current;
     // loadVariant emits 'dataLoaded' → the follow effect consumes the pin. If it
     // bails (unknown id, no event fired), clear the pin so it can't leak onto a
-    // later, unrelated résumé switch.
+    // later, unrelated resume switch.
     if (!loadVariant(variantId)) pinThreadIdRef.current = null;
   };
 
-  // Re-home a thread to the active résumé (the "Move here" affordance).
+  // Re-home a thread to the active resume (the "Move here" affordance).
   const moveThreadToCurrentVariant = (threadId) => {
     const activeId = getCurrentId();
     const next = threadsRef.current.map((t) =>
@@ -1017,7 +1043,7 @@ Let's begin!`);
       .catch(() => {});
   }, [setThreads, setCurrentThreadId, setMessages, modelRef]);
 
-  // Follow the active résumé: when the user switches variants (store emits
+  // Follow the active resume: when the user switches variants (store emits
   // 'dataLoaded'), persist the current thread, reload threads from storage (to
   // pick up any external mutation, e.g. a variant delete), and open that
   // variant's most-recent thread — creating a fresh homed one if it has none.
@@ -1039,7 +1065,7 @@ Let's begin!`);
           t.id === prevId ? { ...t, messages: trimMessages(messagesRef.current), updatedAt: new Date().toISOString() } : t);
       }
       // An explicit in-thread jump (jumpToVariant) pins the thread to KEEP open, so
-      // following the résumé doesn't swap a cross-résumé thread out from under the
+      // following the resume doesn't swap a cross-resume thread out from under the
       // user. One-shot — read and clear. Falls through to normal selection if the
       // pinned thread has since vanished.
       const pinned = pinThreadIdRef.current;
@@ -1050,7 +1076,7 @@ Let's begin!`);
         next = [t, ...next];
         cid = t.id;
       }
-      // Navigating résumés must NOT abort an in-flight reply — it commits to its
+      // Navigating resumes must NOT abort an in-flight reply — it commits to its
       // origin thread via commitToThread(startThreadId). Sync the display: the
       // selection can land on the stream's own origin thread (a pinned jump-back
       // or most-recent pick), where the buffered bubble must repaint.
@@ -1071,7 +1097,7 @@ Let's begin!`);
     return () => window.removeEventListener(SETTINGS_UPDATED_EVENT, onSettings);
   }, [refresh]);
 
-  // Deleting a résumé WITH its threads (Header.handleDelete) drops them straight
+  // Deleting a resume WITH its threads (Header.handleDelete) drops them straight
   // in storage — it can't go through deleteThread. If the in-flight stream's
   // origin is among the dropped ids, its commit target is gone and the banner
   // can no longer render it (the thread lookup fails) while `loading` keeps the
@@ -1100,7 +1126,8 @@ Let's begin!`);
     messages, threads, currentThreadId, loading, thinking, streamingMessage, streamThreadId, contextChips,
     currentModel, reasoningEffort, webSearchEnabled,
     configured, configuredProviders, reasoningSupported, customModels,
-    // active résumé (re-read each render; the follow effect re-renders on switch)
+    catalogRev, refreshCatalog: refreshCatalogIfStale,
+    // active resume (re-read each render; the follow effect re-renders on switch)
     currentVariantId: getCurrentId(),
     // actions
     send, stop, selectModel, applyCustomSlug, removeCustomModelEntry,

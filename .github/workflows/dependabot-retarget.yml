@@ -1,0 +1,65 @@
+name: dependabot-retarget
+
+# Move Dependabot's security PRs off `main` and onto `next`.
+#
+# Dependabot always raises security PRs against the repository's DEFAULT branch,
+# and `target-branch` in dependabot.yml cannot redirect them (it makes the entry
+# apply to version updates only). guard-main-source rejects anything reaching
+# main that is not a promotion from this repo's `next`, so every one of those
+# PRs is born unmergeable — #98 accumulated five failed only-next-into-main runs
+# and had no path to green.
+#
+# Weakening the guard was the wrong fix: a security bump landing on main that
+# `next` does not have would be reverted by the following promotion, silently
+# undoing the fix. Retargeting keeps the promotion invariant intact and lets the
+# bump ride the normal beta -> stable flow.
+#
+# NOTE: `pull_request_target` reads this workflow from the BASE branch, so it
+# only starts firing once this file is on `main` — i.e. after the next
+# promotion. Until then, retarget Dependabot PRs by hand.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  retarget:
+    # `pull_request` would run with a read-only token on a Dependabot-authored
+    # PR, so this must be `pull_request_target` to hold pull-requests: write.
+    # That normally carries the risk of running untrusted PR code with an
+    # elevated token — this job never checks out the head ref, never runs a
+    # build, and touches nothing but the GitHub API, so there is no PR-supplied
+    # code for the token to reach.
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retarget onto next
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Moving #${PR} from main to next"
+          gh pr edit "$PR" --repo "$REPO" --base next
+
+          # Retargeting emits `pull_request: edited`. ci.yml declares no
+          # `types:`, so it defaults to [opened, synchronize, reopened] and
+          # would never see this PR — it would sit on next with no checks.
+          #
+          # Asking Dependabot to rebase is what starts them: the branch is based
+          # on main, next is ahead of main, so the rebase necessarily moves the
+          # tip and the resulting push fires `synchronize`.
+          #
+          # Deliberately NOT close+reopen, which would also fire CI: closing a
+          # Dependabot PR is the documented way to tell Dependabot to stop
+          # recreating that update, and an automation must not emit that signal
+          # on every security fix.
+          gh pr comment "$PR" --repo "$REPO" --body "@dependabot rebase"

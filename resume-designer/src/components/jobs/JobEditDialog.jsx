@@ -43,7 +43,7 @@ export function JobEditDialog({ open, onOpenChange, jd, onSave }) {
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between border-b p-6">
           <div className="space-y-1">
-            <DialogTitle>Edit Job Description</DialogTitle>
+            <DialogTitle>Edit job</DialogTitle>
             <p className="text-sm text-muted-foreground">Update the title, company, and description.</p>
           </div>
           <button
@@ -59,13 +59,13 @@ export function JobEditDialog({ open, onOpenChange, jd, onSave }) {
 
         {/* Body */}
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-6">
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Job Title" />
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Job title" />
           <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company" />
           <Textarea
             rows={10}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Job Description"
+            placeholder="Job description"
           />
         </div>
 

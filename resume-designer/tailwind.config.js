@@ -25,8 +25,8 @@ export default {
   // Preflight (Tailwind's base reset) is ON — real shadcn components require it
   // for correct borders, box-sizing, and typography. Without it, browser-default
   // <button>/<input> chrome bleeds through and `border` utilities don't render.
-  // The résumé document (#resume) is a vanilla island styled by resume.css, and
-  // the PDF renders via print.html (no Tailwind) — so neither the on-screen résumé
+  // The resume document (#resume) is a vanilla island styled by resume.css, and
+  // the PDF renders via print.html (no Tailwind) — so neither the on-screen resume
   // nor PDF export depends on Preflight being off.
   theme: {
   	extend: {

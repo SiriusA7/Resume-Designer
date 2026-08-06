@@ -19,7 +19,7 @@ const AREA_NAMES = {
   ui: 'Interface',
   update: 'Updates & Changelog',
   changelog: 'Updates & Changelog',
-  render: 'Résumé Rendering',
+  render: 'Resume Rendering',
   pagination: 'Pagination',
   store: 'Data & Storage',
   data: 'Data & Storage',
@@ -54,7 +54,11 @@ export function groupChangelog(subjects, version = '') {
     (buckets[type][area] ||= []).push(`${bang ? '**Breaking:** ' : ''}${cap(subject.trim())}`);
   }
 
-  const out = [`## Resume Designer ${String(version).trim()}`.trim(), ''];
+  // Canonical heading. The app parses this back out of the published release
+  // body to recover the true version (beta builds publish under the rolling
+  // `next` tag), so the product name here is a contract with
+  // src/changelogService.js and validate-digest.mjs — not decoration.
+  const out = [`## On Paper ${String(version).trim()}`.trim(), ''];
   let any = false;
   for (const { key, title } of SECTIONS) {
     const areas = buckets[key];

@@ -1,6 +1,6 @@
 /**
  * Font Service
- * Handles font loading, caching, and management for the resume designer
+ * Handles font loading, caching, and management for On Paper
  * Supports: Preset font pairings, Google Fonts, and System fonts
  */
 

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Brain, Briefcase, Check, ChevronDown, CircleHelp, FileText, Globe,
   LayoutPanelTop, List, MessageCircle, Pencil, Send, Trash2, User, X, Zap,
@@ -24,6 +24,12 @@ const SLASH_COMMANDS = [
 
 const COMMANDS_NEEDING_ARGS = ['/improve', '/generate'];
 
+// Below this control-row width the reasoning control drops its text label. The
+// chat panel resizes independently of the viewport (240–500px, ChatPanel.jsx),
+// so a viewport media query would be measuring the wrong box — hence a
+// ResizeObserver rather than a Tailwind breakpoint.
+const COMPACT_ROW_WIDTH = 300;
+
 const REASONING_OPTIONS = [
   { level: 'none', label: 'Off', desc: 'Fastest responses' },
   { level: 'low', label: 'Low', desc: 'Quick thinking' },
@@ -48,7 +54,7 @@ const CHIP_ICONS = {
  */
 export function ChatComposer({
   contextChips, onRemoveChip, onClearChips, onSend, loading,
-  currentModel, configured, customModels,
+  currentModel, configured, customModels, catalogRev, onRefreshCatalog,
   onSelectModel, onApplyCustomSlug, onRemoveCustom, onConfigure,
   reasoningEffort, reasoningSupported, onSetReasoning,
   webSearchEnabled, onToggleWebSearch,
@@ -57,6 +63,18 @@ export function ChatComposer({
   const [slashItems, setSlashItems] = useState(null);
   const [slashIndex, setSlashIndex] = useState(0);
   const [reasoningOpen, setReasoningOpen] = useState(false);
+  const controlsRef = useRef(null);
+  const [compact, setCompact] = useState(false);
+
+  useEffect(() => {
+    const el = controlsRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([entry]) => {
+      setCompact(entry.contentRect.width < COMPACT_ROW_WIDTH);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const autoResize = () => {
     const ta = inputRef.current;
@@ -155,10 +173,10 @@ export function ChatComposer({
 
       <div className="flex flex-wrap gap-1.5 max-[1024px]:hidden">
         <Button variant="outline" size="sm" className="h-7 rounded-full text-xs" disabled={loading} onClick={() => onSend('/feedback')}>
-          Get Feedback
+          Get feedback
         </Button>
         <Button variant="outline" size="sm" className="h-7 rounded-full text-xs" disabled={loading} onClick={() => onSend('/improve summary')}>
-          Improve Summary
+          Improve summary
         </Button>
       </div>
 
@@ -210,23 +228,25 @@ export function ChatComposer({
           onKeyDown={handleKeyDown}
           className="max-h-[200px] min-h-0 resize-none rounded-none border-0 bg-transparent px-3 pb-1 pt-2.5 shadow-none focus-visible:ring-0"
         />
-        <div className="flex items-center gap-1 px-1.5 pb-1.5 pt-0.5">
+        <div ref={controlsRef} className="flex items-center gap-1 px-1.5 pb-1.5 pt-0.5">
           <ModelSelector
             currentModel={currentModel}
             configured={configured}
             customModels={customModels}
+            catalogRev={catalogRev}
+            onRefreshCatalog={onRefreshCatalog}
             onSelect={onSelectModel}
             onApplyCustomSlug={onApplyCustomSlug}
             onRemoveCustom={onRemoveCustom}
             onConfigure={onConfigure}
           />
 
-          <span className="mx-0.5 h-4 w-px bg-border" />
+          <span className="mx-0.5 h-4 w-px shrink-0 bg-border" />
 
           <Button
             variant="ghost"
             size="icon"
-            className={cn('size-7', webSearchEnabled && 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary')}
+            className={cn('size-7 shrink-0', webSearchEnabled && 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary')}
             title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
             aria-label={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
             onClick={onToggleWebSearch}
@@ -239,17 +259,18 @@ export function ChatComposer({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 gap-1 px-2 text-xs font-normal text-muted-foreground"
+                className={cn('h-7 shrink-0 gap-1 text-xs font-normal text-muted-foreground', compact ? 'px-1.5' : 'px-2')}
                 disabled={!reasoningSupported}
-                title={reasoningSupported ? 'Reasoning effort' : 'Reasoning not available for this model'}
+                title={reasoningSupported ? `Reasoning effort: ${reasoningLabel(reasoningEffort)}` : 'Reasoning not available for this model'}
+                aria-label={reasoningSupported ? `Reasoning effort: ${reasoningLabel(reasoningEffort)}` : 'Reasoning not available for this model'}
               >
                 <Brain className="size-3.5" />
-                <span>{reasoningSupported ? reasoningLabel(reasoningEffort) : 'N/A'}</span>
-                <ChevronDown className="size-3 opacity-60" />
+                {!compact && <span>{reasoningSupported ? reasoningLabel(reasoningEffort) : 'N/A'}</span>}
+                {!compact && <ChevronDown className="size-3 opacity-60" />}
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" sideOffset={8} className="w-[200px] p-1">
-              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Reasoning Effort</div>
+              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Reasoning effort</div>
               {REASONING_OPTIONS.map((o) => (
                 <button
                   key={o.level}
@@ -269,7 +290,7 @@ export function ChatComposer({
 
           <Button
             size="icon"
-            className="ml-auto size-[30px] rounded-lg"
+            className="ml-auto size-[30px] shrink-0 rounded-lg"
             title={loading ? 'Waiting for the current response…' : 'Send message'}
             aria-label="Send message"
             disabled={loading}

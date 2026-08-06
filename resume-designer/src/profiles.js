@@ -7,6 +7,7 @@ import { appStorage, setProfileMapping } from './appStorage.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
+  withoutDeadProviderCredentials, withoutStoredCredentials,
 } from './profileKeys.js';
 
 // Starts with `resume-` ON PURPOSE so appStorage's one-time localStorage→disk
@@ -149,29 +150,163 @@ function adoptionProfileName() {
  * One-time move of settings.openrouterKey (per-profile blob) to the shared
  * key, so one configured key serves every profile. Idempotent; an existing
  * shared key wins (never clobbered by a stale key from an imported backup).
- * Runs with mapping ACTIVE (reads the active profile's blob).
+ *
+ * Visits EVERY profile's blob, not only the active one. The key is shared
+ * across profiles by design, so a credential left in an inactive profile's
+ * blob is a stale duplicate — but it is a stale duplicate sitting in clear text
+ * under app_data_dir, which is the exposure this whole module exists to close.
+ * It could linger there indefinitely, since nothing visits a profile that is
+ * never switched to. `withoutLegacyCredential` already sanitized these blobs at
+ * the BACKUP boundary; that kept the key out of exported files and did nothing
+ * about the file it is actually stored in.
+ *
+ * Active profile first, so its key is the one that wins the shared slot when
+ * more than one blob still holds a credential — it is the one the user is
+ * demonstrably using. Inactive keys are adopted rather than merely deleted when
+ * no shared key exists yet, because deleting could destroy the user's only
+ * credential; the migration invariant applies to them exactly as it does to the
+ * active blob.
  */
 export async function extractSharedApiKey() {
-  try {
-    const raw = appStorage.getItem('resume-designer-data');
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (!data?.settings || !('openrouterKey' in data.settings)) return;
-    const inBlob = data?.settings?.openrouterKey;
-    if (inBlob && appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
-      appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
-      // Cached mode reports write failures only at flush time. Never strip
-      // the blob copy until the shared key is DURABLE — if the shared-key
-      // file write failed while the (smaller) blob rewrite succeeded, the
-      // only durable copy of the credential would vanish on restart. On a
-      // failed flush the blob keeps the key and the next boot retries.
-      if (!(await appStorage.flush())) return;
+  // The active profile, however it currently resolves: the mapped physical key
+  // with mapping on, the unprefixed key with mapping off (adoption degraded).
+  // FIRST, and its result is the one kept: the active profile is the authority
+  // on the user's current intent, including an intent to have no key.
+  let stranded = await extractCredentialFromBlob('resume-designer-data');
+  // Snapshot: the shared-key write below adds a key mid-sweep.
+  for (const key of appStorage.keys()) {
+    const split = splitPhysicalKey(key);
+    if (split?.logicalKey === 'resume-designer-data') {
+      const left = await extractCredentialFromBlob(key);
+      // `=== null` — a genuine absence — and NOT falsiness. An active-profile
+      // result of `''` is a Clear that could not be consolidated, and it is an
+      // ANSWER: treating it as absence let an older key from a profile the user
+      // has not opened fill the gap and undo the Clear. The inactive blobs are
+      // still swept, they just cannot outvote the active profile.
+      if (stranded === null) stranded = left;
     }
-    delete data.settings.openrouterKey;
-    appStorage.setItem('resume-designer-data', JSON.stringify(data));
-  } catch {
-    // Corrupt blob: leave it for loadFromStorage()'s own error handling.
   }
+  return stranded;
+}
+
+/**
+ * Remove the dead pre-OpenRouter provider credentials from EVERY profile blob.
+ *
+ * Sanitising on import only helps FUTURE migrations. The Electron import has
+ * been shipping since 2026-05-27, so anyone who already took it is carrying
+ * `anthropicKey` / `openaiKey` / `geminiKey` in clear text under app_data_dir
+ * right now — and nothing will ever visit them, precisely because nothing reads
+ * them: no code path has a reason to rewrite the blob and drop them. Left
+ * alone, they stay for the life of the install.
+ *
+ * Sweeps the same key set as extractSharedApiKey, and deliberately does NOT
+ * reuse extractCredentialFromBlob: that returns early on a blob with no
+ * `openrouterKey`, which is exactly the blob this is for.
+ *
+ * Synchronous and best-effort, unlike the credential extraction beside it.
+ * Nothing here is a durability barrier — the whole operation is a DELETION of
+ * data nothing depends on, so there is no "strip only after the new copy is
+ * durable" rule to obey. A blob storage refuses to rewrite is simply retried on
+ * the next boot.
+ */
+export function stripDeadProviderCredentials() {
+  const keys = ['resume-designer-data'];
+  for (const key of appStorage.keys()) {
+    const split = splitPhysicalKey(key);
+    if (split?.logicalKey === 'resume-designer-data') keys.push(key);
+  }
+  for (const key of keys) {
+    try {
+      const raw = appStorage.getItem(key);
+      if (raw === null) continue;
+      // Always the LOGICAL key: the helper matches on it, and every key here is
+      // a `resume-designer-data` blob by construction.
+      const cleaned = withoutDeadProviderCredentials('resume-designer-data', raw);
+      if (cleaned === raw) continue;
+      appStorage.setItem(key, cleaned);
+    } catch {
+      // Storage refused this one (passthrough quota). The next boot retries;
+      // nothing else depends on it having happened.
+    }
+  }
+}
+
+/**
+ * Move one blob's credential into the shared key and strip it. Per-blob rather
+ * than per-sweep error handling, so one corrupt profile cannot stop the others
+ * being sanitized.
+ *
+ * Returns the credential this call could not consolidate, or null when there is
+ * nothing to report. A caught failure used to look identical to success from
+ * outside, so boot went on to report protected storage while a readable copy sat
+ * in the blob and getSettings quietly served it — see main.js.
+ *
+ * `''` is a RESULT, not an absence. It means the user's Clear could not be
+ * consolidated, and collapsing it to null (via `inBlob || null`) let the caller
+ * carry on scanning inactive profiles and adopt an older key out of one — the
+ * Clear undone by a profile the user has not opened. Every caller must treat
+ * `null` and `''` as different answers.
+ */
+async function extractCredentialFromBlob(blobKey) {
+  let data;
+  try {
+    const raw = appStorage.getItem(blobKey);
+    if (!raw) return null;
+    data = JSON.parse(raw);
+  } catch {
+    // Corrupt blob: leave it for loadFromStorage()'s own error handling. NOT a
+    // stranded credential — a blob this app cannot parse is not one it read a
+    // key out of.
+    return null;
+  }
+  // `in` on a truthy NON-object throws a TypeError, and this line sits outside
+  // the parse catch since the catch was narrowed to distinguish a corrupt blob
+  // from a storage refusal. A hand-edited or imported blob with
+  // `settings: "…"` would therefore escape here — and boot awaits this before
+  // initSecretStore, so one malformed profile aborted the rest of init rather
+  // than being left to loadFromStorage's own fallback.
+  const settings = data?.settings;
+  if (!settings || typeof settings !== 'object') return null;
+  if (!('openrouterKey' in settings)) return null;
+  const inBlob = settings.openrouterKey;
+  try {
+    // PRESENCE, not truthiness. Reaching here means the field is present, so an
+    // empty value is the user's explicit Clear and has to become the shared
+    // masking sentinel. Skipping it deleted the Clear and left no shared entry
+    // — after which the sweep below reached an inactive blob holding an older
+    // paid key, found nothing stored, and resurrected the credential the user
+    // had deleted. The same truthiness assumption did the same damage on the
+    // keychain migration path earlier in this PR.
+    if (appStorage.getItem(OPENROUTER_KEY_KEY) === null) {
+      appStorage.setItem(OPENROUTER_KEY_KEY, inBlob);
+    }
+    // Cached mode reports write failures only at flush time. Never strip
+    // the blob copy until the shared key is DURABLE — if the shared-key
+    // file write failed while the (smaller) blob rewrite succeeded, the
+    // only durable copy of the credential would vanish on restart. On a
+    // failed flush the blob keeps the key and the next boot retries.
+    //
+    // The barrier gates the STRIP, not the write, which is why it sits
+    // outside the `=== null` check. A shared value already present may be
+    // this boot's own PENDING write from an earlier call whose flush failed:
+    // getItem serves the write-behind cache, so a queued value and a durable
+    // one read identically. Gating only the branch that wrote made a second
+    // call skip the barrier and strip the blob against a value still sitting
+    // in the cache — the one durable copy gone if the retry never lands.
+    // Costs nothing in steady state: once extraction has run there is no
+    // `openrouterKey` in the blob and the function returns above.
+    if (!(await appStorage.flush())) return inBlob;
+    delete data.settings.openrouterKey;
+    appStorage.setItem(blobKey, JSON.stringify(data));
+  } catch {
+    // A storage refusal, not a corrupt blob: passthrough setItem throws
+    // synchronously when localStorage is full. The blob still holds a readable
+    // credential — or a readable CLEAR — and saying which is the whole point of
+    // this return value. `inBlob` verbatim, never `inBlob || null`: an
+    // unconsolidated '' is the user's Clear and must not read as absence.
+    return inBlob;
+  }
+  return null;
 }
 
 /**
@@ -256,7 +391,7 @@ async function resolveActiveProfile() {
       // mapping INACTIVE so this session reads/writes the still-intact
       // unprefixed sources (pre-profile behavior); the marker persists so a
       // later boot resumes once space/disk allows. Activating mapping here would
-      // point reads at an incomplete namespace and hide the user's résumés.
+      // point reads at an incomplete namespace and hide the user's resumes.
       console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
       return id;
     }
@@ -483,7 +618,10 @@ export function exportProfileBackup(profileId, filename) {
     const logical = k.slice(prefix.length);
     if (!isOwnedKey(logical)) continue;
     const v = appStorage.getItem(k);
-    if (v !== null) keys[logical] = v;
+    // A per-profile export is the WORST case for a blob-held credential: it
+    // targets a named profile, typically an inactive one, and
+    // extractSharedApiKey only ever clears that field for the active profile.
+    if (v !== null) keys[logical] = withoutStoredCredentials(logical, v);
   }
   // Incomplete-adoption recovery state (mapping off): the ACTIVE profile's live
   // data still sits under unprefixed owned keys, so include them here too —
@@ -495,7 +633,7 @@ export function exportProfileBackup(profileId, filename) {
     for (const k of appStorage.keys()) {
       if (!k || splitPhysicalKey(k) || isSharedKey(k) || !isOwnedKey(k)) continue;
       const v = appStorage.getItem(k);
-      if (v !== null) keys[k] = v;
+      if (v !== null) keys[k] = withoutStoredCredentials(k, v);
     }
   }
   const envelope = {
@@ -507,7 +645,7 @@ export function exportProfileBackup(profileId, filename) {
     keys,
   };
   const slug = profile.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'profile';
-  const name = filename || `resume-designer-profile-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
+  const name = filename || `on-paper-profile-${slug}-${new Date().toISOString().slice(0, 10)}.json`;
   // persistence.js imports this module, so pull downloadFile late to keep the
   // static module graph acyclic.
   return import('./persistence.js').then(({ downloadFile }) => {
@@ -529,7 +667,7 @@ function rollbackImportedProfile(id) {
 export async function importProfileBackup(parsed) {
   if (!parsed || parsed.backupFormat !== 2 || parsed.kind !== 'profile'
       || !parsed.keys || typeof parsed.keys !== 'object') {
-    throw new Error('Not a Resume Designer profile export (expected backupFormat 2, kind "profile").');
+    throw new Error('Not an On Paper profile export (expected backupFormat 2, kind "profile").');
   }
   for (const [k, v] of Object.entries(parsed.keys)) {
     if (typeof v !== 'string') throw new Error(`Invalid profile export: key "${k}" must be a string value.`);
@@ -541,7 +679,9 @@ export async function importProfileBackup(parsed) {
   });
   try {
     for (const [k, v] of Object.entries(parsed.keys)) {
-      appStorage.setItem(physicalKey(profile.id, k), v);
+      // Profile exports written before the strip still carry the credential;
+      // sanitize on the way in so it cannot land back in plaintext storage.
+      appStorage.setItem(physicalKey(profile.id, k), withoutStoredCredentials(k, v));
     }
   } catch (err) {
     // Browser passthrough: setItem throws synchronously at localStorage quota

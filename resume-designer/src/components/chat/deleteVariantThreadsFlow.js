@@ -1,5 +1,5 @@
 /**
- * Shared thread-handling contract for deleting a résumé variant, used by both
+ * Shared thread-handling contract for deleting a resume variant, used by both
  * the Header delete flow and the Library DetailPane. Counts the variant's chat
  * threads and, if any exist, asks the user keep→General vs delete, persists the
  * reassignment via reassignThreadsForDeletedVariant, and (on delete) dispatches

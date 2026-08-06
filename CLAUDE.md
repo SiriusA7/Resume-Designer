@@ -1,9 +1,14 @@
 <!-- project-stack-start -->
 
-This repo is **Resume Designer**, a Tauri 2 desktop app (macOS + Windows) for
-designing résumés, with AI chat assistance and vector PDF export. The app code
-lives in `resume-designer/`; the repo root also holds `website/` (GitHub Pages
-marketing site) and `docs/`.
+This repo is **On Paper, formerly Resume Designer**, a Tauri 2 desktop app
+(macOS + Windows) for designing resumes, with AI chat assistance and vector PDF
+export. The app code lives in `resume-designer/`; the repo root also holds
+`website/` (GitHub Pages marketing site) and `docs/`.
+
+The directory name `resume-designer/`, the GitHub repo slug, the bundle
+identifier `com.resumedesigner.app`, and every `resume-designer-*` storage key
+are **deliberately unchanged** by the rename — they are paths and data
+addresses, not branding. See "Project rules" below.
 
 When working on build, packaging, signing, or updater code, **read
 `resume-designer/TAURI.md` first** — it is the authoritative guide for the
@@ -48,6 +53,48 @@ npm run tauri:build  # production desktop build (see TAURI.md for targets)
 - Conventional commits, enforced by commitlint in CI on **every commit in a PR** (both `main` and `next`): subjects must start lowercase (e.g. `fix(chat): …`).
 - Branch flow: feature branches → `next` (beta channel) → promotion PR to `main`.
 - The `next` **git tag** is the beta release anchor — never delete it. Use `refs/heads/next` / `origin/next` when you mean the branch, to avoid the branch/tag ambiguity.
+
+### Naming (the "On Paper" rename)
+
+The brand is **On Paper** — two words, title case, in all prose and display
+copy. The authority is [docs/brand/on-paper-brand-guide.md](docs/brand/on-paper-brand-guide.md);
+read it before writing user-facing copy.
+
+Lowercase is **only** for constrained technical identifiers — places where a
+space or capital is actually illegal or would be rejected:
+
+- npm package `on-paper`, Rust lib `on_paper_lib`
+- export/temp filenames (`on-paper-backup-*.json`, `on-paper-preview-*.pdf`)
+- CI artifact names (`on-paper_<arch>.app.tar.gz`)
+- the domain `onpaper.pro` (the `.pro` belongs to the address, not the name)
+
+The test is necessity, not house style: if the literal string `On Paper` would
+work there, use it. Never write `OnPaper`, `On paper`, `On-Paper`, or `ONPAPER`.
+
+Transition phrasing, where existing users could be confused, is exactly
+**"On Paper, formerly Resume Designer"**.
+
+These are **frozen and must never be renamed**, however tempting a sweep looks:
+
+- **Bundle identifier `com.resumedesigner.app`** — Tauri derives the app-data
+  directory from it, so it is the on-disk address of every user's resumes.
+  Changing it ships via the auto-updater and factory-resets the app.
+- **Every `resume-designer-*` / `resume-*` storage key** — desktop storage is
+  one file per key, so these are filenames. Renaming them also turns the
+  wipe-before-validate path in `persistence.js` into a silent data loss on the
+  next backup import.
+- **The legacy Electron key list and paths in `src-tauri/src/commands/migration.rs`**
+  — historical facts about a shipped app's on-disk database, not configuration.
+- **The `resume-designer/` directory and the GitHub repo slug** — the repo slug
+  is compiled into the updater endpoints of every shipped binary.
+- **`name = "resume-designer"` in `src-tauri/Cargo.toml`** — with no
+  `bundle.mainBinaryName` set, the Cargo package name becomes
+  `CFBundleExecutable` and the installed Windows `.exe` name. Only the `[lib]`
+  name is branded (`on_paper_lib`).
+
+Never sweep on the bare string `resume-`: it also names the `.resume-page` /
+`.resume-sidebar` CSS classes that pagination and PDF page-splitting depend on.
+Drive any key-related change off `BACKUP_FIXED_KEYS` in `src/profileKeys.js`.
 
 ### UI
 

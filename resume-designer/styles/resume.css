@@ -371,6 +371,33 @@
   color: var(--resume-text-muted);
 }
 
+/* Paragraph sections: each content entry is its own prose block */
+.section-paragraph {
+  margin: 0 0 var(--section-item-gap, 4px);
+  line-height: 1.45;
+}
+
+.section-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+/* The layout containers reset their <p>s (.sidebar-content p,
+   .stacked-skill-content p, .stacked-vertical-content p — specificity 0,1,1),
+   which outranks bare .section-paragraph (0,1,0) and would leave consecutive
+   prose entries flush there. Restate the prose gap at higher specificity for
+   those containers — same shape as the highlight-gap overrides they sit by. */
+.sidebar-content p.section-paragraph,
+.stacked-skill-content p.section-paragraph,
+.stacked-vertical-content p.section-paragraph {
+  margin: 0 0 var(--section-item-gap, 4px);
+}
+
+.sidebar-content p.section-paragraph:last-child,
+.stacked-skill-content p.section-paragraph:last-child,
+.stacked-vertical-content p.section-paragraph:last-child {
+  margin-bottom: 0;
+}
+
 /* ==========================================================================
    Experience
    ========================================================================== */
@@ -387,6 +414,44 @@
 
 .experience-item:last-child {
   margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+/* --- Grouped roles (one employer, several positions) ---------------------- */
+
+/* The employer name, shown once above the run. The page-break rules live in
+   print.css (Task 4) — screen layout has no page breaks to avoid. */
+.experience-group-header {
+  font-weight: 600;
+  color: var(--resume-heading, inherit);
+  margin-bottom: 0.3rem;
+}
+
+/* Run members indent under the header so the progression reads as one job. */
+.is-grouped .experience-header,
+.is-grouped .experience-dates,
+.is-grouped .experience-bullets {
+  margin-left: 0.85rem;
+}
+
+/* The per-role company stays in the DOM for the continuation-page reveal
+   (see src/pagination.js revealGroupContinuations) but is hidden in normal flow. */
+.is-grouped .experience-company {
+  display: none;
+}
+.is-grouped .experience-company.is-continuation {
+  display: inline;
+}
+
+/* A divider between two roles at the SAME employer is exactly the visual this
+   feature exists to remove: the run should read as one job. Only the last member
+   of a run keeps the entry separator, so the boundary to the NEXT employer stays.
+   Keyed on .is-group-last rather than :last-child — with no wrapper element,
+   :last-child would mean "last entry in the section", which would also strip the
+   divider after any run that isn't at the very end of the list. */
+.experience-item.is-grouped:not(.is-group-last) {
+  margin-bottom: 0.3rem;
   padding-bottom: 0;
   border-bottom: none;
 }
@@ -908,6 +973,14 @@
 
 .executive-main .section-title::after {
   width: 100%;
+}
+
+/* Executive's main column is a plain block (no flex gap, no per-section
+   margin) because it historically held a single section (experience). Main-area
+   custom sections render after it, so space every section that follows another
+   — the existing single-section resume matches nothing here and is unchanged. */
+.executive-main .section + .section {
+  margin-top: var(--section-spacing, 0.8rem);
 }
 
 .executive-side {

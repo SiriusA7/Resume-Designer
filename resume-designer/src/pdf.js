@@ -13,6 +13,7 @@ import { isElectron, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, save
 import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
+import { withPreviewSuppressed } from './inlineChanges.js';
 
 let html2pdfModule = null;
 
@@ -94,7 +95,16 @@ async function handleDownloadPdf(customFilename) {
     // Browser fallback only — html2pdf (image-based). Tauri uses the native
     // preview flow (runNativeExportWithPreview), not this path.
     console.log('PDF Export: Using html2pdf.js (browser fallback)...');
-    await generatePdfWithHtml2Pdf(resumeEl, filename);
+    // Capture STORED data, never the pending preview. This path snapshots the
+    // live DOM, and while a proposal is under review that DOM shows projected
+    // changes the user has not accepted. `.pdf-export-mode` only strips the
+    // highlight styling — the text underneath is still the projection — so
+    // without this the PDF silently contains never-applied AI content. The
+    // native path is unaffected: it renders /print.html from stored data in a
+    // separate window. Re-query inside, since the suppressed re-render rebuilds
+    // #resume's subtree.
+    await withPreviewSuppressed(() =>
+      generatePdfWithHtml2Pdf(document.getElementById('resume') || resumeEl, filename));
     
   } catch (error) {
     console.error('PDF generation failed:', error);
@@ -274,7 +284,7 @@ async function generatePdfNative(_resumeEl, _filename, variantId = null) {
       // since createPDF is rect-driven (macOS) or paginated (Windows).
       width: 820,
       height: 1200,
-      title: 'Resume Designer — PDF Export',
+      title: 'On Paper — PDF Export',
     });
 
     // Tauri emits `tauri://created` on the window itself when the OS

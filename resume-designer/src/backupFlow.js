@@ -8,7 +8,11 @@
  * inline comments for why every step is ordered the way it is.
  */
 
-import { exportFullBackup, importFullBackupDurably, importFullBackupMerge } from './persistence.js';
+import {
+  exportFullBackup, importFullBackupDurably, importFullBackupMerge,
+  credentialFromEnvelope, saveApiKey,
+} from './persistence.js';
+import { getSecret, hasNoCredentialConfigured, recoverSecretStore } from './secretStore.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
@@ -93,7 +97,7 @@ function reloadWithOverlay(message = 'Reloading…') {
 // profile — so a replace stays suspended (the user reloads/retries).
 function showImportSuccessAndReload(message) {
   // Saving is already suspended by the caller (before the durable import ran), so
-  // the stale in-memory résumé can't be written back while this modal waits on the
+  // the stale in-memory resume can't be written back while this modal waits on the
   // user or during the reload. The durable import keeps its restore guard armed on
   // success (continuous ownership — no unguarded microtask gap), so only ARM here
   // if it isn't already: the legacy Merge path is synchronous and never armed one.
@@ -230,7 +234,7 @@ export async function importBackupFromFile(file) {
     const isFormat1 = preview?.backupFormat === 1 && preview.keys;
     const isFormat2Full = preview?.backupFormat === 2 && preview.kind === 'full';
     if (!isFormat1 && !isFormat2Full) {
-      throw new Error('Not a Resume Designer backup file.');
+      throw new Error('Not an On Paper backup file.');
     }
     const incoming = isFormat1
       ? Object.keys(preview.keys).length
@@ -265,7 +269,7 @@ export async function importBackupFromFile(file) {
     // Suspend saves BEFORE the import — importFullBackupDurably writes
     // appStorage synchronously and then AWAITS the disk flush; without this, a
     // visibilitychange/close during that await would fire store.saveNow() and
-    // write the stale in-memory résumé over the just-imported data. Resumed in
+    // write the stale in-memory resume over the just-imported data. Resumed in
     // the catch below if the import throws (it rolls appStorage back, so the
     // store is consistent again and the app keeps running without a reload).
     // suspendSaves() returns TRUE only if it flipped the latch on — false if a
@@ -304,7 +308,7 @@ export async function importBackupFromFile(file) {
 }
 
 /**
- * Import résumés / settings / history from a previous (Electron) installation's
+ * Import resumes / settings / history from a previous (Electron) installation's
  * LevelDB into this build. `mode` is 'replace' (overwrite current data — mirrors
  * the one-time auto-migration in main.js) or 'merge' (union; current data wins
  * on conflicts). Tauri-only — the probe/import calls no-op or throw in the
@@ -316,6 +320,10 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
   // See importBackupFromFile: TRUE only if this call ACQUIRED the suspension, so
   // the catch never resumes one a prior import (or an early throw) left in place.
   let suspendedHere = false;
+  // Hoisted so the catch can undo a credential swap the import then failed to
+  // justify — see the replace branch below.
+  let previousCredential = null;
+  let credentialReplaced = false;
   try {
     const probe = await probeLegacyElectronData();
     if (!probe?.found) {
@@ -329,8 +337,8 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       `Import data from your previous desktop app?\n\n` +
         `Found ${incoming} keys from the legacy (Electron) installation.\n\n` +
         (merging
-          ? `They will be MERGED into your current data (your current résumés win on any conflict).`
-          : `Your current résumés, job descriptions, history, and settings will be REPLACED.`) +
+          ? `They will be MERGED into your current data (your current resumes win on any conflict).`
+          : `Your current resumes, job descriptions, history, and settings will be REPLACED.`) +
         `\n\nThe app will reload after import.`
     );
     if (!ok) return;
@@ -342,26 +350,119 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       console.warn('[backup] pre-import flush failed:', err);
     }
 
+    // A REPLACE means the previous installation's data wins, and the credential
+    // is part of "everything". keepCredential carries it through STORAGE, which
+    // is not enough on its own: this install's keychain entry would win at the
+    // next boot — adoptKeychainRead treats a present value as authoritative —
+    // and the cleanup right after it would strip the imported copy. The replace
+    // then comes up with the CURRENT key, or with none at all when that entry is
+    // the empty Clear sentinel. So the credential goes to the keychain here,
+    // alongside every other key this replace is about to write.
+    //
+    // BEFORE importFullBackupDurably, which arms the restore guard: with that
+    // armed, setSecret's plaintext cleanup is deferred and reports failure, so
+    // a successful keychain write would surface as an import error.
+    //
+    // MERGE is deliberately untouched — "your current data wins on conflict" is
+    // its whole contract, and the current key is current data.
+    const incomingCredential = merging ? null : credentialFromEnvelope(envelope);
+
+    // A null snapshot in read-only or browser-unreadable means the current key
+    // could not be READ, not that there is none — and rolling THAT back as ''
+    // would clear a credential the user still has while telling them the import
+    // failed. So make it knowable first: recoverSecretStore is the same retry
+    // the Settings banner offers, and it usually succeeds because a keychain
+    // fault at boot is usually transient.
+    if (incomingCredential !== null && !hasNoCredentialConfigured() && getSecret() === null) {
+      try { await recoverSecretStore(); } catch { /* still unreadable — handled below */ }
+    }
+    previousCredential = getSecret();
+    // Trustworthy iff we either read a value or can say authoritatively there is
+    // none. Unknown is neither, and there is no safe swap from unknown: once the
+    // incoming key is written the original is gone and cannot be read back.
+    const previousKnown = previousCredential !== null || hasNoCredentialConfigured();
+
+    if (incomingCredential !== null && previousKnown) {
+      // Marked BEFORE the await, not after. setSecret writes the keychain and
+      // THEN strips any plaintext copy, and it throws if that strip fails — so
+      // a rejection does not mean the swap did not happen. Setting the flag
+      // afterwards left exactly that case unrolled-back: import reported as
+      // failed, AI silently on the Electron key.
+      //
+      // Optimistic on purpose. The rollback writes a value the keychain may
+      // already hold, which is a harmless no-op, whereas a missed rollback is
+      // the user's credential changed behind a failure message.
+      credentialReplaced = true;
+      await saveApiKey(incomingCredential);
+    }
+
     // Suspend saves before the import writes appStorage (see the format-2 path
     // above for the flush-await race); resumed in the catch if it throws.
     suspendedHere = store.suspendSaves();
 
+    // keepCredential, for the same reason as the automatic upgrade in main.js:
+    // this reads the previous Electron installation ON THIS MACHINE, so it is a
+    // migration of the user's own live data, not the restore of a backup file.
+    // Without it the credential is stripped before extraction can move it into
+    // the keychain, and the user loses the key by choosing a recovery path.
+    // MERGE carries the incoming credential only into a genuine gap. Its
+    // contract is "your current data wins on conflict", and the current key is
+    // current data — but keepCredential STAGES the old one in appStorage, where
+    // a later boot that cannot reach the keychain adopts it as the read-only
+    // fallback and starts spending on the previous installation's key. The
+    // merge said current wins and the staged value quietly disagreed.
+    //
+    // `hasNoCredentialConfigured()` rather than `getSecret() === null`: a null
+    // read in read-only or browser-unreadable means the store could not be READ,
+    // not that nothing is there. Starting a merge while the keychain happens to
+    // be locked would otherwise look like a gap and overrule a key that exists.
+    // The rule lives in secretStore because this file is outside the suite.
+    // REPLACE stages the credential only when the swap above actually
+    // happened. Skipping the swap and staging anyway was half a decision: the
+    // incoming key still landed in appStorage, and a keychain still locked
+    // after the reload adopts it as the read-only fallback — quietly doing the
+    // replacement the success note says was deliberately not done.
+    const keepForMerge = hasNoCredentialConfigured();
     const result = merging
-      ? importFullBackupMerge(envelope)
-      : await importFullBackupDurably(envelope);
+      ? importFullBackupMerge(envelope, { keepCredential: keepForMerge })
+      : await importFullBackupDurably(envelope, { keepCredential: previousKnown });
 
     const skipped = result.historySkipped > 0
       ? `\n\nNote: ${result.historySkipped} oversize undo/redo `
         + `${result.historySkipped === 1 ? 'entry was' : 'entries were'} skipped; `
-        + `your résumés are intact.`
+        + `your resumes are intact.`
       : '';
     const summary = merging
-      ? `Merged your previous app's résumés and settings into this one.`
+      ? `Merged your previous app's resumes and settings into this one.`
       : `Imported ${result.keysImported} keys from your previous app `
         + `(removed ${result.removedExistingKeys} existing keys).`;
-    showImportSuccessAndReload(summary + skipped);
+    // Said out loud rather than left silent: the user asked to replace
+    // everything, and one thing was deliberately not replaced.
+    const keyNote = (incomingCredential !== null && !previousKnown)
+      ? `\n\nYour API key was left as it is — the current one couldn't be read, `
+        + `so replacing it would have discarded a key you may still have.`
+      : '';
+    showImportSuccessAndReload(summary + skipped + keyNote);
   } catch (err) {
     if (suspendedHere) store.resumeSaves(); // resume only a suspension THIS call created
+    // The import did not happen, so the credential swap it was part of must not
+    // stand either — otherwise a failed replace silently reconfigures AI to the
+    // previous installation's key while reporting that nothing was imported.
+    //
+    // Restores on `credentialReplaced` ALONE. Gating on
+    // `previousCredential !== null` as well treated "no key configured" as
+    // nothing to undo, when it is precisely the state that has to be put back:
+    // that user ends up on the imported key having been told the import failed.
+    // `?? ''` because the empty sentinel is how this app expresses "no
+    // credential" — clearing writes '' rather than deleting the entry, so there
+    // is no other way to say it.
+    //
+    // Best-effort: if this write fails too there is nothing further to try, and
+    // the import error is the one worth showing.
+    if (credentialReplaced) {
+      try { await saveApiKey(previousCredential ?? ''); }
+      catch (restoreErr) { console.error('[backup] could not restore the previous key:', restoreErr); }
+    }
     console.error('[backup] Legacy import failed:', err);
     alert(`Couldn't import data from the previous app: ${err.message ?? String(err)}`);
   }

@@ -20,6 +20,11 @@ let hideButtonTimeout = null;
 let isMenuVisible = false;
 let resumeScroller = null;
 
+// True while the month-range picker is open. The AI button is fixed-position
+// like the picker, so without this it paints over the panel when the pointer
+// crosses the resume on its way there.
+let dateEditorOpen = false;
+
 // Check if hint was previously dismissed
 const HINT_DISMISSED_KEY = 'resume-edit-hint-dismissed';
 
@@ -52,6 +57,7 @@ export function initInlineEditor() {
   // Handle hover for AI button using mouseover/mouseout for better stability
   resumeContainer.addEventListener('mouseover', handleMouseOver, true);
   resumeContainer.addEventListener('mouseout', handleMouseOut, true);
+  window.addEventListener('rd:date-editor-closed', () => { dateEditorOpen = false; });
 
   // Hide the (fixed-position) AI button when the resume scrolls or the window
   // resizes — otherwise it orphans at a stale coordinate, floating over other UI.
@@ -176,7 +182,14 @@ function showAIMenu(element) {
     // Show apply/reject/review options for pending changes
     // Get original content to show what's being replaced
     const originalContent = getOriginalContent(path);
-    
+
+    // The pending change may live at a CONTAINER path above the hovered node
+    // (whole-item add/remove, e.g. hovering `experience[1].title` while the
+    // change is at `experience[1]`). Apply/Reject must act on the change's own
+    // path — that is the key the session tracks and applyChangeToStore splices
+    // or writes by.
+    const actionPath = pendingChange.path;
+
     menuContent = `
       ${originalContent ? `
         <div class="editable-ai-menu-preview compact original">
@@ -185,13 +198,13 @@ function showAIMenu(element) {
         </div>
       ` : ''}
       <div class="editable-ai-menu-actions">
-        <button class="editable-ai-menu-item apply-btn" data-action="apply-change" data-path="${path}">
+        <button class="editable-ai-menu-item apply-btn" data-action="apply-change" data-path="${actionPath}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="20 6 9 17 4 12"/>
           </svg>
           <span>Apply</span>
         </button>
-        <button class="editable-ai-menu-item reject-btn" data-action="reject-change" data-path="${path}">
+        <button class="editable-ai-menu-item reject-btn" data-action="reject-change" data-path="${actionPath}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/>
             <line x1="6" y1="6" x2="18" y2="18"/>
@@ -615,6 +628,9 @@ function scheduleHideButton() {
 // The button/menu use fixed positioning, so a scroll or resize leaves them at a
 // stale coordinate over unrelated UI — hide immediately; the next hover re-shows.
 function handleResumeScroll() {
+  // The picker is anchored to a rect captured at click time, so a scroll leaves
+  // it floating over unrelated content. Close it, the way the AI button hides.
+  if (dateEditorOpen) window.dispatchEvent(new Event('rd:close-date-editor'));
   if (hoveredElement || isMenuVisible) {
     hideAIButton();
     hoveredElement = null;
@@ -631,12 +647,14 @@ function handleEditorKeydown(e) {
 
 // Show the AI button on an element
 function showAIButton(element) {
-  if (!aiButton || !element) return;
+  if (!aiButton || !element || dateEditorOpen) return;
   
   const container = aiButton.container || aiButton;
   
   // Check if element has pending change and update button appearance
-  const hasChange = element.dataset.hasChange;
+  // (data-change-status/-type are set by inlineChanges' decorateRenderedResume;
+  // decided paths keep the attributes but drop the pending status).
+  const hasChange = element.dataset.changeStatus === 'pending' ? element.dataset.changeType : undefined;
   if (hasChange) {
     aiButton.classList.add('has-change', `change-${hasChange}`);
     aiButton.innerHTML = `
@@ -728,10 +746,10 @@ function handleClick(e) {
   
   const editable = e.target.closest('[data-editable]');
   if (!editable) return;
-  
+
   // Don't start editing if already editing
   if (editable.isContentEditable) return;
-  
+
   startEditing(editable);
 }
 
@@ -767,10 +785,37 @@ function startEditing(element) {
   hideAIButton();
   hideAIMenu();
   hoveredElement = null;
-  
-  activeElement = element;
 
   const path = element.dataset.editable;
+
+  // Dates open a month-range picker instead of a contenteditable, so the
+  // machine-readable startDate/endDate stay in step with the display string.
+  //
+  // Intercepted HERE, not in handleClick, because startEditing is the one funnel
+  // both entry points share: handleKeyDown's Tab branch calls it directly, and a
+  // dates node is an ordinary [data-editable] in that cycle (both renderer
+  // variants — the <time> in the default layout and the <span> in the timeline
+  // one). A click-only guard let Tab make the node contentEditable and write
+  // `dates` alone, leaving the machine pair describing the old range.
+  //
+  // Returns BEFORE activeElement is set: the node never becomes contentEditable,
+  // so nothing may point at it as the active edit. The re-resolution above has
+  // already run, so `element` is the freshly-rendered node and its rect is real.
+  //
+  // This module stays free of React: it dispatches, and a host mounted in App
+  // renders the panel and performs the store write — the same arrangement
+  // confirmDestructive uses.
+  if (/^experience\[\d+\]\.dates$/.test(path)) {
+    dateEditorOpen = true;
+    const rect = element.getBoundingClientRect();
+    window.dispatchEvent(new CustomEvent('rd:edit-dates', {
+      detail: { path, rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height } },
+    }));
+    return;
+  }
+
+  activeElement = element;
+
   // Tool chips — inline (.tool-token/.skill-tag) OR bulleted (.highlight-bullet) —
   // all share data-editable="tools" because `tools` is a single `•`-joined string.
   // Treat a click on one chip as editing JUST that chip: skip the whole-field
@@ -782,6 +827,15 @@ function startEditing(element) {
     && element.matches('.tool-token, .skill-tag, .skill-tag-inline, .highlight-bullet');
   if (path && !isInlineToolToken) {
     const sourceValue = store.get(path);
+    // A data-editable must always resolve to a scalar. If it points at a container
+    // (an object or array), the textContent fallback below would replace this whole
+    // subtree with the literal string '[object Object]', make it contentEditable, and
+    // let finishEditing persist that string over the record. Refuse instead.
+    if (sourceValue !== null && sourceValue !== undefined
+        && typeof sourceValue !== 'string' && typeof sourceValue !== 'number') {
+      activeElement = null;
+      return;
+    }
     if (typeof sourceValue === 'string') {
       element.textContent = sourceValue;
     } else if (sourceValue === null || sourceValue === undefined) {
@@ -800,6 +854,7 @@ function startEditing(element) {
 
   // Make editable
   element.contentEditable = 'true';
+  element.spellcheck = true;
   element.classList.add('editing');
   
   // Focus and select all text
@@ -830,8 +885,20 @@ function finishEditing(element) {
   // Extract value, handling special cases for skill tags and highlight bullets
   let newValue = extractEditedValue(element, path);
   
-  // Handle different types of editable content
-  if (path.includes('[') && path.includes('].')) {
+  // A company header edit renames EVERY role in the run. data-editable-group is
+  // DOM metadata (a comma-separated list of array indices), not a store path — the
+  // AI-addressable path grammar is unchanged. One array write keeps it to a single
+  // undo step and a single re-render, instead of N torn intermediate states.
+  const groupIndices = element.dataset.editableGroup;
+  if (groupIndices) {
+    const indices = groupIndices.split(',').map((n) => parseInt(n, 10)).filter(Number.isInteger);
+    const experience = store.get('experience');
+    if (Array.isArray(experience) && indices.length > 0) {
+      const next = experience.map((entry, i) => (indices.includes(i) ? { ...entry, company: newValue } : entry));
+      store.setChangeMetadata('Renamed company');
+      store.update('experience', next);
+    }
+  } else if (path.includes('[') && path.includes('].')) {
     // Array item property (e.g., "experience[0].title")
     store.update(path, newValue);
   } else if (path.startsWith('sections[')) {
@@ -844,6 +911,7 @@ function finishEditing(element) {
   
   // Remove editing state
   element.contentEditable = 'false';
+  element.spellcheck = false;
   element.classList.remove('editing');
   
   if (activeElement === element) {
@@ -961,16 +1029,45 @@ function handleKeyDown(e) {
   // Tab moves to next editable
   if (e.key === 'Tab') {
     e.preventDefault();
+
+    // finishEditing() calls store.update(), which SYNCHRONOUSLY triggers a full
+    // renderCurrentResume() that replaces every node inside #resume — and
+    // store.update pushes history and emits even when the value is unchanged, so
+    // the re-render is unconditional. `editable` is therefore always detached by
+    // the time the fresh list below exists, and indexOf() always returned -1:
+    // forward Tab landed on editables[0] and Shift+Tab on editables[length - 2],
+    // never the adjacent field.
+    //
+    // So capture the element's identity BEFORE finishing — its path plus its
+    // position among same-path siblings, the same bookkeeping startEditing does,
+    // because tool chips all share data-editable="tools" and a bare re-query
+    // would resolve to the first chip. Then locate the fresh node and step from
+    // ITS index. (#11)
+    const path = editable.dataset.editable;
+    const samePathIndex = path
+      ? Math.max(0, [...document.querySelectorAll(`[data-editable="${path}"]`)].indexOf(editable))
+      : 0;
+
     finishEditing(editable);
-    
+
     const editables = Array.from(
       document.querySelectorAll('[data-editable]')
     );
-    const currentIndex = editables.indexOf(editable);
-    const nextIndex = e.shiftKey 
-      ? (currentIndex - 1 + editables.length) % editables.length
-      : (currentIndex + 1) % editables.length;
-    
+    if (editables.length === 0) return;
+
+    const refreshed = path ? document.querySelectorAll(`[data-editable="${path}"]`) : null;
+    const current = refreshed ? (refreshed[samePathIndex] || refreshed[0]) : null;
+    const currentIndex = current ? editables.indexOf(current) : -1;
+
+    // The field genuinely vanished across the re-render (nothing renders it any
+    // more). Start the cycle from the end the user was heading towards rather
+    // than silently doing nothing.
+    const nextIndex = currentIndex === -1
+      ? (e.shiftKey ? editables.length - 1 : 0)
+      : (e.shiftKey
+        ? (currentIndex - 1 + editables.length) % editables.length
+        : (currentIndex + 1) % editables.length);
+
     if (editables[nextIndex]) {
       startEditing(editables[nextIndex]);
     }

@@ -1,0 +1,50 @@
+version: 2
+
+# Deliberately NO `target-branch` in these entries.
+#
+# Security updates always target the repository's default branch, and setting
+# `target-branch` does not redirect them — it makes the entry apply to VERSION
+# updates only. GitHub's security-updates documentation is explicit: "In order
+# for Dependabot to use this configuration for security updates ... you should
+# not specify a target-branch". Omitting it is what keeps `commit-message`
+# below applying to the security PRs, which are the only kind this repo raises.
+#
+# So the base-branch problem cannot be solved from this file. Security PRs land
+# on `main`, where guard-main-source rejects anything that is not a promotion
+# from `next` — see the five failed only-next-into-main runs on #98.
+# .github/workflows/dependabot-retarget.yml moves them onto `next` after they
+# open, which is the only place that fix can live.
+#
+# open-pull-requests-limit: 0 disables routine version-bump PRs. Security
+# updates are exempt from this limit, so vulnerability fixes still arrive —
+# this repo gets security traffic only, matching the behaviour it had before
+# this file existed.
+
+updates:
+  - package-ecosystem: npm
+    directory: /resume-designer
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore
+
+  # src-tauri: the Rust side ships in the signed binary, so an advisory here
+  # reaches users directly rather than only the build.
+  - package-ecosystem: cargo
+    directory: /resume-designer/src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: chore
+
+  # Workflow actions run with repository write scope and handle the minisign
+  # signing key during release, so they are worth patching promptly.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: ci
