@@ -55,6 +55,27 @@ export function isGeneralChatModel(entry) {
 }
 
 /**
+ * Can this model return text at all?
+ *
+ * The bar for BEING PICKABLE, distinct from `isGeneralChatModel`'s bar for
+ * being FEATURED. Featuring is curation — it drops `:free` tiers, dated
+ * snapshots and `-instruct` variants because they make a poor default. Those
+ * are all perfectly usable when a user goes looking for them, so the "All
+ * models" list must not inherit that filter. What it must exclude is models
+ * that cannot answer a chat request at all: image, audio, embedding and video
+ * output lines, which `streamOpenRouter` reduces to "The model returned an
+ * empty response".
+ *
+ * Unknown modalities count as usable. An entry with no `output_modalities` is
+ * one OpenRouter did not describe, and a missing field is not evidence the
+ * model cannot emit text — hiding a working model is the worse error.
+ */
+export function canOutputText(entry) {
+  const out = (entry && entry.outputModalities) || [];
+  return out.length === 0 || out.includes('text');
+}
+
+/**
  * Version-agnostic family key: digits collapse to '#', so claude-opus-5 and
  * claude-opus-4.8 share a root and only the newest survives.
  */

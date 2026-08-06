@@ -4,6 +4,7 @@ import {
   CATALOG_SCHEMA_VERSION,
   deriveFeatured,
   isGeneralChatModel,
+  canOutputText,
   familyRoot,
   stripGroupPrefix,
 } from '../src/modelCatalog.js';
@@ -137,5 +138,50 @@ import { CATALOG_SOFT_TTL_MS } from '../src/modelCatalog.js';
 describe('catalog refresh policy', () => {
   it('uses a short soft TTL so opening the picker revalidates', () => {
     expect(CATALOG_SOFT_TTL_MS).toBe(5 * 60 * 1000);
+  });
+});
+
+// The chat picker's "All models" section offered every catalog entry, including
+// image-, audio- and embedding-output models. streamOpenRouter only consumes
+// text, so picking one produced "The model returned an empty response".
+//
+// This is a DIFFERENT bar from isGeneralChatModel, which curates the Featured
+// shortlist. That one also drops :free tiers, dated snapshots and -instruct
+// variants — right for a default, wrong for a list the user opened on purpose.
+describe('canOutputText', () => {
+  const entry = (outputModalities) => ({ id: 'x/y', outputModalities });
+
+  it('accepts text models', () => {
+    expect(canOutputText(entry(['text']))).toBe(true);
+  });
+
+  it('accepts multimodal models that can still answer in text', () => {
+    expect(canOutputText(entry(['text', 'image']))).toBe(true);
+  });
+
+  it('rejects models that cannot produce text', () => {
+    for (const mods of [['image'], ['audio'], ['embedding'], ['video'], ['image', 'audio']]) {
+      expect(canOutputText(entry(mods)), mods.join('+')).toBe(false);
+    }
+  });
+
+  // A missing field is OpenRouter not describing the model, which is not
+  // evidence it cannot emit text. Hiding a working model is the worse error —
+  // the same rule the credential code follows for an unreadable store.
+  it('treats unknown modalities as usable', () => {
+    expect(canOutputText(entry([]))).toBe(true);
+    expect(canOutputText({ id: 'x/y' })).toBe(true);
+    expect(canOutputText(null)).toBe(true);
+  });
+
+  // isGeneralChatModel is stricter on purpose; canOutputText must NOT inherit
+  // its curation, or the "All models" list loses entries that work fine.
+  it('admits models the featured filter deliberately excludes', () => {
+    const free = { id: 'meta/llama-3:free', outputModalities: ['text'] };
+    const instruct = { id: 'meta/llama-3-instruct', outputModalities: ['text'] };
+    for (const m of [free, instruct]) {
+      expect(isGeneralChatModel(m), `featured: ${m.id}`).toBe(false);
+      expect(canOutputText(m), `selectable: ${m.id}`).toBe(true);
+    }
   });
 });

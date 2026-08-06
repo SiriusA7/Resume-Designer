@@ -261,3 +261,47 @@ describe('getAllCatalogModels', () => {
     );
   });
 });
+
+// The picker's "All models" section offered every catalog entry. OpenRouter's
+// catalog carries image-, audio- and embedding-output lines, and streamOpenRouter
+// only consumes text — so selecting one produced "The model returned an empty
+// response". This is the list to OFFER; getAllCatalogModels stays the list to
+// RESOLVE against, because getModelLabel looks the current selection up in it.
+describe('getSelectableChatModels', () => {
+  it('drops models that cannot output text', async () => {
+    seedCatalog({
+      'vendor/chat': catalogEntry('vendor/chat', { created: 300 }),
+      'vendor/painter': catalogEntry('vendor/painter', { created: 200, outputModalities: ['image'] }),
+      'vendor/speaker': catalogEntry('vendor/speaker', { created: 100, outputModalities: ['audio'] }),
+    });
+
+    const { getSelectableChatModels } = await importFreshAiService();
+
+    expect(getSelectableChatModels().map((m) => m.id)).toEqual(['vendor/chat']);
+  });
+
+  it('keeps multimodal models that can still answer in text', async () => {
+    seedCatalog({
+      'vendor/omni': catalogEntry('vendor/omni', { outputModalities: ['text', 'image'] }),
+    });
+
+    const { getSelectableChatModels } = await importFreshAiService();
+
+    expect(getSelectableChatModels().map((m) => m.id)).toEqual(['vendor/omni']);
+  });
+
+  // getAllCatalogModels must stay unfiltered: getModelLabel resolves the CURRENT
+  // selection through it, so filtering there would strip the name off a model
+  // the user already picked and render it as a prettified slug instead.
+  it('leaves getAllCatalogModels unfiltered', async () => {
+    seedCatalog({
+      'vendor/chat': catalogEntry('vendor/chat', { created: 300 }),
+      'vendor/painter': catalogEntry('vendor/painter', { created: 200, outputModalities: ['image'] }),
+    });
+
+    const { getAllCatalogModels, getSelectableChatModels } = await importFreshAiService();
+
+    expect(getAllCatalogModels()).toHaveLength(2);
+    expect(getSelectableChatModels()).toHaveLength(1);
+  });
+});
