@@ -34,3 +34,16 @@ jobs:
           path: website
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # The action's default is 10 minutes, and this repo's deployments have
+          # run past it: on 2026-08-06 the action aborted at 14:46:56 while the
+          # deployment actually completed at 14:51:09 — 4m13s later. The site was
+          # correct and the workflow was red, which is the worst way to be wrong,
+          # because a red deploy is exactly what you learn to ignore.
+          #
+          # The timeout does not only stop watching, it CANCELS the deployment
+          # ("Time in milliseconds after which to timeout and cancel"), so too
+          # low a value can kill a deploy that was going to succeed. 30 minutes
+          # is roughly double the slowest run observed; the job's own
+          # timeout-minutes (360 by default) is still the real backstop.
+          timeout: 1800000
