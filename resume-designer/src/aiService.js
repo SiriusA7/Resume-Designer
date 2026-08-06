@@ -13,6 +13,7 @@ import { createStreamAccumulator } from './aiStream.js';
 import { appStorage } from './appStorage.js';
 import {
   toCatalogEntry, CATALOG_SCHEMA_VERSION, deriveFeatured, stripGroupPrefix, CATALOG_SOFT_TTL_MS,
+  canOutputText,
 } from './modelCatalog.js';
 
 // OpenRouter — a single OpenAI-compatible endpoint fronting every provider.
@@ -1481,6 +1482,19 @@ export function getAllCatalogModels() {
   const cached = readCatalogCache();
   if (!cached) return [];
   return Object.values(cached.models).sort((a, b) => b.created - a.created);
+}
+
+/**
+ * The catalog narrowed to models a chat request can actually use.
+ *
+ * Kept separate from `getAllCatalogModels` on purpose. That one is the catalog
+ * as fetched, and `getModelLabel` looks the CURRENT selection up in it — filter
+ * there and a model the user already has selected (or typed by hand) loses its
+ * name and renders as a prettified slug. This is the list to OFFER; that one is
+ * the list to resolve against.
+ */
+export function getSelectableChatModels() {
+  return getAllCatalogModels().filter(canOutputText);
 }
 
 /** Stale-while-revalidate: refresh in the background if the soft TTL lapsed. */

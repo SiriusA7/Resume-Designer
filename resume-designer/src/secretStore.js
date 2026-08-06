@@ -248,6 +248,31 @@ function announceCredentialChange() {
 const REMOTE_READ_ATTEMPTS = 3;
 const REMOTE_READ_BACKOFF_MS = 50;
 
+// Called after this tab's credential changes for a reason the UI could not see
+// coming — another tab saved or cleared it. Everything else that mutates the
+// credential is driven by a local action whose caller dispatches
+// SETTINGS_UPDATED_EVENT afterwards; a remote adoption has no such caller, so
+// without this the other tab's chat UI keeps its old enabled/disabled state
+// until reload: a composer still enabled against a key that was cleared, or
+// disabled against one that was just saved.
+//
+// Injected rather than imported. The event constant lives in persistence.js,
+// which imports THIS module, so importing it back would close a cycle.
+let credentialChangeNotifier = null;
+
+/** Wired by persistence.js at import time. */
+export function setCredentialChangeNotifier(fn) {
+  credentialChangeNotifier = typeof fn === 'function' ? fn : null;
+}
+
+function notifyCredentialChanged() {
+  // A listener that throws must not abort an adoption — the credential state is
+  // already committed by the time we get here.
+  try {
+    if (credentialChangeNotifier) credentialChangeNotifier();
+  } catch (_) { /* a UI refresh failure is not an adoption failure */ }
+}
+
 async function onRemoteCredentialChange() {
   // Memory-only: nothing to re-read, so the only safe response to "something
   // changed elsewhere" is to stop trusting what this tab holds. Without it, two
@@ -255,9 +280,17 @@ async function onRemoteCredentialChange() {
   // cleared in the other, indefinitely.
   if (!browserBackend) {
     if (mode === 'session') cached = null;
+    notifyCredentialChanged();
     return undefined;
   }
-  return serializeCredentialOp(() => adoptRemoteChange());
+  try {
+    return await serializeCredentialOp(() => adoptRemoteChange());
+  } finally {
+    // `finally`, so the fail-closed path notifies too. That path is the one the
+    // UI most needs to hear about: it drops `cached` and moves to
+    // `browser-unreadable`, so a composer left enabled would send with no key.
+    notifyCredentialChanged();
+  }
 }
 
 async function adoptRemoteChange() {

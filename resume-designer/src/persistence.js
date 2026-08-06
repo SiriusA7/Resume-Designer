@@ -9,7 +9,9 @@ import { isTauri } from './native.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 // The API key lives in the OS keychain, not beside the resume data on disk.
-import { getSecret, setSecret, isSecretStoreReady } from './secretStore.js';
+import {
+  getSecret, setSecret, isSecretStoreReady, setCredentialChangeNotifier,
+} from './secretStore.js';
 
 const STORAGE_KEY = 'resume-designer-data';
 export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
@@ -250,12 +252,29 @@ export function saveSettings(settings) {
   // stale blob value stays masked by the shared-key overlay in getSettings.
   saveToStorage(storage);
 
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
-      detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
-    }));
-  }
+  notifySettingsUpdated();
 }
+
+/**
+ * Tell the UI that settings — including the credential — may have changed.
+ *
+ * Every listener re-reads through getSettings() rather than trusting `detail`,
+ * so the payload is informational and a notification is never wrong, only
+ * sometimes redundant. That is what makes it safe to fire from the failure
+ * paths in saveApiKey and from a remote credential adoption.
+ */
+function notifySettingsUpdated() {
+  if (typeof window === 'undefined') return;
+  const storage = loadFromStorage();
+  window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
+    detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
+  }));
+}
+
+// A remote credential adoption has no local caller to announce it, so
+// secretStore calls back here. Wired at import time; persistence.js is imported
+// by every entry point that has a UI.
+setCredentialChangeNotifier(notifySettingsUpdated);
 
 /**
  * Persist the API key. Async because it goes to the OS keychain rather than
@@ -266,12 +285,19 @@ export function saveSettings(settings) {
  * a silently lost credential.
  */
 export async function saveApiKey(value) {
-  await setSecret(value);
-  if (typeof window !== 'undefined') {
-    const storage = loadFromStorage();
-    window.dispatchEvent(new CustomEvent(SETTINGS_UPDATED_EVENT, {
-      detail: { settings: { ...storage.settings, openrouterKey: getSettings().openrouterKey } }
-    }));
+  // `finally`, not "after the await". setSecret() has three paths that change
+  // the effective credential and THEN throw: the memory-only fallback (caches
+  // the value, reports it was not saved), the write-conflict path (adopts the
+  // winner's value, then reports the conflict), and a plaintext-cleanup failure
+  // after the ciphertext write has landed. Dispatching only on success left
+  // getSettings() returning a new key while the UI kept the old enabled state
+  // until reload. Listeners re-read state rather than trusting the payload, so
+  // firing on a total failure too is harmless — it just recomputes to what is
+  // already on screen.
+  try {
+    await setSecret(value);
+  } finally {
+    notifySettingsUpdated();
   }
 }
 

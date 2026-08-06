@@ -8,7 +8,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { cn } from '@/lib/utils';
 
 import { getAIModels, getModelLabel } from './useChat.js';
-import { fetchModelCatalog, getAllCatalogModels } from '../../aiService.js';
+import { fetchModelCatalog, getSelectableChatModels } from '../../aiService.js';
 import { shouldSpellcheck } from '../../spellcheck.js';
 
 /**
@@ -31,8 +31,13 @@ export function ModelSelector({
   // Recomputed when the popover opens or a catalog refresh lands.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const featured = useMemo(() => getAIModels(), [open, catalogRev]);
+  // Selectable, not the raw catalog: image/audio/embedding models cannot answer
+  // a chat request, and offering them only produces "The model returned an
+  // empty response". Both this and the empty-check below must use the SAME
+  // list — if they disagreed, a catalog that loaded with nothing selectable
+  // would sit on "Loading the model catalog…" forever.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const allModels = useMemo(() => getAllCatalogModels(), [open, catalogRev]);
+  const allModels = useMemo(() => getSelectableChatModels(), [open, catalogRev]);
 
   // Stale-while-revalidate: the lists above render from cache immediately, and
   // this kicks a background refresh that swaps them in via catalogRev.
@@ -53,7 +58,7 @@ export function ModelSelector({
     setCatalogFailed(false);
     fetchModelCatalog()
       .then(() => {
-        if (!cancelled && getAllCatalogModels().length === 0) setCatalogFailed(true);
+        if (!cancelled && getSelectableChatModels().length === 0) setCatalogFailed(true);
       })
       .catch(() => {
         if (!cancelled) setCatalogFailed(true);
