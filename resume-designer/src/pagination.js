@@ -110,7 +110,11 @@ function splittableConfig(el) {
              itemSel: tl ? ':scope > .timeline-item' : ':scope > .experience-item' };
   }
   if (el.classList.contains('experience-item')) {
-    return { head: [':scope > .experience-header', ':scope > .experience-dates'],
+    // The group header rides FIRST in the head list so a rebuilt page reproduces
+    // it above the role it introduces. `head` is also a whitelist — a direct child
+    // that is neither a head nor an itemSel match is dropped by
+    // buildColumnRecursive and lost at resumeEl.replaceChildren.
+    return { head: [':scope > .experience-group-header', ':scope > .experience-header', ':scope > .experience-dates'],
              itemWrap: ':scope > .experience-bullets', itemSel: ':scope > li' };
   }
   if (el.classList.contains('education-section')) {
@@ -226,6 +230,62 @@ export function buildColumnRecursive(targetEl, units) {
   }
 }
 
+/**
+ * After pages are built, reveal the employer name on the first grouped role of any
+ * page that does not itself carry the run's company header.
+ *
+ * A run's header is emitted once, with the lead role. When a run straddles a page
+ * boundary the continuation page would otherwise show indented roles with no
+ * employer — worse than the pre-grouping behaviour, where every entry carried its
+ * own company. The per-role .experience-company element is still in the DOM (Task
+ * 2 renders it without data-editable and hides it in CSS); this only unhides it.
+ *
+ * Runs after measurement, and can add a line: revealing flips the company's
+ * `display: none` to `inline`, adding a flex child to `.experience-header`
+ * (which wraps). Where that genuinely overflows a fixed-height, `overflow:
+ * hidden` sheet, the sheet is tagged to grow (`.is-overflowing`) rather than
+ * clip its bottom-most block — but only then, since that class also drives the
+ * exported page height.
+ *
+ * MUST be called with the pages already ATTACHED to the document. The overflow
+ * check reads scrollHeight/clientHeight, and a detached element reports both as
+ * 0 — so calling this before `resumeEl.replaceChildren(pages)` silently reduces
+ * the check to a no-op and lets a wrapped header clip.
+ *
+ * @param {Array<Element>} pages Connected `.resume-page` sheets, in page order.
+ */
+export function revealGroupContinuations(pages) {
+  if (!Array.isArray(pages)) return;
+  pages.forEach((page, i) => {
+    if (i === 0 || !page) return;
+    // A page that starts its own run already shows the header; nothing to reveal
+    // before it. Only roles appearing BEFORE the first header on this page are
+    // continuations of a run that began on an earlier page.
+    const firstHeader = page.querySelector('.experience-group-header');
+    const grouped = page.querySelectorAll('.is-grouped');
+    for (const role of grouped) {
+      if (firstHeader && (role.contains(firstHeader) || role.compareDocumentPosition(firstHeader) & Node.DOCUMENT_POSITION_PRECEDING)) break;
+      const company = role.querySelector('.experience-company');
+      if (company) {
+        company.classList.add('is-continuation');
+        // Revealing flips display:none -> inline, adding a flex child to
+        // .experience-header, which can wrap to a new line. The sheet has a fixed
+        // height and overflow:hidden and overflowingPages has already run, so a
+        // wrap here would clip the bottom-most block.
+        //
+        // Only grow the sheet when that actually happened: `.is-overflowing` sets
+        // `height: auto !important`, and pdf.js sizes each PDF page from its
+        // sheet's measured height — so tagging a sheet that still fits would
+        // SHRINK that page to its content and export a document whose pages are
+        // not all the selected size. Reading scrollHeight forces the layout we
+        // need, and the 1px epsilon matches overflowingPages' float-drift guard.
+        if (page.scrollHeight > page.clientHeight + 1) page.classList.add('is-overflowing');
+        break;
+      }
+    }
+  });
+}
+
 // --- sheet builders ---
 function makePagesContainer() {
   const el = document.createElement('div');
@@ -286,6 +346,13 @@ function paginateContinuous(resumeEl, widthPx) {
   const page = makeSheet(widthPx, null);
   kids.forEach((k) => page.appendChild(k));
   pages.appendChild(page);
+  // No revealGroupContinuations() here: continuous mode builds exactly ONE sheet,
+  // so there is no continuation page to reveal an employer name on. Every shipped
+  // export path (native rect-based and the html2pdf browser fallback) produces a
+  // single page from that sheet. Raw browser print (Cmd+P) is the one case where
+  // the browser slices this sheet with no DOM boundary for a JS pass to find; the
+  // `break-after: avoid` rules in print.css keep a header with its first role, but
+  // a run split further down would show a role with no employer. Accepted.
   resumeEl.replaceChildren(pages);
 }
 
@@ -315,7 +382,11 @@ function paginateSingle(resumeEl, cfg, widthPx, heightPx, scale) {
     page.appendChild(bodyClone);
     pages.appendChild(page);
   }
+  // AFTER the attach: the pass measures whether revealing wrapped the header, and
+  // a detached sheet reports scrollHeight/clientHeight as 0, so measuring here
+  // before replaceChildren would never detect overflow.
   resumeEl.replaceChildren(pages);
+  revealGroupContinuations(Array.from(pages.children));
 }
 
 // Two-column: paginate the sidebar and main columns INDEPENDENTLY, then build
@@ -377,5 +448,8 @@ function paginateTwo(resumeEl, cfg, widthPx, heightPx, scale) {
     mount.appendChild(gridClone);
     pages.appendChild(page);
   }
+  // AFTER the attach — see paginateSingle: a detached sheet measures as 0, so the
+  // overflow check only means anything once the pages are in the document.
   resumeEl.replaceChildren(pages);
+  revealGroupContinuations(Array.from(pages.children));
 }

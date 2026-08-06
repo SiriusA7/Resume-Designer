@@ -55,6 +55,84 @@ export function diffLines(oldText, newText) {
 }
 
 /**
+ * Fields a model may never author, and the two helpers that enforce it on
+ * WHOLE-OBJECT changes.
+ *
+ * The key-level skip further down only runs while diffing MATCHED object keys,
+ * so it never sees inside an addition or a wholesale rewrite: diffArray emits
+ * one `ADD experience[n]` carrying the entire item, and applyChangeToStore
+ * splices that object in verbatim. The change-generation prompt asks for none
+ * of these fields, but it does serialise the current resume WITH them
+ * (`JSON.stringify(resumeData)`), so a model templating a new role off an
+ * existing entry carries that entry's internals along for the ride.
+ *
+ * Two failures, both silent:
+ *  - the date pair stamps a brand-new job with someone else's start month, for
+ *    `datesAreContinuous` to trust;
+ *  - `_groupId` folds the new role into an existing employer run the moment it
+ *    lands adjacent to the same company, asserting a continuous tenure that no
+ *    grouping action and no date gate approved.
+ *
+ * So an ADDED entry arrives clean, exactly as a hand-added one does, and a
+ * REWRITTEN one keeps whatever the store already holds.
+ */
+function isUnproposable(key) {
+  // `_`-prefixed keys are internal, and `_groupId` is the one that bites: the
+  // change prompt serialises the current resume WITH it, so a model templating a
+  // new role off an existing entry brings that run's id. The moment the new role
+  // lands adjacent to the same company, groupExperience folds it into the
+  // employer's tenure — asserting continuous employment that no grouping action
+  // and no date gate ever approved.
+  //
+  // `id` is deliberately NOT here: applyChangeToStore's idempotency check reads
+  // it to make re-applying an ADD a no-op instead of a duplicate.
+  return key === 'startDate' || key === 'endDate' || key.startsWith('_');
+}
+
+function withoutInternalFields(value) {
+  if (Array.isArray(value)) return value.map(withoutInternalFields);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (isUnproposable(key)) continue;
+    out[key] = withoutInternalFields(nested);
+  }
+  return out;
+}
+
+/**
+ * The same, for a WHOLE-OBJECT REWRITE of an item that already exists.
+ *
+ * Here the pair must be carried over rather than dropped: applying a MODIFY
+ * writes `newValue` over the entry, so a scrubbed object would DELETE a pair
+ * the picker owns. An addition has no prior entry, so `withoutInternalFields` is
+ * right there and this is right here.
+ */
+function withStoredInternals(oldItem, newItem) {
+  const rewritable = newItem && typeof newItem === 'object' && !Array.isArray(newItem)
+    && oldItem && typeof oldItem === 'object' && !Array.isArray(oldItem);
+  if (!rewritable) return withoutInternalFields(newItem);
+
+  // Substitute the stored values IN PLACE rather than stripping and re-appending.
+  // The caller decides "did anything actually change?" with JSON.stringify, which
+  // is key-order sensitive: rebuilding with these keys moved to the end made an
+  // otherwise identical entry compare as different and emitted a phantom change.
+  const out = {};
+  for (const [key, nested] of Object.entries(newItem)) {
+    if (isUnproposable(key)) {
+      if (key in oldItem) out[key] = oldItem[key];
+      continue;
+    }
+    out[key] = withoutInternalFields(nested);
+  }
+  // Internals the stored entry carries but the proposal omitted must survive too.
+  for (const key of Object.keys(oldItem)) {
+    if (isUnproposable(key) && !(key in out)) out[key] = oldItem[key];
+  }
+  return out;
+}
+
+/**
  * Compute structured diff for resume data
  * Handles nested objects and arrays properly
  * @param {Object} oldData - Original resume data
@@ -69,13 +147,14 @@ export function diffResumeData(oldData, newData, basePath = '') {
   
   // Handle case where one is null/undefined
   if (!oldData) {
+    const added = withoutInternalFields(newData);
     changes.push({
       path: basePath,
       type: DIFF_TYPES.ADD,
       oldValue: null,
-      newValue: newData,
+      newValue: added,
       displayOld: '',
-      displayNew: JSON.stringify(newData, null, 2)
+      displayNew: JSON.stringify(added, null, 2)
     });
     return changes;
   }
@@ -100,8 +179,25 @@ export function diffResumeData(oldData, newData, basePath = '') {
     const oldValue = oldData[key];
     const newValue = newData[key];
     
-    // Skip internal fields
-    if (key.startsWith('_') || key === 'id') continue;
+    // Skip fields a model may never address. `_`-prefixed keys and `id` are
+    // internal; startDate/endDate are the machine-readable date pair, which only
+    // ever moves as a UNIT — written by a picker commit, or cleared beside a
+    // freeform edit to `dates` (R1/R2). A half-written pair is the contradiction
+    // those rules exist to prevent.
+    //
+    // Skipping here, and not only at the proposal boundary, is what closes the
+    // container route: a proposal keyed `experience[0]` — or the whole
+    // `experience` array — carries the pair inside its VALUE, where a path
+    // filter cannot see it, and createChangeSet re-diffs that container into
+    // leaves, re-creating the very `experience[n].startDate` change the filter
+    // rejects. diffArray delegates object items back here, so this one skip
+    // covers the leaf, container and whole-array routes alike.
+    //
+    // Skipping is also the only safe shape. Scrubbing the keys out of the
+    // proposal instead would leave them present in oldData and absent from
+    // newData — and `allKeys` above is the UNION — so the diff would emit a
+    // change that BLANKS the pair rather than preserving it.
+    if (key.startsWith('_') || key === 'id' || key === 'startDate' || key === 'endDate') continue;
     
     // Both values are the same
     if (JSON.stringify(oldValue) === JSON.stringify(newValue)) continue;
@@ -217,27 +313,38 @@ function diffArray(oldArray, newArray, basePath) {
       // For objects, recursively diff them as modifications
       const itemChanges = diffResumeData(oldEntry.item, newEntry.item, `${basePath}[${oldEntry.index}]`);
       if (itemChanges.length === 0) {
-        // Objects are same structure but may have small differences
-        changes.push({
-          path: `${basePath}[${oldEntry.index}]`,
-          type: DIFF_TYPES.MODIFY,
-          oldValue: oldEntry.item,
-          newValue: newEntry.item,
-          displayOld: formatArrayItemDisplay(oldEntry.item),
-          displayNew: formatArrayItemDisplay(newEntry.item)
-        });
+        // Objects are same structure but may have small differences.
+        //
+        // diffResumeData now SKIPS the machine date pair, so an item whose only
+        // difference is that pair reaches here with nothing to report — and a
+        // whole-object MODIFY carrying newEntry.item verbatim would smuggle the
+        // pair straight back in, reopening the very route the skip closes. Carry
+        // the STORED pair over instead (the picker owns it), and when nothing
+        // else differs, emit no change at all rather than a phantom one.
+        const nextItem = withStoredInternals(oldEntry.item, newEntry.item);
+        if (JSON.stringify(nextItem) !== JSON.stringify(oldEntry.item)) {
+          changes.push({
+            path: `${basePath}[${oldEntry.index}]`,
+            type: DIFF_TYPES.MODIFY,
+            oldValue: oldEntry.item,
+            newValue: nextItem,
+            displayOld: formatArrayItemDisplay(oldEntry.item),
+            displayNew: formatArrayItemDisplay(nextItem)
+          });
+        }
       } else {
         changes.push(...itemChanges);
       }
     } else {
       // Mixed types - treat as remove + add
+      const nextItem = withStoredInternals(oldEntry.item, newEntry.item);
       changes.push({
         path: `${basePath}[${oldEntry.index}]`,
         type: DIFF_TYPES.MODIFY,
         oldValue: oldEntry.item,
-        newValue: newEntry.item,
+        newValue: nextItem,
         displayOld: formatArrayItemDisplay(oldEntry.item),
-        displayNew: formatArrayItemDisplay(newEntry.item)
+        displayNew: formatArrayItemDisplay(nextItem)
       });
     }
     
@@ -259,13 +366,17 @@ function diffArray(oldArray, newArray, basePath) {
   
   // Remaining items added (more new than old)
   for (const newEntry of unmatchedNew.filter(n => !n.matched)) {
+    // Scrubbed at EMISSION, not at apply: the change object is what the review
+    // preview projects and what the diff dialog shows, so scrubbing later would
+    // put the two out of step again.
+    const added = withoutInternalFields(newEntry.item);
     changes.push({
       path: `${basePath}[${newEntry.index}]`,
       type: DIFF_TYPES.ADD,
       oldValue: null,
-      newValue: newEntry.item,
+      newValue: added,
       displayOld: '',
-      displayNew: formatArrayItemDisplay(newEntry.item)
+      displayNew: formatArrayItemDisplay(added)
     });
   }
   
@@ -424,6 +535,8 @@ export function getPathLabel(path) {
   const labels = {
     'name': 'Name',
     'title': 'Title',
+    'company': 'Company',
+    'dates': 'Dates',
     'email': 'Email',
     'phone': 'Phone',
     'location': 'Location',

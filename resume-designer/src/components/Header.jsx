@@ -119,7 +119,17 @@ export default function Header() {
   const onImportChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      importVariant(file);
+      importVariant(file, {
+        confirmGrouping: (runCount) => confirmDestructive({
+          title: runCount === 1
+            ? '1 employer has more than one role'
+            : `${runCount} employers have more than one role`,
+          description: 'Group each employer’s roles under a single company heading? Keep them separate if any of them are return stints rather than promotions.',
+          actionLabel: 'Group',
+          cancelLabel: 'Keep separate',
+          destructive: false,
+        }),
+      });
       e.target.value = ''; // allow re-importing the same file
     }
   };

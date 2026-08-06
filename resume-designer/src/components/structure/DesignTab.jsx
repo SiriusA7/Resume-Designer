@@ -10,8 +10,9 @@
  * photo preview) keep inline styles — that's content, not theme; all chrome
  * colors are semantic token classes.
  *
- * Only palette / layout / customColor dispatch `rd:design-change` for main.js
- * to consume — every other control just applies + saves through its service.
+ * Only palette / layout / customColor / pageSize / orientation / pageWidthIn /
+ * groupPositions dispatch `rd:design-change` for main.js to consume — every
+ * other control just applies + saves through its service.
  */
 
 import { useState } from 'react';
@@ -516,6 +517,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
   const [pageSize, setPageSize] = useState(initialSettings.pageSize || 'continuous');
   const [orientation, setOrientation] = useState(initialSettings.orientation || 'portrait');
   const [pageWidthIn, setPageWidthIn] = useState(initialSettings.pageWidthIn ?? 8.5);
+  const [groupPositions, setGroupPositions] = useState(initialSettings.groupPositions !== false);
   const [customColor, setCustomColor] = useState(initialSettings.customColor || '#c45c3e');
 
   const [fontSettings, setFontSettings] = useState(() => getCurrentFontSettings());
@@ -579,6 +581,14 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
   function handleSetOrientation(value) {
     setOrientation(value);
     dispatchDesignChange({ type: 'orientation', value });
+  }
+
+  function handleSetGroupPositions(value) {
+    setGroupPositions(value);
+    // Collapsing a run into flat cards changes block heights, so the sheets must
+    // re-split — a stale .resume-page split is how content gets clipped out of
+    // the exported PDF.
+    dispatchDesignChange({ type: 'groupPositions', value });
   }
 
   function handleSetPageWidth(raw) {
@@ -924,6 +934,18 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
             />
           </ControlGroup>
         )}
+
+        <ControlGroup label="Positions at one employer">
+          <Segmented
+            stretch
+            options={[
+              { value: true, label: 'Grouped' },
+              { value: false, label: 'Separate' },
+            ]}
+            value={groupPositions}
+            onChange={handleSetGroupPositions}
+          />
+        </ControlGroup>
       </PanelSection>
 
       {/* ===== Color Theme ===== */}

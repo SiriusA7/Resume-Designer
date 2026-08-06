@@ -5,6 +5,8 @@
 
 import { getSettings, saveSettings, getUserProfile, saveUserProfile } from './persistence.js';
 import { store } from './store.js';
+import { groupExperience } from './experienceGroups.js';
+import { formatIntervalHint } from './experienceDates.js';
 import { getActiveJobDescriptions } from './jobDescriptions.js';
 import { trackUsage } from './tokenTrackingService.js';
 import { createStreamAccumulator } from './aiStream.js';
@@ -482,6 +484,8 @@ Create a clear, well-structured resume that:
 2. Uses the job description's vocabulary for experience the profile actually evidences
 3. Orders experience by relevance (most relevant first), and ALSO provides
    machine-readable startDate/endDate per role so the app can re-sort chronologically
+   — but keeps several roles at ONE employer consecutive (most recent first), never
+   split apart by a role at a different employer
 4. Writes a professional summary grounded in the profile and targeted at this position
 5. Writes bullets that quantify results ONLY where the profile supplies the number
 6. Includes 3-4 highlights that are DISTINCT, career-level achievements — not
@@ -511,7 +515,7 @@ Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in t
       "title": "Job Title",
       "company": "Company Name",
       "location": "City, State",
-      "startDate": "YYYY-MM (machine-readable; YYYY ok if month unknown)",
+      "startDate": "YYYY-MM (machine-readable; the month is required)",
       "endDate": "YYYY-MM or Present (machine-readable)",
       "dates": "Human-readable range shown on the resume, e.g. Jan 2022 - Jun 2024",
       "bullets": [
@@ -536,7 +540,19 @@ Return ONLY a valid JSON object (no code fences, no prose outside the JSON) in t
 IMPORTANT:
 - Only include sections that have relevant content from the profile
 - Order experience by relevance (most relevant first); ALWAYS include
-  machine-readable startDate/endDate so the app can offer a chronological view
+  machine-readable startDate/endDate as "YYYY-MM" (a bare year is not enough —
+  the app uses the month to decide whether two roles at one employer were one
+  continuous tenure)
+  Where a role in the profile carries a bracketed interval like [2020-01 → present],
+  copy those values into startDate/endDate verbatim rather than inferring them.
+- If the profile shows SEVERAL POSITIONS AT ONE EMPLOYER (a promotion, a lateral
+  move, or two roles held at once), emit them as separate entries that are
+  CONSECUTIVE and share the identical "company" string, most recent first. Never
+  place a role at a different employer between them, even if relevance would.
+  A RETURN to a former employer after time elsewhere is NOT one tenure: keep the
+  two stints as separate entries and do not present them as continuous.
+  The app groups one employer's roles under a single company heading by that
+  adjacency, so splitting them prints the employer twice as unrelated jobs
 - Put concrete tools/software/platforms (e.g. Figma, Git, Docker, Excel) in
   "tools"; keep "skills" for competencies. Do NOT duplicate an item across both.
 - Limit "highlights" to 3-4 entries, each a DISTINCT career-level achievement
@@ -644,11 +660,28 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
   
   if (profile.workExperience && profile.workExperience.length > 0) {
     profileContext += `### Work Experience\n`;
-    for (const exp of profile.workExperience) {
-      profileContext += `\n**${exp.title || 'Position'}** at **${exp.company || 'Company'}**`;
-      if (exp.dates) profileContext += ` (${exp.dates})`;
-      profileContext += `\n`;
-      if (exp.details) profileContext += `${exp.details}\n`;
+    // Grouped runs emit ONE company heading with its roles beneath, so the model is
+    // told that several positions are one tenure instead of inferring it from a
+    // repeated company string — which it gets wrong for return stints and for
+    // concurrent roles.
+    for (const group of groupExperience(profile.workExperience)) {
+      if (group.roles.length > 1) {
+        profileContext += `\n**${group.company}** — ${group.roles.length} positions\n`;
+        for (const { entry } of group.roles) {
+          profileContext += `- **${entry.title || 'Position'}**`;
+          if (entry.dates) profileContext += ` (${entry.dates})`;
+          profileContext += formatIntervalHint(entry);
+          profileContext += `\n`;
+          if (entry.details) profileContext += `${entry.details}\n`;
+        }
+      } else {
+        const exp = group.roles[0].entry;
+        profileContext += `\n**${exp.title || 'Position'}** at **${exp.company || 'Company'}**`;
+        if (exp.dates) profileContext += ` (${exp.dates})`;
+        profileContext += formatIntervalHint(exp);
+        profileContext += `\n`;
+        if (exp.details) profileContext += `${exp.details}\n`;
+      }
     }
     profileContext += '\n';
   }
@@ -730,8 +763,10 @@ export async function generateResumeFromProfileForJob(modelId, jobDescription, o
 }
 
 // Get user profile context for AI
-function getUserProfileContext() {
-  const profile = getUserProfile();
+// Exported with an optional profile so the serialisation is unit-testable
+// without seeding storage. Every existing caller passes nothing and gets the
+// stored profile exactly as before.
+export function getUserProfileContext(profile = getUserProfile()) {
   console.log('[AI Context] User profile loaded:', profile);
   
   if (!profile || isProfileEmpty(profile)) {
@@ -776,12 +811,26 @@ function getUserProfileContext() {
   
   if (profile.workExperience && profile.workExperience.length > 0) {
     context += `### Detailed Work Experience\n`;
-    for (const exp of profile.workExperience) {
-      if (exp.title || exp.company) {
-        context += `\n**${exp.title || 'Untitled'}** at ${exp.company || 'Unknown Company'}`;
-        if (exp.dates) context += ` (${exp.dates})`;
-        context += `\n`;
-        if (exp.details) context += `${exp.details}\n`;
+    for (const group of groupExperience(profile.workExperience)) {
+      if (group.roles.length > 1) {
+        context += `\n**${group.company}** — ${group.roles.length} positions\n`;
+        for (const { entry } of group.roles) {
+          if (!entry.title && !entry.company) continue;
+          context += `- **${entry.title || 'Untitled'}**`;
+          if (entry.dates) context += ` (${entry.dates})`;
+          context += formatIntervalHint(entry);
+          context += `\n`;
+          if (entry.details) context += `${entry.details}\n`;
+        }
+      } else {
+        const exp = group.roles[0].entry;
+        if (exp.title || exp.company) {
+          context += `\n**${exp.title || 'Untitled'}** at ${exp.company || 'Unknown Company'}`;
+          if (exp.dates) context += ` (${exp.dates})`;
+          context += formatIntervalHint(exp);
+          context += `\n`;
+          if (exp.details) context += `${exp.details}\n`;
+        }
       }
     }
     context += '\n';
@@ -1224,6 +1273,32 @@ export async function improveSummary(modelId, options = {}) {
   return chat(modelId, messages, true, { feature: 'generate', ...options });
 }
 
+// `experience[i].dates` is the AI-addressable date path; the machine-readable
+// startDate/endDate pair is NOT, matching `_groupId`. Nothing else enforces
+// that: the edit prompt serialises the whole resume JSON, pair included, and
+// the documented path grammar is open-ended ("And similar nested paths using
+// dot notation and array indices"). A model that wrote one half would persist
+// exactly the contradiction the picker's R1/R2 rules exist to prevent — the
+// pair only ever moves as a unit, written by a picker commit or cleared by a
+// freeform edit.
+const UNADDRESSABLE_DATE_PATH = /(^|\.)(startDate|endDate)$/;
+
+/**
+ * Drop model-proposed paths that address the structured date pair directly.
+ * Skip, don't throw — the rest of the change set is still good — but warn, the
+ * way setByPath's unsafe-path guard does, so a model that keeps trying leaves a
+ * trace instead of no evidence.
+ */
+export function stripUnaddressableDatePaths(changes) {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return {};
+  const entries = Object.entries(changes);
+  const kept = entries.filter(([path]) => !UNADDRESSABLE_DATE_PATH.test(path));
+  if (kept.length !== entries.length) {
+    console.warn('[aiService] ignoring model-proposed startDate/endDate paths; only `dates` is addressable');
+  }
+  return Object.fromEntries(kept);
+}
+
 /**
  * Generate structured resume changes that can be displayed in a diff view
  * @param {string} modelId - Model to use
@@ -1295,7 +1370,7 @@ export async function generateResumeChanges(modelId, instruction, targetPath = n
     
     const result = JSON.parse(jsonStr);
     return {
-      changes: result.changes || {},
+      changes: stripUnaddressableDatePaths(result.changes),
       explanation: result.explanation || 'Changes generated successfully'
     };
   } catch {
@@ -1529,6 +1604,16 @@ export function saveExtractedProfile(extractedProfile) {
   const arrayFields = ['workExperience', 'skills', 'education', 'projects', 'certifications', 'achievements', 'customSections'];
   for (const field of arrayFields) {
     if (extractedProfile[field] && extractedProfile[field].length > 0) {
+      // Company-run grouping is deliberately NOT derived here. An interview can
+      // report two separate stints at one employer with no intervening role
+      // ("Acme 2015-2018", "Acme 2021-Present"), and adjacency alone cannot tell
+      // that return from a promotion — it would mint one id spanning both and
+      // print a single header asserting continuous employment that never
+      // happened. The date gate that saves the generation path is unavailable:
+      // the profile entry shape is { title, company, dates, details }, `dates` is
+      // a freeform string, and there is no machine-readable signal to gate on.
+      // So extracted work experience arrives ungrouped and the user links roles
+      // with the Profile tab's "Link to company above" — plainer, never false.
       // Simple merge: add new items to existing
       mergedProfile[field] = [
         ...(existingProfile[field] || []),
@@ -1536,7 +1621,7 @@ export function saveExtractedProfile(extractedProfile) {
       ];
     }
   }
-  
+
   console.log('[Profile] Merged profile to save:', mergedProfile);
   saveUserProfile(mergedProfile);
   

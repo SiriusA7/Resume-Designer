@@ -3,11 +3,13 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, Plus, Trash2, X } from 'lucide-react';
 
 import { store, generateId, experienceSortValue } from '../../store.js';
+import { sortRunAware, groupExperience, companyKey } from '../../experienceGroups.js';
 import { SINGLE_COLUMN_LAYOUTS } from '../../renderer.js';
 import { getSettings, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { SortableList, SortableItem, DragHandle } from '../Sortable.jsx';
 import { PanelSection } from './PanelSection.jsx';
 import DesignTab from './DesignTab.jsx';
+import ExperienceDateField from '../experience/ExperienceDateField.jsx';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -73,6 +75,18 @@ function writeField(path, value) {
   localEdit = true;
   try { store.update(path, value); } finally { localEdit = false; }
 }
+// Dates write three fields at once, so this cannot use writeField, which takes
+// one path. One array write is one undo step and one re-render, matching the
+// company-rename fan-out in inlineEditor.js. No `localEdit` guard: that exists
+// to keep an uncontrolled input's caret while typing, and this writes on a
+// popover commit, where a full re-render is exactly what we want.
+function writeExperienceDates(index, fields) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience) || !experience[index]) return;
+  const next = experience.map((entry, i) => (i === index ? { ...entry, ...fields } : entry));
+  store.setChangeMetadata('Edited dates');
+  store.update('experience', next);
+}
 function writeTool(index, value) {
   // Split WITHOUT dropping blanks (and join the same way) so the index space stays
   // aligned with the rendered inputs while the user is mid-edit — e.g. after clearing
@@ -93,13 +107,14 @@ function writeTool(index, value) {
 
 // Compact labeled field. Resume-data inputs stay UNCONTROLLED (defaultValue)
 // and write through writeField on change — never `value`.
-function Field({ label, type = 'text', path, defaultValue }) {
+function Field({ label, type = 'text', path, defaultValue, onBlur }) {
   return (
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}</Label>
       <Input
         type={type} className="h-8" data-field={path} defaultValue={defaultValue}
         onChange={(e) => writeField(path, e.target.value)}
+        onBlur={onBlur}
       />
     </div>
   );
@@ -220,7 +235,102 @@ function SectionItem({ section, index, activeLayout }) {
   );
 }
 
-function ExperienceItem({ exp, index }) {
+// --- grouping actions -------------------------------------------------------
+// Each is ONE store.update('experience', next) preceded by setChangeMetadata, so
+// each is a single undo step. Never push-then-drag: that is two history entries
+// and routes the user through the drag that breaks runs.
+
+function linkToCompanyAbove(index) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience) || index < 1) return;
+  const prev = experience[index - 1];
+  const cur = experience[index];
+  // Re-check against FRESH store data: the panel suppresses re-renders while a
+  // field is being typed (localEdit), so the button's canLinkAbove prop can be
+  // stale and this entry's company may have just changed. Never write `company`
+  // here — copying the neighbour's name is how a role gets filed under an
+  // employer the user never worked for.
+  if (!prev || !companyKey(prev.company) || companyKey(prev.company) !== companyKey(cur.company)) return;
+  const id = prev._groupId || generateId('grp');
+  const oldId = cur._groupId;
+  const next = [...experience];
+  next[index - 1] = { ...prev, _groupId: id };
+  next[index] = { ...cur, _groupId: id };
+  // The clicked entry may itself be the LEAD of a run: its trailing members come
+  // with it. Re-idding only this index would leave them on the old id, splitting
+  // them off as an orphaned singleton the user never asked to unlink.
+  for (let i = index + 1; i < next.length; i += 1) {
+    const entry = next[i];
+    if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
+    next[i] = { ...entry, _groupId: id };
+  }
+  store.setChangeMetadata('Linked roles at one company');
+  store.update('experience', next);
+}
+
+function separateFromCompanyAbove(index) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience) || index < 0) return;
+  const cur = experience[index];
+  const oldId = cur._groupId;
+  // A fresh id — never reuse — so this entry can never re-fuse with the run above.
+  const freshId = generateId('grp');
+  const next = [...experience];
+  next[index] = { ...next[index], _groupId: freshId };
+  // Trailing members of the SAME run follow the detached entry, so separating the
+  // middle role of a 3-role run yields [A] + [B,C] rather than orphaning C too.
+  for (let i = index + 1; i < next.length; i += 1) {
+    const entry = next[i];
+    if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
+    next[i] = { ...entry, _groupId: freshId };
+  }
+  store.setChangeMetadata('Separated role from company');
+  store.update('experience', next);
+}
+
+function addRoleAtCompany(leadIndex) {
+  const experience = store.get('experience');
+  if (!Array.isArray(experience)) return;
+  const lead = experience[leadIndex];
+  if (!lead) return;
+  // Revalidate the company against FRESH data, not just the button's gating: local
+  // text edits suppress re-renders, so the user can clear this field while the
+  // already-rendered button stays visible. A run needs a non-empty company, so
+  // proceeding would insert a second blank row and id both entries into a "run"
+  // the grouping rule then refuses to form.
+  if (!companyKey(lead.company)) return;
+  const id = lead._groupId || generateId('grp');
+  // Recompute the run's end from FRESH store data rather than trusting a bound
+  // that was computed at render time: the panel suppresses re-renders while a
+  // field is being typed (localEdit), so renaming this lead's company shortens
+  // the run without the render ever hearing about it. Splicing at a stale end
+  // would drop the new role outside the run it belongs to.
+  let lastIndexOfRun = leadIndex;
+  if (lead._groupId && companyKey(lead.company)) {
+    while (lastIndexOfRun + 1 < experience.length) {
+      const nextEntry = experience[lastIndexOfRun + 1];
+      if (!nextEntry || nextEntry._groupId !== lead._groupId
+        || companyKey(nextEntry.company) !== companyKey(lead.company)) break;
+      lastIndexOfRun += 1;
+    }
+  }
+  const role = {
+    id: generateId('exp'),
+    title: 'New Position',
+    company: lead.company,
+    dates: 'Start – End',
+    bullets: ['Describe your accomplishments'],
+    _groupId: id,
+    _expanded: true,
+  };
+  const next = [...experience];
+  if (!next[leadIndex]._groupId) next[leadIndex] = { ...next[leadIndex], _groupId: id };
+  next.splice(lastIndexOfRun + 1, 0, role);
+  store.setChangeMetadata('Added a role at this company');
+  store.update('experience', next);
+}
+
+function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, onCompanyBlur }) {
   const [expanded, setExpanded] = useState(exp._expanded !== false);
   const toggle = () => {
     const next = !expanded;
@@ -242,9 +352,20 @@ function ExperienceItem({ exp, index }) {
     <SortableItem id={exp.id || `exp-${index}`} className="overflow-hidden rounded-[9px] border bg-background">
       <div className="flex cursor-pointer items-center gap-2 px-2.5 py-2" onClick={toggle}>
         <DragHandle />
+        {/* The rail is the whole grouping affordance: membership is visible
+            without opening an accordion. */}
+        <span
+          aria-hidden="true"
+          className={cn('w-[3px] self-stretch rounded-full', isRunMember ? 'bg-primary/40' : 'bg-transparent')}
+        />
         <span className="min-w-0 flex-1">
+          {isLead && group && group.roles.length > 1 && (
+            <span className="block truncate text-[11.5px] font-semibold text-muted-foreground">
+              {group.company} · {group.roles.length} roles
+            </span>
+          )}
           <span className="block truncate text-[13px] font-semibold">{exp.title || 'Untitled position'}</span>
-          <span className="block truncate text-[11.5px] text-muted-foreground">{exp.company || ''}</span>
+          {!isRunMember && <span className="block truncate text-[11.5px] text-muted-foreground">{exp.company || ''}</span>}
         </span>
         <ChevronDown
           className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')}
@@ -254,13 +375,25 @@ function ExperienceItem({ exp, index }) {
           CSS expand/collapse — its uncontrolled inputs must keep their DOM
           values across toggles without a remount. */}
       <div className={cn('space-y-3 border-t bg-muted/40 p-2.5', !expanded && 'hidden')}>
-        {[['title', 'Job title'], ['company', 'Company'], ['dates', 'Dates']].map(([f, label]) => (
+        {[['title', 'Job title'], ['company', 'Company']].map(([f, label]) => (
           <Field
             key={f} label={label}
             path={`experience[${index}].${f}`}
             defaultValue={exp[f] || ''}
+            // Company only: `writeField` suppresses the store-driven remount while
+            // typing, so the grouping gating (canLinkAbove, "Add role at this
+            // company") keeps whatever it computed BEFORE the rename — a disabled
+            // Link button can never be clicked, so the fresh-data revalidation
+            // inside the action never gets its chance. Blur forces a plain
+            // re-render (no key change, no remount, no caret loss) which re-reads
+            // store.getData() and re-gates against the typed company.
+            onBlur={f === 'company' ? onCompanyBlur : undefined}
           />
         ))}
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Dates</Label>
+          <ExperienceDateField entry={exp} onCommit={(fields) => writeExperienceDates(index, fields)} />
+        </div>
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">Bullets</Label>
           <SortableList
@@ -282,6 +415,41 @@ function ExperienceItem({ exp, index }) {
             <AddRowButton label="Add bullet" onClick={() => store.addToArray(`experience[${index}].bullets`, 'New bullet point')} />
           </SortableList>
         </div>
+        <div className="flex flex-wrap gap-1.5 border-t pt-2.5">
+          {/* Offered on the first member of ANY group, including a run of one:
+              "I was promoted here" starts from a single entry, and this is the
+              only path that adds the second role in place. Requires a company —
+              a run needs a non-empty one to form, so without it the action would
+              duplicate the row without producing a visible group. */}
+          {isLead && group && !!companyKey(exp.company) && (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              onClick={() => addRoleAtCompany(index)}
+            >
+              <Plus className="size-3.5" /> Add role at this company
+            </Button>
+          )}
+          {/* A run LEAD has no run member above it, so separating it is a pure
+              no-op that still costs an undo entry — offer it the link action.
+              At index 0 there is nothing above at all, so offer neither. */}
+          {isRunMember && !isLead ? (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              onClick={() => separateFromCompanyAbove(index)}
+            >
+              Separate from company above
+            </Button>
+          ) : index > 0 ? (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              disabled={!canLinkAbove}
+              title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
+              onClick={() => linkToCompanyAbove(index)}
+            >
+              Link to company above
+            </Button>
+          ) : null}
+        </div>
         <Button
           variant="ghost" size="sm" type="button"
           className="text-destructive hover:text-destructive"
@@ -300,6 +468,12 @@ export default function StructurePanel() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('header');
   const [dataVersion, bump] = useReducer((n) => n + 1, 0);
+  // A SECOND counter whose only job is to force a plain re-render. It must never
+  // reach the tab key below: putting it there would remount the tab on blur and
+  // unmount the grouping button before its click landed, which is exactly the
+  // "first click is swallowed" bug the profile editor had. Render re-reads
+  // store.getData(), so a re-render alone re-gates the grouping controls.
+  const [, bumpGrouping] = useReducer((n) => n + 1, 0);
   const [collapsed, setCollapsed] = useState({});
   const [renameOpen, setRenameOpen] = useState(false); // "Custom Section…" title dialog
   const [customTitle, setCustomTitle] = useState('');
@@ -400,13 +574,21 @@ export default function StructurePanel() {
     if (mode === 'custom') return;
     const experience = store.get('experience');
     if (!Array.isArray(experience) || experience.length < 2) return;
-    const sorted = [...experience];
-    if (mode === 'relevance') {
-      const rank = (e) => (Number.isFinite(e?._relevanceRank) ? e._relevanceRank : Number.MAX_SAFE_INTEGER);
-      sorted.sort((a, b) => rank(a) - rank(b));
-    } else {
-      sorted.sort((a, b) => experienceSortValue(b) - experienceSortValue(a));
-    }
+    // Ordering is RUN-AWARE: a naive sort interleaves a foreign employer between
+    // two roles at one company, which silently drops the company header from the
+    // preview and the PDF. Because applySort('custom') is a no-op, that shredded
+    // order would become the saved data with no way back.
+    const sorted = mode === 'relevance'
+      ? sortRunAware(
+        experience,
+        (run) => Math.min(...run.map((e) => (Number.isFinite(e?._relevanceRank) ? e._relevanceRank : Number.MAX_SAFE_INTEGER))),
+        (a, b) => a - b,
+      )
+      : sortRunAware(
+        experience,
+        (run) => Math.max(...run.map(experienceSortValue)),
+        (a, b) => b - a,
+      );
     store.update('experience', sorted);
   };
 
@@ -415,7 +597,25 @@ export default function StructurePanel() {
   const reorderExperience = (from, to) => {
     setSortMode('custom');
     store.updateSilent('experienceSortMode', 'custom');
-    store.moveInArray('experience', from, to);
+    const experience = store.get('experience');
+    if (!Array.isArray(experience)) return;
+    const next = [...experience];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    // A drag can strand an entry away from its run. Rather than leave an id that
+    // no longer describes anything, clear it — immediately visible in the rail,
+    // and re-linked with one click.
+    const before = next[to - 1];
+    const after = next[to + 1];
+    const stillAdjacent = (before && before._groupId && before._groupId === moved._groupId
+        && companyKey(before.company) === companyKey(moved.company))
+      || (after && after._groupId && after._groupId === moved._groupId
+        && companyKey(after.company) === companyKey(moved.company));
+    if (moved._groupId && !stillAdjacent) {
+      next[to] = { ...moved, _groupId: undefined };
+    }
+    store.setChangeMetadata('Reordered experience');
+    store.update('experience', next);
   };
 
   const sections = data.sections || [];
@@ -567,7 +767,33 @@ export default function StructurePanel() {
               )}
               <SortableList className="space-y-2" ids={experience.map((e, i) => e.id || `exp-${i}`)}
                 onReorder={reorderExperience}>
-                {experience.map((exp, i) => <ExperienceItem key={exp.id || `exp-${i}`} exp={exp} index={i} />)}
+                {(() => {
+                  const groups = groupExperience(experience);
+                  // index -> { group, isLead }
+                  const byIndex = new Map();
+                  groups.forEach((group) => {
+                    group.roles.forEach((role, position) => {
+                      byIndex.set(role.index, { group, isLead: position === 0 });
+                    });
+                  });
+                  return experience.map((exp, i) => {
+                    const meta = byIndex.get(i) || {};
+                    const isRunMember = !!meta.group && meta.group.roles.length > 1;
+                    const prev = i > 0 ? experience[i - 1] : null;
+                    return (
+                      <ExperienceItem
+                        key={exp.id || `exp-${i}`}
+                        exp={exp}
+                        index={i}
+                        group={meta.group}
+                        isLead={!!meta.isLead}
+                        isRunMember={isRunMember}
+                        canLinkAbove={!!prev && !!companyKey(prev.company) && companyKey(prev.company) === companyKey(exp.company)}
+                        onCompanyBlur={bumpGrouping}
+                      />
+                    );
+                  });
+                })()}
               </SortableList>
             </PanelSection>
 

@@ -1,3 +1,4 @@
+import { useId, useReducer } from 'react';
 import { Globe, Plus, Trash2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -8,8 +9,12 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { confirmDestructive } from '@/components/ui/confirm';
 
 import { shouldSpellcheck } from '../../spellcheck.js';
+import { groupExperience, companyKey } from '../../experienceGroups.js';
+import { generateId } from '../../store.js';
+import ExperienceDateField from '../experience/ExperienceDateField.jsx';
 
 // The profile editor's per-tab content, rebuilt on genuine shadcn primitives to
 // match SettingsDialog's idiom (Label + Input grids, SectionHeader, entry cards
@@ -256,7 +261,7 @@ function ItemList({ items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete,
         <Empty title={emptyTitle} subtitle={emptySubtitle} />
       ) : (
         items.map((item, i) => (
-          <EntryCard key={i} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
+          <EntryCard key={item.id || `row-${i}`} titleInput={renderTitle(item, i)} onDelete={() => onDelete(i)}>
             {renderBody(item, i)}
           </EntryCard>
         ))
@@ -266,38 +271,362 @@ function ItemList({ items, emptyTitle, emptySubtitle, addLabel, onAdd, onDelete,
   );
 }
 
+// ── Experience: employer blocks ─────────────────────────────────────────
+// The résumé prints several positions at one employer as a company header with
+// dated roles beneath. These render the same shape in the editor, so the two
+// surfaces agree. A run of ONE collapses to SoloJobCard — nesting appears only
+// where a progression exists, so it means something.
+
+// One role inside an employer block. Deliberately has NO company field: the
+// block states the employer once, so there is nothing to repeat and nothing to
+// get out of sync.
+function RoleSubCard({ exp, index, set, setDates, onDelete, onDetach, canDetach }) {
+  return (
+    <div className="space-y-2.5 rounded-[8px] border bg-background/40 p-2.5">
+      <div className="flex items-center gap-2.5">
+        <Input
+          className="font-medium" placeholder="Job title"
+          defaultValue={exp.title || ''}
+          onChange={(e) => set(index, 'title')(e.target.value)}
+        />
+        <Button
+          type="button" variant="ghost" size="icon"
+          title="Delete role" aria-label="Delete role"
+          className="shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <ExperienceDateField entry={exp} onCommit={setDates(index)} />
+      <Textarea
+        rows={4}
+        placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
+        defaultValue={stripEmphasis(exp.details)}
+        onChange={(e) => set(index, 'details')(e.target.value)}
+      />
+      {canDetach && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
+          <Button
+            variant="outline" size="sm" type="button" className="h-7 text-xs"
+            onClick={onDetach}
+          >
+            Make this its own employer
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A run of 2+: the employer stated once, its roles beneath.
+function EmployerBlock({
+  group, set, setDates, onCompanyChange, onCompanyBlur, onAddRole, onDeleteRole, onDetachRole, onDeleteEmployer,
+  onLinkAbove, canLinkAbove, showLinkAbove,
+}) {
+  const employerInputId = useId();
+  const canAddRole = !!(group.company || '').trim();
+  return (
+    <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
+      <div className="flex items-end gap-2.5">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <Label htmlFor={employerInputId} className="text-xs text-muted-foreground">Employer</Label>
+          <Input
+            id={employerInputId}
+            className="font-semibold" placeholder="Company"
+            defaultValue={group.company}
+            onChange={(e) => onCompanyChange(group, e.target.value)}
+            onBlur={onCompanyBlur}
+          />
+        </div>
+        <span className="shrink-0 whitespace-nowrap pb-2 text-[11.5px] font-medium text-muted-foreground">
+          {group.roles.length} positions
+        </span>
+        <Button
+          type="button" variant="ghost" size="icon"
+          title="Delete employer" aria-label="Delete employer"
+          className="mb-0.5 shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={() => onDeleteEmployer(group)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {group.roles.map((role, position) => (
+          <RoleSubCard
+            key={role.entry.id || `role-${role.index}`}
+            exp={role.entry}
+            index={role.index}
+            set={set}
+            setDates={setDates}
+            onDelete={() => onDeleteRole(role.index)}
+            onDetach={() => onDetachRole(role.index)}
+            canDetach={position > 0}
+          />
+        ))}
+      </div>
+      {(canAddRole || showLinkAbove) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {canAddRole && (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 flex-1 text-xs"
+              onClick={() => onAddRole(group)}
+            >
+              <Plus className="h-3.5 w-3.5" /> Add role at this company
+            </Button>
+          )}
+          {/* A detached role leaves [solo Acme] + [Acme block]; without this the
+              block's lead has no way back. linkAbove never writes `company`, and
+              it carries the lead's trailing run members with it. */}
+          {showLinkAbove && (
+            <Button
+              variant="outline" size="sm" type="button" className="h-7 text-xs"
+              disabled={!canLinkAbove}
+              title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
+              onClick={() => onLinkAbove(group.roles[0].index)}
+            >
+              Link to company above
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A run of ONE: today's flat card, unchanged in shape. It keeps its own company
+// field, because there is no block above it to state the employer.
+function SoloJobCard({ exp, index, set, setDates, onCompanyBlur, onAddRole, onDelete, onLinkAbove, canLinkAbove, showLinkAbove }) {
+  const canAddRole = !!(exp.company || '').trim();
+  return (
+    <div className="space-y-2.5 rounded-[10px] border bg-card p-[13px]">
+      <div className="flex items-center gap-2.5">
+        <Input
+          className="font-medium" placeholder="Job title"
+          defaultValue={exp.title || ''}
+          onChange={(e) => set(index, 'title')(e.target.value)}
+        />
+        {canAddRole && (
+          <Button
+            variant="outline" size="sm" type="button" className="h-7 shrink-0 text-xs"
+            title="Add role at this company"
+            onClick={() => onAddRole(index)}
+          >
+            <Plus className="h-3.5 w-3.5" /> Add role
+          </Button>
+        )}
+        <Button
+          type="button" variant="ghost" size="icon"
+          title="Delete" aria-label="Delete"
+          className="shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <Input
+        placeholder="Company"
+        defaultValue={exp.company || ''}
+        onChange={(e) => set(index, 'company')(e.target.value)}
+        onBlur={onCompanyBlur}
+      />
+      <ExperienceDateField entry={exp} onCommit={setDates(index)} />
+      <Textarea
+        rows={4}
+        placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
+        defaultValue={stripEmphasis(exp.details)}
+        onChange={(e) => set(index, 'details')(e.target.value)}
+      />
+      {showLinkAbove && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
+          <Button
+            variant="outline" size="sm" type="button" className="h-7 text-xs"
+            disabled={!canLinkAbove}
+            title={canLinkAbove ? undefined : 'Only available when the entry above has the same company'}
+            onClick={() => onLinkAbove(index)}
+          >
+            Link to company above
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExperienceTab({ profile, scheduleSave, refresh }) {
   const items = profile.workExperience;
   const set = (i, field) => (v) => { items[i][field] = v; scheduleSave(); };
+  // Dates write THREE fields at once (the display string plus the
+  // machine-readable pair), so this cannot go through `set`, which writes one.
+  // The local bump re-renders the tab so the trigger label updates; it must NOT
+  // be `refresh`, which bumps the parent's `version` — the tab wrapper's React
+  // key — and would remount the tab mid-interaction.
+  const setDates = (i) => (fields) => { Object.assign(items[i], fields); scheduleSave(); bumpGrouping(); };
+  // Local re-render ONLY, to re-derive the grouping after a company edit. It must
+  // not go through `refresh`: that bumps the parent's `version`, which is the tab
+  // wrapper's React key, so blurring the company input would remount the tab and
+  // unmount the button being pressed before its click fired.
+  const [, bumpGrouping] = useReducer((n) => n + 1, 0);
+  const groups = groupExperience(items);
+  const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
+
+  // Splice a new role after the run's LAST member, carrying the run's id and
+  // company. Walks `items` at click time — the company input is uncontrolled, so
+  // a render-time bound can point past a boundary just typed into existence.
+  const addRoleAt = (leadIndex) => {
+    const lead = items[leadIndex];
+    if (!lead) return;
+    const company = companyKey(lead.company);
+    if (!company) return;
+    const id = lead._groupId || generateId('grp');
+    let last = leadIndex;
+    if (lead._groupId) {
+      while (last + 1 < items.length) {
+        const entry = items[last + 1];
+        if (!entry || entry._groupId !== lead._groupId || companyKey(entry.company) !== company) break;
+        last += 1;
+      }
+    }
+    const next = [...items];
+    if (!next[leadIndex]._groupId) next[leadIndex] = { ...next[leadIndex], _groupId: id };
+    next.splice(last + 1, 0, {
+      id: generateId('exp'), title: '', company: lead.company, dates: '', details: '', _groupId: id,
+    });
+    rewrite(next);
+  };
+
+  // Detach a role into its own employer. Trailing members of the SAME run follow
+  // it, so detaching the middle role of a 3-role block yields [A] + [B,C] rather
+  // than orphaning C.
+  const detachRole = (index) => {
+    const cur = items[index];
+    if (!cur) return;
+    const oldId = cur._groupId;
+    const freshId = generateId('grp');
+    const next = [...items];
+    next[index] = { ...next[index], _groupId: freshId };
+    for (let k = index + 1; k < next.length; k += 1) {
+      const entry = next[k];
+      if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
+      next[k] = { ...entry, _groupId: freshId };
+    }
+    rewrite(next);
+  };
+
+  // Merge this entry into the employer above. Never writes `company` — copying a
+  // neighbour's name is how a role gets filed under an employer the user never
+  // worked for. The clicked entry's trailing run members come with it.
+  const linkAbove = (index) => {
+    const cur = items[index];
+    const above = items[index - 1];
+    if (!cur || !above || !companyKey(above.company) || companyKey(above.company) !== companyKey(cur.company)) return;
+    const id = above._groupId || generateId('grp');
+    const oldId = cur._groupId;
+    const next = [...items];
+    next[index - 1] = { ...above, _groupId: id };
+    next[index] = { ...cur, _groupId: id };
+    for (let k = index + 1; k < next.length; k += 1) {
+      const entry = next[k];
+      if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
+      next[k] = { ...entry, _groupId: id };
+    }
+    rewrite(next);
+  };
+
+  const deleteEntry = (index) => { items.splice(index, 1); refresh(); };
+
+  // The block shows ONE company field for the whole employer, so an edit applies
+  // to every role in it. Mutates in place like `set` does — the inputs are
+  // uncontrolled, so no re-render is needed per keystroke, and the run rule stays
+  // satisfied because every member changes together.
+  const setGroupCompany = (group, value) => {
+    for (const role of group.roles) items[role.index].company = value;
+    scheduleSave();
+  };
+
+  // Removes several entries at once, so it asks first. Splices by descending
+  // index so earlier removals cannot shift the ones still to come.
+  const deleteEmployer = async (group) => {
+    const count = group.roles.length;
+    // Read the company from `items` at click time, not from the render-time
+    // `group`: the field is uncontrolled and setGroupCompany deliberately skips
+    // the re-render, so a just-typed name would not be reflected here and this
+    // dialog would name the wrong employer while asking to destroy it.
+    const liveCompany = items[group.roles[0]?.index]?.company || group.company;
+    const ok = await confirmDestructive({
+      title: `Delete ${liveCompany || 'this employer'}?`,
+      description: `All ${count} positions at this employer will be permanently removed from your profile.`,
+      actionLabel: 'Delete',
+    });
+    if (!ok) return;
+    const next = [...items];
+    const indices = group.roles.map((r) => r.index).sort((a, b) => b - a);
+    for (const idx of indices) next.splice(idx, 1);
+    rewrite(next);
+  };
+
   return (
     <section>
       <SectionHeader
         title="Detailed work experience"
-        description="Add details beyond what's on your resume - challenges faced, technologies used, team size, impact metrics, lessons learned."
+        description="Add details beyond what's on your resume - challenges faced, technologies used, team size, impact metrics, lessons learned. Several positions at one employer sit together under a single company heading."
       />
-      <ItemList
-        items={items}
-        emptyTitle="No experience entries yet"
-        emptySubtitle="Add detailed information about your work history"
-        addLabel="Add experience entry"
-        onAdd={() => { items.push({ title: '', company: '', dates: '', details: '' }); refresh(); }}
-        onDelete={(i) => { items.splice(i, 1); refresh(); }}
-        renderTitle={(exp, i) => (
-          <Input className="font-medium" placeholder="Job title" defaultValue={exp.title || ''} onChange={(e) => set(i, 'title')(e.target.value)} />
+      <div className="space-y-3">
+        {items.length === 0 ? (
+          <Empty title="No experience entries yet" subtitle="Add detailed information about your work history" />
+        ) : (
+          groups.map((group) => {
+            const lead = group.roles[0];
+            const i = lead.index;
+            const prev = i > 0 ? items[i - 1] : null;
+            const canLinkAbove = !!prev
+              && !!companyKey(prev.company)
+              && companyKey(prev.company) === companyKey(lead.entry.company);
+            if (group.roles.length > 1) {
+              return (
+                <EmployerBlock
+                  key={lead.entry.id || `emp-${lead.index}`}
+                  group={group}
+                  set={set}
+                  setDates={setDates}
+                  onCompanyChange={setGroupCompany}
+                  onCompanyBlur={bumpGrouping}
+                  onAddRole={(g) => addRoleAt(g.roles[0].index)}
+                  onDeleteRole={deleteEntry}
+                  onDetachRole={detachRole}
+                  onDeleteEmployer={deleteEmployer}
+                  onLinkAbove={linkAbove}
+                  canLinkAbove={canLinkAbove}
+                  showLinkAbove={i > 0}
+                />
+              );
+            }
+            return (
+              <SoloJobCard
+                key={lead.entry.id || `exp-${i}`}
+                exp={lead.entry}
+                index={i}
+                set={set}
+                setDates={setDates}
+                onCompanyBlur={bumpGrouping}
+                onAddRole={addRoleAt}
+                onDelete={() => deleteEntry(i)}
+                onLinkAbove={linkAbove}
+                canLinkAbove={canLinkAbove}
+                showLinkAbove={i > 0}
+              />
+            );
+          })
         )}
-        renderBody={(exp, i) => (
-          <>
-            <Input placeholder="Company" defaultValue={exp.company || ''} onChange={(e) => set(i, 'company')(e.target.value)} />
-            <Input placeholder="Dates (e.g., Jan 2020 - Present)" defaultValue={exp.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
-            <Textarea
-              rows={4}
-              placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
-              defaultValue={stripEmphasis(exp.details)}
-              onChange={(e) => set(i, 'details')(e.target.value)}
-            />
-          </>
-        )}
-      />
+        <AddButton
+          onClick={() => {
+            items.push({ id: generateId('exp'), title: '', company: '', dates: '', details: '' });
+            refresh();
+          }}
+        >
+          Add experience entry
+        </AddButton>
+      </div>
     </section>
   );
 }

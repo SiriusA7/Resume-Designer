@@ -10,11 +10,13 @@ import {
 
 let resolver = null;
 
-export function confirmDestructive({ title, description, actionLabel = 'Confirm', destructive = true }) {
+export function confirmDestructive({
+  title, description, actionLabel = 'Confirm', cancelLabel = 'Cancel', destructive = true,
+}) {
   return new Promise((resolve) => {
     resolver?.(false); // a newer confirm supersedes any pending one — never leave a caller hanging
     resolver = resolve;
-    window.dispatchEvent(new CustomEvent('rd:confirm', { detail: { title, description, actionLabel, destructive } }));
+    window.dispatchEvent(new CustomEvent('rd:confirm', { detail: { title, description, actionLabel, cancelLabel, destructive } }));
   });
 }
 
@@ -41,7 +43,7 @@ export function ConfirmHost() {
           <AlertDialogDescription>{opts?.description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => settle(false)}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel onClick={() => settle(false)}>{opts?.cancelLabel || 'Cancel'}</AlertDialogCancel>
           <AlertDialogAction
             className={opts?.destructive ? 'bg-destructive text-white hover:bg-destructive/90' : undefined}
             onClick={() => settle(true)}

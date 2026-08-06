@@ -16,7 +16,7 @@
 import { DIFF_TYPES, setByPath, getByPath } from './diffEngine.js';
 // The preview and the apply path must agree on ordering and on what an ADD
 // means, or the user reviews something other than what accepting produces.
-import { orderChanges, resolveAnchoredPath } from './changeApply.js';
+import { orderChanges, resolveAnchoredPath, experienceScalarWrite } from './changeApply.js';
 
 /**
  * Resume data with still-pending changes projected in.
@@ -64,6 +64,18 @@ export function applyPendingToData(data, changeSet, statuses) {
           continue;
         }
       }
+    }
+    // Two experience writes touch more than the leaf they name: a company
+    // rename fans across the whole run, and a dates edit clears the machine
+    // pair beside it. Projecting them as plain scalars showed the user a run
+    // SPLIT down the middle — the lead under the new employer name, the
+    // trailing roles under the old — while accepting kept it intact. Same
+    // function as the apply path, so the two cannot drift again.
+    const experience = getByPath(next, 'experience');
+    const rewritten = experienceScalarWrite(experience, change.path, change.newValue);
+    if (rewritten) {
+      if (rewritten !== experience) setByPath(next, 'experience', rewritten);
+      continue;
     }
     setByPath(next, change.path, change.newValue);
   }

@@ -1293,7 +1293,10 @@ function generateMarkdown(data) {
   if (data.experience && data.experience.length > 0) {
     md += `## Experience\n\n`;
     for (const exp of data.experience) {
-      md += `### ${exp.title} — ${exp.company} **${exp.dates}**\n\n`;
+      // Dates go on their own bold line — the grammar the reader and
+      // Templates/RESUME-TEMPLATE.md both document — so the round trip is lossless.
+      md += `### ${exp.title} — ${exp.company}\n`;
+      md += `**${exp.dates}**\n\n`;
       if (exp.bullets && exp.bullets.length > 0) {
         for (const bullet of exp.bullets) {
           md += `- ${bullet}\n`;

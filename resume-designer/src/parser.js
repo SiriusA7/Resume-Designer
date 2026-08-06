@@ -3,7 +3,10 @@
  * Parses the specific markdown structure used in the resume files
  */
 
-export function parseResume(markdown) {
+import { generateId } from './store.js';
+import { assignGroupIds } from './experienceGroups.js';
+
+export function parseResume(markdown, { group = false } = {}) {
   const lines = markdown.split('\n');
   
   const resume = {
@@ -44,7 +47,10 @@ export function parseResume(markdown) {
     }
     
     // Parse tagline (bold line after name)
-    if (line.startsWith('**') && line.endsWith('**') && !resume.tagline) {
+    // Only the header region (before the first `## `) can supply the tagline.
+    // Without the currentSection guard, a resume with no tagline has its FIRST
+    // experience date line stolen — and grouping multiplies bold lines per employer.
+    if (line.startsWith('**') && line.endsWith('**') && !resume.tagline && !currentSection) {
       resume.tagline = line.slice(2, -2).trim();
       i++;
       continue;
@@ -140,12 +146,13 @@ export function parseResume(markdown) {
       
       // Parse title and company
       const titleLine = line.substring(4).trim();
-      const { title, company } = parseExperienceTitle(titleLine);
-      
+      const { title, company, dates: inlineDates } = parseExperienceTitle(titleLine);
+
       currentExperience = {
+        id: generateId('exp'),
         title,
         company,
-        dates: '',
+        dates: inlineDates,
         bullets: []
       };
       
@@ -174,7 +181,13 @@ export function parseResume(markdown) {
   if (currentExperience) {
     resume.experience.push(currentExperience);
   }
-  
+
+  // Grouping is OPT-IN. The exported markdown carries no _groupId, so adjacency
+  // is the only signal here — and adjacency cannot tell a promotion from a
+  // return stint whose intervening job is simply absent from the file. The
+  // importer asks the user instead of guessing.
+  if (group) resume.experience = assignGroupIds(resume.experience);
+
   return resume;
 }
 
@@ -201,17 +214,25 @@ function parseContactLine(line, contact) {
 }
 
 function parseExperienceTitle(titleLine) {
-  // Pattern: "Role — Company" or "Role — Project — Event"
-  const parts = titleLine.split('—').map(p => p.trim());
-  
-  if (parts.length >= 2) {
-    return {
-      title: parts[0],
-      company: parts.slice(1).join(' — ')
-    };
+  // The exporter writes dates INLINE on the heading (`### Title — Company **Dates**`)
+  // while the reader historically expected them on a separate bold line — which made
+  // parse -> export -> re-import lossy (the dates folded into `company`). Accept both.
+  let dates = '';
+  let line = titleLine;
+  const inline = line.match(/\s*\*\*([^*]+)\*\*\s*$/);
+  if (inline) {
+    dates = inline[1].trim();
+    line = line.slice(0, inline.index).trim();
   }
-  
-  return { title: titleLine, company: '' };
+
+  // Pattern: "Role — Company" or "Role — Project — Event"
+  const parts = line.split('—').map(p => p.trim());
+
+  if (parts.length >= 2) {
+    return { title: parts[0], company: parts.slice(1).join(' — '), dates };
+  }
+
+  return { title: line, company: '', dates };
 }
 
 function formatBullet(text) {

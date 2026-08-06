@@ -8,6 +8,17 @@
  * Pure except for store reads/writes.
  */
 import { store } from './store.js';
+// Resume scalars go through the shared writer, not a bare store.update: an
+// experience match can resolve to `experience[i].company`, where a direct write
+// renames a grouped employer's LEAD ALONE and splits the run, because a run
+// needs an identical company as well as a shared _groupId.
+//
+// The writer also handles `experience[i].dates` (clearing the machine-readable
+// pair beside it). That branch is unreachable from here today — findInExperience
+// matches title, company and bullets only — but routing through one writer means
+// a future matcher that does reach it inherits the rule instead of re-opening
+// the hole.
+import { writeScalarToStore } from './changeApply.js';
 
 // Map section name to store path and apply the change. Returns true if applied.
 export function applyRecommendationToStore(sectionName, currentValue, suggestedValue) {
@@ -53,7 +64,7 @@ export function applyRecommendationToStore(sectionName, currentValue, suggestedV
     if (!isAddNew) {
       const result = findInExperience(currentValue, data.experience);
       if (result) {
-        store.update(result.path, suggestedValue);
+        writeScalarToStore(result.path, suggestedValue);
         return true;
       }
     }
@@ -124,7 +135,9 @@ export function applyRecommendationToStore(sectionName, currentValue, suggestedV
   if (!isAddNew) {
     const genericResult = findTextAnywhere(currentValue, data);
     if (genericResult) {
-      store.update(genericResult, suggestedValue);
+      // The generic search walks the whole document, so it can land on an
+      // experience scalar too.
+      writeScalarToStore(genericResult, suggestedValue);
       return true;
     }
   }

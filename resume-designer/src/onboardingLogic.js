@@ -7,6 +7,7 @@
  * the necessary store/persistence/AI side effects); no document access.
  */
 import { generateId, experienceSortValue } from './store.js';
+import { sortRunAware, assignGroupIds, datesAreContinuous } from './experienceGroups.js';
 import { getDefaultModelId, chat, generateResumeFromProfileForJob, getAllModels, getCustomModels, isConfigured, GROUNDING_RULES } from './aiService.js';
 import { generateUniqueVariantName, saveVariant } from './persistence.js';
 import { parseResumeText } from './resumeParser.js';
@@ -84,8 +85,9 @@ export async function parseResumeWithAI(text) {
       "title": "Job Title",
       "company": "Company Name",
       "location": "Location",
-      "startDate": "Start Date",
-      "endDate": "End Date or Present",
+      "dates": "Human-readable range as printed on the resume, e.g. Jan 2022 - Jun 2024",
+      "startDate": "YYYY-MM (machine-readable; the month is required)",
+      "endDate": "YYYY-MM or Present (machine-readable)",
       "bullets": ["Achievement 1", "Achievement 2"]
     }
   ],
@@ -99,6 +101,16 @@ export async function parseResumeWithAI(text) {
   "skills": ["Skill 1", "Skill 2"],
   "sections": []
 }
+
+IMPORTANT:
+- "dates" is what the resume prints; startDate/endDate are what the app computes
+  with. Emit BOTH for every role.
+- startDate/endDate must be "YYYY-MM" (or "Present" for endDate). A bare year is
+  not enough: the app uses the month to decide whether two roles at one employer
+  were one continuous tenure or two separate stints, and a year-only value makes
+  it treat a promotion as two unrelated jobs.
+- If one employer appears with several roles, emit them as separate entries that
+  are CONSECUTIVE and share the identical "company" string.
 
 Resume text:
 ${text}`,
@@ -298,12 +310,38 @@ export function buildResumeData(resume) {
 
   // Normalize + order experience: stable id, capture AI relevance order in
   // _relevanceRank, then default to chronological (newest first).
-  const experience = (r.experience || []).map((exp, i) => ({
+  let experience = (r.experience || []).map((exp, i) => ({
     ...exp,
     id: exp.id || generateId('exp'),
     _relevanceRank: i,
   }));
-  experience.sort((a, b) => experienceSortValue(b) - experienceSortValue(a));
+  // Mint one group id per run of consecutive entries at the same employer BEFORE
+  // sorting: sortRunAware only respects an EXISTING _groupId, and this fresh AI
+  // output has none yet, so assignGroupIds must read the run off the AI's own raw
+  // adjacency first. Only then can sortRunAware reorder chronologically without
+  // shredding that run apart — without this nothing the AI produces is ever grouped.
+  //
+  // This depends on the model emitting one employer's roles CONSECUTIVELY, which
+  // buildGenerateResumePrompt requires explicitly — the prompt otherwise asks for
+  // relevance ordering, which can legitimately place a different employer between
+  // two roles at the same one, leaving nothing for adjacency to find. The output
+  // schema deliberately carries no _groupId (the model is never asked to author
+  // grouping), so ordering plus the dates are the only channels available.
+  //
+  // Adjacency alone is NOT sufficient here, because this input may be INCOMPLETE:
+  // the generator omits jobs irrelevant to the target role, and a pasted resume
+  // omits jobs the user chose to leave out, so two separate stints at one employer
+  // can arrive adjacent. Fusing them would print one company header spanning both,
+  // asserting continuous employment that never happened. datesAreContinuous
+  // requires the two roles' machine-readable, month-precise ranges to overlap or
+  // abut (<= 1 month) before they may share a header; anything missing, year-only,
+  // or gapped renders ungrouped — the pre-feature rendering: plainer, never false.
+  const grouped = assignGroupIds(experience, undefined, datesAreContinuous);
+  experience = sortRunAware(
+    grouped,
+    (run) => Math.max(...run.map(experienceSortValue)),
+    (a, b) => b - a,
+  );
 
   return {
     name: r.name || 'Your Name',
