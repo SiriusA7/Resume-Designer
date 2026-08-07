@@ -43,11 +43,20 @@ export function installReadableStreamAsyncIterator(target = globalThis) {
   if (Stream.prototype[Symbol.asyncIterator]) return false;
 
   function values(options) {
-    // `options ?? {}` rather than a destructuring default: Web IDL treats null
-    // as an empty options dictionary, so `stream.values(null)` is valid and
-    // works natively. Destructuring null throws, which would make that call
-    // fail only where this polyfill is installed — the exact
-    // engine-specific divergence this module exists to remove.
+    // Web IDL dictionary conversion, which is stricter in BOTH directions than
+    // a destructuring default. Measured against Node's native implementation:
+    //
+    //   values(null) / values(undefined) / values({})  -> accepted
+    //   values(1) / values('x') / values(true) / values(Symbol()) -> TypeError
+    //
+    // A destructuring default gets both wrong: it throws on null, and it
+    // silently boxes primitives instead of rejecting them. Either way a call
+    // behaves differently only where this polyfill is installed, which is the
+    // engine divergence the module exists to remove.
+    if (options !== undefined && options !== null
+        && typeof options !== 'object' && typeof options !== 'function') {
+      throw new TypeError('ReadableStream.values options must be an object or null');
+    }
     const { preventCancel = false } = options ?? {};
     const reader = this.getReader();
     // Once the reader is released, ANY further use of it throws

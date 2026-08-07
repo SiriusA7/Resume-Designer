@@ -125,11 +125,22 @@ describe('installReadableStreamAsyncIterator', () => {
   // Web IDL treats null as an empty options dictionary, so this is a valid call
   // and works natively. Destructuring null throws, which would make it fail
   // only where the polyfill is installed.
-  it('accepts null as an empty options dictionary', () => {
+  // Web IDL dictionary conversion is stricter in BOTH directions than a
+  // destructuring default, which throws on null AND silently boxes primitives.
+  // Both rows measured against Node's native implementation.
+  it('accepts null, undefined and objects as an options dictionary', () => {
     installReadableStreamAsyncIterator(target);
-    expect(() => new Stream(['a']).values(null)).not.toThrow();
-    expect(() => new Stream(['a']).values(undefined)).not.toThrow();
+    for (const opt of [null, undefined, {}, { preventCancel: true }, function f() {}]) {
+      expect(() => new Stream(['a']).values(opt), String(opt)).not.toThrow();
+    }
     expect(() => new Stream(['a']).values()).not.toThrow();
+  });
+
+  it('rejects primitive options the way native does', () => {
+    installReadableStreamAsyncIterator(target);
+    for (const opt of [1, 0, 'x', '', true, false, Symbol('s'), 10n]) {
+      expect(() => new Stream(['a']).values(opt), String(opt)).toThrow(TypeError);
+    }
   });
 
   // Native iterators serialize their operations: return() waits for an
