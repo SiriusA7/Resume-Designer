@@ -17,6 +17,12 @@
 // without guarding it, and that global is Safari 18.4 / macOS 15.4. The app's
 // floor is macOS 14.4, so the modern build would throw at module load for every
 // user between those versions. The legacy build polyfills it and loads fine.
+// MUST precede the pdf.js import — see resumeParser.js and the module itself.
+// This file does not extract text, but it is a second entry point into pdf.js
+// and the patch is idempotent, so installing from both is cheaper than
+// reasoning about which one loaded first.
+import './readableStreamAsyncIterator.js';
+
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import pdfjsWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 
