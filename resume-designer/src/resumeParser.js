@@ -23,6 +23,12 @@
 //
 // So: legacy build keeps the security fix without moving the macOS floor. Both
 // import sites must stay on it — see pdfPreview.js.
+// MUST precede the pdf.js import: pdf.js consumes its text stream with
+// `for await (… of readableStream)` over a native ReadableStream, and WebKit
+// does not implement async iteration on those. Module evaluation follows import
+// order, so this line's POSITION is the guarantee. See the module for detail.
+import './readableStreamAsyncIterator.js';
+
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 // Import with ?url to get the bundled worker path.
