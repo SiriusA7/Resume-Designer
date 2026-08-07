@@ -25,11 +25,17 @@ First Tauri build takes 3-5 minutes (Rust compilation). Subsequent builds are ca
 ## Prerequisites
 
 1. **Rust toolchain** — install via [rustup](https://rustup.rs/).
-2. **Node.js 20+**.
+2. **Node.js 22.13+** (or 24+). The floor is set by `pdfjs-dist` 6, whose own
+   `engines` is `>=22.13.0 || >=24`; it was taken for a high-severity advisory
+   and the 5.x line has no backport. `package.json` declares the same range, so
+   Node 20 now fails `npm install` under `engine-strict` rather than merely
+   warning.
 3. **macOS dev**: Xcode Command Line Tools (`xcode-select --install`).
 4. **Windows dev**: Visual Studio C++ Build Tools and the Windows SDK.
 
-> **Lockfile note:** regenerate `resume-designer/package-lock.json` with **npm 10** (the npm that ships with Node 20), **not npm 11**. npm 11 records esbuild's optional platform packages without the `optional` flag, which makes CI's `npm ci` fail with `EBADPLATFORM`. If your local Node is newer, run `npx npm@10 install` from `resume-designer/`. CI pins Node 20 / npm 10.
+> **Lockfile note:** regenerate `resume-designer/package-lock.json` with **npm 10**, **not npm 11**. npm 11 records esbuild's optional platform packages without the `optional` flag, which makes CI's `npm ci` fail with `EBADPLATFORM`. Node 24 ships npm 11, so run `npx npm@10 install` from `resume-designer/` — the pin is on the npm that writes the lockfile, not on the Node you develop with.
+>
+> This previously read "CI pins Node 20 / npm 10", which was already wrong: every workflow sets `node-version: 24`. Check `.github/workflows/*.yml` rather than this line if it matters.
 
 ## App Icons
 
