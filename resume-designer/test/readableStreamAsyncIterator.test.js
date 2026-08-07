@@ -122,6 +122,55 @@ describe('installReadableStreamAsyncIterator', () => {
     expect(installReadableStreamAsyncIterator({})).toBe(false);
   });
 
+  // Web IDL treats null as an empty options dictionary, so this is a valid call
+  // and works natively. Destructuring null throws, which would make it fail
+  // only where the polyfill is installed.
+  it('accepts null as an empty options dictionary', () => {
+    installReadableStreamAsyncIterator(target);
+    expect(() => new Stream(['a']).values(null)).not.toThrow();
+    expect(() => new Stream(['a']).values(undefined)).not.toThrow();
+    expect(() => new Stream(['a']).values()).not.toThrow();
+  });
+
+  // Native iterators serialize their operations: return() waits for an
+  // in-flight next() instead of cancelling underneath it. Measured against
+  // Node's native implementation with a chunk that arrives after next() is
+  // already waiting, native yields the chunk and a naive version yields
+  // { done: true } — silently losing data, and only in WebKit.
+  it('lets a pending next() finish before return() cancels', async () => {
+    installReadableStreamAsyncIterator(target);
+
+    // A stream whose chunk arrives only AFTER next() is already waiting.
+    //
+    // The fake must reproduce the one behaviour that makes this lossy:
+    // cancelling a real reader resolves any in-flight read() as
+    // { done: true }. Without that, return() cannot clobber the pending read
+    // and the test passes whether or not operations are serialized — which is
+    // precisely how the first version of this test asserted nothing.
+    let pendingRead = null;
+    const stream = new Stream([]);
+    stream.getReader = () => ({
+      read: () => new Promise((resolve) => { pendingRead = resolve; }),
+      releaseLock() { stream.lockReleased = true; },
+      async cancel() {
+        stream.cancelled = true;
+        if (pendingRead) { pendingRead({ done: true, value: undefined }); pendingRead = null; }
+      },
+    });
+
+    const it = stream[Symbol.asyncIterator]();
+    const pending = it.next();
+    const returned = it.return('early');
+
+    // Let the queued operations start so read() is genuinely in flight.
+    await new Promise((r) => { setTimeout(r, 0); });
+    if (pendingRead) pendingRead({ done: false, value: 'late' });
+
+    // The chunk must survive: return() queues behind the in-flight read.
+    await expect(pending).resolves.toEqual({ done: false, value: 'late' });
+    await expect(returned).resolves.toEqual({ done: true, value: 'early' });
+  });
+
   // Releasing the reader detaches it, so ANY later use throws "the reader is
   // not attached to a stream". A native async iterator instead stays
   // permanently done. Because this patches a global prototype, a consumer that

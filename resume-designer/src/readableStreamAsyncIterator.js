@@ -42,7 +42,13 @@ export function installReadableStreamAsyncIterator(target = globalThis) {
   // working implementation with ours would be a pure downgrade.
   if (Stream.prototype[Symbol.asyncIterator]) return false;
 
-  function values({ preventCancel = false } = {}) {
+  function values(options) {
+    // `options ?? {}` rather than a destructuring default: Web IDL treats null
+    // as an empty options dictionary, so `stream.values(null)` is valid and
+    // works natively. Destructuring null throws, which would make that call
+    // fail only where this polyfill is installed — the exact
+    // engine-specific divergence this module exists to remove.
+    const { preventCancel = false } = options ?? {};
     const reader = this.getReader();
     // Once the reader is released, ANY further use of it throws
     // "Invalid state: The reader is not attached to a stream". A native async
@@ -54,35 +60,62 @@ export function installReadableStreamAsyncIterator(target = globalThis) {
     let finished = false;
     const done = (value) => ({ done: true, value });
 
-    return {
-      async next() {
-        if (finished) return done(undefined);
-        try {
-          const result = await reader.read();
-          if (result.done) {
-            finished = true;
-            reader.releaseLock();
-          }
-          return result;
-        } catch (err) {
+    // Native iterators SERIALIZE their operations. `return()` called while a
+    // `next()` is still in flight waits for it; cancelling underneath instead
+    // resolves that pending `next()` as done and DISCARDS the chunk it was
+    // about to deliver. Measured against Node's native implementation with a
+    // chunk that arrives after `next()` is already waiting:
+    //
+    //   native: pending next() -> { value: 'late', done: false }
+    //   naive:  pending next() -> { done: true }            (chunk lost)
+    //
+    // Every operation therefore chains on the previous one. `then(op, op)` runs
+    // the next operation whether the previous settled or rejected, so one
+    // failed read cannot wedge the queue forever.
+    let ongoing = Promise.resolve();
+    const serialize = (op) => {
+      const result = ongoing.then(op, op);
+      ongoing = result.then(() => undefined, () => undefined);
+      return result;
+    };
+
+    async function nextOp() {
+      if (finished) return done(undefined);
+      try {
+        const result = await reader.read();
+        if (result.done) {
           finished = true;
           reader.releaseLock();
-          throw err;
         }
-      },
-      async return(value) {
-        // Called when a consumer breaks out early. Without this the reader
-        // stays locked and the stream can never be read again.
-        if (finished) return done(value);
+        return result;
+      } catch (err) {
         finished = true;
-        if (preventCancel) {
-          reader.releaseLock();
-        } else {
-          const cancelled = reader.cancel(value);
-          reader.releaseLock();
-          await cancelled;
-        }
-        return done(value);
+        reader.releaseLock();
+        throw err;
+      }
+    }
+
+    async function returnOp(value) {
+      // Called when a consumer breaks out early. Without this the reader stays
+      // locked and the stream can never be read again.
+      if (finished) return done(value);
+      finished = true;
+      if (preventCancel) {
+        reader.releaseLock();
+      } else {
+        const cancelled = reader.cancel(value);
+        reader.releaseLock();
+        await cancelled;
+      }
+      return done(value);
+    }
+
+    return {
+      next() {
+        return serialize(nextOp);
+      },
+      return(value) {
+        return serialize(() => returnOp(value));
       },
       [Symbol.asyncIterator]() {
         return this;
