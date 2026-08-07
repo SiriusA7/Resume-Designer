@@ -3,11 +3,30 @@
  * Parses resume content from various formats into structured data
  */
 
-import * as pdfjsLib from 'pdfjs-dist';
+// The LEGACY build, not the default one, and this is load-bearing.
+//
+// pdf.js 6 (taken for GHSA-hq66-cqwq-w95j, arbitrary JS execution on opening a
+// malicious PDF) polyfills `Iterator.prototype.join` like this:
+//
+//     if (typeof Iterator.prototype.join !== "function") { … }
+//
+// That dereferences the `Iterator` global BEFORE testing it, and there is no
+// `typeof Iterator !== "undefined"` guard. The `Iterator` global shipped in
+// Safari 18.4 (macOS 15.4); this app's floor is macOS 14.4, set in
+// tauri.conf.json. So on 14.4-15.3 the modern build throws
+// "Can't find variable: Iterator" at module evaluation and pdf.js never loads
+// at all — taking PDF import AND the export preview with it.
+//
+// Verified by deleting the global and importing each build: the modern build
+// fails with "Iterator is not defined", the legacy build (and its worker) load
+// clean, because core-js supplies the global first.
+//
+// So: legacy build keeps the security fix without moving the macOS floor. Both
+// import sites must stay on it — see pdfPreview.js.
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 
-// Configure PDF.js worker - use the worker from the npm package
-// Import with ?url to get the bundled worker path
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+// Import with ?url to get the bundled worker path.
+import pdfjsWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 /**
