@@ -113,7 +113,7 @@ npm run build
 npm run tauri:build
 ```
 
-**Prerequisites for the desktop build:** Node.js 20+, the [Rust toolchain](https://rustup.rs/), and platform build tools (Xcode Command Line Tools on macOS; Visual Studio C++ Build Tools + Windows SDK on Windows). The first Tauri build compiles Rust and takes a few minutes; later builds are cached.
+**Prerequisites for the desktop build:** Node.js 22.13+ (24 recommended — it is what CI runs, and what `.nvmrc` selects), the [Rust toolchain](https://rustup.rs/), and platform build tools (Xcode Command Line Tools on macOS; Visual Studio C++ Build Tools + Windows SDK on Windows). The first Tauri build compiles Rust and takes a few minutes; later builds are cached.
 
 Full build, signing, notarization, and release details are in [`resume-designer/TAURI.md`](resume-designer/TAURI.md).
 
