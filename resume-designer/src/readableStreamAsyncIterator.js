@@ -44,13 +44,28 @@ export function installReadableStreamAsyncIterator(target = globalThis) {
 
   function values({ preventCancel = false } = {}) {
     const reader = this.getReader();
+    // Once the reader is released, ANY further use of it throws
+    // "Invalid state: The reader is not attached to a stream". A native async
+    // iterator instead stays permanently done: `next()` keeps resolving
+    // `{ done: true }` and `return()` keeps succeeding, however many times they
+    // are called. Since this patches a global prototype, it has to behave the
+    // same — a consumer that probes an exhausted iterator must not get a
+    // TypeError only in WebKit.
+    let finished = false;
+    const done = (value) => ({ done: true, value });
+
     return {
       async next() {
+        if (finished) return done(undefined);
         try {
           const result = await reader.read();
-          if (result.done) reader.releaseLock();
+          if (result.done) {
+            finished = true;
+            reader.releaseLock();
+          }
           return result;
         } catch (err) {
+          finished = true;
           reader.releaseLock();
           throw err;
         }
@@ -58,6 +73,8 @@ export function installReadableStreamAsyncIterator(target = globalThis) {
       async return(value) {
         // Called when a consumer breaks out early. Without this the reader
         // stays locked and the stream can never be read again.
+        if (finished) return done(value);
+        finished = true;
         if (preventCancel) {
           reader.releaseLock();
         } else {
@@ -65,7 +82,7 @@ export function installReadableStreamAsyncIterator(target = globalThis) {
           reader.releaseLock();
           await cancelled;
         }
-        return { done: true, value };
+        return done(value);
       },
       [Symbol.asyncIterator]() {
         return this;

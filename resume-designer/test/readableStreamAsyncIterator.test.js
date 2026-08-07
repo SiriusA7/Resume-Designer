@@ -27,13 +27,23 @@ function makeStreamClass() {
       if (this._locked) throw new TypeError('already locked');
       this._locked = true;
       const stream = this;
+      // A released reader is DETACHED: the real one throws "Invalid state: The
+      // reader is not attached to a stream" on any further use. Modelling that
+      // is what makes the exhaustion tests real — with a no-op releaseLock they
+      // pass whether or not the polyfill tracks completion, which is exactly
+      // the trap this fixture fell into first time round.
+      let detached = false;
+      const assertAttached = () => {
+        if (detached) throw new TypeError('Invalid state: The reader is not attached to a stream');
+      };
       return {
         async read() {
+          assertAttached();
           if (!stream._chunks.length) return { done: true, value: undefined };
           return { done: false, value: stream._chunks.shift() };
         },
-        releaseLock() { stream._locked = false; stream.lockReleased = true; },
-        async cancel() { stream.cancelled = true; },
+        releaseLock() { detached = true; stream._locked = false; stream.lockReleased = true; },
+        async cancel() { assertAttached(); stream.cancelled = true; },
       };
     }
   };
@@ -110,5 +120,61 @@ describe('installReadableStreamAsyncIterator', () => {
 
   it('does nothing when there is no ReadableStream at all', () => {
     expect(installReadableStreamAsyncIterator({})).toBe(false);
+  });
+
+  // Releasing the reader detaches it, so ANY later use throws "the reader is
+  // not attached to a stream". A native async iterator instead stays
+  // permanently done. Because this patches a global prototype, a consumer that
+  // probes an exhausted iterator must not get a TypeError only in WebKit.
+  describe('stays permanently done once exhausted', () => {
+    it('keeps returning done from next()', async () => {
+      installReadableStreamAsyncIterator(target);
+      const it = new Stream(['a'])[Symbol.asyncIterator]();
+
+      expect(await it.next()).toEqual({ done: false, value: 'a' });
+      expect(await it.next()).toEqual({ done: true, value: undefined });
+      // The call that used to throw.
+      expect(await it.next()).toEqual({ done: true, value: undefined });
+      expect(await it.next()).toEqual({ done: true, value: undefined });
+    });
+
+    it('keeps resolving return() after exhaustion', async () => {
+      installReadableStreamAsyncIterator(target);
+      const it = new Stream(['a'])[Symbol.asyncIterator]();
+
+      await it.next();
+      await it.next();
+      expect(await it.return('x')).toEqual({ done: true, value: 'x' });
+      expect(await it.return('y')).toEqual({ done: true, value: 'y' });
+    });
+
+    it('does not cancel a stream that already ended on its own', async () => {
+      installReadableStreamAsyncIterator(target);
+      const stream = new Stream(['a']);
+      const it = stream[Symbol.asyncIterator]();
+
+      await it.next();
+      await it.next();
+      await it.return('x');
+
+      // The stream finished normally; return() must not retroactively cancel it.
+      expect(stream.cancelled).toBe(false);
+    });
+
+    it('stays done after a read error rather than throwing again', async () => {
+      installReadableStreamAsyncIterator(target);
+      const stream = new Stream(['a']);
+      const it = stream[Symbol.asyncIterator]();
+      stream.getReader = () => { throw new Error('unreachable'); };
+
+      // Force the read path to fail on the reader this iterator already holds.
+      const broken = new Stream(['a']);
+      const it2 = broken[Symbol.asyncIterator]();
+      broken._chunks = null; // makes read() throw inside next()
+
+      await expect(it2.next()).rejects.toThrow();
+      expect(await it2.next()).toEqual({ done: true, value: undefined });
+      expect(await it.next()).toEqual({ done: false, value: 'a' });
+    });
   });
 });
