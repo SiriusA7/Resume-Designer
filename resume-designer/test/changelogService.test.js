@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   composeUpdateNotes,
+  hasDigest,
   historyReachesBack,
   justUpdated,
   MAX_MISSED_RELEASES,
@@ -350,5 +351,43 @@ describe('composeUpdateNotes with a truncated history', () => {
     const a = composeUpdateNotes([mkRelease('2.0.0'), mkRelease('1.16.0')]);
     const b = composeUpdateNotes([mkRelease('2.0.0'), mkRelease('1.16.0')], { complete: true });
     expect(a).toBe(b);
+  });
+});
+
+// updateNotes.jsx decides whether to offer its "Full changelog" expander with
+// `full !== notes`. That was sound while `notes` WAS the current release's
+// summary — an unsplit body made the two equal and the expander stayed hidden.
+// Once `notes` became a composed stack of several releases, an unsplit body
+// would make them differ and open an expander that just repeats what the panel
+// already shows. The call site gates on this predicate instead.
+describe('hasDigest', () => {
+  it('true when the body split into a distinct summary and full log', () => {
+    expect(hasDigest({ summary: '## On Paper 2.0.0\n- a', full: '### Fixes\n- b' })).toBe(true);
+  });
+
+  it('false for a legacy body, where splitReleaseBody returns summary === full', () => {
+    const body = '## Resume Designer 1.15.0\n\n### Fixes\n- a';
+    expect(hasDigest(splitReleaseBody(body))).toBe(false);
+  });
+
+  it('false for the malformed-marker fallback, which degrades both fields', () => {
+    const malformed = '## On Paper 9.9.9\n\n<!-- full-log -->\n<details><summary>Full changelog</summary>\n</details>';
+    expect(hasDigest(splitReleaseBody(malformed))).toBe(false);
+  });
+
+  it('false when there is no full log at all', () => {
+    expect(hasDigest({ summary: 'x', full: '' })).toBe(false);
+    expect(hasDigest(null)).toBe(false);
+  });
+
+  // The reachable shape of the bug: an unsplit CURRENT release plus at least
+  // one skipped release, where the composed notes necessarily differ from it.
+  it('is what keeps an unsplit current release from opening a duplicate expander', () => {
+    const legacyCurrent = splitReleaseBody('## Resume Designer 1.15.0\n\n### Fixes\n- a');
+    const currentRel = { version: '1.15.0', ...legacyCurrent, date: null };
+    const notes = composeUpdateNotes([currentRel, mkRelease('1.14.0')]);
+    const full = hasDigest(currentRel) ? currentRel.full : '';
+    expect(notes).not.toBe(currentRel.full);      // the dialog's test would pass...
+    expect(full).toBe('');                         // ...so the gate must be here
   });
 });

@@ -237,7 +237,7 @@ function labelled(rel) {
 // v1.15.0 is like this, and reprinting three of them ran past 11,000
 // characters. Same test updateNotes.jsx uses to decide whether to offer its
 // expander.
-const hasDigest = (rel) => !!rel?.full && rel.full !== rel.summary;
+export const hasDigest = (rel) => !!rel?.full && rel.full !== rel.summary;
 
 // Past a handful, naming each version is noise — a long-dormant user would get
 // 21 numbers in a row. Give the count and the span instead, which still says
@@ -310,9 +310,17 @@ export async function maybeShowPostUpdateChangelog() {
       notes: composeUpdateNotes(selected, {
         complete: historyReachesBack(releases, seen),
       }),
-      // The expander stays scoped to THIS build's full changelog — stacking
-      // every skipped release's full log would bury it.
-      full: selected[0].full,
+      // Scoped to THIS build's full changelog — stacking every skipped
+      // release's full log would bury it.
+      //
+      // Gated on hasDigest rather than left to the dialog, which decides via
+      // `full !== notes`. That comparison was sound while `notes` WAS the
+      // current release's summary: an unsplit body made the two equal and the
+      // expander stayed hidden. Now that `notes` is a composed stack, an
+      // unsplit body would make them differ and open an expander repeating
+      // notes the panel already shows. Same predicate that decides whether a
+      // skipped release is rendered or merely named.
+      full: hasDigest(selected[0]) ? selected[0].full : '',
       mode: 'whatsnew',
     });
   }
