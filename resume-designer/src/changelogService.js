@@ -243,10 +243,7 @@ export const hasDigest = (rel) => !!rel?.full && rel.full !== rel.summary;
 // 21 numbers in a row. Give the count and the span instead, which still says
 // plainly how much they missed.
 const MAX_NAMED_VERSIONS = 6;
-const describeVersions = (rels, complete) => {
-  // Truncated history: we know some releases were skipped but not how many, so
-  // say exactly that. A count or a range here would be confident and wrong.
-  if (!complete) return 'several earlier releases';
+const describeVersions = (rels) => {
   const v = rels.map((r) => r.version);
   if (v.length === 1) return v[0];
   if (v.length <= MAX_NAMED_VERSIONS) return `${v.slice(0, -1).join(', ')} and ${v[v.length - 1]}`;
@@ -266,11 +263,22 @@ export function composeUpdateNotes(selected = [], { complete = true } = {}) {
 
   const parts = [labelled(current), '---', '_Also new since your last update:_'];
   parts.push(...readable.map(labelled));
-  if (named.length || !complete) {
-    // "the details" rather than a pronoun, so it reads correctly for one
-    // skipped release and for twenty.
+  if (!complete) {
+    // Deliberately NOT pointing at Settings → What's new here. It calls the
+    // same single-page fetchReleaseHistory() with no bundled base, so it can
+    // show nothing this panel could not — sending someone there for releases
+    // it also lacks is a worse answer than naming the limit. No count either:
+    // a truncated page cannot know one.
     parts.push(
-      `You also passed through ${describeVersions(named, complete)} — `
+      'You also passed through several earlier releases, including some '
+      + 'further back than the app keeps notes for.',
+    );
+  } else if (named.length) {
+    // "the details" rather than a pronoun, so it reads correctly for one
+    // skipped release and for twenty. Safe to point at Settings: a complete
+    // history means every named release is in the same fetch it renders.
+    parts.push(
+      `You also passed through ${describeVersions(named)} — `
       + "see Settings → What's new for the details.",
     );
   }

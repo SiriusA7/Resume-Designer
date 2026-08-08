@@ -167,6 +167,15 @@ const mkRelease = (version, summary = `## On Paper ${version}\n\n- thing`) => ({
   version, summary, full: `full ${version}`, date: null,
 });
 
+// Everything up to and including v1.15.0 predates the digest pipeline, so its
+// "summary" is the whole raw grouped changelog — summary === full, i.e. no
+// digest. Reprinting three of those ran past 11,000 characters against live
+// release data.
+const legacy = (version) => {
+  const body = `## Resume Designer ${version}\n\n### ✨ New features\n${'- a commit subject\n'.repeat(40)}`;
+  return { version, summary: body, full: body, date: null };
+};
+
 // Deliberately NOT semver-sorted. maybeShowPostUpdateChangelog feeds
 // releasesSince the output of fetchReleaseHistory(), which only maps the GitHub
 // payload — it never sorts, so the order is GitHub's (published-date desc), and
@@ -263,14 +272,6 @@ describe('composeUpdateNotes', () => {
     expect(composeUpdateNotes([])).toBe('');
   });
 
-  // Everything up to and including v1.15.0 predates the digest pipeline, so its
-  // "summary" is the whole raw grouped changelog. Reprinting three of those ran
-  // past 11,000 characters against live release data.
-  const legacy = (version) => {
-    const body = `## Resume Designer ${version}\n\n### ✨ New features\n${'- a commit subject\n'.repeat(40)}`;
-    return { version, summary: body, full: body, date: null }; // no split => no digest
-  };
-
   it('names pre-digest releases instead of reprinting their raw changelog', () => {
     const out = composeUpdateNotes([mkRelease('2.0.0'), mkRelease('1.16.0'), legacy('1.15.0')]);
     expect(out).toContain('## On Paper 1.16.0');       // digest: rendered
@@ -344,6 +345,20 @@ describe('composeUpdateNotes with a truncated history', () => {
   it('still mentions skipped releases when none of them came back in the fetch', () => {
     const out = composeUpdateNotes([mkRelease('2.0.0')], { complete: false });
     expect(out).toContain('several earlier releases');
+  });
+
+  // Settings → What's new calls the same single-page fetchReleaseHistory() with
+  // no bundled base, so it cannot show anything this panel could not. Sending
+  // someone there for releases it also lacks promises a recovery path that does
+  // not exist.
+  it('does not point at Settings for releases Settings also lacks', () => {
+    const out = composeUpdateNotes([mkRelease('2.0.0'), mkRelease('1.16.0')], { complete: false });
+    expect(out).not.toContain("Settings → What's new");
+    expect(out).toContain('further back than the app keeps notes for');
+  });
+
+  it('does point at Settings when the history is complete', () => {
+    const out = composeUpdateNotes([mkRelease('2.0.0'), legacy('1.15.0')], { complete: true });
     expect(out).toContain("Settings → What's new");
   });
 
