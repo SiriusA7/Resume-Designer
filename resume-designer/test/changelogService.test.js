@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  composeUpdateNotes,
   justUpdated,
+  MAX_MISSED_RELEASES,
   mergeReleases,
   normalizeRelease,
+  releasesSince,
   splitReleaseBody,
 } from '../src/changelogService.js';
 
@@ -150,5 +153,152 @@ describe('splitReleaseBody malformed bodies', () => {
     const r = splitReleaseBody(body);
     expect(r.summary).toBe(body);
     expect(r.full).toBe(body);
+  });
+});
+
+// The panel used to show exactly ONE release — whichever matched the running
+// version — because `seen` was read only as a boolean by justUpdated(). That
+// inverted the intent: the further behind you were, the less you were told.
+// Someone going 1.15.0 -> 2.0.1 got a security patch and a PDF fix, and never
+// learned the app had been renamed to On Paper in 2.0.0.
+const mkRelease = (version, summary = `## On Paper ${version}\n\n- thing`) => ({
+  version, summary, full: `full ${version}`, date: null,
+});
+
+// Deliberately NOT semver-sorted. maybeShowPostUpdateChangelog feeds
+// releasesSince the output of fetchReleaseHistory(), which only maps the GitHub
+// payload — it never sorts, so the order is GitHub's (published-date desc), and
+// the rolling `next` tag is republished on every beta so it floats to the top.
+// Only mergeReleases() sorts, and that is the history view's path, not this one.
+// So releasesSince must impose its own order rather than trusting the input.
+// Scrambled on purpose: if this were already descending, the two releases the
+// main case selects would come out ordered by luck and the sort would be
+// untested. Here they are picked up ascending, so only the sort saves them.
+const HISTORY = [
+  mkRelease('1.16.0'),
+  mkRelease('2.0.1-next.141'),
+  mkRelease('1.14.0'),
+  mkRelease('2.0.1'),
+  mkRelease('1.15.0'),
+  mkRelease('2.0.0'),
+];
+
+describe('releasesSince', () => {
+  const versions = (list) => list.map((r) => r.version);
+
+  it('returns every release the user skipped, current one first', () => {
+    const got = releasesSince(HISTORY, '1.15.0', '2.0.1');
+    expect(versions(got)).toEqual(['2.0.1', '2.0.0', '1.16.0']);
+  });
+
+  it('excludes the release already seen, and anything older', () => {
+    const got = releasesSince(HISTORY, '1.15.0', '2.0.1');
+    expect(versions(got)).not.toContain('1.15.0');
+    expect(versions(got)).not.toContain('1.14.0');
+  });
+
+  it('returns just the current release for a normal single-step update', () => {
+    expect(versions(releasesSince(HISTORY, '2.0.0', '2.0.1'))).toEqual(['2.0.1']);
+  });
+
+  // The rolling `next` tag is always in the fetched list. A stable user must
+  // never be shown beta notes for a build they are not running.
+  it('hides prereleases from a stable user', () => {
+    const got = releasesSince(HISTORY, '1.15.0', '2.0.1');
+    expect(versions(got).some((v) => v.includes('-next.'))).toBe(false);
+  });
+
+  it('keeps prereleases for a user already on the beta channel', () => {
+    const got = releasesSince(HISTORY, '2.0.1', '2.0.1-next.141');
+    expect(versions(got)).toContain('2.0.1-next.141');
+  });
+
+  // Selection is uncapped; composeUpdateNotes decides how many are worth
+  // rendering. Capping here would drop releases before anything could tell the
+  // user they existed.
+  it('returns every skipped release, uncapped', () => {
+    const long = [mkRelease('9.0.0'), ...Array.from({ length: 12 }, (_, i) => mkRelease(`8.0.${12 - i}`))];
+    const got = releasesSince(long, '8.0.0', '9.0.0');
+    expect(got.length).toBe(13);
+    expect(got[0].version).toBe('9.0.0');
+  });
+
+  it('shows nothing when the running version has no release entry', () => {
+    expect(releasesSince(HISTORY, '1.15.0', '3.1.4')).toEqual([]);
+  });
+
+  it('falls back to the current release alone when seen is missing or junk', () => {
+    expect(versions(releasesSince(HISTORY, null, '2.0.1'))).toEqual(['2.0.1']);
+    expect(versions(releasesSince(HISTORY, 'not-a-version', '2.0.1'))).toEqual(['2.0.1']);
+  });
+
+  it('tolerates an empty history', () => {
+    expect(releasesSince([], '1.15.0', '2.0.1')).toEqual([]);
+  });
+});
+
+describe('composeUpdateNotes', () => {
+  it('passes a single release through unchanged', () => {
+    expect(composeUpdateNotes([mkRelease('2.0.1')])).toBe(mkRelease('2.0.1').summary);
+  });
+
+  it('stacks skipped releases under the current one', () => {
+    const out = composeUpdateNotes([mkRelease('2.0.1'), mkRelease('2.0.0'), mkRelease('1.16.0')]);
+    expect(out).toContain('## On Paper 2.0.1');
+    expect(out).toContain('## On Paper 2.0.0');
+    expect(out).toContain('## On Paper 1.16.0');
+    expect(out).toContain('Also new since your last update');
+    // Current release leads.
+    expect(out.indexOf('2.0.1')).toBeLessThan(out.indexOf('2.0.0'));
+  });
+
+  it('synthesises a heading for a body that has none, so a stack stays labelled', () => {
+    const out = composeUpdateNotes([mkRelease('2.0.1'), mkRelease('2.0.0', '- bare bullet, no heading')]);
+    expect(out).toContain('## 2.0.0');
+  });
+
+  it('returns empty for no releases', () => {
+    expect(composeUpdateNotes([])).toBe('');
+  });
+
+  // Everything up to and including v1.15.0 predates the digest pipeline, so its
+  // "summary" is the whole raw grouped changelog. Reprinting three of those ran
+  // past 11,000 characters against live release data.
+  const legacy = (version) => {
+    const body = `## Resume Designer ${version}\n\n### ✨ New features\n${'- a commit subject\n'.repeat(40)}`;
+    return { version, summary: body, full: body, date: null }; // no split => no digest
+  };
+
+  it('names pre-digest releases instead of reprinting their raw changelog', () => {
+    const out = composeUpdateNotes([mkRelease('2.0.0'), mkRelease('1.16.0'), legacy('1.15.0')]);
+    expect(out).toContain('## On Paper 1.16.0');       // digest: rendered
+    expect(out).toContain('You also passed through 1.15.0');
+    expect(out).not.toContain('a commit subject');     // raw log: not reprinted
+    expect(out.length).toBeLessThan(2000);
+  });
+
+  it('stacks at most MAX_MISSED_RELEASES digests and names the overflow', () => {
+    const missed = Array.from({ length: 7 }, (_, i) => mkRelease(`1.${20 - i}.0`));
+    const out = composeUpdateNotes([mkRelease('2.0.0'), ...missed]);
+    const rendered = missed.filter((r) => out.includes(`## On Paper ${r.version}\n`));
+    expect(rendered.length).toBe(MAX_MISSED_RELEASES);
+    // The remainder is named rather than silently dropped.
+    for (const r of missed.slice(MAX_MISSED_RELEASES)) {
+      expect(out).toContain(r.version);
+    }
+  });
+
+  it('lists a few named versions readably', () => {
+    const out = composeUpdateNotes([mkRelease('2.0.0'), legacy('1.15.0'), legacy('1.14.0')]);
+    expect(out).toContain('1.15.0 and 1.14.0');
+  });
+
+  // A long-dormant user would otherwise get 21 version numbers in a row.
+  it('summarises the span instead of naming every version past a handful', () => {
+    const old = Array.from({ length: 21 }, (_, i) => legacy(`1.${21 - i}.0`));
+    const out = composeUpdateNotes([mkRelease('2.0.0'), ...old]);
+    expect(out).toContain('21 earlier releases, from 1.21.0 back to 1.1.0');
+    expect(out).not.toContain('1.20.0, 1.19.0');   // not an inline dump
+    expect(out.length).toBeLessThan(1200);
   });
 });
