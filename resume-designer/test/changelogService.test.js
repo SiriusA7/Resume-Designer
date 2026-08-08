@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   composeUpdateNotes,
+  historyReachesBack,
   justUpdated,
   MAX_MISSED_RELEASES,
   mergeReleases,
@@ -300,5 +301,54 @@ describe('composeUpdateNotes', () => {
     expect(out).toContain('21 earlier releases, from 1.21.0 back to 1.1.0');
     expect(out).not.toContain('1.20.0, 1.19.0');   // not an inline dump
     expect(out.length).toBeLessThan(1200);
+  });
+});
+
+// fetchReleaseHistory() makes ONE request, so a user further behind than its
+// page size gets a truncated list. Harmless while this file only looked for one
+// matching release; not harmless once composeUpdateNotes started reporting HOW
+// MANY releases were skipped, because it would state a count it cannot know.
+describe('historyReachesBack', () => {
+  it('true when the fetched page includes the seen version', () => {
+    expect(historyReachesBack(HISTORY, '1.15.0')).toBe(true);
+  });
+
+  it('true when it reaches past the seen version', () => {
+    expect(historyReachesBack(HISTORY, '1.14.5')).toBe(true);
+  });
+
+  it('false when every fetched release is newer than the seen version', () => {
+    expect(historyReachesBack(HISTORY, '1.2.0')).toBe(false);
+  });
+
+  it('true when there is no seen version to reach back to', () => {
+    expect(historyReachesBack(HISTORY, null)).toBe(true);
+    expect(historyReachesBack(HISTORY, 'junk')).toBe(true);
+  });
+
+  it('false for an empty history with a real seen version', () => {
+    expect(historyReachesBack([], '1.15.0')).toBe(false);
+  });
+});
+
+describe('composeUpdateNotes with a truncated history', () => {
+  it('does not claim a count it cannot know', () => {
+    const out = composeUpdateNotes(
+      [mkRelease('2.0.0'), mkRelease('1.16.0')], { complete: false },
+    );
+    expect(out).toContain('several earlier releases');
+    expect(out).not.toMatch(/\d+ earlier releases/);
+  });
+
+  it('still mentions skipped releases when none of them came back in the fetch', () => {
+    const out = composeUpdateNotes([mkRelease('2.0.0')], { complete: false });
+    expect(out).toContain('several earlier releases');
+    expect(out).toContain("Settings → What's new");
+  });
+
+  it('defaults to complete, so existing callers are unchanged', () => {
+    const a = composeUpdateNotes([mkRelease('2.0.0'), mkRelease('1.16.0')]);
+    const b = composeUpdateNotes([mkRelease('2.0.0'), mkRelease('1.16.0')], { complete: true });
+    expect(a).toBe(b);
   });
 });

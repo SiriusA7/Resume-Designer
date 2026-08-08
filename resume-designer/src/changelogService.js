@@ -7,8 +7,13 @@
  * dynamic-imports persistence/native) so the unit tests import cleanly.
  */
 
+// 100 is GitHub's per_page maximum. Deliberately ONE request rather than
+// paginating: the unauthenticated API allows 60 requests per hour per IP, and
+// this runs on launch, so four pages of 25 would burn the budget four times as
+// fast for the same data. Anyone further behind than 100 releases is handled by
+// historyReachesBack() below rather than by fetching more.
 const RELEASES_API =
-  'https://api.github.com/repos/ashproto/Resume-Designer/releases?per_page=30';
+  'https://api.github.com/repos/ashproto/Resume-Designer/releases?per_page=100';
 
 // Base for resolving relative links in fetched release notes. Release-note
 // relative links are almost always repo FILE paths (README.md, docs/*.md), and
@@ -142,6 +147,29 @@ const SEEN_KEY = 'changelogLastSeenVersion';
 export const MAX_MISSED_RELEASES = 4;
 
 /**
+ * Whether the fetched page reaches back far enough to contain the version the
+ * user last saw — i.e. whether the skipped interval is knowable at all.
+ *
+ * fetchReleaseHistory() makes a single request, so someone further behind than
+ * its page size gets a truncated list. That was harmless while this file only
+ * ever looked for ONE matching release; it stopped being harmless the moment
+ * composeUpdateNotes started reporting how many releases were skipped, because
+ * a truncated list would make it state a count it cannot know. When this
+ * returns false the count is dropped rather than guessed.
+ *
+ * @returns {boolean} true when nothing is missing, or when there is no seen
+ *                    version to reach back to.
+ */
+export function historyReachesBack(releases = [], seenVersion) {
+  const from = sortKey(seenVersion);
+  if (!from) return true;
+  return releases.some((r) => {
+    const k = sortKey(r.version);
+    return !!k && cmpKeys(k, from) <= 0;
+  });
+}
+
+/**
  * The releases to show after an update, newest first, with the release the app
  * is NOW RUNNING at index 0 followed by any the user skipped over.
  *
@@ -215,17 +243,22 @@ const hasDigest = (rel) => !!rel?.full && rel.full !== rel.summary;
 // 21 numbers in a row. Give the count and the span instead, which still says
 // plainly how much they missed.
 const MAX_NAMED_VERSIONS = 6;
-const describeVersions = (rels) => {
+const describeVersions = (rels, complete) => {
+  // Truncated history: we know some releases were skipped but not how many, so
+  // say exactly that. A count or a range here would be confident and wrong.
+  if (!complete) return 'several earlier releases';
   const v = rels.map((r) => r.version);
   if (v.length === 1) return v[0];
   if (v.length <= MAX_NAMED_VERSIONS) return `${v.slice(0, -1).join(', ')} and ${v[v.length - 1]}`;
   return `${v.length} earlier releases, from ${v[0]} back to ${v[v.length - 1]}`;
 };
 
-export function composeUpdateNotes(selected = []) {
+export function composeUpdateNotes(selected = [], { complete = true } = {}) {
   if (!selected.length) return '';
   const [current, ...missed] = selected;
-  if (!missed.length) return current.summary || '';
+  // An incomplete history still has releases to mention even when none of them
+  // came back in the fetch, so this must not short-circuit on an empty list.
+  if (!missed.length && complete) return current.summary || '';
 
   const readable = missed.filter(hasDigest).slice(0, MAX_MISSED_RELEASES);
   // Named, not dropped — a silent cap reads as "that was everything".
@@ -233,11 +266,11 @@ export function composeUpdateNotes(selected = []) {
 
   const parts = [labelled(current), '---', '_Also new since your last update:_'];
   parts.push(...readable.map(labelled));
-  if (named.length) {
+  if (named.length || !complete) {
     // "the details" rather than a pronoun, so it reads correctly for one
     // skipped release and for twenty.
     parts.push(
-      `You also passed through ${describeVersions(named)} — `
+      `You also passed through ${describeVersions(named, complete)} — `
       + "see Settings → What's new for the details.",
     );
   }
@@ -274,7 +307,9 @@ export async function maybeShowPostUpdateChangelog() {
     const { showUpdateNotes } = await import('./components/ui/updateNotes.jsx');
     await showUpdateNotes({
       version: current,
-      notes: composeUpdateNotes(selected),
+      notes: composeUpdateNotes(selected, {
+        complete: historyReachesBack(releases, seen),
+      }),
       // The expander stays scoped to THIS build's full changelog — stacking
       // every skipped release's full log would bury it.
       full: selected[0].full,
