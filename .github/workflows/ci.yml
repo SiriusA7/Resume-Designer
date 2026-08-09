@@ -68,10 +68,11 @@ jobs:
         run: npm run build
         working-directory: resume-designer
 
-      - name: Install Rust toolchain (+ clippy)
+      - name: Install Rust toolchain (+ clippy, iOS target)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: aarch64-apple-ios
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -80,6 +81,11 @@ jobs:
 
       - name: cargo check
         run: cargo check --manifest-path resume-designer/src-tauri/Cargo.toml
+
+      # The iOS target must never silently regress. This is a compile-only
+      # check — no Xcode project, no signing, no simulator.
+      - name: cargo check (iOS)
+        run: cargo check --manifest-path resume-designer/src-tauri/Cargo.toml --target aarch64-apple-ios
 
       - name: clippy
         run: cargo clippy --manifest-path resume-designer/src-tauri/Cargo.toml -- -D warnings
