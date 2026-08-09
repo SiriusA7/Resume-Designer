@@ -12,8 +12,19 @@
  * The worker is loaded via Vite's `?url` — the same setup resumeParser.js uses
  * and which already ships in the packaged app.
  */
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+// The LEGACY build, deliberately — see resumeParser.js for the full reasoning.
+// Short version: pdf.js 6's modern build dereferences the `Iterator` global
+// without guarding it, and that global is Safari 18.4 / macOS 15.4. The app's
+// floor is macOS 14.4, so the modern build would throw at module load for every
+// user between those versions. The legacy build polyfills it and loads fine.
+// MUST precede the pdf.js import — see resumeParser.js and the module itself.
+// This file does not extract text, but it is a second entry point into pdf.js
+// and the patch is idempotent, so installing from both is cheaper than
+// reasoning about which one loaded first.
+import './readableStreamAsyncIterator.js';
+
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import pdfjsWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -83,7 +94,13 @@ export async function renderPdfPreview(base64, container, shouldCancel) {
     canvas.style.boxShadow = '0 1px 6px rgba(0, 0, 0, 0.18)';
     canvas.style.borderRadius = '2px';
 
-    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    // `canvas`, not `canvasContext`. pdf.js 6 made the canvas the primary
+    // parameter and demoted `canvasContext` to a back-compat path — its own
+    // docs say "it is recommended to use the `canvas` parameter instead", and
+    // that path additionally requires `canvas: null` to be honoured explicitly.
+    // Passing the element directly is the supported shape and avoids depending
+    // on compatibility handling that a later major can drop.
+    await page.render({ canvas, viewport }).promise;
     if (shouldCancel?.()) break;
     container.appendChild(canvas);
   }

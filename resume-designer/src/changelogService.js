@@ -7,8 +7,13 @@
  * dynamic-imports persistence/native) so the unit tests import cleanly.
  */
 
+// 100 is GitHub's per_page maximum. Deliberately ONE request rather than
+// paginating: the unauthenticated API allows 60 requests per hour per IP, and
+// this runs on launch, so four pages of 25 would burn the budget four times as
+// fast for the same data. Anyone further behind than 100 releases is handled by
+// historyReachesBack() below rather than by fetching more.
 const RELEASES_API =
-  'https://api.github.com/repos/ashproto/Resume-Designer/releases?per_page=30';
+  'https://api.github.com/repos/ashproto/Resume-Designer/releases?per_page=100';
 
 // Base for resolving relative links in fetched release notes. Release-note
 // relative links are almost always repo FILE paths (README.md, docs/*.md), and
@@ -91,17 +96,23 @@ function sortKey(version) {
   if (!m) return null;
   return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? Infinity : Number(m[4])];
 }
+// Ascending compare of two sortKey tuples. Returns -1/0/1 rather than a
+// difference because the prerelease slot holds Infinity for stable builds, and
+// Infinity - Infinity is NaN.
+function cmpKeys(ka, kb) {
+  for (let i = 0; i < 4; i += 1) {
+    // Infinity !== Infinity is false, so equal slots fall through.
+    if (ka[i] !== kb[i]) return ka[i] < kb[i] ? -1 : 1;
+  }
+  return 0;
+}
 function bySemverDesc(a, b) {
   const ka = sortKey(a.version);
   const kb = sortKey(b.version);
   if (!ka && !kb) return 0;
   if (!ka) return 1;
   if (!kb) return -1;
-  for (let i = 0; i < 4; i += 1) {
-    // Infinity !== Infinity is false, so equal slots fall through (no NaN).
-    if (ka[i] !== kb[i]) return kb[i] - ka[i];
-  }
-  return 0;
+  return -cmpKeys(ka, kb);
 }
 
 // Merge bundled (offline base) with fetched (newer/live); fetched wins on
@@ -130,6 +141,150 @@ export async function fetchReleaseHistory() {
 
 const SEEN_KEY = 'changelogLastSeenVersion';
 
+// How many skipped releases to stack under the current one. Someone returning
+// after a long gap should get the story, not a wall of text — the rest stay one
+// click away in Settings → What's new.
+export const MAX_MISSED_RELEASES = 4;
+
+/**
+ * Whether the fetched page reaches back far enough to contain the version the
+ * user last saw — i.e. whether the skipped interval is knowable at all.
+ *
+ * fetchReleaseHistory() makes a single request, so someone further behind than
+ * its page size gets a truncated list. That was harmless while this file only
+ * ever looked for ONE matching release; it stopped being harmless the moment
+ * composeUpdateNotes started reporting how many releases were skipped, because
+ * a truncated list would make it state a count it cannot know. When this
+ * returns false the count is dropped rather than guessed.
+ *
+ * @returns {boolean} true when nothing is missing, or when there is no seen
+ *                    version to reach back to.
+ */
+export function historyReachesBack(releases = [], seenVersion) {
+  const from = sortKey(seenVersion);
+  if (!from) return true;
+  return releases.some((r) => {
+    const k = sortKey(r.version);
+    return !!k && cmpKeys(k, from) <= 0;
+  });
+}
+
+/**
+ * The releases to show after an update, newest first, with the release the app
+ * is NOW RUNNING at index 0 followed by any the user skipped over.
+ *
+ * Until this existed the panel showed exactly one release — whichever matched
+ * the running version — because `seen` was only ever read as a boolean by
+ * justUpdated(). That inverted the intent: the further behind you were, the
+ * less you were told. Someone going 1.15.0 -> 2.0.1 saw a security patch and a
+ * PDF fix, and never learned the app had been renamed to On Paper in 2.0.0.
+ *
+ * @param {Array<{version:string,summary:string,full:string}>} releases newest-first
+ * @param {string|null} seenVersion  last version recorded on this machine
+ * @param {string} currentVersion    version now running
+ * @returns {Array} current release first, then skipped ones descending; [] if
+ *                  the current release is not in `releases` (nothing to show —
+ *                  matches the old behaviour of staying silent).
+ */
+export function releasesSince(releases = [], seenVersion, currentVersion) {
+  // Lead with the release actually running. Finding it explicitly (rather than
+  // taking whatever sorts highest) is what keeps a build with no release entry
+  // silent — a local build or an unpublished version would otherwise present
+  // the newest OLDER release as if it were its own.
+  const current = releases.find((r) => r.version === currentVersion);
+  if (!current) return [];
+
+  const to = sortKey(currentVersion);
+  const from = sortKey(seenVersion);
+  // No usable record of where they came from: show this build alone, which is
+  // exactly what the panel did before skipped releases were handled at all.
+  if (!to || !from) return [current];
+
+  // The rolling `next` release is always in the fetched list. Someone on stable
+  // must never be shown notes for a beta build they are not running; someone
+  // already on the beta channel should still see them.
+  const stableOnly = to[3] === Infinity;
+
+  const missed = releases
+    .filter((r) => {
+      if (r === current) return false;
+      const k = sortKey(r.version);
+      if (!k) return false;
+      if (stableOnly && k[3] !== Infinity) return false;
+      // Strictly after what they last saw, strictly before what they now run.
+      return cmpKeys(k, from) > 0 && cmpKeys(k, to) < 0;
+    })
+    .sort(bySemverDesc);
+
+  // Uncapped on purpose — this picks WHICH releases apply; composeUpdateNotes
+  // decides how many are worth rendering. Capping here would drop releases
+  // before anything could tell the user they existed.
+  return [current, ...missed];
+}
+
+// Stack the selected releases into one markdown body for the dialog. Each
+// release body already opens with its own `## On Paper x.y.z` heading, so they
+// self-label; only a body missing one needs a heading synthesised.
+function labelled(rel) {
+  const summary = rel?.summary || '';
+  return /^\s*##\s+/m.test(summary) ? summary : `## ${rel?.version || ''}\n\n${summary}`.trim();
+}
+
+// A release published before the digest pipeline has no summary/full split, so
+// splitReleaseBody hands back its entire raw grouped changelog as the "summary"
+// — every commit subject under ### headings. That is right for the history
+// view and a wall of text stacked here: every release up to and including
+// v1.15.0 is like this, and reprinting three of them ran past 11,000
+// characters. Same test updateNotes.jsx uses to decide whether to offer its
+// expander.
+export const hasDigest = (rel) => !!rel?.full && rel.full !== rel.summary;
+
+// Past a handful, naming each version is noise — a long-dormant user would get
+// 21 numbers in a row. Give the count and the span instead, which still says
+// plainly how much they missed.
+const MAX_NAMED_VERSIONS = 6;
+const describeVersions = (rels) => {
+  const v = rels.map((r) => r.version);
+  if (v.length === 1) return v[0];
+  if (v.length <= MAX_NAMED_VERSIONS) return `${v.slice(0, -1).join(', ')} and ${v[v.length - 1]}`;
+  return `${v.length} earlier releases, from ${v[0]} back to ${v[v.length - 1]}`;
+};
+
+export function composeUpdateNotes(selected = [], { complete = true } = {}) {
+  if (!selected.length) return '';
+  const [current, ...missed] = selected;
+  // An incomplete history still has releases to mention even when none of them
+  // came back in the fetch, so this must not short-circuit on an empty list.
+  if (!missed.length && complete) return current.summary || '';
+
+  const readable = missed.filter(hasDigest).slice(0, MAX_MISSED_RELEASES);
+  // Named, not dropped — a silent cap reads as "that was everything".
+  const named = missed.filter((r) => !readable.includes(r));
+
+  const parts = [labelled(current), '---', '_Also new since your last update:_'];
+  parts.push(...readable.map(labelled));
+  if (!complete) {
+    // Deliberately NOT pointing at Settings → What's new here. It calls the
+    // same single-page fetchReleaseHistory() with no bundled base, so it can
+    // show nothing this panel could not — sending someone there for releases
+    // it also lacks is a worse answer than naming the limit. No count either:
+    // a truncated page cannot know one.
+    parts.push(
+      'You also passed through several earlier releases, including some '
+      + 'further back than the app keeps notes for.',
+    );
+  } else if (named.length) {
+    // "the details" rather than a pronoun, so it reads correctly for one
+    // skipped release and for twenty. Safe to point at Settings: a complete
+    // history means every named release is in the same fetch it renders.
+    parts.push(
+      `You also passed through ${describeVersions(named)} — `
+      + "see Settings → What's new for the details.",
+    );
+  }
+  return parts.join('\n\n');
+}
+
 // On launch: if the running version differs from the last one we recorded, an
 // update landed — show its notes once, then record the new version. First run
 // records silently (justUpdated() is false without a prior record). App modules
@@ -154,10 +309,28 @@ export async function maybeShowPostUpdateChangelog() {
   // (record it — don't refetch forever for a release that has none).
   const releases = await fetchReleaseHistory();
   if (!releases.length) return;
-  const rel = releases.find((r) => r.version === current) || null;
-  if (rel) {
+  // Every release the user passed through, not just the one they landed on.
+  const selected = releasesSince(releases, seen, current);
+  if (selected.length) {
     const { showUpdateNotes } = await import('./components/ui/updateNotes.jsx');
-    await showUpdateNotes({ version: current, notes: rel.summary, full: rel.full, mode: 'whatsnew' });
+    await showUpdateNotes({
+      version: current,
+      notes: composeUpdateNotes(selected, {
+        complete: historyReachesBack(releases, seen),
+      }),
+      // Scoped to THIS build's full changelog — stacking every skipped
+      // release's full log would bury it.
+      //
+      // Gated on hasDigest rather than left to the dialog, which decides via
+      // `full !== notes`. That comparison was sound while `notes` WAS the
+      // current release's summary: an unsplit body made the two equal and the
+      // expander stayed hidden. Now that `notes` is a composed stack, an
+      // unsplit body would make them differ and open an expander repeating
+      // notes the panel already shows. Same predicate that decides whether a
+      // skipped release is rendered or merely named.
+      full: hasDigest(selected[0]) ? selected[0].full : '',
+      mode: 'whatsnew',
+    });
   }
   saveSettings({ [SEEN_KEY]: current });
 }
