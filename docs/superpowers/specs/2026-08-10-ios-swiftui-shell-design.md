@@ -35,6 +35,20 @@ the design a hybrid rather than a rewrite.
 
 1. **SwiftUI owns the full native shell** — navigation bar, toolbar, sheets —
    and hosts the webview as a child view showing only the résumé page.
+   **Mechanism settled by spike (2026-08-10, `7e7646e`, verified on an iOS 26.5
+   simulator — see [`docs/ios/swiftui-lifecycle-spike.md`](../../ios/swiftui-lifecycle-spike.md)):**
+   tao KEEPS the run loop and `ffi::start_app()` is unchanged. After
+   `ios_view.rs` attaches the `UIWindowScene`, one `msg_send!` into an `@objc`
+   Swift class makes a `UIHostingController` the window's `rootViewController`
+   and reparents wry's existing `WKWebView` into it. The shell is ordinary Swift
+   in tracked `src-tauri/ios/`; Rust makes ONE call and does not compose UI.
+   SwiftUI genuinely owns navigation, safe areas and rotation.
+   **Inverting the lifecycle is impossible and was ruled out, not deferred:**
+   `tao-0.35.3` `ios/event_loop.rs:146-153` asserts
+   `[UIApplication sharedApplication] == nil` before starting, which a Swift
+   `@main App` violates by construction; and skipping `start_app()` leaves no
+   `AppHandle`, so commands, IPC and storage all disappear — collapsing that
+   route into "native app, Tauri desktop-only".
 2. **The web keeps editing.** Tap-to-edit `contentEditable` in the canvas is
    unchanged; it is already verified working on real hardware, caret and
    selection included. One editing implementation, not two.
@@ -129,9 +143,14 @@ Type in the chrome.
 
 Each step ships something usable; there is no interval where the app is broken.
 
-1. **Commit `gen/apple`, own the entry point, host the existing webview
-   full-screen.** Zero visible change. Proves the project survives regeneration
-   and that the build still works — the riskiest unknown, bought cheaply.
+1. ~~**Commit `gen/apple`, own the entry point**~~ — **DONE differently, and the
+   original wording was wrong.** There is no SwiftUI entry point to own: the
+   generated app is a five-line `main.mm` calling `ffi::start_app()`. The spike
+   settled the real mechanism (see decision 1) and the shell Swift lives in
+   tracked `src-tauri/ios/`, NOT in `gen/apple`. `gen/apple` must still become
+   tracked source for the Xcode project to reference that Swift, with two known
+   regeneration gotchas to handle: xcodegen adds the 365 MB `libapp.a` to
+   Resources, and drops `DEVELOPMENT_TEAM`.
 2. **Native chrome around the unchanged canvas** — nav bar, bottom toolbar, safe
    area. Alone this removes the overlapping header, the floating buttons over the
    name, and the wrapped toolbar column.
