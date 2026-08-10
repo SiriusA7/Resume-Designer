@@ -23,8 +23,19 @@
   --transition-fast: 150ms ease;
   --transition-normal: 250ms ease;
   
-  /* Layout dimensions */
-  --header-height: 56px;
+  /* Layout dimensions
+     --header-height carries the iOS top safe-area inset (Dynamic Island /
+     notch) baked in, not just the visual header content height. Under the
+     universal box-sizing: border-box (below), `.app .header-bar`'s own
+     `padding-top: env(safe-area-inset-top)` shrinks its CONTENT box rather
+     than growing the element — so the inset has to come from a taller
+     token instead, or the header's painted band stays 56px tall while its
+     content overflows below the border into the resume underneath.
+     Every consumer (`.app-content`'s `calc(var(--app-height, 100dvh) -
+     var(--header-height))`, the fixed-position panel toggles, etc.) reads
+     this token, so baking the inset in here keeps them all correct for
+     free. On desktop env() resolves to 0px, so this is exactly 56px there. */
+  --header-height: calc(56px + env(safe-area-inset-top));
   --chat-panel-width: 320px;
   --structure-panel-width: 380px;
 }
