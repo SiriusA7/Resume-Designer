@@ -1729,3 +1729,20 @@ html[data-theme="dark"] .header-variant-select {
   flex-shrink: 1;
   min-width: 0;
 }
+
+/* ===== Touch-target floor =====
+   44x44pt is Apple's HIG minimum. Scoped to `pointer: coarse` so desktop
+   density is untouched — a mouse does not need the padding, and widening the
+   toolbar on the Mac would push controls off a narrow window.
+
+   `min-width`/`min-height` beat the fixed `width: 30px; height: 30px` on
+   .zoom-btn (a min-* always wins over the corresponding width/height), and
+   .zoom-btn is already a centred flex box, so the glyph stays 30px inside a
+   44px tap target rather than scaling up. */
+@media (pointer: coarse) {
+  .zoom-btn,
+  .header-tools-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
