@@ -873,13 +873,18 @@ html[data-theme="dark"] .header-variant-select {
   padding-bottom: 100px; /* Space for bottom toolbar */
   overflow: auto; /* Scroll both directions */
   display: flex;
-  justify-content: center;
+  /* NOT `center`: a centred flex item wider than the scrollport overflows on
+     BOTH sides, and start-side overflow is not scrollable in any engine — the
+     left edge of the page becomes unreachable. Centring is done by the child's
+     auto margins instead, which stay inside the scrollable region. */
+  justify-content: flex-start;
   align-items: flex-start;
 }
 
 .resume-container {
   width: 8.5in;
   min-width: 8.5in;
+  margin-inline: auto; /* centres when there is room; no-ops when cropped */
   background: white;
   border-radius: 4px;
   box-shadow:
