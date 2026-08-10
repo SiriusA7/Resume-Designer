@@ -25,19 +25,28 @@ launch storyboard, `main.mm` and its bindings header.
 derived from it by `xcodegen generate`, so never hand-edit the pbxproj — the
 next regeneration would silently discard the edit.
 
-Four blocks in `project.yml` are ours. Each is commented `HAND-MAINTAINED` in
+Five things in `project.yml` are ours. Each is commented `HAND-MAINTAINED` in
 place:
 
 | Block | Why it exists |
 |---|---|
+| `info.properties: UIApplicationSceneManifest` (+ `CFBundleDisplayName`, `ITSAppUsesNonExemptEncryption`) | **The app is invisible without the scene manifest.** tao never assigns its `UIWindow` a `windowScene` on its own; a static scene manifest is what makes iOS hand one over, which `src-tauri/src/ios_view.rs` then attaches. Without it the webview stays 0×0 and the app launches black. |
 | `sources: - path: ../../ios` | Compiles the SwiftUI shell from its tracked home, so there is exactly one copy of it. Without this the shell is not in the app and `AnyClass::get(c"OPShell")` returns `None` at runtime. |
 | `Externals: excludes: ["**/*.a"]` | `Externals` is empty when `tauri ios init` first runs and holds the 365 MB `libapp.a` afterwards. Without the exclude, a later `xcodegen generate` copies that static library into the app bundle's Resources. It is *linked* via the `libapp.a` dependency; it must never be a resource. |
 | `DEVELOPMENT_TEAM: "847VH25R7U"` | Tauri writes this straight into the pbxproj and never records it in `project.yml`, so `xcodegen generate` drops it and device builds stop signing. Simulator builds don't care; device builds do. |
 | the `Shell` group name | Cosmetic — keeps the shell separate from generated `Sources` in Xcode's navigator. |
 
-## Re-running `tauri ios init`
+## Re-running `tauri ios init` — measured, not assumed
 
-It is destructive to all four. The safe procedure:
+Run against the committed tree on 2026-08-10. It **does not touch
+`project.yml`**, so everything expressed there survives. What it changes:
+
+| File | What it does |
+|---|---|
+| `resume-designer_iOS/Info.plist` | Rewrites it from `project.yml`. This is why the scene manifest lives in `project.yml` now: when those keys existed only in the plist, this step **deleted them**, which is a black-screen bug wearing a cosmetic diff. |
+| `resume-designer.xcodeproj/project.pbxproj` | Re-randomises two `TEMP_<uuid>` `PBXGroup` names for the empty `Externals/arm64` and `Externals/x86_64` groups. Pure churn — discard it. |
+
+So the procedure is short:
 
 ```bash
 cd resume-designer
@@ -46,10 +55,10 @@ npx tauri ios init
 git diff src-tauri/gen/apple               # read every hunk
 ```
 
-Then reapply the four blocks above (or `git checkout -- src-tauri/gen/apple/project.yml`
-if nothing else in it changed), run `xcodegen generate`, and rebuild. Commit
-the generator's changes and ours as separate commits so the next person can
-tell them apart.
+Expect the two `TEMP_` lines and nothing else. **Anything else in that diff is
+the generator taking something back** — check it against the table above before
+accepting it. Commit the generator's changes and ours as separate commits so
+the next person can tell them apart.
 
 **Tauri upgrades will produce conflicts here.** That is the deal: a generated
 project became a maintained one. The conflicts are ours to resolve, and the

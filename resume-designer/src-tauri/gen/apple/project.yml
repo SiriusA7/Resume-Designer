@@ -68,6 +68,26 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 1.0.0
         CFBundleVersion: "1.0.0"
+        # HAND-MAINTAINED, and the most load-bearing lines in this file.
+        #
+        # THE APP IS INVISIBLE WITHOUT UIApplicationSceneManifest. tao never
+        # assigns its UIWindow a `windowScene` on its own; declaring a static
+        # scene manifest is what makes iOS hand one over, which
+        # `src-tauri/src/ios_view.rs` then attaches. Without it the webview
+        # stays 0x0 and the app launches to a black screen.
+        #
+        # These keys were added by hand during Phase 0 and lived only in the
+        # generated Info.plist, where `tauri ios init` deleted them (measured,
+        # 2026-08-10). Declaring them here means xcodegen writes them back on
+        # every regeneration instead.
+        CFBundleDisplayName: On Paper
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: TaoSceneDelegate
+        ITSAppUsesNonExemptEncryption: false
     entitlements:
       path: resume-designer_iOS/resume-designer_iOS.entitlements
     scheme:
