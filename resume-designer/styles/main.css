@@ -31,10 +31,10 @@
      than growing the element — so the inset has to come from a taller
      token instead, or the header's painted band stays 56px tall while its
      content overflows below the border into the resume underneath.
-     Every consumer (`.app-content`'s `calc(var(--app-height, 100dvh) -
-     var(--header-height))`, the fixed-position panel toggles, etc.) reads
-     this token, so baking the inset in here keeps them all correct for
-     free. On desktop env() resolves to 0px, so this is exactly 56px there. */
+     Every consumer (`.app-content`'s `calc(100vh - var(--header-height))`,
+     the fixed-position panel toggles, etc.) reads this token, so baking the
+     inset in here keeps them all correct for free. On desktop env() resolves
+     to 0px, so this is exactly 56px there. */
   --header-height: calc(56px + env(safe-area-inset-top));
   --chat-panel-width: 320px;
   --structure-panel-width: 380px;
@@ -221,7 +221,7 @@ body {
 .app {
   display: flex;
   flex-direction: column;
-  height: var(--app-height, 100dvh);
+  height: 100vh;
   overflow: hidden;
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
@@ -230,7 +230,7 @@ body {
 .app-content {
   display: flex;
   flex: 1;
-  height: calc(var(--app-height, 100dvh) - var(--header-height));
+  height: calc(100vh - var(--header-height));
   overflow: hidden; /* Children handle their own scrolling */
   position: relative;
 }
@@ -238,9 +238,9 @@ body {
 /* Safe area — only meaningful once index.html opts into viewport-fit=cover.
    env() resolves to 0px everywhere else, so these are inert on desktop.
    `.zoom-controls` is position:absolute inside .preview-area with bottom:24px
-   (main.css:743-758); .app-content is sized from --app-height, so its bottom
-   edge IS the bottom of the visible viewport once the content extends under
-   the home indicator.
+   (main.css:743-758); .app-content is sized from the viewport height, so its
+   bottom edge IS the bottom of the visible viewport once the content extends
+   under the home indicator.
    Scoped with an ancestor (`.app`, `.app-content`) rather than the bare class:
    the later, unconditional `.header-bar { padding: 0 var(--space-lg); … }`
    and `.zoom-controls { bottom: 24px; … }` rules further down this file have
@@ -1385,7 +1385,7 @@ html[data-theme="dark"] .header-variant-select {
   top: 100%;
   right: var(--space-md);
   width: 220px;
-  max-height: calc(var(--app-height, 100dvh) - var(--header-height) - 20px);
+  max-height: calc(100vh - var(--header-height) - 20px);
   overflow-y: auto;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-border);
@@ -1745,37 +1745,4 @@ html[data-theme="dark"] .header-variant-select {
 .header-variant {
   flex-shrink: 1;
   min-width: 0;
-}
-
-/* ===== Touch-target floor =====
-   44x44pt is Apple's HIG minimum. Scoped to `any-pointer: coarse` (true when
-   ANY available pointer is coarse, not just the primary one) so desktop
-   density is untouched — a mouse or trackpad does not need the padding, and
-   widening the toolbar on the Mac would push controls off a narrow window.
-   `pointer: coarse` alone would miss an iPad with a Magic Keyboard: its
-   trackpad makes `pointer: fine` the primary report even though direct
-   finger tapping is still available.
-
-   `min-width`/`min-height` beat the fixed `width: 30px; height: 30px` on
-   .zoom-btn (a min-* always wins over the corresponding width/height), and
-   .zoom-btn is already a centred flex box, so the glyph stays 30px inside a
-   44px tap target rather than scaling up.
-
-   .zoom-group and .text-tools each get their own flex-wrap here too: the
-   outer .zoom-controls wrap (~:793) only reflows those two clusters relative
-   to each other, never the buttons inside them — with the 44px floor,
-   .text-tools alone (7 buttons + readout) is wider than the pill's
-   max-width on a phone, so without this its buttons overflow the pill's
-   border instead of wrapping into another row. */
-@media (any-pointer: coarse) {
-  .zoom-btn,
-  .header-tools-btn {
-    min-width: 44px;
-    min-height: 44px;
-  }
-
-  .zoom-group,
-  .text-tools {
-    flex-wrap: wrap;
-  }
 }
