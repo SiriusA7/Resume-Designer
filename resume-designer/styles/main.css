@@ -1731,18 +1731,34 @@ html[data-theme="dark"] .header-variant-select {
 }
 
 /* ===== Touch-target floor =====
-   44x44pt is Apple's HIG minimum. Scoped to `pointer: coarse` so desktop
-   density is untouched — a mouse does not need the padding, and widening the
-   toolbar on the Mac would push controls off a narrow window.
+   44x44pt is Apple's HIG minimum. Scoped to `any-pointer: coarse` (true when
+   ANY available pointer is coarse, not just the primary one) so desktop
+   density is untouched — a mouse or trackpad does not need the padding, and
+   widening the toolbar on the Mac would push controls off a narrow window.
+   `pointer: coarse` alone would miss an iPad with a Magic Keyboard: its
+   trackpad makes `pointer: fine` the primary report even though direct
+   finger tapping is still available.
 
    `min-width`/`min-height` beat the fixed `width: 30px; height: 30px` on
    .zoom-btn (a min-* always wins over the corresponding width/height), and
    .zoom-btn is already a centred flex box, so the glyph stays 30px inside a
-   44px tap target rather than scaling up. */
-@media (pointer: coarse) {
+   44px tap target rather than scaling up.
+
+   .zoom-group and .text-tools each get their own flex-wrap here too: the
+   outer .zoom-controls wrap (~:793) only reflows those two clusters relative
+   to each other, never the buttons inside them — with the 44px floor,
+   .text-tools alone (7 buttons + readout) is wider than the pill's
+   max-width on a phone, so without this its buttons overflow the pill's
+   border instead of wrapping into another row. */
+@media (any-pointer: coarse) {
   .zoom-btn,
   .header-tools-btn {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .zoom-group,
+  .text-tools {
+    flex-wrap: wrap;
   }
 }
