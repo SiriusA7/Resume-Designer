@@ -124,3 +124,48 @@ reimplementing the store AND diverging iOS from desktop at the storage layer.
 3. PATH GRAMMAR DRIFT — if SwiftUI builds paths itself it becomes a second
    implementation of a grammar whose drift has already caused data corruption.
    Swift must echo back paths it RECEIVED, never construct them.
+
+## BLOCKER found executing step 1 (2026-08-10) — the spec's premise is wrong
+
+`find src-tauri/gen/apple -type f` = 33 source files (plus build/Externals).
+The ENTIRE generated app entry point is `Sources/resume-designer/main.mm`:
+
+    #include "bindings/bindings.h"
+    int main(int argc, char * argv[]) {
+        ffi::start_app();
+        return 0;
+    }
+
+There is NO SwiftUI, NO AppDelegate, NO SceneDelegate and NO view controller in
+the generated project. wry/tao build the whole UI hierarchy from Rust, and
+`ffi::start_app()` owns the application lifecycle and the run loop. (This is
+also why `src-tauri/src/ios_view.rs` has to reach in via objc2 to fix the
+UIWindow — there is no Swift layer to do it from.)
+
+So spec decision 1 ("SwiftUI owns the full native shell and hosts the webview as
+a child view") is NOT a matter of replacing a generated entry point. It requires
+INVERTING who owns the application lifecycle. SwiftUI's `App` wants the run
+loop; tao wants the run loop.
+
+Three ways forward, needing a decision before any more code:
+
+A. TAO KEEPS THE LIFECYCLE; SwiftUI is injected into the hierarchy.
+   Write SwiftUI in Swift files in the committed Xcode project, expose them as
+   @objc classes, and have Rust instantiate/attach them via objc2 — extending
+   the ios_view.rs pattern. Keeps Tauri whole. Cost: the shell is assembled
+   from Rust through objc2, chrome<->webview layout is hand-wired, and SwiftUI
+   never owns navigation. Least native of the three.
+
+B. SWIFT OWNS THE LIFECYCLE; link the Rust lib, skip tao's app bootstrap.
+   Replace main.mm with a Swift @main App, do not call ffi::start_app(), and
+   create the WKWebView ourselves — then hand it to Tauri, or run Tauri's IPC
+   without its windowing. Most native result. Cost: leaves Tauri's supported
+   path for iOS; every Tauri upgrade risks breaking the seam. Needs a spike to
+   find out whether Tauri's iOS plumbing can be driven without start_app().
+
+C. NATIVE iOS APP, Tauri desktop-only (the option rejected earlier, now cheaper
+   by comparison). Swift owns everything; the shared asset is the RENDERER
+   bundle, not the app. Storage moves to Swift, contradicting decision 3.
+
+Note this also reopens the gen/apple decision: if B or C, committing Tauri's
+generated project may be pointless.
