@@ -470,41 +470,55 @@ silent wrong-typeface/wrong-pagination failure, removes two CSP entries and a
 third-party network call from the privacy story, and makes offline export
 correct on mobile.
 
-### D7 — Editing on mobile
+### D7 — Editing on mobile — **REVISED 2026-08-09 after Phase 0**
 
-`contentEditable` is **disabled entirely when `isMobile`.** This does not
-mitigate the port's largest unverified risk — caret placement and
-selection-handle dragging inside `zoomControls.js:87`'s `transform: scale()`
-subtree, at ~0.40 on a phone — it removes it, because no caret is ever placed
-there.
+> **This section previously said:** "`contentEditable` is **disabled entirely
+> when `isMobile`**… Tap a `[data-editable]` → **select**, don't edit… A bottom
+> sheet opens with a real `<textarea>`." It justified that rewrite as removing
+> "the port's largest unverified risk — caret placement and selection-handle
+> dragging inside `zoomControls.js:87`'s `transform: scale()` subtree."
+>
+> **That risk did not materialise.** Task 6 ran on a physical iPhone 16 Pro (not
+> the Simulator): tapping into résumé text places the caret correctly and
+> selection handles drag correctly, inside the scaled subtree, at phone zoom.
+> See [`docs/ios/phase-0-findings.md`](../../ios/phase-0-findings.md).
 
-**The model:**
+**On-page editing is KEPT on mobile.** The sheet-based rehost is no longer
+required, which is the single largest scope reduction Phase 0 produced — D7 goes
+from *rewrite the mobile editing model* to *harden the existing editor for
+touch*.
 
-1. Tap a `[data-editable]` → **select**, don't edit. Highlight in place; the
-   canvas stays a scaled read-only surface.
-2. A bottom sheet opens with a real `<textarea>` at native size, plus
-   Cancel / Done.
-3. If the element has a pending AI change, the sheet also carries
-   **Apply / Reject / Review All** — the fix for the unreachable hover menu.
+**What is still required**, none of which the caret result addresses:
 
-**What this buys:** system keyboard avoidance, system selection handles, and
-`autocorrect="off"` / `autocapitalize="off"`. There are currently **zero** such
-attributes anywhere in `src/`, and `inlineEditor.js:975` writes
-`element.textContent` straight to storage — so iOS would silently rewrite
-résumé prose and persist the rewrite.
+1. **`autocorrect="off"` / `autocapitalize="off"` on every `[data-editable]`.**
+   There are currently **zero** such attributes anywhere in `src/`, and
+   `inlineEditor.js:975` writes `element.textContent` straight to storage — so
+   iOS rewriting `Kubernetes` or `SaaS` is *persisted*. This is now the highest
+   remaining editor risk, because it silently corrupts résumé prose.
+2. **Keyboard avoidance.** Every ancestor is `overflow: hidden`, so a focused
+   field cannot scroll above the software keyboard. Needs a `visualViewport`
+   resize listener writing a CSS custom property.
+3. **Blur must not silently commit** (`inlineEditor.js:979`). There is no Escape
+   key on a software keyboard, so the only abort path has no touch equivalent.
+4. **A touch surface for AI Apply / Reject.** `inlineEditor.js:58` still gates
+   that menu on `mouseover`, and `startEditing()` calls `hideAIButton()` at
+   `:785`, so a tap destroys the button before it can be pressed. A working
+   caret does not make a hover-only menu tappable. But it can now be solved **in
+   place** — a persistent action bar on the selected element — rather than by
+   rehosting the editor in a sheet.
 
-**What it still costs:**
+**Knock-on:** `components/ui/sheet.jsx` (vendored, still zero consumers) is no
+longer needed *for the editor*. It remains the right primitive for the chat and
+structure panels on phone — see D8.
 
-- `components/ui/sheet.jsx` (109 lines) is vendored and imported by **zero**
-  files. This is its first consumer. Its `bottom` variant needs `max-h`,
-  safe-area padding, and a grabber.
-- A `visualViewport` resize listener writing a CSS custom property.
-  Non-optional: every ancestor is `overflow: hidden`, so a focused field
-  physically cannot scroll above the keyboard.
-- Blur must **not** silently commit on mobile (`inlineEditor.js:979`) — there is
-  no Escape key, so Cancel is the only abort path.
-- Desktop behaviour is unchanged: `contentEditable`, Tab-to-next
-  (`inlineEditor.js:1030`), and Cmd+B (`:997`) all stay.
+**Knock-on to D8, which gets harder:** with on-page editing retained, the
+pinch-zoom conflict is now load-bearing rather than cosmetic. `index.html` has no
+`maximum-scale`, so WKWebView page zoom fights `zoomControls.js:87`'s
+`transform: scale()` indistinguishably, and every `position: fixed` affordance
+plus the AI button's `getBoundingClientRect()` math (`inlineEditor.js:677`) is
+stranded when the user pinches. Phase 0 predicted this exact trade: removing the
+caret risk would have made D8 moot; keeping on-page editing makes D8 the harder
+half.
 
 ### D8 — Responsive shell and touch
 
