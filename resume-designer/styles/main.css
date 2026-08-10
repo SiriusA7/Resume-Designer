@@ -212,6 +212,8 @@ body {
   flex-direction: column;
   height: var(--app-height, 100dvh);
   overflow: hidden;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .app-content {
@@ -220,6 +222,25 @@ body {
   height: calc(var(--app-height, 100dvh) - var(--header-height));
   overflow: hidden; /* Children handle their own scrolling */
   position: relative;
+}
+
+/* Safe area — only meaningful once index.html opts into viewport-fit=cover.
+   env() resolves to 0px everywhere else, so these are inert on desktop.
+   `.zoom-controls` is position:absolute inside .preview-area with bottom:24px
+   (main.css:743-758); .app-content is sized from --app-height, so its bottom
+   edge IS the bottom of the visible viewport once the content extends under
+   the home indicator.
+   Scoped with an ancestor (`.app`, `.app-content`) rather than the bare class:
+   the later, unconditional `.header-bar { padding: 0 var(--space-lg); … }`
+   and `.zoom-controls { bottom: 24px; … }` rules further down this file have
+   equal specificity and would otherwise win the cascade by source order,
+   silently discarding these insets. */
+.app .header-bar {
+  padding-top: env(safe-area-inset-top);
+}
+
+.app-content .zoom-controls {
+  bottom: calc(24px + env(safe-area-inset-bottom));
 }
 
 /* ==========================================================================
