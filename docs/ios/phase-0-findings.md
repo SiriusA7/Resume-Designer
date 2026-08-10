@@ -333,9 +333,109 @@ plumbing. Measure it before designing the fix.
 alert/confirm for `confirmDestructive`" item from cleanup to a
 data-loss blocker.** Nothing that calls `window.confirm` may ship on iOS.
 
-## Task 5 — createPDF rect spike
+## Task 5 — createPDF rect spike — **PASSED. D5 option C is viable.**
 
-*(pending)*
+Run on iOS 27.0 simulator via `tauri ios build --debug --target aarch64-sim`,
+with the `ios_view` workaround active (without it the webview is 0×0 and any
+capture is a false negative).
+
+**The binding.** `objc2-web-kit` declares `WKWebView` with an AppKit superclass
+under `#[cfg(target_os = "macos")]` and ships no UIKit variant, so the typed
+`createPDFWithConfiguration_completionHandler` used by `pdf_macos.rs:125` is
+unavailable. Dynamic dispatch works and compiles clean:
+
+```rust
+let obj = webview.inner() as *mut AnyObject;
+let _: () = objc2::msg_send![obj, createPDFWithConfiguration: &*configuration,
+                                  completionHandler: &*handler];
+```
+
+`WKPDFConfiguration` is **not** cfg-gated and is used as-is, so the iOS Cargo
+block needs `objc2-web-kit` **without** the `objc2-app-kit` feature.
+
+**Results — every load-bearing assumption confirmed:**
+
+| Question | Result |
+|---|---|
+| Does `createPDF` run on iOS? | **Yes** — 63,168 bytes returned |
+| Is the `rect` honoured? | **Yes** — a one-sheet rect produced exactly **one** page (`/Type /Page` ×1, `/Count 1`) |
+| MediaBox vs requested CSS px | **`MediaBox [0 0 816 1056]`** — byte-exact match to the requested 816×1056. **pt == CSS px 1:1, so `PX_TO_PT = 72/96` in `pdf_merge.rs` stands unchanged.** |
+| Vector or raster? | **Vector.** Embedded subset fonts `AAAAAB+Geist-Medium`, `AAAAAC+Geist-SemiBold`, `AAAAAD+Geist-Regular`, 212 text-showing operators. **The ATS requirement is met on iOS.** |
+| Does an iframe get its own 816 px layout viewport on a 402 pt device? | **Yes** — `iframe_innerWidth: 816`, `scrollHeight: 2112`, `sameOrigin: true`, body 31,821 bytes. **Option C's core premise is confirmed.** |
+| Is `/print.html` served by the `tauri://` scheme handler? | **Yes** — HTTP 200, 31,384 bytes, content verified |
+
+**One caveat, and it is a test artefact rather than a result.** The captured page
+contains the *onboarding modal* ("Step 1 of 6 / Welcome to On Paper"), not the
+iframe's résumé content. Two reasons, both fixable: the iframe was mounted at
+`opacity: 0.01` (borrowed from the native-offscreen-webview technique, where it
+keeps a webview rendering — but inside a *captured* document it simply makes the
+content invisible), and a full-screen fixed modal was painted over it. So the
+PDF **machinery** is proven end-to-end; what is not yet proven is that iframe
+content composites into the rect. Re-test with an opaque iframe and no modal
+before committing to option C over option A.
+
+**Also guard:** WebKit caps a PDF page at 14400 pt and loops, so a rect taller
+than 14400 CSS px silently becomes multiple pages. Untested; reachable in
+`.is-overflowing` mode.
+
+## Task 4 addendum — measurements taken with a real viewport
+
+Everything geometric measured before the `ios_view` fix was taken against a 0×0
+viewport and is void. Re-measured:
+
+| Question | iPhone 17 (402×874) | iPad Pro 13" (1032×1376) |
+|---|---|---|
+| `innerSize` | `[402, 778]` | `[1032, 1324]` |
+| `env(safe-area-inset-*)` **without** `viewport-fit=cover` | `0px` all round | `0px` all round |
+| **with** `viewport-fit=cover` | **`62px` top, `34px` bottom** | **`32px` top, `20px` bottom` |
+| `/print.html` reachable | 200, 31,384 B | 200, 31,384 B |
+
+So `viewport-fit=cover` is required and sufficient; the earlier all-zero reading
+was an artefact of the 0×0 viewport, not a platform limitation.
+
+### 🔴 iPadOS reports a DESKTOP user agent — the shipped gate missed it
+
+`66fa6a9` gated the glass treatment on `/iPad|iPhone|iPod/.test(userAgent)`,
+measured on iPhone only. On iPad:
+
+```
+userAgent:         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15…"
+navigator.platform: "MacIntel"        maxTouchPoints: 5
+gateRegexMatches:   false             dataTauriAttr: "true"   <-- glass RE-ENGAGED
+```
+
+The regex misses, `data-tauri` is set, and the iPad went transparent again —
+**the same black screen, reintroduced on half the declared device scope by the
+fix for it.** Fixed in `fbacc48` by adding the standard iPadOS discriminator
+(`navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1`; a real Mac
+reports `0`), with the CSP hash recomputed. **Verified on device:**
+`dataTauriAttr: null` and the iPad now renders the app correctly.
+
+### `tauri-plugin-dialog` presents AND resolves on iOS — use it
+
+The natural replacement for the 13 broken `window.confirm`/`alert` sites was
+untested. Measured:
+
+- **`message()` — presents a native panel and RESOLVES**: `{resolved: true,
+  value: 'Ok'}` after tapping Ok.
+- **`ask()` — presents** a two-button panel (screenshotted, "No" / "Yes").
+  Its resolution was **not captured** — the probe's 20 s timeout elapsed before
+  the tap landed. Same plugin and same IPC path as `message()`, so it very
+  likely resolves, but that is **inferred, not measured**.
+
+This is the decisive difference from `window.confirm`, which returns an
+always-truthy Promise. `dialog:allow-ask` / `allow-message` / `allow-confirm`
+are already granted in the cross-platform `capabilities/default.json`, and
+`native.js:85` `showMessage()` already routes through this plugin on Tauri — so
+the fix for the data-loss sites is to make `backupFlow.js` call `showMessage()`
+(async) instead of `window.confirm`.
+
+### The updater error is real and user-visible
+
+Screenshotted on first launch: a toast reading **"Updater error: Command
+`check_update_on_channel` not found"**. Spec D1 predicted exactly this —
+`isTauri` is true on iOS, so `updateFlow.js`'s startup check calls a
+`#[cfg(desktop)]` command. Confirms the 2.1 App Store rejection risk.
 
 ## Task 6 — contentEditable spike (physical hardware)
 
