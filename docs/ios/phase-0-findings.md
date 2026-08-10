@@ -216,37 +216,63 @@ Measured on the running app (iPhone 17, iOS 27.0, 402×874 pt).
 | `#resume` vs viewport | 816 px cropped | **confirmed** — `resumeRect` 816×1056 at `x=-207` in a 402 pt viewport |
 | Onboarding hard-gate | 2.1 rejection risk | **confirmed visually** — Step 1 of 6 demands an `sk-or-v1-…` key before anything else |
 
-### `alert()` / `confirm()` — the spec is wrong, and the severity is INVERTED
+### 🔴 `alert()` / `confirm()` — CRITICAL, and the spec had it exactly backwards
 
-The spec (from the audit's source reading of wry's `WryWebViewUIDelegate`)
-stated these are **silent no-ops**, and reasoned that `backupFlow.js:248`'s
-destructive-import `confirm()` therefore **fails safe** by returning `false`.
+**Isolated test run** (`resume-ios-confirm-test`, a probe that does nothing else):
 
-Observed on device:
-
-- **`alert()` DOES present a native iOS panel.** Screenshotted: a real
-  "On Paper / probe / Ok" dialog over the onboarding screen.
-- **But it does NOT block JavaScript** — measured `alertMs = 0`, and execution
-  continued straight past it.
-- **`confirm()` also returned in 0 ms**, and returned a **non-boolean object**
-  (serialised as `{}`), not `false`.
-
-Both halves matter. A panel that appears while JS keeps running is a *race*, not
-a no-op: any code that assumes `alert()` blocks is wrong. And if `confirm()`
-yields a truthy object rather than `false`, then
-
-```js
-if (confirm('…will be REPLACED…')) { /* destructive path */ }
+```json
+"confirm_ms": 1,          "confirm_typeof": "object",
+"confirm_String": "[object Promise]",   "confirm_ctor": "Promise",
+"confirm_isPromise": true,
+"confirm_strictTrue": false,  "confirm_strictFalse": false,
+"confirm_BOOLEAN_COERCION": true,
+"confirm_wouldProceed": "YES — DESTRUCTIVE PATH RUNS",
+"backupFlowPattern_destructiveRan": true,
+"alert_ms": 1, "alert_blocked": false
 ```
 
-**proceeds**. The spec assessed this as fail-safe; the observation suggests
-fail-**dangerous**.
+**`window.confirm()` returns a Promise on iOS. A Promise is always truthy.**
 
-⚠️ **This specific behaviour needs a dedicated, isolated test before it is
-acted on** — the reading comes from one probe run that measured several things
-at once. But it is now the highest-priority unknown in the port, because it
-governs a destructive whole-store replace. Do not rely on the spec's
-"fails safe" claim.
+So this, the literal shape at `backupFlow.js:248`:
+
+```js
+if (confirm('Your current resumes … will be REPLACED. Continue?')) {
+  /* destructive import */
+}
+```
+
+**always takes the destructive branch**, regardless of what the user taps — the
+value being tested is a pending Promise object, never a boolean. The test above
+ran that exact pattern and `backupFlowPattern_destructiveRan` came back `true`.
+
+`alert()` likewise returns in ~1 ms and does **not** block, though it *does*
+present a real native panel (screenshotted over the onboarding screen). It is
+fire-and-forget: any code sequencing on it is broken.
+
+**The spec was wrong in the dangerous direction.** It reasoned that `confirm()`
+returning `false` made the Import button merely "look dead", and rated it a
+low-severity, fail-safe defect. On iOS it is a **silent data-loss path**: a
+destructive whole-store replace runs with no confirmation at all.
+
+**Blast radius** — 3 real `window.confirm` sites:
+
+| Site | Consequence |
+|---|---|
+| `src/native.js:108` — `return confirm(options.message) ? 0 : 1;` | The **shared** confirm facade always returns `0` (= OK). Every caller is affected. |
+| `src/backupFlow.js:248` | Destructive whole-store replace proceeds unconfirmed |
+| `src/backupFlow.js:336` | Same pattern |
+
+(`components/PdfDialog.jsx:164`'s `confirm()` is a local callback prop, not
+`window.confirm` — unaffected.)
+
+Plus 11 `alert()` sites (`native.js:110`, `pdf.js:71/111/376/393/404`,
+`variantManager.js:251`, `backupFlow.js:167/201/306/330/467`) that now fail to
+block, including `backupFlow.js:167` — the sole signal that an import never
+reached disk.
+
+**This raises the priority of the spec's Phase 1 "swap `backupFlow.js`
+alert/confirm for `confirmDestructive`" item from cleanup to a
+data-loss blocker.** Nothing that calls `window.confirm` may ship on iOS.
 
 ## Task 5 — createPDF rect spike
 
