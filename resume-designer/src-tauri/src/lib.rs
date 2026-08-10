@@ -3,6 +3,9 @@ mod commands;
 // unattached UIWindow — see the module docs. Not app logic; delete on upstream fix.
 #[cfg(target_os = "ios")]
 mod ios_view;
+// SPIKE ONLY — SwiftUI shell reparent experiment. See docs/ios/swiftui-lifecycle-spike.md.
+#[cfg(target_os = "ios")]
+mod ios_shell;
 
 // `Manager` is used by the desktop `app.manage(...)` call in `setup` and by the
 // macOS-only Reopen handler below. Gating to `desktop` keeps it out of mobile
@@ -112,6 +115,11 @@ pub fn run() {
             // hierarchy does not exist yet in `setup`. See ios_view.rs.
             #[cfg(target_os = "ios")]
             ios_view::on_run_event(app_handle, &event);
+
+            // SPIKE ONLY — must run AFTER ios_view, which attaches the scene
+            // this depends on. See docs/ios/swiftui-lifecycle-spike.md.
+            #[cfg(target_os = "ios")]
+            ios_shell::on_run_event(app_handle, &event);
 
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
