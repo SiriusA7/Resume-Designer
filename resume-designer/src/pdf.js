@@ -9,7 +9,7 @@
  * Browser fallback: html2pdf.js produces image-based PDFs (not ATS-friendly).
  */
 
-import { isElectron, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, discardPdfPreview, showMessage } from './native.js';
+import { isElectron, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, discardPdfPreview, notify } from './native.js';
 import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
@@ -68,7 +68,7 @@ async function handleDownloadPdf(customFilename) {
   // Validate resume element exists
   if (!resumeEl) {
     console.error('PDF generation failed: Resume element not found');
-    await showMessage({ title: 'PDF export failed', type: 'error', message: 'Failed to generate PDF: Resume content not found.' });
+    await notify({ title: 'PDF export failed', type: 'error', message: 'Failed to generate PDF: Resume content not found.' });
     return;
   }
   
@@ -108,7 +108,7 @@ async function handleDownloadPdf(customFilename) {
     
   } catch (error) {
     console.error('PDF generation failed:', error);
-    await showMessage({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message || 'Unknown error'}. Check the console for details.` });
+    await notify({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message || 'Unknown error'}. Check the console for details.` });
   } finally {
     // Restore button state on EVERY exit path (success, user-cancel, error).
     // Mirror busy:false to the visible React header button too.
@@ -373,7 +373,7 @@ function setExportBusy(busy) {
 async function runNativeExportWithPreview(defaultFilename) {
   const resumeEl = document.getElementById('resume');
   if (!resumeEl) {
-    await showMessage({ title: 'PDF export failed', type: 'error', message: 'Failed to generate PDF: Resume content not found.' });
+    await notify({ title: 'PDF export failed', type: 'error', message: 'Failed to generate PDF: Resume content not found.' });
     return;
   }
   // Hold the export guard for the WHOLE preview lifecycle — from before
@@ -390,7 +390,7 @@ async function runNativeExportWithPreview(defaultFilename) {
   try {
     acquireExportGuard();
   } catch (error) {
-    await showMessage({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message}.` });
+    await notify({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message}.` });
     return;
   }
   setExportBusy(true);
@@ -401,7 +401,7 @@ async function runNativeExportWithPreview(defaultFilename) {
     if (!previewBase64) throw new Error('Could not read the generated PDF for preview.');
   } catch (error) {
     console.error('PDF generation failed:', error);
-    await showMessage({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message || 'Unknown error'}.` });
+    await notify({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message || 'Unknown error'}.` });
     // Terminal: clean the slot first, then release (discardPdfPreview never
     // throws — see native.js — so the release below always runs).
     await discardPdfPreview();

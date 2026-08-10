@@ -112,6 +112,28 @@ export async function showMessage(options) {
 }
 
 /**
+ * Fire-and-forget user notification — the replacement for `window.alert()`.
+ *
+ * NEVER rejects. `alert()` could not throw, so its call sites (often the last
+ * statement of a `catch`, or sitting upstream of guard-release cleanup) have no
+ * rejection handling. `showMessage` awaits a dynamic import and an IPC call and
+ * CAN reject, so routing those sites through it directly would turn a handled
+ * error into an unhandled rejection — or skip the cleanup that follows.
+ *
+ * Deliberately NOT applied to two-button `showMessage` calls: swallowing an
+ * error there would have to invent a button index, and index 0 means "the user
+ * chose the first action" — which for a destructive prompt would be a silent
+ * yes.
+ */
+export async function notify(options) {
+  try {
+    await showMessage(options);
+  } catch (err) {
+    console.error('[notify] Failed to present message:', options?.message, err);
+  }
+}
+
+/**
  * Get app metadata.
  */
 export async function getAppInfo() {

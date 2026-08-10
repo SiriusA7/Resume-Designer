@@ -16,7 +16,7 @@ import { getSecret, hasNoCredentialConfigured, recoverSecretStore } from './secr
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
-import { probeLegacyElectronData, importLegacyElectronData, showMessage } from './native.js';
+import { probeLegacyElectronData, importLegacyElectronData, notify } from './native.js';
 import { confirmDestructive } from '@/components/ui/confirm';
 
 /**
@@ -165,7 +165,7 @@ function showImportSuccessAndReload(message) {
       // imported keys. Writes stay guarded and saves stay suspended until reload;
       // the user exports a copy, then reloads.
       appStorage.discardDeferredWrites();
-      await showMessage({
+      await notify({
         title: 'Import not saved',
         type: 'error',
         message:
@@ -202,7 +202,7 @@ export function exportFullBackupWithFeedback() {
     console.log(`[backup] Exported ${keysExported} keys to ${filename}`);
   } catch (err) {
     console.error('[backup] Export failed:', err);
-    void showMessage({ title: 'Export failed', type: 'error', message: `Export failed: ${err.message ?? String(err)}` });
+    void notify({ title: 'Export failed', type: 'error', message: `Export failed: ${err.message ?? String(err)}` });
   }
 }
 
@@ -309,7 +309,7 @@ export async function importBackupFromFile(file) {
     // suspendSaves) or a re-latched prior suspension must not be unlocked here.
     if (suspendedHere) store.resumeSaves(); // import rolled back — app keeps running
     console.error('[backup] Import failed:', err);
-    await showMessage({ title: 'Import failed', type: 'error', message: `Import failed: ${err.message ?? String(err)}` });
+    await notify({ title: 'Import failed', type: 'error', message: `Import failed: ${err.message ?? String(err)}` });
   }
 }
 
@@ -333,7 +333,7 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
   try {
     const probe = await probeLegacyElectronData();
     if (!probe?.found) {
-      await showMessage({ title: 'Nothing to import', message: 'No data from a previous (Electron) installation was found on this computer.' });
+      await notify({ title: 'Nothing to import', message: 'No data from a previous (Electron) installation was found on this computer.' });
       return;
     }
 
@@ -474,6 +474,6 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       catch (restoreErr) { console.error('[backup] could not restore the previous key:', restoreErr); }
     }
     console.error('[backup] Legacy import failed:', err);
-    await showMessage({ title: 'Import failed', type: 'error', message: `Couldn't import data from the previous app: ${err.message ?? String(err)}` });
+    await notify({ title: 'Import failed', type: 'error', message: `Couldn't import data from the previous app: ${err.message ?? String(err)}` });
   }
 }
