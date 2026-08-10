@@ -146,16 +146,29 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
           Your API key is stored locally on your device and is sent only to OpenRouter to make AI requests.
         </p>
       </StepBody>
-      <StepFooter className="justify-end">
-        <Button id="validate-and-continue" disabled={validating} onClick={handleContinue}>
-          {validating ? (
-            <>
-              <Loader2 className="size-4 animate-spin" /> Validating…
-            </>
-          ) : (
-            hasProviders ? 'Continue' : 'Validate & continue'
-          )}
-        </Button>
+      <StepFooter className="flex-col items-stretch">
+        <div className="flex justify-end gap-2">
+          <Button id="validate-and-continue" disabled={validating} onClick={handleContinue}>
+            {validating ? (
+              <>
+                <Loader2 className="size-4 animate-spin" /> Validating…
+              </>
+            ) : (
+              hasProviders ? 'Continue' : 'Validate & continue'
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={validating}
+            onClick={() => goTo(1)}
+          >
+            Skip for now
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          You can add a key later in Settings. Everything except the AI
+          assistant works without one.
+        </p>
       </StepFooter>
     </div>
   );
