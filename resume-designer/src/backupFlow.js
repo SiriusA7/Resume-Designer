@@ -17,6 +17,12 @@ import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
 import { probeLegacyElectronData, importLegacyElectronData } from './native.js';
+// Relative + explicit extension, NOT the `@/components/ui/confirm` alias the
+// nine React callers use: vitest.config.js declares no resolve.alias, so `@/`
+// resolves under `vite build` but NOT under vitest. backupFlow.js has no test
+// importing it today, so an alias here would fail silently until someone wrote
+// one. See the note in Global Constraints.
+import { confirmDestructive } from './components/ui/confirm.jsx';
 
 /**
  * Bridge the visual gap between "user clicked OK on the post-import alert" and
@@ -245,14 +251,16 @@ export async function importBackupFromFile(file) {
     const profileNote = isFormat2Full && Array.isArray(preview.registry)
       ? ` across ${preview.registry.length} ${preview.registry.length === 1 ? 'profile' : 'profiles'}`
       : '';
-    const ok = confirm(
-      `Restore from backup?\n\n` +
-        `This backup contains ${incoming} keys${profileNote} ` +
-        `(created ${preview.createdAt || 'unknown date'}).\n\n` +
-        `Your current resumes, job descriptions, history, and ` +
-        `settings will be REPLACED.\n\n` +
-        `The app will reload after import.`
-    );
+    const ok = await confirmDestructive({
+      title: 'Restore from backup?',
+      description:
+        `This backup contains ${incoming} keys${profileNote} `
+        + `(created ${preview.createdAt || 'unknown date'}). `
+        + `Your current resumes, job descriptions, history, and settings will be REPLACED. `
+        + `The app will reload after import.`,
+      actionLabel: 'Replace and reload',
+      cancelLabel: 'Cancel',
+    });
     if (!ok) return;
 
     // Flush all pending debounced writers (resume store + profile panel) before
@@ -333,14 +341,18 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
 
     const envelope = await importLegacyElectronData();
     const incoming = envelope?.keys ? Object.keys(envelope.keys).length : 0;
-    const ok = confirm(
-      `Import data from your previous desktop app?\n\n` +
-        `Found ${incoming} keys from the legacy (Electron) installation.\n\n` +
-        (merging
-          ? `They will be MERGED into your current data (your current resumes win on any conflict).`
-          : `Your current resumes, job descriptions, history, and settings will be REPLACED.`) +
-        `\n\nThe app will reload after import.`
-    );
+    const ok = await confirmDestructive({
+      title: 'Import data from your previous desktop app?',
+      description:
+        `Found ${incoming} keys from the legacy (Electron) installation. `
+        + (merging
+          ? `They will be MERGED into your current data (your current resumes win on any conflict). `
+          : `Your current resumes, job descriptions, history, and settings will be REPLACED. `)
+        + `The app will reload after import.`,
+      actionLabel: merging ? 'Merge and reload' : 'Replace and reload',
+      cancelLabel: 'Cancel',
+      destructive: !merging,
+    });
     if (!ok) return;
 
     try {
