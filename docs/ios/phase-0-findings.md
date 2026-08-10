@@ -133,130 +133,120 @@ Binary verified `platform IOSSIMULATOR, minos 17.4, arm64`. It launches on the
 iOS 27 SDK with no scene-lifecycle crash, and every asset loads through the
 `tauri://` custom-scheme handler with **zero CSP violations and zero errors**.
 
-## BLOCKER: the app launches but renders nothing — CAUSE STILL UNKNOWN
+## RESOLVED: the blank screen — three-part failure, now fixed
 
-**Severity: critical for any further Phase 0 spike. UNRESOLVED.**
+**On Paper renders correctly on iOS 27.** Onboarding, typography, palette, all
+of it. Getting there required fixing three separate things, and the first two
+diagnoses I published were wrong — recorded here because the wrong turns are
+themselves the finding.
 
-> **Correction (2026-08-09, after testing).** An earlier version of this section
-> asserted that `glass.css` was the root cause. **That was wrong.** The
-> platform gate was implemented (commit `66fa6a9`), the app rebuilt, and the
-> screen is *still* black. The hypothesis below is well-motivated and the gate
-> is a genuinely correct fix — spec D1 calls for it independently — but it does
-> **not** explain the blank screen. Do not treat the diagnosis as settled.
->
-> **What is actually established:** the app launches, JS executes (a probe's
-> `<a download>` demonstrably fired), every asset loads through the `tauri://`
-> scheme handler, and there are no CSP violations or errors in the WebKit log —
-> yet nothing paints, *including a probe overlay with its own opaque background
-> and maximum z-index*. JS running while nothing renders points away from CSS
-> and toward the webview's own presentation (size, hierarchy attachment, or
-> opacity), which is the next thing to investigate — not more CSS.
->
-> Candidate leads, untested: whether `tauri.ios.conf.json`'s replacement of
-> `app.windows` correctly drops the base config's `"transparent": true`;
-> whether the Tao/wry iOS webview is attached and non-zero-sized; whether
-> `isOpaque=false` is set with nothing behind it.
+### What it was NOT
 
-### The original (refuted-as-cause) hypothesis, retained for the record
+- **Not `glass.css`.** Gating `data-tauri` on platform (commit `66fa6a9`) is a
+  correct, independently-required D1 fix and it is kept — but the screen stayed
+  black afterwards. The probe later proved `data-tauri` was `null` and
+  `body` background was an opaque `rgb(232,228,223)` the whole time.
+- **Not the blob `<a download>`** tearing down the document.
+- **Not CSP, not asset loading, not a JS error.** Storage proved the app was
+  fully alive: it created a profile, ran the migration probe, and fetched an
+  81 KB model catalog from OpenRouter over the network.
 
-Every launch shows a pure black screen. It is not a load failure, not a CSP
-problem, and not a JS error — the WebKit log shows dozens of successful
-`WebURLSchemeTaskProxy::startLoading` / `didComplete` pairs and nothing else.
+### What it was
 
-Root cause, `styles/glass.css:80-86`:
+Read out through the app's own storage layer (probe writes a key; the file is
+read from the simulator container — no Safari Web Inspector needed):
 
-```css
-/* --- 1. Clear the window down to the native vibrancy --- */
-:root[data-tauri="true"],
-:root[data-tauri="true"] body,
-:root[data-tauri="true"] .app,
-:root[data-tauri="true"] .app-content,
-:root[data-tauri="true"] .preview-area {
-  background: transparent !important;
-}
+```
+innerSize [0,0]   outerSize [0,0]   docScroll [0,0]   centerElement null
+screen [402,874]  rootHtmlLength 29343  bodyHtmlLength 29767
+bodyStyle.background rgb(232,228,223)   resumeRect 816x1056
 ```
 
-`index.html:20-33` sets `data-tauri="true"` whenever **any** Tauri global is
-present, and `native.js:24`'s `isTauri` is true on iOS. So glass.css strips
-every background "down to the native vibrancy" — but iOS has no vibrancy layer.
-`macOSPrivateApi`, `transparent`, and `windowEffects` are macOS-only and are
-silently ignored on iOS. The result is a transparent document over a bare black
-`UIView`.
+**The app was rendering perfectly into a 0×0 viewport.** Nothing was hidden;
+there was nothing to paint into. That also explains why a probe overlay with
+`position:fixed; inset:0` never appeared — it resolves against the viewport, so
+a 0×0 viewport yields a 0×0 overlay.
 
-**The spec predicted this file would misbehave but understated it**, calling the
-outcome "washed-out, low-contrast." It is total invisibility.
+Rust-side instrumentation (written to `<container>/Documents/ios-dbg.txt`) found
+three stacked causes:
 
-**Fix** (already specced as D1, now proven necessary before anything else can be
-observed): gate on *platform*, not on Tauri presence. Either extend the
-`index.html` sniff to skip iOS, or gate the glass.css block behind an additional
-`:root:not([data-platform="ios"])`.
-
-**Isolation performed:** rebuilt with the throwaway probe module removed
-entirely — still black. The probe was not the cause.
-
-## Task 4 — platform behaviour
-
-**Status: BLOCKED by the invisibility defect above.** The on-screen probe
-(`src/dev/iosProbe.js`, throwaway) renders its own opaque overlay and still
-could not be read, because the first run's `<a download>` tore down the
-document and later runs inherited the same blank canvas. These readings need
-the glass.css gate fixed first; none of them are hard, and all are one rebuild
-away once the app is visible.
-
-| Question | Spec predicted | Observed |
+| # | Cause | Evidence |
 |---|---|---|
-| `alert()` elapsed ms | no-op (<5 ms) | not yet read |
-| `confirm()` elapsed ms / return | no-op (<5 ms), false | not yet read |
-| `platform()` | `"ios"` | not yet read |
-| `navigator.platform` | unknown | not yet read |
-| `env(safe-area-inset-top)` without `viewport-fit=cover` | `0px` | not yet read |
-| `env(safe-area-inset-top)` with `viewport-fit=cover` | non-zero | not yet read |
-| `Promise.withResolvers` | present on 17.4+ | not yet read |
-| `ReadableStream[Symbol.asyncIterator]` | absent | not yet read |
-| `#resume` width vs viewport | 816 px inside ~402 pt, cropped | not yet read |
-| App launches on the iOS 27 SDK | yes | **YES — confirmed** |
+| 1 | **WKWebView frame is 0×0.** wry's iOS branch does `initWithFrame: ns_view.frame()` (`wkwebview/mod.rs:447-451`) — the parent's frame *at creation time* — and sets **no autoresizing mask**. Every `setAutoresizingMask` in wry (`:504/507/521/677`) is macOS-only; the iOS path is a bare `addSubview` at `:705`. | `frame_before=0x0` |
+| 2 | **The parent view is also 0×0**, while the grandparent is correct. Sizing only the webview leaves it inside a zero-sized ancestor. | `superview_bounds=0x0`, `superview2_bounds=402x874` |
+| 3 | **The `UIWindow` has no `windowScene`,** so it is orphaned on iOS 13+: it can be sized, unhidden and fully populated and will still never composite. `makeKeyAndVisible()` was a silent no-op. | `window hidden=false key=false`; after attaching a scene, `key=true` |
 
-### Partial result: blob `<a download>` is NOT cancelled on iOS
+**We trigger this ourselves.** Task 2's `UIApplicationSceneManifest` is
+*required* (without it the app will not launch on the iOS 27 SDK), and it is the
+same change that moves tao onto the scene lifecycle where the window is never
+attached. tao's own `set_focus()` reads `window.windowScene()` and branches on
+it, so tao knows the association matters — but under a *static* scene manifest
+nothing ever assigns it.
 
-One reading did land, from the WebKit log of the first probe run:
+### The workaround (spike-quality; needs a proper home in Phase 1)
 
-```
-decidePolicyForNavigationAction: frameID=…, isMainFrame=1
-NavigationState::decidePolicyForNavigationAction: Client responded with policy 2
-… listener called: … policyAction=Download
-Adding download 30 to UIProcess DownloadProxyMap
-ProcessAssertion::acquireSync 'WebKit DownloadProxy DecideDestination'
-FrameLoader::continueLoadAfterNavigationPolicy: can't continue loading frame
-DocumentLoader::detachFromFrame / stopLoading
-```
+From Rust via `with_webview`, on a retry loop **after** the event loop starts
+(doing it inside `setup()` is too early — attempt 1 failed exactly that way):
 
-`WKNavigationActionPolicy` 2 = **Download**, not Cancel (0). Per wry
-`navigation.rs:68-74` that branch is only reachable when
-`has_download_handler == true` — which **contradicts the audit's premise** that
-Tauri leaves `download_handler` at `None`. `tauri/src/webview/mod.rs:612-635` is
-only a doc-comment example, not a default handler, so the mechanism is
-**unexplained and still open**.
+1. size the superview to the grandparent/screen bounds + `autoresizingMask`
+2. size the webview to match + `autoresizingMask`
+3. if `windowScene` is nil, find the connected `UIWindowScene` and attach it
+4. `setHidden:false` + `makeKeyAndVisible`
 
-What is clear: on iOS the click starts a real download that then has no
-`WKDownloadDelegate` to choose a destination, and the main frame's
-`DocumentLoader` is detached and stopped. This is consistent with — and may
-independently explain — why macOS succeeds (macOS WebKit has a default
-destination) while iOS produces nothing. It strengthens, rather than changes,
-the D5 decision to route exports through a share sheet.
+This belongs upstream (tao/wry) rather than in app code. File it; carry the
+workaround until it lands.
 
-| Question | Spec predicted | Observed |
+## Task 4 — platform behaviour — ANSWERED
+
+Measured on the running app (iPhone 17, iOS 27.0, 402×874 pt).
+
+| Question | Spec predicted | **Observed** |
 |---|---|---|
-| `alert()` elapsed ms | no-op (<5 ms) | |
-| `confirm()` elapsed ms / return | no-op (<5 ms), false | |
-| `platform()` | `"ios"` | |
-| `navigator.platform` | unknown | |
-| `env(safe-area-inset-top)` without `viewport-fit=cover` | `0px` | |
-| `env(safe-area-inset-top)` with `viewport-fit=cover` | non-zero | |
-| `Promise.withResolvers` | present on 17.4+ | |
-| `ReadableStream[Symbol.asyncIterator]` | absent | |
-| Blob `<a download>` behaviour | unknown on iOS | |
-| `#resume` width vs viewport | 816 px inside ~402 pt, cropped | |
-| App launches on the iOS 27 SDK | yes, with the scene manifest | |
+| App launches on the iOS 27 SDK | yes | **YES** |
+| `platform()` | `"ios"` | **`"ios"`**, `version()` = `27.0.0` |
+| `navigator.platform` | unknown | **`"iPhone"`** |
+| User agent | unknown | `…(iPhone; CPU iPhone OS 18_7 like Mac OS X)… Mobile/15E148` — note the **frozen `18_7`** even on iOS 27 |
+| `Promise.withResolvers` | present ≥17.4 | **present** — the 17.4 floor is correct |
+| `ReadableStream[Symbol.asyncIterator]` | **absent** | **PRESENT — spec is WRONG** |
+| `env(safe-area-inset-*)` | 0 without `viewport-fit=cover` | **0 both before and after** adding it — needs re-measuring now the viewport is non-zero |
+| `visualViewport` | — | **present** |
+| Task 3.5 platform gate | — | **works** — `data-tauri` is `null` on iOS |
+| `document.documentElement.className` | — | **`"desktop electron"`** — spec D1's unconditional desktop classes, **confirmed** |
+| Google Fonts at runtime | CDN fetch | **confirmed** — `css2?family=Cormorant…` and `DM+Sans` in `document.styleSheets` |
+| `#resume` vs viewport | 816 px cropped | **confirmed** — `resumeRect` 816×1056 at `x=-207` in a 402 pt viewport |
+| Onboarding hard-gate | 2.1 rejection risk | **confirmed visually** — Step 1 of 6 demands an `sk-or-v1-…` key before anything else |
+
+### `alert()` / `confirm()` — the spec is wrong, and the severity is INVERTED
+
+The spec (from the audit's source reading of wry's `WryWebViewUIDelegate`)
+stated these are **silent no-ops**, and reasoned that `backupFlow.js:248`'s
+destructive-import `confirm()` therefore **fails safe** by returning `false`.
+
+Observed on device:
+
+- **`alert()` DOES present a native iOS panel.** Screenshotted: a real
+  "On Paper / probe / Ok" dialog over the onboarding screen.
+- **But it does NOT block JavaScript** — measured `alertMs = 0`, and execution
+  continued straight past it.
+- **`confirm()` also returned in 0 ms**, and returned a **non-boolean object**
+  (serialised as `{}`), not `false`.
+
+Both halves matter. A panel that appears while JS keeps running is a *race*, not
+a no-op: any code that assumes `alert()` blocks is wrong. And if `confirm()`
+yields a truthy object rather than `false`, then
+
+```js
+if (confirm('…will be REPLACED…')) { /* destructive path */ }
+```
+
+**proceeds**. The spec assessed this as fail-safe; the observation suggests
+fail-**dangerous**.
+
+⚠️ **This specific behaviour needs a dedicated, isolated test before it is
+acted on** — the reading comes from one probe run that measured several things
+at once. But it is now the highest-priority unknown in the port, because it
+governs a destructive whole-store replace. Do not rely on the spec's
+"fails safe" claim.
 
 ## Task 5 — createPDF rect spike
 
