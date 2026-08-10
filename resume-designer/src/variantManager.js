@@ -16,6 +16,7 @@
 import { store, generateId, EMPTY_RESUME } from './store.js';
 import { storageErrorToast } from './storageToast.js';
 import { assignGroupIds, groupExperience } from './experienceGroups.js';
+import { showMessage } from './native.js';
 import {
   getVariants,
   getCurrentVariantId,
@@ -248,7 +249,7 @@ export async function importVariant(file, { confirmGrouping = null } = {}) {
     // (it already surfaced the storage error to the user).
     return createVariant(name, data) !== null;
   } catch (err) {
-    alert('Import failed: ' + err.message);
+    await showMessage({ title: 'Import failed', type: 'error', message: 'Import failed: ' + err.message });
     return false;
   }
 }
