@@ -20,9 +20,14 @@ function jsFiles(dir, acc = []) {
   return acc;
 }
 
-// Bare calls with a prompt only: not preceded by `.` or a word character, so
-// `confirmDestructive(` and `props.confirm(` are correctly ignored. A
-// zero-argument local callback named `confirm` is also ignored.
+// Matches the bare call AND the qualified spellings — `window.confirm(`,
+// `globalThis.confirm(`, `self.confirm(` — because the qualified form is the
+// likeliest way the bug comes back and a naive "not preceded by a dot" rule
+// makes it invisible.
+//
+// Still ignored: `confirmDestructive(` (word char follows), `props.confirm(`
+// (an arbitrary member access, not a global), and a zero-argument `confirm()`
+// — PdfDialog passes one as a local callback prop.
 export function findOffenders(pattern) {
   const offenders = [];
   for (const file of jsFiles('src')) {
@@ -39,6 +44,6 @@ export function findOffenders(pattern) {
 
 describe('no blocking browser dialogs', () => {
   it('never calls window.confirm outside the web fallback', () => {
-    expect(findOffenders(/(^|[^.\w])confirm\s*\((?!\s*\))/)).toEqual([]);
+    expect(findOffenders(/(^|[^\w.])(window\.|globalThis\.|self\.)?confirm\s*\((?!\s*\))/)).toEqual([]);
   });
 });

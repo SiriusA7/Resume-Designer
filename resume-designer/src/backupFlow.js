@@ -17,12 +17,7 @@ import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
 import { probeLegacyElectronData, importLegacyElectronData } from './native.js';
-// Relative + explicit extension, NOT the `@/components/ui/confirm` alias the
-// nine React callers use: vitest.config.js declares no resolve.alias, so `@/`
-// resolves under `vite build` but NOT under vitest. backupFlow.js has no test
-// importing it today, so an alias here would fail silently until someone wrote
-// one. See the note in Global Constraints.
-import { confirmDestructive } from './components/ui/confirm.jsx';
+import { confirmDestructive } from '@/components/ui/confirm';
 
 /**
  * Bridge the visual gap between "user clicked OK on the post-import alert" and
