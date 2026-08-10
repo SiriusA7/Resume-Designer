@@ -25,12 +25,17 @@ pub struct PendingPdfPath(pub Mutex<Option<PathBuf>>);
 #[derive(Default)]
 pub struct PreviewPdfPath(pub Mutex<Option<PathBuf>>);
 
-#[cfg(target_os = "macos")]
-mod pdf_macos;
+// WKWebView.createPDF — macOS AND iOS. One implementation, because it is
+// literally one API: `WKPDFConfiguration` and `createPDF` are not cfg-gated in
+// objc2-web-kit, and the module reaches for no AppKit type. Gating it to
+// `macos` alone is what left iOS on the "not supported on this platform"
+// branch even though Phase 0 had already measured createPDF working there.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod pdf_apple;
 #[cfg(target_os = "windows")]
 mod pdf_windows;
-// Shared per-sheet → multi-page PDF merge (pure lopdf) for both desktop captures.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+// Shared per-sheet → multi-page PDF merge (pure lopdf) for every capture.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 mod pdf_merge;
 
 // `pub` so `generate_handler!` in lib.rs can name the commands as
@@ -218,7 +223,7 @@ pub async fn capture_pdf_from_window(
         }
     };
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     let result = {
         let _ = page_size;
         // Prefer the per-sheet rects (one PDF page each, merged + scaled). Fall
@@ -227,7 +232,7 @@ pub async fn capture_pdf_from_window(
             .filter(|v| !v.is_empty())
             .or_else(|| capture_rect.clone().map(|r| vec![r]))
             .unwrap_or_default();
-        pdf_macos::capture_pdf(target, save_path, rects).await
+        pdf_apple::capture_pdf(target, save_path, rects).await
     };
     #[cfg(target_os = "windows")]
     let result = {
@@ -243,7 +248,7 @@ pub async fn capture_pdf_from_window(
             .unwrap_or_default();
         pdf_windows::capture_pdf(target, save_path, rects).await
     };
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     let result = {
         let _ = (target, save_path, capture_rect, capture_rects);
         PdfResult::error("PDF export is not supported on this platform")

@@ -9,7 +9,7 @@
  * Browser fallback: html2pdf.js produces image-based PDFs (not ATS-friendly).
  */
 
-import { isElectron, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, discardPdfPreview, notify } from './native.js';
+import { isElectron, isIOSPlatform, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, discardPdfPreview, notify } from './native.js';
 import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
@@ -167,7 +167,106 @@ function releaseExportGuard() {
   nativeExportInFlight = false;
 }
 
+/**
+ * Generate the PDF from the MAIN window, for iOS.
+ *
+ * The desktop flow above spawns a second, off-screen `WebviewWindow` at
+ * `/print.html`. iOS Tauri is single-window — an iOS app has one `UIWindow` —
+ * and `x`/`y`/`decorations`/`skipTaskbar` are desktop-only options, so that
+ * constructor emits `tauri://error` immediately and the export dies with
+ * "Print window creation failed". Phase 0 proved `createPDF` itself works on
+ * iOS (63,168 bytes returned); it was the window on top of it that never could.
+ *
+ * So iOS captures the window it already has, using the SAME `html.pdf-export-mode`
+ * stylesheet the print window applies to itself: chrome hidden, the zoom
+ * transform and its scroll-margins removed, `.resume` planted at the document
+ * origin at 8.5in. No re-render is needed — a transform does not affect layout,
+ * so the on-screen pagination was already measured at the export width.
+ *
+ * The visible cost is a brief flash of the export layout, which the desktop
+ * flow deliberately avoids. There is no way around it with one window, and the
+ * preview dialog opens over it immediately afterwards.
+ *
+ * @param {string|null} variantId ignored — the main window always holds the
+ *   current variant. Bridge exports of OTHER variants are desktop-only for the
+ *   same single-window reason; the caller rejects them before reaching here.
+ */
+async function generatePdfInMainWindow() {
+  const root = document.documentElement;
+  const resumeEl = document.getElementById('resume');
+  if (!resumeEl) throw new Error('Resume content not found');
+
+  const scroller = document.getElementById('resume-scroller');
+  const scrollTop = scroller?.scrollTop ?? 0;
+  const scrollLeft = scroller?.scrollLeft ?? 0;
+
+  root.classList.add('pdf-export-mode');
+  try {
+    // pdf-export-mode makes <html> the scrolling box, so a mid-document scroll
+    // position would offset every rect measured below.
+    window.scrollTo(0, 0);
+
+    // Fonts are already loaded in this window, unlike a freshly spawned print
+    // window — this resolves immediately and only guards a cold first export.
+    if (document.fonts?.ready) await document.fonts.ready;
+
+    // Force the reflow that the class change requires before measuring. Two
+    // frames, not a timeout: this window IS on screen, so rAF actually fires
+    // here (the print window's setTimeout exists precisely because an
+    // off-screen macOS window never composites).
+    void resumeEl.offsetHeight;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    const bounds = resumeEl.getBoundingClientRect();
+    // Per-sheet rects, doc-relative to #resume — one PDF page per on-screen
+    // `.resume-page`. Identical projection to initPrintMode's.
+    const pages = Array.from(resumeEl.querySelectorAll('.resume-page')).map((p) => {
+      const r = p.getBoundingClientRect();
+      return {
+        x: r.left - bounds.left,
+        y: r.top - bounds.top,
+        width: r.width,
+        height: r.height,
+      };
+    });
+    const captureRect = { x: 0, y: 0, width: bounds.width, height: bounds.height };
+    const pageSize = { width: bounds.width / 96, height: bounds.height / 96 };
+
+    console.log(
+      `PDF Export (iOS, main window): ${bounds.width.toFixed(0)}×${bounds.height.toFixed(0)} CSS px, `
+      + `${pages.length || 1} sheet(s)`
+    );
+
+    const result = await capturePdfFromWindow(
+      'main', pageSize, captureRect, pages.length ? pages : [captureRect]
+    );
+    if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
+  } finally {
+    // Restore unconditionally: leaving the class on would strand the user in a
+    // chrome-less full-bleed page with no way back.
+    root.classList.remove('pdf-export-mode');
+    if (scroller) {
+      scroller.scrollTop = scrollTop;
+      scroller.scrollLeft = scrollLeft;
+    }
+  }
+}
+
 async function generatePdfNative(_resumeEl, _filename, variantId = null) {
+  // iOS captures the main window instead of a print window it cannot create.
+  // Returning before the saveNow()/flush() below is deliberate, not an
+  // oversight: that durability gate exists because the print window is a
+  // separate webview that reads ONLY disk and would otherwise capture stale
+  // data. Here the capture target IS this DOM, so the newest keystroke is
+  // already in it, and blocking the export on a disk write would only add a
+  // way for it to fail.
+  if (isIOSPlatform()) {
+    if (variantId) {
+      // Only the companion bridge passes one, and it is desktop-only.
+      throw new Error('Exporting a specific resume is not supported on iOS');
+    }
+    return generatePdfInMainWindow();
+  }
   // 0. Flush any pending in-memory edits to storage BEFORE the print
   //    window opens. The store's auto-save is debounced (~SAVE_DEBOUNCE_MS),
   //    so a user who types and immediately clicks "Download PDF" can have

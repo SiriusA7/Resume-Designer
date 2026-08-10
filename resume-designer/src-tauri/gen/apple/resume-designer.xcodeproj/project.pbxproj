@@ -24,6 +24,7 @@
 
 /* Begin PBXFileReference section */
 		0941D4F19255C0F1089055FF /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		0B741A1A2068BFDDD8E0BC7E /* pdf_apple.rs */ = {isa = PBXFileReference; path = pdf_apple.rs; sourceTree = "<group>"; };
 		0F2ECBB747B05C1B37AC115E /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		0FEB926F679CAC5A3CED8AA6 /* secret.rs */ = {isa = PBXFileReference; path = secret.rs; sourceTree = "<group>"; };
 		129E38387B051F17EF9D53E5 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -53,7 +54,6 @@
 		E0E20CAEEACE3F9ED75B90D8 /* migration.rs */ = {isa = PBXFileReference; path = migration.rs; sourceTree = "<group>"; };
 		EB78AF9BA041928CF0687CC6 /* bridge.rs */ = {isa = PBXFileReference; path = bridge.rs; sourceTree = "<group>"; };
 		EFDC81558432D9A46C5B9FFB /* OPShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPShell.swift; sourceTree = "<group>"; };
-		FDFFB306C884F74ECC2ACBD7 /* pdf_macos.rs */ = {isa = PBXFileReference; path = pdf_macos.rs; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -139,7 +139,7 @@
 				A9AD7A55017F2378971EFABE /* bundle_name.rs */,
 				E0E20CAEEACE3F9ED75B90D8 /* migration.rs */,
 				66250B1BE62BA664F214CB7E /* mod.rs */,
-				FDFFB306C884F74ECC2ACBD7 /* pdf_macos.rs */,
+				0B741A1A2068BFDDD8E0BC7E /* pdf_apple.rs */,
 				72B526A3E02A81204398D45E /* pdf_merge.rs */,
 				4F7D748785876BEDA2EAD667 /* pdf_windows.rs */,
 				0FEB926F679CAC5A3CED8AA6 /* secret.rs */,
@@ -194,18 +194,18 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_36E915A6-FBB3-4C82-B92F-84D8FD00FB0B" /* x86_64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = x86_64;
-			sourceTree = "<group>";
-		};
-		"TEMP_AD82F72C-C07D-4B50-B644-F65846D99FA5" /* arm64 */ = {
+		"TEMP_603ABFD5-9474-4F99-B8A1-712881D2D986" /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = arm64;
+			sourceTree = "<group>";
+		};
+		"TEMP_FD250B14-4493-49E9-A5ED-89B42F21659C" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
