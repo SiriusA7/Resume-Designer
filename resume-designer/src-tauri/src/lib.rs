@@ -1,4 +1,8 @@
 mod commands;
+// Workaround for upstream wry/tao bugs that leave the iOS webview 0×0 inside an
+// unattached UIWindow — see the module docs. Not app logic; delete on upstream fix.
+#[cfg(target_os = "ios")]
+mod ios_view;
 
 // `Manager` is used by the desktop `app.manage(...)` call in `setup` and by the
 // macOS-only Reopen handler below. Gating to `desktop` keeps it out of mobile
@@ -103,6 +107,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // iOS only: size the webview and attach its window to a scene, both
+            // of which upstream leaves undone. Driven from here because the view
+            // hierarchy does not exist yet in `setup`. See ios_view.rs.
+            #[cfg(target_os = "ios")]
+            ios_view::on_run_event(app_handle, &event);
+
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
                 has_visible_windows,

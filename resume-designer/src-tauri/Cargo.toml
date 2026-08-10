@@ -81,6 +81,16 @@ objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSString
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-app-kit"] }
 block2 = "0.6"
 
+# Just enough Objective-C to run the iOS view-hierarchy workaround in
+# src/ios_view.rs: raw `msg_send!` plus the CGRect/CGPoint/CGSize aliases.
+# Deliberately NOT the macOS block above — that one enables objc2-web-kit with
+# its `objc2-app-kit` feature for pdf_macos.rs, and AppKit does not exist on iOS.
+# Versions match what Tauri 2.11 / wry 0.55 pull in transitively so the tree
+# keeps a single copy of each crate (`cargo tree -d` to verify).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # windows 0.61 matches the transitive version webview2-com 0.38 pulls in;
 # pinning here keeps Interface/cast/HSTRING types from the SAME crate version
