@@ -8,6 +8,7 @@ import { openChatWithContext, addContextChip } from './chatPanel.js';
 import { getPendingChange, applyInlineChange, rejectInlineChange, getCurrentChangeSet, getOriginalContent } from './inlineChanges.js';
 import { showDiffView } from './diffView.js';
 import { appStorage } from './appStorage.js';
+import { EDITABLE_TEXT_ATTRS } from './spellcheck.js';
 
 let isInitialized = false;
 let activeElement = null;
@@ -855,6 +856,12 @@ function startEditing(element) {
   // Make editable
   element.contentEditable = 'true';
   element.spellcheck = true;
+  // spellcheck does NOT govern autocorrect in WebKit, and résumé text is written
+  // straight back to the store — so an autocorrection would be persisted with no
+  // undo. Set the attributes explicitly.
+  for (const [attr, value] of Object.entries(EDITABLE_TEXT_ATTRS)) {
+    element.setAttribute(attr, value);
+  }
   element.classList.add('editing');
   
   // Focus and select all text
@@ -912,6 +919,7 @@ function finishEditing(element) {
   // Remove editing state
   element.contentEditable = 'false';
   element.spellcheck = false;
+  for (const attr of Object.keys(EDITABLE_TEXT_ATTRS)) element.removeAttribute(attr);
   element.classList.remove('editing');
   
   if (activeElement === element) {
