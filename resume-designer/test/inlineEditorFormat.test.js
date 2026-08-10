@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleMarkdownMarker } from '../src/inlineEditor.js';
-import { serializeEmphasis } from '../src/inlineEditor.js';
+import { toggleMarkdownMarker, serializeEmphasis } from '../src/inlineEditor.js';
 
 function el(html) {
   const d = document.createElement('div');
@@ -38,6 +37,29 @@ describe('toggleMarkdownMarker', () => {
     // A `_`-toggle over text already bolded must add italics, not strip bold.
     expect(toggleMarkdownMarker('**hi**', 2, 4, '_'))
       .toEqual({ value: '**_hi_**', start: 3, end: 5 });
+  });
+
+  it('unwraps when the markers are INSIDE the selection (the select-all case)', () => {
+    // startEditing auto-selects the whole raw value, markers included.
+    expect(toggleMarkdownMarker('**Title**', 0, 9, '**'))
+      .toEqual({ value: 'Title', start: 0, end: 5 });
+  });
+
+  it('unwraps markers inside the selection for single-character markers', () => {
+    expect(toggleMarkdownMarker('_Title_', 0, 7, '_'))
+      .toEqual({ value: 'Title', start: 0, end: 5 });
+  });
+
+  it('normalises a backwards selection', () => {
+    expect(toggleMarkdownMarker('hello world', 5, 0, '**'))
+      .toEqual({ value: '**hello** world', start: 2, end: 7 });
+  });
+
+  it('does not treat a too-short selection as wrapped', () => {
+    // '**' selected alone is shorter than a full pair of markers, so it must
+    // wrap rather than "unwrap" to an empty string.
+    expect(toggleMarkdownMarker('**', 0, 2, '**'))
+      .toEqual({ value: '******', start: 2, end: 4 });
   });
 });
 

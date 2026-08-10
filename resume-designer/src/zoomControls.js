@@ -122,9 +122,12 @@ function setZoom(level) {
 function withoutTransition(container, fn) {
   if (!container) { fn(); return; }
   container.classList.add('is-zooming');
-  fn();
-  container.offsetHeight; // commit the change before re-enabling
-  requestAnimationFrame(() => container.classList.remove('is-zooming'));
+  try {
+    fn();
+  } finally {
+    container.offsetHeight; // commit the change before re-enabling
+    requestAnimationFrame(() => container.classList.remove('is-zooming'));
+  }
 }
 
 // Apply zoom to resume container

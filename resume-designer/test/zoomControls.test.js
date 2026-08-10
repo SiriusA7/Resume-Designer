@@ -33,7 +33,7 @@ describe('computeFitZoom', () => {
 
   it('clamps to minZoom, which means a long resume does NOT fully fit', () => {
     // Documented limitation, not desired behaviour: a 4-sheet resume needs
-    // ~0.22 but MIN_ZOOM is 0.25. Phase 3.3 lowers MIN_ZOOM; this test pins
+    // ~0.166 (700 / 4224) but MIN_ZOOM is 0.25. Phase 3.3 lowers MIN_ZOOM; this test pins
     // today's behaviour so that change is visible when it happens.
     const z = computeFitZoom({
       availableWidth: 354, availableHeight: 700,

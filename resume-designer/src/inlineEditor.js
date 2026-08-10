@@ -1082,8 +1082,15 @@ function handleKeyDown(e) {
 }
 
 function toggleMarkerInEditable(editable, marker) {
-  // Skip structural rich text nodes that are reconstructed by specialized extractors.
-  if (editable.querySelector('.skill-tag, .skill-tag-inline, .highlight-bullet')) {
+  // Skip structural rich text nodes that are reconstructed by specialized extractors:
+  // the textContent round-trip below would flatten their markup. `matches` is needed
+  // as well as `querySelector` because these chips are sometimes the editable ITSELF,
+  // not a descendant — renderer.js emits
+  // `<span class="highlight-bullet" data-editable="tools">` per tool — and
+  // querySelector only ever looks at descendants, so the guard missed exactly the
+  // elements it exists to protect.
+  const RICH_TEXT_SELECTOR = '.skill-tag, .skill-tag-inline, .highlight-bullet';
+  if (editable.matches(RICH_TEXT_SELECTOR) || editable.querySelector(RICH_TEXT_SELECTOR)) {
     return;
   }
 
@@ -1130,24 +1137,43 @@ function setSelectionInEditable(editable, start, end) {
  * Exported for unit testing; the DOM wrapper is toggleMarkerInEditable.
  */
 export function toggleMarkdownMarker(value, start, end, marker) {
-  if (start === end) return { value, start, end };
-  const len = marker.length;
-  const before = value.slice(0, start);
-  const selected = value.slice(start, end);
-  const after = value.slice(end);
+  // A DOM selection can run backwards (anchor after focus), so normalise before
+  // slicing — otherwise `selected` is empty and every branch below misbehaves.
+  const selectionStart = Math.min(start, end);
+  const selectionEnd = Math.max(start, end);
+  if (selectionStart === selectionEnd) return { value, start: selectionStart, end: selectionEnd };
 
-  // Already wrapped by this exact marker? Unwrap.
+  const len = marker.length;
+  const before = value.slice(0, selectionStart);
+  const selected = value.slice(selectionStart, selectionEnd);
+  const after = value.slice(selectionEnd);
+
+  // Markers INSIDE the selection? Unwrap. This is the default path in the app:
+  // startEditing ends with range.selectNodeContents(element), so a click selects
+  // the whole RAW value including its markers. Must be tested before the
+  // markers-outside case. The length guard keeps a selection that is nothing but
+  // the marker itself (e.g. '**') from "unwrapping" to an empty string.
+  if (selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= 2 * len) {
+    const unwrapped = selected.slice(len, -len);
+    return {
+      value: before + unwrapped + after,
+      start: selectionStart,
+      end: selectionStart + unwrapped.length,
+    };
+  }
+
+  // Markers OUTSIDE the selection? Unwrap outward.
   if (before.endsWith(marker) && after.startsWith(marker)) {
     return {
       value: before.slice(0, -len) + selected + after.slice(len),
-      start: start - len,
-      end: end - len,
+      start: selectionStart - len,
+      end: selectionEnd - len,
     };
   }
   return {
     value: `${before}${marker}${selected}${marker}${after}`,
-    start: start + len,
-    end: end + len,
+    start: selectionStart + len,
+    end: selectionEnd + len,
   };
 }
 
