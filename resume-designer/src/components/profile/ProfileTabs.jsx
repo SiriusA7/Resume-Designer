@@ -11,7 +11,7 @@ import {
 import { cn } from '@/lib/utils';
 import { confirmDestructive } from '@/components/ui/confirm';
 
-import { shouldSpellcheck } from '../../spellcheck.js';
+import { shouldSpellcheck, EDITABLE_TEXT_ATTRS } from '../../spellcheck.js';
 import { groupExperience, companyKey } from '../../experienceGroups.js';
 import { generateId } from '../../store.js';
 import ExperienceDateField from '../experience/ExperienceDateField.jsx';
@@ -64,7 +64,10 @@ function SectionHeader({ title, description }) {
 }
 
 // A labeled, uncontrolled text input that commits to the working object on change.
-function Field({ id, label, icon, type = 'text', value, placeholder, onCommit }) {
+// `prose`: this field's value is résumé content (not an identifier like email/
+// phone/a social URL), so WebKit autocorrect/autocapitalize are disabled — see
+// EDITABLE_TEXT_ATTRS in spellcheck.js.
+function Field({ id, label, icon, type = 'text', value, placeholder, onCommit, prose = false }) {
   return (
     <div className="space-y-1.5">
       {label && (
@@ -79,12 +82,14 @@ function Field({ id, label, icon, type = 'text', value, placeholder, onCommit })
         placeholder={placeholder}
         defaultValue={value || ''}
         onChange={(e) => onCommit(e.target.value)}
+        {...(prose ? EDITABLE_TEXT_ATTRS : null)}
       />
     </div>
   );
 }
 
-// A labeled, uncontrolled textarea with a muted hint (Summary-tab idiom).
+// A labeled, uncontrolled textarea with a muted hint (Summary-tab idiom). Every
+// caller holds résumé prose, so WebKit autocorrect/autocapitalize are always off.
 function Area({ id, label, hint, value, placeholder, rows = 4, onCommit }) {
   return (
     <div className="space-y-1.5">
@@ -100,6 +105,7 @@ function Area({ id, label, hint, value, placeholder, rows = 4, onCommit }) {
         placeholder={placeholder}
         defaultValue={stripEmphasis(value)}
         onChange={(e) => onCommit(e.target.value)}
+        {...EDITABLE_TEXT_ATTRS}
       />
     </div>
   );
@@ -135,10 +141,10 @@ function ContactTab({ profile, scheduleSave }) {
       <section>
         <SectionHeader title="Basic information" description="Your name and contact details for resumes" />
         <div className="grid grid-cols-2 gap-4">
-          <Field id="profile-fullName" label="Full name" value={c.fullName} placeholder="e.g. John Smith" onCommit={set('fullName')} />
+          <Field id="profile-fullName" label="Full name" value={c.fullName} placeholder="e.g. John Smith" onCommit={set('fullName')} prose />
           <Field id="profile-email" label="Email" type="email" value={c.email} placeholder="e.g. john@example.com" onCommit={set('email')} />
           <Field id="profile-phone" label="Phone" type="tel" value={c.phone} placeholder="e.g. (555) 123-4567" onCommit={set('phone')} />
-          <Field id="profile-location" label="Location" value={c.location} placeholder="e.g. San Francisco, CA" onCommit={set('location')} />
+          <Field id="profile-location" label="Location" value={c.location} placeholder="e.g. San Francisco, CA" onCommit={set('location')} prose />
         </div>
       </section>
 
@@ -288,6 +294,7 @@ function RoleSubCard({ exp, index, set, setDates, onDelete, onDetach, canDetach 
           className="font-medium" placeholder="Job title"
           defaultValue={exp.title || ''}
           onChange={(e) => set(index, 'title')(e.target.value)}
+          {...EDITABLE_TEXT_ATTRS}
         />
         <Button
           type="button" variant="ghost" size="icon"
@@ -304,6 +311,7 @@ function RoleSubCard({ exp, index, set, setDates, onDelete, onDetach, canDetach 
         placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
         defaultValue={stripEmphasis(exp.details)}
         onChange={(e) => set(index, 'details')(e.target.value)}
+        {...EDITABLE_TEXT_ATTRS}
       />
       {canDetach && (
         <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
@@ -337,6 +345,7 @@ function EmployerBlock({
             defaultValue={group.company}
             onChange={(e) => onCompanyChange(group, e.target.value)}
             onBlur={onCompanyBlur}
+            {...EDITABLE_TEXT_ATTRS}
           />
         </div>
         <span className="shrink-0 whitespace-nowrap pb-2 text-[11.5px] font-medium text-muted-foreground">
@@ -405,6 +414,7 @@ function SoloJobCard({ exp, index, set, setDates, onCompanyBlur, onAddRole, onDe
           className="font-medium" placeholder="Job title"
           defaultValue={exp.title || ''}
           onChange={(e) => set(index, 'title')(e.target.value)}
+          {...EDITABLE_TEXT_ATTRS}
         />
         {canAddRole && (
           <Button
@@ -429,6 +439,7 @@ function SoloJobCard({ exp, index, set, setDates, onCompanyBlur, onAddRole, onDe
         defaultValue={exp.company || ''}
         onChange={(e) => set(index, 'company')(e.target.value)}
         onBlur={onCompanyBlur}
+        {...EDITABLE_TEXT_ATTRS}
       />
       <ExperienceDateField entry={exp} onCommit={setDates(index)} />
       <Textarea
@@ -436,6 +447,7 @@ function SoloJobCard({ exp, index, set, setDates, onCompanyBlur, onAddRole, onDe
         placeholder="Describe this role in detail: what did you accomplish? What challenges did you overcome? What technologies did you use? What was your team like?"
         defaultValue={stripEmphasis(exp.details)}
         onChange={(e) => set(index, 'details')(e.target.value)}
+        {...EDITABLE_TEXT_ATTRS}
       />
       {showLinkAbove && (
         <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
@@ -654,7 +666,7 @@ function SkillsTab({ profile, scheduleSave, refresh }) {
           ) : (
             skills.map((skill, i) => (
               <div className="flex items-center gap-2" key={i}>
-                <Input className="flex-1" placeholder="Skill name" defaultValue={skill.name || ''} onChange={(e) => set(i, 'name')(e.target.value)} />
+                <Input className="flex-1" placeholder="Skill name" defaultValue={skill.name || ''} onChange={(e) => set(i, 'name')(e.target.value)} {...EDITABLE_TEXT_ATTRS} />
                 <Select defaultValue={skill.proficiency || undefined} onValueChange={set(i, 'proficiency')}>
                   <SelectTrigger className="w-[150px]">
                     <SelectValue placeholder="Proficiency" />
@@ -713,17 +725,18 @@ function EducationTab({ profile, scheduleSave, refresh }) {
         onAdd={() => { items.push({ degree: '', institution: '', dates: '', details: '' }); refresh(); }}
         onDelete={(i) => { items.splice(i, 1); refresh(); }}
         renderTitle={(edu, i) => (
-          <Input className="font-medium" placeholder="Degree / program" defaultValue={edu.degree || ''} onChange={(e) => set(i, 'degree')(e.target.value)} />
+          <Input className="font-medium" placeholder="Degree / program" defaultValue={edu.degree || ''} onChange={(e) => set(i, 'degree')(e.target.value)} {...EDITABLE_TEXT_ATTRS} />
         )}
         renderBody={(edu, i) => (
           <>
-            <Input placeholder="Institution" defaultValue={edu.institution || ''} onChange={(e) => set(i, 'institution')(e.target.value)} />
+            <Input placeholder="Institution" defaultValue={edu.institution || ''} onChange={(e) => set(i, 'institution')(e.target.value)} {...EDITABLE_TEXT_ATTRS} />
             <Input placeholder="Dates / year" defaultValue={edu.dates || ''} onChange={(e) => set(i, 'dates')(e.target.value)} />
             <Textarea
               rows={3}
               placeholder="Notable courses, projects, thesis, honors, activities, GPA if relevant..."
               defaultValue={stripEmphasis(edu.details)}
               onChange={(e) => set(i, 'details')(e.target.value)}
+              {...EDITABLE_TEXT_ATTRS}
             />
           </>
         )}
@@ -749,7 +762,7 @@ function ProjectsTab({ profile, scheduleSave, refresh }) {
         onAdd={() => { items.push({ name: '', url: '', description: '' }); refresh(); }}
         onDelete={(i) => { items.splice(i, 1); refresh(); }}
         renderTitle={(proj, i) => (
-          <Input className="font-medium" placeholder="Project name" defaultValue={proj.name || ''} onChange={(e) => set(i, 'name')(e.target.value)} />
+          <Input className="font-medium" placeholder="Project name" defaultValue={proj.name || ''} onChange={(e) => set(i, 'name')(e.target.value)} {...EDITABLE_TEXT_ATTRS} />
         )}
         renderBody={(proj, i) => (
           <>
@@ -759,6 +772,7 @@ function ProjectsTab({ profile, scheduleSave, refresh }) {
               placeholder="Describe the project: what problem does it solve? What technologies did you use? What was your role? What was the outcome?"
               defaultValue={stripEmphasis(proj.description)}
               onChange={(e) => set(i, 'description')(e.target.value)}
+              {...EDITABLE_TEXT_ATTRS}
             />
           </>
         )}
@@ -800,7 +814,7 @@ function MoreTab({ profile, scheduleSave, refresh }) {
             <Empty title="No certifications added" />
           ) : certs.map((cert, i) => (
             <CompactRow key={i} onDelete={() => { certs.splice(i, 1); refresh(); }}>
-              <Input className="flex-1" placeholder="Certification name" defaultValue={cert.name || ''} onChange={(e) => { certs[i].name = e.target.value; scheduleSave(); }} />
+              <Input className="flex-1" placeholder="Certification name" defaultValue={cert.name || ''} onChange={(e) => { certs[i].name = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />
               <Input className="w-24" placeholder="Year" defaultValue={cert.year || ''} onChange={(e) => { certs[i].year = e.target.value; scheduleSave(); }} />
             </CompactRow>
           ))}
@@ -815,7 +829,7 @@ function MoreTab({ profile, scheduleSave, refresh }) {
             <Empty title="No achievements added" />
           ) : achs.map((ach, i) => (
             <CompactRow key={i} onDelete={() => { achs.splice(i, 1); refresh(); }}>
-              <Input className="flex-1" placeholder="Achievement description" defaultValue={ach.description || ''} onChange={(e) => { achs[i].description = e.target.value; scheduleSave(); }} />
+              <Input className="flex-1" placeholder="Achievement description" defaultValue={ach.description || ''} onChange={(e) => { achs[i].description = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />
             </CompactRow>
           ))}
           <AddButton onClick={() => { achs.push({ description: '' }); refresh(); }}>Add achievement</AddButton>
@@ -830,10 +844,10 @@ function MoreTab({ profile, scheduleSave, refresh }) {
           ) : customs.map((sec, i) => (
             <EntryCard
               key={i}
-              titleInput={<Input className="font-medium" placeholder="Section title" defaultValue={sec.title || ''} onChange={(e) => { customs[i].title = e.target.value; scheduleSave(); }} />}
+              titleInput={<Input className="font-medium" placeholder="Section title" defaultValue={sec.title || ''} onChange={(e) => { customs[i].title = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />}
               onDelete={() => { customs.splice(i, 1); refresh(); }}
             >
-              <Textarea rows={3} placeholder="Content..." defaultValue={stripEmphasis(sec.content)} onChange={(e) => { customs[i].content = e.target.value; scheduleSave(); }} />
+              <Textarea rows={3} placeholder="Content..." defaultValue={stripEmphasis(sec.content)} onChange={(e) => { customs[i].content = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />
             </EntryCard>
           ))}
           <AddButton onClick={() => { customs.push({ title: '', content: '' }); refresh(); }}>Add custom section</AddButton>

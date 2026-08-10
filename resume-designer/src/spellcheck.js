@@ -11,30 +11,12 @@ export function shouldSpellcheck(fieldKind) {
   return !IDENTIFIER_KINDS.has(fieldKind);
 }
 
-// Kinds where autocorrect is welcome: free text the user is writing FOR a
-// machine to read, where a substitution is harmless and a typo is not stored.
-const AUTOCORRECT_KINDS = new Set(['chat']);
-
-/**
- * Autocorrect policy — deliberately far stricter than spellcheck.
- *
- * Résumé fields round-trip through `textContent` into the store
- * (`inlineEditor.js`), so a WebKit autocorrection is persisted with no undo and
- * no signal. Worse, the live value carries raw markdown markers, so smart
- * punctuation rewrites `**bold**` into curly quotes and dashes. Spellcheck only
- * squiggles; autocorrect edits.
- *
- * @param {string} [fieldKind] @returns {boolean}
- */
-export function shouldAutocorrect(fieldKind) {
-  return AUTOCORRECT_KINDS.has(fieldKind);
-}
-
-// The attribute set that disables WebKit's text substitution on an editable.
-// `autocorrect` and `autocapitalize` are the iOS-relevant pair; `autocomplete`
-// stops the keyboard's strip offering stored form values.
+// The attribute pair that disables WebKit's text substitution on an editable.
+// Résumé fields round-trip through `textContent` into the store
+// (`inlineEditor.js`), so a WebKit autocorrection is persisted with no undo and
+// no signal. Worse, the live value carries raw markdown markers, so smart
+// punctuation rewrites `**bold**` into curly quotes and dashes.
 export const EDITABLE_TEXT_ATTRS = {
   autocorrect: 'off',
   autocapitalize: 'off',
-  autocomplete: 'off',
 };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldSpellcheck, shouldAutocorrect, EDITABLE_TEXT_ATTRS } from '../src/spellcheck.js';
+import { shouldSpellcheck, EDITABLE_TEXT_ATTRS } from '../src/spellcheck.js';
 
 describe('shouldSpellcheck', () => {
   it('spellchecks prose and unknown kinds', () => {
@@ -16,29 +16,18 @@ describe('shouldSpellcheck', () => {
   });
 });
 
-describe('shouldAutocorrect', () => {
-  it('is false for résumé prose — an autocorrection here is persisted silently', () => {
-    // Résumé text round-trips through textContent straight into the store, and
-    // the live value contains raw markdown markers that smart punctuation eats.
-    expect(shouldAutocorrect('prose')).toBe(false);
-    expect(shouldAutocorrect(undefined)).toBe(false);
-  });
-
-  it('is false for identifiers too', () => {
-    expect(shouldAutocorrect('slug')).toBe(false);
-  });
-
-  it('is true only where the user is composing free text for a machine to read', () => {
-    expect(shouldAutocorrect('chat')).toBe(true);
-  });
-});
-
 describe('EDITABLE_TEXT_ATTRS', () => {
-  it('turns off every WebKit text-substitution behaviour', () => {
-    expect(EDITABLE_TEXT_ATTRS).toEqual({
-      autocorrect: 'off',
-      autocapitalize: 'off',
-      autocomplete: 'off',
-    });
+  it('round-trips onto a real element the way inlineEditor applies and removes it', () => {
+    const element = document.createElement('div');
+
+    for (const [attr, value] of Object.entries(EDITABLE_TEXT_ATTRS)) {
+      element.setAttribute(attr, value);
+    }
+    expect(element.getAttribute('autocorrect')).toBe('off');
+    expect(element.getAttribute('autocapitalize')).toBe('off');
+
+    for (const attr of Object.keys(EDITABLE_TEXT_ATTRS)) element.removeAttribute(attr);
+    expect(element.hasAttribute('autocorrect')).toBe(false);
+    expect(element.hasAttribute('autocapitalize')).toBe(false);
   });
 });
