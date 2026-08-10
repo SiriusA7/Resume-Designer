@@ -28,6 +28,23 @@ export const isTauri =
 // Slated for removal in a follow-up cleanup PR.
 export const isElectron = isTauri;
 
+/**
+ * True on iPhone/iPad. Mirrors the platform gate in index.html.
+ *
+ * iPadOS 13+ reports a Macintosh user agent, so the UA alone is not enough —
+ * `maxTouchPoints > 1` is the discriminator, and a real Mac reports 0. Getting
+ * this wrong in the other direction blanked the iPad once already.
+ *
+ * @param {string} [userAgent] @param {string} [platform] @param {number} [maxTouchPoints]
+ */
+export function isIOSPlatform(
+  userAgent = navigator.userAgent,
+  platform = navigator.platform,
+  maxTouchPoints = navigator.maxTouchPoints,
+) {
+  return /iPad|iPhone|iPod/.test(userAgent) || (platform === 'MacIntel' && maxTouchPoints > 1);
+}
+
 let _platformCache = null;
 let _appInfoCache = null;
 
@@ -467,9 +484,14 @@ export async function checkForUpdates(source = 'manual', { notifyOnly = false } 
 /**
  * Auto-check on app launch. Called once from src/main.js init().
  * Equivalent of electron/main.cjs:106 `checkForUpdates('startup')`.
+ *
+ * Skipped entirely on iOS: `check_update_on_channel` is a `#[cfg(desktop)]`
+ * Rust command that does not exist there, and App Store builds must not
+ * self-update anyway. Without this gate the invoke rejects and the startup
+ * source surfaces the rejection as a visible "Updater error" toast.
  */
 export async function startupUpdateCheck() {
-  if (!isTauri || import.meta.env.DEV) return;
+  if (!isTauri || import.meta.env.DEV || isIOSPlatform()) return;
   // Seed the channel from the build type on first run — before the auto-check
   // gate, so a fresh beta install lands on the beta (superset) channel even if
   // auto-check is later turned off.

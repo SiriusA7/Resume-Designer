@@ -32,7 +32,7 @@ import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
 import {
   isTauri, getAppInfo, getUpdateChannel, setUpdateChannel,
-  getAutoUpdateCheck, setAutoUpdateCheck,
+  getAutoUpdateCheck, setAutoUpdateCheck, isIOSPlatform,
 } from '../native.js';
 import {
   getUsageSummary, getUsageByDate, exportUsageData, clearUsageData,
@@ -61,12 +61,14 @@ const THEME_OPTIONS = [
   { value: 'system', label: 'System', Icon: Monitor },
 ];
 
-// Tab order matches the original settings modal. Updates is desktop-only.
+// Tab order matches the original settings modal. Updates is desktop-only:
+// isTauri alone doesn't discriminate (it's also true on iOS), and App Store
+// builds must not self-update, so isIOSPlatform() excludes iOS explicitly.
 const TABS = [
   { id: 'account', label: 'Account', Icon: UserCircle },
   { id: 'general', label: 'General', Icon: SlidersHorizontal },
   { id: 'api-keys', label: 'AI', Icon: Sparkles },
-  ...(isTauri ? [{ id: 'updates', label: 'Updates', Icon: RefreshCw }] : []),
+  ...(isTauri && !isIOSPlatform() ? [{ id: 'updates', label: 'Updates', Icon: RefreshCw }] : []),
   { id: 'data', label: 'Data', Icon: Database },
   { id: 'usage', label: 'Usage', Icon: BarChart3 },
 ];
@@ -664,7 +666,7 @@ export default function SettingsDialog() {
             )}
 
             {/* Updates (desktop only) */}
-            {isTauri && tab === 'updates' && (
+            {isTauri && !isIOSPlatform() && tab === 'updates' && (
               <div className="space-y-6">
                 <section className="space-y-2.5">
                   <Label>Update channel</Label>
