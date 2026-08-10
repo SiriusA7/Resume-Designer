@@ -916,7 +916,24 @@ html[data-theme="dark"] .header-variant-select {
 .resume-container {
   width: 8.5in;
   min-width: 8.5in;
-  margin-inline: auto; /* centres when there is room; no-ops when cropped */
+  /* A transform does NOT extend an ancestor's scrollable overflow, and
+     start-side overflow is unreachable in every engine. With `top center` the
+     scaled page grew symmetrically outside #resume-scroller and only the right
+     half could be scrolled to — above ~106% zoom the left margin was simply
+     gone (measured: at 2x, 228px over each edge, 196px of scroll).
+
+     So scale from `top left` and make the element's own FOOTPRINT track the
+     scaled width, which puts the overflow back into normal layout where it is
+     scrollable:
+       margin-left  centres while there is room, clamping to 0 once the page is
+                    wider than the scrollport so its left edge sits exactly on
+                    the scroll origin;
+       margin-right reserves the width the transform adds (and goes negative
+                    below 100%, correctly shrinking the footprint to 8.5in*zoom).
+     `--zoom` is published by applyZoom() in zoomControls.js; the 1 fallback
+     keeps this identical to the old rule before the first paint. */
+  margin-left: max(0px, calc((100% - 8.5in * var(--zoom, 1)) / 2));
+  margin-right: calc((var(--zoom, 1) - 1) * 8.5in);
   background: white;
   border-radius: 4px;
   box-shadow:
@@ -924,7 +941,7 @@ html[data-theme="dark"] .header-variant-select {
     0 10px 40px rgba(0, 0, 0, 0.1);
   flex-shrink: 0;
   overflow: hidden;
-  transform-origin: top center;
+  transform-origin: top left;
   transition: transform 0.2s ease;
 }
 

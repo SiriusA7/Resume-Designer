@@ -148,6 +148,11 @@ function applyZoom() {
 
   if (container) {
     container.style.transform = `scale(${currentZoom})`;
+    // `.resume-container` sizes its own margins from this so the element's
+    // footprint tracks the SCALED width — a transform alone never extends the
+    // scroller's scrollable area, which is what made the page's left margin
+    // unreachable above ~106%. See the margin comment in main.css.
+    container.style.setProperty('--zoom', `${currentZoom}`);
   }
 
   if (zoomLevel) {
