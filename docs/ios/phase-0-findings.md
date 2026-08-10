@@ -437,11 +437,55 @@ Screenshotted on first launch: a toast reading **"Updater error: Command
 `isTauri` is true on iOS, so `updateFlow.js`'s startup check calls a
 `#[cfg(desktop)]` command. Confirms the 2.1 App Store rejection risk.
 
-## Task 6 — contentEditable spike (physical hardware)
+## Task 6 — contentEditable spike — **PASSED on physical hardware**
 
-*(pending — assigned to the developer)*
+**Device:** Ash's iPhone (iPhone 16 Pro, `iPhone17,1`), real hardware, not the
+Simulator. Build: `tauri ios build --debug --target aarch64`, installed via
+`xcrun devicectl device install app`. Development-provisioned under team
+`847VH25R7U` using the pre-existing wildcard profile `847VH25R7U.*` — so no App
+ID registration and no free-personal-team 7-day limit were needed, contrary to
+the plan's assumption.
 
-**Hardware is available**, which the plan treated as an open question. Paired to
-this Mac: **Ash's iPhone** (iPhone 16 Pro, `iPhone17,1`, physical), **Ash's iPad
-Pro** (`iPad16,3`), **Ash's iPad Mini** (`iPad14,1`). No new purchase or
-enrolment is needed for the on-device spike.
+**Result, reported by the developer:** the app works, nothing is broken, and
+**tapping into résumé text places the caret correctly and selection handles drag
+correctly** — inside the `transform: scale()`d subtree at phone zoom. The
+remaining issues are UI/UX, "in the context of it being an iOS app."
+
+### This refutes D7's premise and shrinks Phase 3
+
+D7 ("disable `contentEditable` on mobile; tap → select → edit in a sheet")
+existed **solely** to sidestep the caret/selection risk, which the spec called
+"the largest genuinely unverified risk in the entire port." That risk did not
+materialise. On-page editing works on iOS.
+
+**Therefore D7 must be revised before Phase 3 is planned.** It changes from
+*"rewrite the mobile editing model"* to *"harden the existing editor for
+touch"* — a large scope reduction. The plan's own contingency said exactly this:
+"If they work, on-page editing reopens and D7 gets revisited."
+
+**What is NOT thereby answered** — these were not part of the caret/selection
+check and remain open:
+
+- **Autocorrect persistence.** There are still **zero** `autocorrect` /
+  `autocapitalize` attributes anywhere in `src/`, and `inlineEditor.js:975`
+  writes `element.textContent` straight to storage. iOS rewriting `Kubernetes`
+  or `SaaS` and *persisting* it is still a live risk. Required regardless.
+- **Keyboard avoidance.** Every ancestor is `overflow: hidden`, so a focused
+  field physically cannot scroll above the software keyboard. Still needs the
+  `visualViewport` work.
+- **The AI Apply/Reject dead-end.** `inlineEditor.js:58` still gates that menu on
+  `mouseover`, and `startEditing()` calls `hideAIButton()` at `:785`. Caret
+  working does not make a hover-only menu tappable. Still needs a touch surface —
+  but it can now be solved *in place* rather than by rehosting the whole editor
+  in a sheet.
+- **Pinch-zoom conflict (D8).** `index.html` has no `maximum-scale`, so WKWebView
+  page zoom fights `zoomControls.js`'s `transform: scale()`. With on-page editing
+  retained this becomes **more** load-bearing, not less — the plan predicted this
+  exact trade.
+
+### Phase 0 status after this
+
+Every spike in the plan has now returned a result. Outstanding items are no
+longer unknowns, only work: the desktop runtime gate (`tauri:dev` PDF export +
+update check), the option-C re-test with an opaque iframe, and three upstream
+issues to file.
