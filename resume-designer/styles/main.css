@@ -1502,11 +1502,14 @@ html[data-theme="dark"] .header-variant-select {
 
 /* 1200px: Second stage - collapse button text */
 @media (max-width: 1200px) {
+  /* --structure-panel-width only: nothing sets it as an inline style, so this
+     override is live and .structure-panel (editor.css) consumes it. The sibling
+     --chat-panel-width override was deleted — ChatPanel.jsx pins that property
+     inline on :root, which outranks any @media :root rule. */
   :root {
-    --chat-panel-width: 280px;
     --structure-panel-width: 340px;
   }
-  
+
   /* Hide Tools button text and arrow */
   .header-tools-btn .btn-text,
   .header-tools-btn .dropdown-arrow {
@@ -1536,10 +1539,6 @@ html[data-theme="dark"] .header-variant-select {
 
 /* 1050px: Third stage - collapse more buttons */
 @media (max-width: 1050px) {
-  :root {
-    --chat-panel-width: 260px;
-  }
-  
   /* Hide Import/Export text */
   .header-import-btn .btn-text,
   .header-export-btn .btn-text {

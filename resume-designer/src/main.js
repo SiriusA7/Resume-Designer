@@ -1049,8 +1049,11 @@ function initUndoRedo() {
       return;
     }
     
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    const modKey = isMac ? e.metaKey : e.ctrlKey;
+    // metaKey on Apple platforms, ctrlKey elsewhere — accepting either avoids a
+    // deprecated navigator.platform read and matches the two other handlers in
+    // this codebase (inlineEditor.js, zoomControls.js). No shortcut in this
+    // block uses both.
+    const modKey = e.metaKey || e.ctrlKey;
     
     if (modKey && e.key === 'z' && !e.shiftKey) {
       e.preventDefault();
