@@ -10,6 +10,29 @@ const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const ZOOM_STEP = 0.1;
 
+/**
+ * Pure fit-to-view maths, extracted so it can be unit-tested without a DOM.
+ * All measurements are in CSS px at scale 1.
+ *
+ * Returns 1 (not 0 or NaN) for unmeasurable input, so a failed measurement
+ * leaves the canvas where it is instead of collapsing it.
+ */
+export function computeFitZoom({
+  availableWidth,
+  availableHeight,
+  contentWidth,
+  contentHeight,
+  minZoom = MIN_ZOOM,
+  maxZoom = MAX_ZOOM,
+}) {
+  const ok = (n) => Number.isFinite(n) && n > 0;
+  if (!ok(availableWidth) || !ok(availableHeight) || !ok(contentWidth) || !ok(contentHeight)) {
+    return 1;
+  }
+  const fit = Math.min(availableWidth / contentWidth, availableHeight / contentHeight);
+  return Math.min(Math.max(fit, minZoom), maxZoom);
+}
+
 // Initialize zoom controls
 export function initZoomControls() {
   const zoomIn = document.getElementById('zoom-in');
@@ -69,6 +92,17 @@ export function initZoomControls() {
   // repositioning is needed — a prior repositionToolbar() computed a
   // viewport-relative left and applied it to the now preview-area-relative bar,
   // double-counting the open chat panel's width and pushing it off-screen.
+
+  // The window can change size at any time — a resized Mac window, a rotated
+  // phone, an iPad Split View drag. Refit rather than leaving a stale zoom.
+  // Debounced because a Split View drag fires continuously.
+  let refitTimer = null;
+  const scheduleRefit = () => {
+    clearTimeout(refitTimer);
+    refitTimer = setTimeout(fitToView, 150);
+  };
+  window.addEventListener('resize', scheduleRefit);
+  window.addEventListener('orientationchange', scheduleRefit);
 }
 
 // Set zoom level
@@ -96,35 +130,29 @@ function applyZoom() {
 }
 
 // Fit resume to available view space
-function fitToView() {
+export function fitToView() {
   const scroller = document.getElementById('resume-scroller');
   const container = document.getElementById('resume-container');
-  
+
   if (!scroller || !container) return;
-  
-  // Temporarily reset zoom to get true dimensions
+
+  // Measure at scale 1 so scrollHeight is the true, unscaled height.
   container.style.transform = 'scale(1)';
-  
-  // Force reflow to get accurate measurements
-  container.offsetHeight;
-  
-  // Get available space (subtract padding)
-  const availableWidth = scroller.clientWidth - 64; // 32px padding on each side
-  const availableHeight = scroller.clientHeight - 96; // 64px top + 32px bottom
-  
-  // Get resume size at scale 1
-  const resumeWidth = 8.5 * 96; // 8.5 inches at 96 DPI
-  const resumeHeight = container.scrollHeight || 11 * 96; // Now measured at scale 1
-  
-  // Calculate zoom to fit
-  const widthZoom = availableWidth / resumeWidth;
-  const heightZoom = availableHeight / resumeHeight;
-  
-  // Use the smaller zoom to ensure entire resume is visible
-  const fitZoom = Math.min(widthZoom, heightZoom, MAX_ZOOM);
-  
-  // Apply the calculated zoom
-  setZoom(Math.max(fitZoom, MIN_ZOOM));
+  container.offsetHeight; // force reflow
+
+  // clientWidth/Height INCLUDE padding, so subtract the real computed values
+  // rather than the constants the CSS used to have. Padding is driven by
+  // var(--space-xl) and will change again in 3.2.
+  const cs = getComputedStyle(scroller);
+  const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+
+  setZoom(computeFitZoom({
+    availableWidth: scroller.clientWidth - padX,
+    availableHeight: scroller.clientHeight - padY,
+    contentWidth: 8.5 * 96,
+    contentHeight: container.scrollHeight || 11 * 96,
+  }));
 }
 
 // Update button enabled/disabled states
