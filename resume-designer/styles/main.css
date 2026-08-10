@@ -896,6 +896,14 @@ html[data-theme="dark"] .header-variant-select {
   transition: transform 0.2s ease;
 }
 
+/* Programmatic zoom (fit-to-view, and 3.3's column zoom) must be instantaneous:
+   the transition makes getBoundingClientRect() report in-flight values while
+   getZoom() reports the target, which makes pagination.js measure wrongly. It
+   is also what causes the visible out-and-back wobble on fit-to-view. */
+.resume-container.is-zooming {
+  transition: none;
+}
+
 /* ===== On-screen pagination — true page "sheets" ===== */
 /* When paginated, #resume and its container stop being a single white page;
    each .resume-page is the paper. The zoom transform stays on .resume-container. */

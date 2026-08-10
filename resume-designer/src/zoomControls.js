@@ -112,15 +112,30 @@ function setZoom(level) {
   saveZoom();
 }
 
+/**
+ * Run a zoom mutation with the CSS transition suppressed, then restore it on
+ * the next frame. Without this, measurement during the 0.2s transition
+ * disagrees with getZoom() — see the .is-zooming comment in main.css.
+ */
+function withoutTransition(container, fn) {
+  if (!container) { fn(); return; }
+  container.classList.add('is-zooming');
+  fn();
+  container.offsetHeight; // commit the change before re-enabling
+  requestAnimationFrame(() => container.classList.remove('is-zooming'));
+}
+
 // Apply zoom to resume container
 function applyZoom() {
   const container = document.getElementById('resume-container');
   const zoomLevel = document.getElementById('zoom-level');
-  
+
   if (container) {
-    container.style.transform = `scale(${currentZoom})`;
+    withoutTransition(container, () => {
+      container.style.transform = `scale(${currentZoom})`;
+    });
   }
-  
+
   if (zoomLevel) {
     zoomLevel.textContent = `${Math.round(currentZoom * 100)}%`;
   }
@@ -137,6 +152,7 @@ export function fitToView() {
   if (!scroller || !container) return;
 
   // Measure at scale 1 so scrollHeight is the true, unscaled height.
+  container.classList.add('is-zooming');
   container.style.transform = 'scale(1)';
   container.offsetHeight; // force reflow
 
