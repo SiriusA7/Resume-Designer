@@ -6,6 +6,9 @@
 import { appStorage } from './appStorage.js';
 
 let currentZoom = 1;
+// The zoom fitToView last applied, or null if the canvas has never been fitted.
+// Read by the resize handler to tell an app-chosen zoom from a user-chosen one.
+let lastFittedZoom = null;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const ZOOM_STEP = 0.1;
@@ -94,12 +97,20 @@ export function initZoomControls() {
   // double-counting the open chat panel's width and pushing it off-screen.
 
   // The window can change size at any time — a resized Mac window, a rotated
-  // phone, an iPad Split View drag. Refit rather than leaving a stale zoom.
-  // Debounced because a Split View drag fires continuously.
+  // phone, an iPad Split View drag. Keep a FITTED canvas fitted, but never
+  // overwrite a zoom the user chose: fitToView goes through setZoom, which
+  // persists, so an unguarded refit silently replaced a deliberate 100% with a
+  // whole-document fit — 31% on a 2-page résumé, MIN_ZOOM on anything longer —
+  // and saved it. `lastFittedZoom` stays null until the user actually fits, so
+  // a zoom that was never fitted (including one restored from storage) is left
+  // alone. Debounced because a Split View drag fires continuously.
   let refitTimer = null;
   const scheduleRefit = () => {
     clearTimeout(refitTimer);
-    refitTimer = setTimeout(fitToView, 150);
+    refitTimer = setTimeout(() => {
+      if (currentZoom !== lastFittedZoom) return;
+      fitToView();
+    }, 150);
   };
   window.addEventListener('resize', scheduleRefit);
   window.addEventListener('orientationchange', scheduleRefit);
@@ -174,6 +185,9 @@ export function fitToView() {
       contentWidth: 8.5 * 96,
       contentHeight: container.scrollHeight || 11 * 96,
     }));
+    // Read back rather than reusing the computed value: setZoom rounds to two
+    // decimals, and the resize guard compares for exact equality.
+    lastFittedZoom = currentZoom;
   });
 }
 
