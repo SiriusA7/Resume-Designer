@@ -38,12 +38,15 @@ struct ShellSnapshot: Decodable, Equatable {
   var zoom: Double
   var zoomPercent: Int
   var pdfBusy: Bool
+  /// A web dialog owns the screen. The chrome floats above the webview, so it
+  /// has to step aside or it covers the dialog's own buttons.
+  var modalOpen: Bool
 
   /// What the chrome shows before the first snapshot arrives — a fraction of a
   /// second at launch, but it must not render as blank or as "0%".
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
-    zoom: 1, zoomPercent: 100, pdfBusy: false
+    zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false
   )
 }
 
@@ -105,11 +108,26 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
   ) {
     guard JSONSerialization.isValidJSONObject(message.body),
           let data = try? JSONSerialization.data(withJSONObject: message.body),
-          let snapshot = try? JSONDecoder().decode(ShellSnapshot.self, from: data) else {
-      NSLog("[OPShell] undecodable snapshot: \(message.body)")
+          let body = message.body as? [String: Any] else {
+      NSLog("[OPShell] undecodable message: \(message.body)")
       return
     }
-    Task { @MainActor in self.model?.snapshot = snapshot }
+
+    switch body["kind"] as? String {
+    case "share":
+      guard let path = body["path"] as? String else {
+        NSLog("[OPShell] share message with no path: \(body)")
+        return
+      }
+      NSLog("[OPShell] share requested: \(path)")
+      Task { @MainActor in OPShell.presentShareSheet(path: path) }
+    default:
+      guard let snapshot = try? JSONDecoder().decode(ShellSnapshot.self, from: data) else {
+        NSLog("[OPShell] undecodable snapshot: \(message.body)")
+        return
+      }
+      Task { @MainActor in self.model?.snapshot = snapshot }
+    }
   }
 }
 
@@ -159,6 +177,42 @@ final class OPShell: NSObject {
       NSLog("[OPShell] installed: root=\(type(of: host)) webview=\(type(of: webView))")
       activateWeb()
     }
+  }
+
+  /// Present a share sheet for a file Rust staged (`stage_pdf_for_share`).
+  ///
+  /// iOS has no save-to-path dialog. `tauri-plugin-dialog`'s `save_file`
+  /// approximates one with `UIDocumentPickerViewController(.exportToService)`
+  /// presented on tao's view controller — and once tao is a CHILD of the
+  /// hosting controller, that picker's remote view service launches and then
+  /// never appears. Measured, twice.
+  ///
+  /// Presenting from the hosting controller — the window's actual root — avoids
+  /// the whole question, and a share sheet is the better answer anyway: it
+  /// offers Save to Files, AirDrop, Mail and Messages where the picker offered
+  /// only a file location.
+  @MainActor
+  static func presentShareSheet(path: String) {
+    guard let root = model?.webView?.window?.rootViewController else {
+      NSLog("[OPShell] no root view controller to share from")
+      return
+    }
+    NSLog("[OPShell] presenting share sheet from \(type(of: root))")
+    let url = URL(fileURLWithPath: path)
+    let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    // iPad presents this as a popover and CRASHES without an anchor. Anchor it
+    // to the top-trailing corner, under the PDF button that started the export.
+    if let popover = sheet.popoverPresentationController {
+      popover.sourceView = root.view
+      popover.sourceRect = CGRect(
+        x: root.view.bounds.maxX - 40, y: root.view.safeAreaInsets.top, width: 1, height: 1
+      )
+      popover.permittedArrowDirections = [.up]
+    }
+    // A dialog may still be dismissing; present from whatever is frontmost.
+    var presenter: UIViewController = root
+    while let next = presenter.presentedViewController { presenter = next }
+    presenter.present(sheet, animated: true)
   }
 
   @MainActor private static var handedOver = false
@@ -250,6 +304,22 @@ private struct CanvasHost: UIViewControllerRepresentable {
       container.view.addSubview(tao.view)
       pin(tao.view, to: container.view)
       tao.didMove(toParent: container)
+
+      // The webview needs pinning too, not just its controller's view.
+      //
+      // `ios_view.rs` sizes the webview to `UIScreen.bounds` and gives it a
+      // flexible autoresizing mask. Reparenting moved its ORIGIN into the
+      // content area but left its HEIGHT at the full screen's, so the page ran
+      // ~114pt (the two bars) off the bottom of the display. Everything still
+      // looked right, because the overflow is below the fold — but
+      // `window.innerHeight` was 874 instead of 760, so every `vh` in the app
+      // was wrong, dialogs centred too low, and the PDF preview's Save button
+      // sat off-screen where a tap hit the overlay instead.
+      //
+      // Measured, not deduced: a diagnostic dumped `innerHeight: 874` next to a
+      // 760pt content area.
+      webView.translatesAutoresizingMaskIntoConstraints = false
+      pin(webView, to: tao.view)
     } else {
       // No controller to adopt — fall back to hosting the bare webview so the
       // app still renders. Dialogs will be broken; the log line says so.
@@ -292,10 +362,27 @@ private struct ShellView: View {
         // rather than let the canvas bleed under floating glyphs.
         .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
         .toolbar {
-          ToolbarItem(placement: .topBarLeading) { actionsMenu }
-          ToolbarItem(placement: .principal) { titleMenu }
-          ToolbarItem(placement: .topBarTrailing) { pdfButton }
-          ToolbarItemGroup(placement: .bottomBar) { bottomBar }
+          // `.disabled` is applied per ITEM, never to the NavigationStack's
+          // content. It is an environment modifier that propagates down the
+          // whole tree, so putting it on the content disabled CanvasHost and
+          // therefore the hosted WKWebView — every tap on the web dialog was
+          // swallowed before it reached the page, silently.
+          ToolbarItem(placement: .topBarLeading) {
+            actionsMenu.disabled(snapshot.modalOpen)
+          }
+          ToolbarItem(placement: .principal) {
+            titleMenu.disabled(snapshot.modalOpen)
+          }
+          ToolbarItem(placement: .topBarTrailing) {
+            pdfButton.disabled(snapshot.modalOpen)
+          }
+          // Withdrawn while a web dialog is up. The toolbar floats ABOVE the
+          // webview, so it covered the PDF preview's Save button — the dialog
+          // rendered fine and simply could not be completed. Its commands
+          // would act on the canvas behind the dialog anyway.
+          if !snapshot.modalOpen {
+            ToolbarItemGroup(placement: .bottomBar) { bottomBar }
+          }
         }
     }
   }

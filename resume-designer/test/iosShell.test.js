@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   buildSnapshot,
   createCommandDispatcher,
+  hasOpenModal,
   isNativeShellAvailable,
   SHELL_HANDLER,
 } from '../src/iosShell.js';
@@ -61,6 +62,7 @@ describe('buildSnapshot', () => {
       zoom: 1,
       zoomPercent: 100,
       pdfBusy: false,
+      modalOpen: false,
     });
   });
 });
@@ -124,5 +126,42 @@ describe('isNativeShellAvailable', () => {
   it('is true once the handler is there', () => {
     const win = { webkit: { messageHandlers: { [SHELL_HANDLER]: { postMessage() {} } } } };
     expect(isNativeShellAvailable(win)).toBe(true);
+  });
+});
+
+describe('hasOpenModal', () => {
+  // The native toolbar floats above the webview, so it covered the PDF
+  // preview's Save button. This is the signal that withdraws it.
+  const root = (html) => {
+    const el = document.createElement('div');
+    el.innerHTML = html;
+    return el;
+  };
+
+  it('sees an open Radix dialog or alert dialog', () => {
+    expect(hasOpenModal(root('<div role="dialog" data-state="open"></div>'))).toBe(true);
+    expect(hasOpenModal(root('<div role="alertdialog" data-state="open"></div>'))).toBe(true);
+  });
+
+  it('ignores a closed one, which Radix leaves in the DOM', () => {
+    expect(hasOpenModal(root('<div role="dialog" data-state="closed"></div>'))).toBe(false);
+  });
+
+  it("sees the app's own overlays only once they are showing", () => {
+    expect(hasOpenModal(root('<div class="onboarding-overlay show"></div>'))).toBe(true);
+    expect(hasOpenModal(root('<div class="modal-overlay show"></div>'))).toBe(true);
+    expect(hasOpenModal(root('<div class="onboarding-overlay"></div>'))).toBe(false);
+    expect(hasOpenModal(root('<div class="modal-overlay"></div>'))).toBe(false);
+  });
+
+  it('does not count the chat or structure drawers', () => {
+    // They are toggled FROM the toolbar; withdrawing it would strand the user.
+    expect(hasOpenModal(root('<aside class="chat-panel"></aside>'))).toBe(false);
+    expect(hasOpenModal(root('<aside class="structure-panel open"></aside>'))).toBe(false);
+  });
+
+  it('is false for an empty document and a missing root', () => {
+    expect(hasOpenModal(root(''))).toBe(false);
+    expect(hasOpenModal(null)).toBe(false);
   });
 });

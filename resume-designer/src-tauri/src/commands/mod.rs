@@ -281,6 +281,56 @@ pub async fn read_pdf_preview(preview: State<'_, PreviewPdfPath>) -> Result<Stri
     Ok(STANDARD.encode(bytes))
 }
 
+/// Copy the preview temp PDF to a sibling temp file named the way the user
+/// named it, and return that path so iOS can hand it to a share sheet.
+///
+/// iOS has no "save to a path" dialog. `tauri-plugin-dialog`'s `save_file`
+/// approximates one with `UIDocumentPickerViewController(.exportToService)`,
+/// which it presents on tao's view controller — and that never appears once the
+/// native shell has nested tao inside a `UIHostingController` (the picker's
+/// remote view service launches and then shows nothing). A share sheet is the
+/// platform's actual answer for "get this file out of the app": it offers Save
+/// to Files, AirDrop, Mail and Messages in one place, and `OPShell.swift`
+/// presents it from the hosting controller itself.
+///
+/// The rename matters because a share sheet shows the FILE's name, and the temp
+/// is called `on-paper-preview-<pid>-<nanos>.pdf`.
+///
+/// The renderer supplies only a name, never a path: the source is always the
+/// server-side preview slot, and the destination is always the temp dir.
+#[tauri::command]
+pub async fn stage_pdf_for_share(
+    file_name: String,
+    preview: State<'_, PreviewPdfPath>,
+) -> Result<String, String> {
+    let source = {
+        let slot = preview
+            .0
+            .lock()
+            .map_err(|_| "preview slot lock poisoned".to_string())?;
+        slot.clone()
+    };
+    let source = source.ok_or_else(|| "No preview PDF available".to_string())?;
+
+    // Take only the final path component and drop anything that could redirect
+    // the write: the renderer must not be able to name a destination outside
+    // the temp dir, even with a compromised script.
+    let stem: String = std::path::Path::new(&file_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
+        .take(80)
+        .collect();
+    let stem = stem.trim().trim_matches('.');
+    let stem = if stem.is_empty() { "Resume" } else { stem };
+
+    let dest = std::env::temp_dir().join(format!("{}.pdf", stem));
+    std::fs::copy(&source, &dest).map_err(|e| format!("Failed to stage PDF: {}", e))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 /// Copy the preview temp PDF to the user-confirmed path (from `pick_pdf_save_path`),
 /// then delete the temp. The renderer supplies neither the bytes nor the path.
 #[tauri::command]

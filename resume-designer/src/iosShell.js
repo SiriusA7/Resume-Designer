@@ -29,6 +29,34 @@ export const SHELL_HANDLER = 'opShell';
 export const NATIVE_SHELL_CLASS = 'op-native-shell';
 
 /**
+ * Selectors for "a web dialog owns the screen".
+ *
+ * The native toolbar floats ABOVE the webview, so it covers the bottom of any
+ * web modal — which put the PDF preview's Save button under it, unreachable.
+ * The chrome has to get out of the way while one is open.
+ *
+ * Radix portals its dialogs to `<body>` and marks them `data-state="open"`.
+ * The other two are the app's own overlay tokens: `.onboarding-overlay.show`
+ * (the wizard's documented "on screen" contract, see onboarding.js) and
+ * `.modal-overlay.show` (backupFlow.js's hand-built modal).
+ *
+ * The chat and structure panels are deliberately NOT here. They are drawers,
+ * not modals, and they are toggled FROM the toolbar — hiding it would strand
+ * the user in a panel with no way back.
+ */
+const MODAL_SELECTOR = [
+  '[role="dialog"][data-state="open"]',
+  '[role="alertdialog"][data-state="open"]',
+  '.onboarding-overlay.show',
+  '.modal-overlay.show',
+].join(',');
+
+/** True when any web dialog is on screen. Pure over the passed root. */
+export function hasOpenModal(root = document) {
+  return !!root?.querySelector?.(MODAL_SELECTOR);
+}
+
+/**
  * Project app state onto the wire shape the SwiftUI chrome renders from.
  *
  * Coarse on purpose: the chrome needs a title, a menu of names, and a zoom
@@ -42,9 +70,12 @@ export const NATIVE_SHELL_CLASS = 'op-native-shell';
  * @param {Array<{id: string, name?: string}>} [state.list] every variant
  * @param {number} [state.zoom] canvas scale, 1 = 100%
  * @param {boolean} [state.pdfBusy] a PDF export is in flight
- * @returns {{variantId: string|null, variantName: string, variants: Array<{id: string, name: string}>, zoom: number, zoomPercent: number, pdfBusy: boolean}}
+ * @param {boolean} [state.modalOpen] a web dialog owns the screen
+ * @returns {{variantId: string|null, variantName: string, variants: Array<{id: string, name: string}>, zoom: number, zoomPercent: number, pdfBusy: boolean, modalOpen: boolean}}
  */
-export function buildSnapshot({ currentId = null, list = [], zoom = 1, pdfBusy = false } = {}) {
+export function buildSnapshot({
+  currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false,
+} = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
     .map((v) => ({ id: v.id, name: typeof v.name === 'string' && v.name ? v.name : 'Untitled' }));
@@ -58,6 +89,7 @@ export function buildSnapshot({ currentId = null, list = [], zoom = 1, pdfBusy =
     zoom: safeZoom,
     zoomPercent: Math.round(safeZoom * 100),
     pdfBusy: !!pdfBusy,
+    modalOpen: !!modalOpen,
   };
 }
 
@@ -98,6 +130,19 @@ export function createCommandDispatcher(actions) {
       return { ok: false, error: String(err?.message ?? err) };
     }
   };
+}
+
+/**
+ * Ask the native shell to present a share sheet for `path`.
+ *
+ * No-op anywhere the shell is not installed, so the caller does not have to
+ * branch twice. The path always comes from Rust (`stage_pdf_for_share`), never
+ * from anything the renderer composed.
+ */
+export function sharePdf(path) {
+  if (!isNativeShellAvailable() || typeof path !== 'string' || !path) return false;
+  window.webkit.messageHandlers[SHELL_HANDLER].postMessage({ kind: 'share', path });
+  return true;
 }
 
 /** True when Swift has registered its message handler on this webview. */
@@ -208,7 +253,7 @@ export function initIOSShell(deps) {
     waits = 0;
     const { currentId, list } = getVariantsSnapshot();
     window.webkit.messageHandlers[SHELL_HANDLER].postMessage(
-      buildSnapshot({ currentId, list, zoom: getZoom(), pdfBusy })
+      { kind: 'snapshot', ...buildSnapshot({ currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal() }) }
     );
   };
   // Coalesce: loading a variant fires the variant subscription AND a zoom
@@ -221,6 +266,17 @@ export function initIOSShell(deps) {
 
   subscribeVariants(publish);
   window.addEventListener('rd:zoom', publish);
+  // Dialogs open and close without any event this module could listen for —
+  // Radix just portals a node into <body> and flips data-state. Watching the
+  // DOM is the only signal that covers React dialogs, the onboarding wizard
+  // and backupFlow's hand-built modal alike. Cheap: publish() coalesces into
+  // one microtask, and the payload is a few hundred bytes.
+  new MutationObserver(publish).observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-state', 'class'],
+  });
   window.addEventListener('rd:pdf-busy', (e) => {
     pdfBusy = !!e.detail?.busy;
     publish();

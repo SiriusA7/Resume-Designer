@@ -597,6 +597,17 @@ export async function savePdfPreview() {
   return await core.invoke('save_pdf_preview');
 }
 
+/**
+ * Copy the previewed temp PDF to a temp file named the way the user named it,
+ * and return that path. iOS only: there is no save-to-path dialog there, so the
+ * native shell hands this path to a share sheet (Save to Files, AirDrop, Mail).
+ */
+export async function stagePdfForShare(fileName) {
+  if (!isTauri) throw new Error('PDF sharing is only available in the app');
+  const { core } = await tauri();
+  return await core.invoke('stage_pdf_for_share', { fileName });
+}
+
 /** Delete the preview temp PDF (user cancelled). Best-effort; never throws. */
 export async function discardPdfPreview() {
   if (!isTauri) return;

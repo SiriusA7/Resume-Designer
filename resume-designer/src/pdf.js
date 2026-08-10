@@ -9,7 +9,8 @@
  * Browser fallback: html2pdf.js produces image-based PDFs (not ATS-friendly).
  */
 
-import { isElectron, isIOSPlatform, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, discardPdfPreview, notify } from './native.js';
+import { isElectron, isIOSPlatform, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, stagePdfForShare, discardPdfPreview, notify } from './native.js';
+import { sharePdf } from './iosShell.js';
 import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
@@ -245,6 +246,11 @@ async function generatePdfInMainWindow() {
     // Restore unconditionally: leaving the class on would strand the user in a
     // chrome-less full-bleed page with no way back.
     root.classList.remove('pdf-export-mode');
+    // `pdf-export-mode` makes <html> the scrolling box over a document as tall
+    // as the whole resume. Once the class is gone `overflow: hidden` returns
+    // and hides any leftover offset visually, so a non-zero scroll here is
+    // invisible but still shifts where touches land.
+    window.scrollTo(0, 0);
     if (scroller) {
       scroller.scrollTop = scrollTop;
       scroller.scrollLeft = scrollLeft;
@@ -536,6 +542,27 @@ async function savePreviewedPdf(customFilename) {
   const filename = customFilename
     ? (customFilename.endsWith('.pdf') ? customFilename : `${customFilename}.pdf`)
     : 'Resume.pdf';
+
+  // iOS has no save-to-path dialog, so it shares instead — see
+  // stage_pdf_for_share in commands/mod.rs for why the plugin's approximation
+  // of one does not work under the native shell. The share sheet's own
+  // "Save to Files" is the equivalent of what the desktop picker does.
+  if (isIOSPlatform()) {
+    setExportBusy(true);
+    try {
+      const staged = await stagePdfForShare(filename);
+      sharePdf(staged);
+      console.log('PDF Export: shared', staged);
+    } finally {
+      setExportBusy(false);
+    }
+    // Terminal either way: the share sheet is the system's now, and whether
+    // the user saves or dismisses it is not something the app is told.
+    await discardPdfPreview();
+    releaseExportGuard();
+    return;
+  }
+
   const path = await pickPdfSavePath(filename);
   if (!path) {
     await discardPdfPreview();

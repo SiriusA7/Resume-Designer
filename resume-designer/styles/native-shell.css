@@ -58,3 +58,36 @@ html.op-native-shell .resume-scroller {
   padding: 16px;
   padding-bottom: 16px;
 }
+
+/* ==========================================================================
+   Dialogs on a phone
+
+   These are still web dialogs — only the chrome went native — and they were
+   written for a desktop window. Two things go wrong on a 390x844pt screen, and
+   both make a dialog's PRIMARY ACTION unreachable rather than merely ugly:
+
+   1. The dialog can be taller than the viewport, so its footer falls off the
+      bottom with nothing to scroll.
+   2. SwiftUI hides the bottom toolbar while a dialog is open (so the toolbar
+      does not cover it), and the webview then extends under the home
+      indicator, where taps are the system's swipe-up gesture, not ours.
+
+   Capping the height and reserving the inset fixes both. Scoped to the native
+   shell: desktop windows are tall enough and have no home indicator.
+   ========================================================================== */
+html.op-native-shell [role='dialog'],
+html.op-native-shell [role='alertdialog'] {
+  max-height: calc(100vh - 16px - env(safe-area-inset-bottom));
+  overflow-y: auto;
+  /* Stop a flick at the end of the dialog's scroll from scrolling the résumé
+     behind it. */
+  overscroll-behavior: contain;
+}
+
+/* The PDF preview's 60vh box plus the header, filename row and footer overflows
+   the viewport by just enough to push Save off-screen. Shortening the box is
+   better than scrolling the whole dialog: the preview is the one part of it
+   that is happy at any size. */
+html.op-native-shell .pdf-preview-box {
+  height: 40vh;
+}
