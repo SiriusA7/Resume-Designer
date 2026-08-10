@@ -1141,9 +1141,35 @@ export function toggleMarkdownMarker(value, start, end, marker) {
   // slicing — otherwise `selected` is empty and every branch below misbehaves.
   const selectionStart = Math.min(start, end);
   const selectionEnd = Math.max(start, end);
-  if (selectionStart === selectionEnd) return { value, start: selectionStart, end: selectionEnd };
-
   const len = marker.length;
+
+  // Collapsed caret: toggle an EMPTY marker pair, so "turn emphasis on, then
+  // type" works and pressing the shortcut again inside the pair cancels it.
+  // Reachable only after the caret is moved — startEditing select-alls on focus
+  // — which is why an earlier no-op version of this branch went unnoticed.
+  if (selectionStart === selectionEnd) {
+    const insideEmptyPair =
+      selectionStart >= len &&
+      value.slice(selectionStart - len, selectionStart) === marker &&
+      value.slice(selectionStart, selectionStart + len) === marker;
+
+    if (insideEmptyPair) {
+      const caret = selectionStart - len;
+      return {
+        value: value.slice(0, caret) + value.slice(selectionStart + len),
+        start: caret,
+        end: caret,
+      };
+    }
+
+    const caret = selectionStart + len;
+    return {
+      value: value.slice(0, selectionStart) + marker + marker + value.slice(selectionStart),
+      start: caret,
+      end: caret,
+    };
+  }
+
   const before = value.slice(0, selectionStart);
   const selected = value.slice(selectionStart, selectionEnd);
   const after = value.slice(selectionEnd);

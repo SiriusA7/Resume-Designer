@@ -28,9 +28,38 @@ describe('toggleMarkdownMarker', () => {
       .toEqual({ value: '++hello++', start: 2, end: 7 });
   });
 
-  it('leaves an empty selection untouched', () => {
+  // A collapsed caret is how "turn bold on, then type" works. It is reachable in
+  // the app only after the caret is moved: startEditing select-alls on focus, so
+  // the user must click or arrow first, then press the shortcut.
+  it('inserts an empty marker pair and puts the caret between them', () => {
     expect(toggleMarkdownMarker('hello', 2, 2, '**'))
+      .toEqual({ value: 'he****llo', start: 4, end: 4 });
+  });
+
+  it('removes the pair when the caret is already inside an empty one', () => {
+    expect(toggleMarkdownMarker('he****llo', 4, 4, '**'))
       .toEqual({ value: 'hello', start: 2, end: 2 });
+  });
+
+  it('opens an empty pair at the end of a field (caret parked after the text)', () => {
+    expect(toggleMarkdownMarker('hello', 5, 5, '_'))
+      .toEqual({ value: 'hello__', start: 6, end: 6 });
+  });
+
+  it('opens an empty underline pair in an empty field', () => {
+    expect(toggleMarkdownMarker('', 0, 0, '++'))
+      .toEqual({ value: '++++', start: 2, end: 2 });
+  });
+
+  it('does not underflow when the caret sits at offset 0', () => {
+    expect(toggleMarkdownMarker('hi', 0, 0, '**'))
+      .toEqual({ value: '****hi', start: 2, end: 2 });
+  });
+
+  it('does not mistake an adjacent pair of DIFFERENT markers for its own', () => {
+    // Caret between '**' and '_' must open a new bold pair, not strip anything.
+    expect(toggleMarkdownMarker('**_', 2, 2, '**'))
+      .toEqual({ value: '******_', start: 4, end: 4 });
   });
 
   it('does not confuse bold and italic markers', () => {
