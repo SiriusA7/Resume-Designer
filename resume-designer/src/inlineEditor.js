@@ -927,13 +927,16 @@ function finishEditing(element) {
 }
 
 // Re-apply markdown emphasis (**bold**, _italic_, ++underline++) onto an element's
-// plain text from its rendered <strong>/<em>/<u> children, so a round-trip through
-// contentEditable doesn't silently drop formatting. Shared by bullet lists and tool
-// chips.
-function serializeEmphasis(el) {
+// plain text from its rendered children, so a round-trip through contentEditable
+// doesn't silently drop formatting. Shared by bullet lists and tool chips.
+//
+// `b`/`i` are included alongside `strong`/`em` because WebKit's own execCommand —
+// the iPad shortcut bar, and macOS's Edit menu — inserts the presentational tags.
+// Querying only the semantic ones dropped that formatting on every round trip.
+export function serializeEmphasis(el) {
   let result = (el.textContent || '').trim();
-  el.querySelectorAll('strong').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `**${t}**`); });
-  el.querySelectorAll('em').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `_${t}_`); });
+  el.querySelectorAll('strong, b').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `**${t}**`); });
+  el.querySelectorAll('em, i').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `_${t}_`); });
   el.querySelectorAll('u').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `++${t}++`); });
   return result;
 }
