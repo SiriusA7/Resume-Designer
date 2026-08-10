@@ -133,9 +133,31 @@ Binary verified `platform IOSSIMULATOR, minos 17.4, arm64`. It launches on the
 iOS 27 SDK with no scene-lifecycle crash, and every asset loads through the
 `tauri://` custom-scheme handler with **zero CSP violations and zero errors**.
 
-## BLOCKER: the app renders, but is completely invisible
+## BLOCKER: the app launches but renders nothing — CAUSE STILL UNKNOWN
 
-**Severity: critical for any further Phase 0 spike. Confirmed empirically.**
+**Severity: critical for any further Phase 0 spike. UNRESOLVED.**
+
+> **Correction (2026-08-09, after testing).** An earlier version of this section
+> asserted that `glass.css` was the root cause. **That was wrong.** The
+> platform gate was implemented (commit `66fa6a9`), the app rebuilt, and the
+> screen is *still* black. The hypothesis below is well-motivated and the gate
+> is a genuinely correct fix — spec D1 calls for it independently — but it does
+> **not** explain the blank screen. Do not treat the diagnosis as settled.
+>
+> **What is actually established:** the app launches, JS executes (a probe's
+> `<a download>` demonstrably fired), every asset loads through the `tauri://`
+> scheme handler, and there are no CSP violations or errors in the WebKit log —
+> yet nothing paints, *including a probe overlay with its own opaque background
+> and maximum z-index*. JS running while nothing renders points away from CSS
+> and toward the webview's own presentation (size, hierarchy attachment, or
+> opacity), which is the next thing to investigate — not more CSS.
+>
+> Candidate leads, untested: whether `tauri.ios.conf.json`'s replacement of
+> `app.windows` correctly drops the base config's `"transparent": true`;
+> whether the Tao/wry iOS webview is attached and non-zero-sized; whether
+> `isOpaque=false` is set with nothing behind it.
+
+### The original (refuted-as-cause) hypothesis, retained for the record
 
 Every launch shows a pure black screen. It is not a load failure, not a CSP
 problem, and not a JS error — the WebKit log shows dozens of successful
