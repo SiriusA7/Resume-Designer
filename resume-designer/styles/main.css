@@ -896,10 +896,12 @@ html[data-theme="dark"] .header-variant-select {
   transition: transform 0.2s ease;
 }
 
-/* Programmatic zoom (fit-to-view, and 3.3's column zoom) must be instantaneous:
-   the transition makes getBoundingClientRect() report in-flight values while
+/* Fit-to-view's measure-then-apply sequence must be instantaneous: the
+   transition makes getBoundingClientRect() report in-flight values while
    getZoom() reports the target, which makes pagination.js measure wrongly. It
-   is also what causes the visible out-and-back wobble on fit-to-view. */
+   is also what causes the visible out-and-back wobble on fit-to-view.
+   Ordinary user-initiated zoom (buttons, shortcuts) does not add this class,
+   so it keeps its 0.2s animation. */
 .resume-container.is-zooming {
   transition: none;
 }

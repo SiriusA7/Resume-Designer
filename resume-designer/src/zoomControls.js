@@ -114,8 +114,10 @@ function setZoom(level) {
 
 /**
  * Run a zoom mutation with the CSS transition suppressed, then restore it on
- * the next frame. Without this, measurement during the 0.2s transition
- * disagrees with getZoom() — see the .is-zooming comment in main.css.
+ * the next frame. Used by fitToView to make its measure-and-apply sequence
+ * instantaneous — ordinary user-initiated zoom (buttons, shortcuts) does not
+ * use this and keeps its 0.2s animation. See the .is-zooming comment in
+ * main.css.
  */
 function withoutTransition(container, fn) {
   if (!container) { fn(); return; }
@@ -131,9 +133,7 @@ function applyZoom() {
   const zoomLevel = document.getElementById('zoom-level');
 
   if (container) {
-    withoutTransition(container, () => {
-      container.style.transform = `scale(${currentZoom})`;
-    });
+    container.style.transform = `scale(${currentZoom})`;
   }
 
   if (zoomLevel) {
@@ -151,24 +151,27 @@ export function fitToView() {
 
   if (!scroller || !container) return;
 
-  // Measure at scale 1 so scrollHeight is the true, unscaled height.
-  container.classList.add('is-zooming');
-  container.style.transform = 'scale(1)';
-  container.offsetHeight; // force reflow
+  // Suppression spans the measurement AND the final apply: applyZoom no longer
+  // suppresses anything, so user-initiated zoom keeps its 0.2s animation while
+  // fit-to-view stays instantaneous. See the .is-zooming comment in main.css.
+  withoutTransition(container, () => {
+    // Measure at scale 1 so scrollHeight is the true, unscaled height.
+    container.style.transform = 'scale(1)';
+    container.offsetHeight; // force reflow
 
-  // clientWidth/Height INCLUDE padding, so subtract the real computed values
-  // rather than the constants the CSS used to have. Padding is driven by
-  // var(--space-xl) and will change again in 3.2.
-  const cs = getComputedStyle(scroller);
-  const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
-  const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    // clientWidth/Height INCLUDE padding, so subtract the real computed values
+    // rather than the constants the CSS used to have.
+    const cs = getComputedStyle(scroller);
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
 
-  setZoom(computeFitZoom({
-    availableWidth: scroller.clientWidth - padX,
-    availableHeight: scroller.clientHeight - padY,
-    contentWidth: 8.5 * 96,
-    contentHeight: container.scrollHeight || 11 * 96,
-  }));
+    setZoom(computeFitZoom({
+      availableWidth: scroller.clientWidth - padX,
+      availableHeight: scroller.clientHeight - padY,
+      contentWidth: 8.5 * 96,
+      contentHeight: container.scrollHeight || 11 * 96,
+    }));
+  });
 }
 
 // Update button enabled/disabled states
