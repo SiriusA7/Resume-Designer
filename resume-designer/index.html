@@ -26,7 +26,11 @@
           'isTauri' in window ||
           '__TAURI_INTERNALS__' in window ||
           '__TAURI__' in window;
-        if (inTauri || params.has('translucent')) {
+        // iOS has no NSVisualEffectView vibrancy layer behind the webview, so
+        // clearing to transparent there leaves a bare black UIView. Only the
+        // desktop targets (macOS/Windows/Linux) get the glass treatment.
+        var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        if ((inTauri && !isIOS) || params.has('translucent')) {
           document.documentElement.setAttribute('data-tauri', 'true');
         }
       } catch (_) {
