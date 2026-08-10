@@ -1,5 +1,17 @@
 # iOS Phase 0 — findings
 
+> **Authority.** This document is **empirical**. Everything in it was produced by
+> building On Paper and running it on an iOS 27.0 simulator, and measuring the
+> result — not by reading source and inferring. Where it conflicts with the
+> design spec
+> ([`../superpowers/specs/2026-08-09-ios-ipados-port-design.md`](../superpowers/specs/2026-08-09-ios-ipados-port-design.md))
+> or with the portability audit
+> ([`2026-08-09-ios-portability-audit.md`](2026-08-09-ios-portability-audit.md)),
+> **this document wins**. Both of those were written before the app had ever
+> run on iOS; the corrections have been propagated back into them, but if a
+> third claim is found that disagrees with a measurement here, the measurement
+> is the one to trust.
+
 **Date:** 2026-08-09
 **Host:** macOS, Xcode 26.6 (17F113), rustc 1.92.0, CocoaPods 1.17.0
 **Tauri:** CLI 2.11.2 · tauri 2.11.2 · tauri-utils 2.9.2 · wry 0.55.1 · tao 0.35.3

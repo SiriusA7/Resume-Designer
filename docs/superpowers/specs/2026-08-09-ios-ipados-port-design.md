@@ -65,14 +65,62 @@ updater `setInterval` (`updateFlow.js:98`) calling a `#[cfg(desktop)]` command,
 surfacing "Could not check for updates." on first launch. That alone is a 2.1
 rejection.
 
-### `alert()` and `confirm()` are silent no-ops (upgraded from "unknown")
+### 🔴 `confirm()` is a silent data-loss path — corrected 2026-08-09 by Phase 0
 
-wry installs `WryWebViewUIDelegate` but implements no JS-panel selectors;
-grepping `runJavaScriptAlertPanel|runJavaScriptConfirmPanel` across wry 0.55.1 +
-tauri 2.11.2 + tauri-runtime-wry returns nothing. macOS works only because macOS
-WebKit ships default panels. The dangerous site is `backupFlow.js:167`, reached
-*after* `appStorage.flush()` failed with saves suspended and deferred writes
-discarded — the only signal that an import never reached disk.
+**This section previously read "`alert()` and `confirm()` are silent no-ops
+(upgraded from 'unknown')".** It reasoned from wry source — `WryWebViewUIDelegate`
+implements no JS-panel selectors; grepping
+`runJavaScriptAlertPanel|runJavaScriptConfirmPanel` across wry 0.55.1 + tauri
+2.11.2 + tauri-runtime-wry returns nothing — and concluded that `confirm()`
+returns `false`, making the Import button merely *look* dead. It rated the defect
+low-severity and **fail-safe**, and named `backupFlow.js:167` as the dangerous
+site.
+
+**Every part of that is wrong, in the dangerous direction.** Measured on the
+running app (iOS 27.0 simulator, isolated probe — see
+[`docs/ios/phase-0-findings.md`](../../ios/phase-0-findings.md)):
+
+- **`window.confirm()` returns a `Promise`**, in ~1 ms. `confirm_typeof:
+  "object"`, `confirm_ctor: "Promise"`, `confirm_strictTrue: false`,
+  `confirm_strictFalse: false`, `confirm_BOOLEAN_COERCION: true`.
+- **A Promise is always truthy**, so `if (confirm(…))` **always** takes the
+  destructive branch, regardless of what the user taps. The literal shape at
+  `backupFlow.js:248` was executed in the probe and
+  `backupFlowPattern_destructiveRan` came back `true`.
+- **`alert()` does present a real native panel** — screenshotted over the
+  onboarding screen — but returns in ~1 ms without blocking. It is
+  fire-and-forget; any code sequencing on it is broken.
+
+So this is **not** a no-op and **not** fail-safe. On iOS it is a **silent
+data-loss path**: a destructive whole-store replace runs with no confirmation at
+all.
+
+**The dangerous sites are the two `confirm()` gates**, not `backupFlow.js:167`:
+
+| Site | Consequence on iOS |
+|---|---|
+| `backupFlow.js:248` | whole-store **REPLACE** proceeds unconfirmed |
+| `backupFlow.js:336` | legacy-Electron replace/merge, same pattern |
+
+`backupFlow.js:167` remains real but is a lesser, non-destructive defect: it is an
+`alert()` — still the only signal that an import never reached disk, now
+non-blocking rather than absent. Ten reachable `alert()` sites lose their blocking
+behaviour (`backupFlow.js:167/201/306/330/467`, `pdf.js:71/111/376/393/404`,
+`variantManager.js:251`).
+
+**`native.js:108`'s `confirm` is UNREACHABLE on iOS.** `showMessage()` opens with
+`if (isTauri)` at `:86` and returns at `:95`/`:103` through
+`tauri-plugin-dialog`'s `dialog.message` / `dialog.ask`. Lines 106-111 are the
+**web fallback**, and `isTauri` is `true` on iOS (proved — `platform()` returned
+`"ios"` and the migration probe ran, both of which require IPC). Do not budget
+work for it. (`components/PdfDialog.jsx:164`'s `confirm()` is a local callback
+prop, not `window.confirm` — also unaffected.)
+
+**This moves Phase 1's "swap `backupFlow.js` alert/confirm for
+`confirmDestructive`" from cleanup to a data-loss blocker. Nothing that calls
+`window.confirm` may ship on iOS.** The iOS behaviour of `dialog.ask` /
+`dialog.message` — the natural target for all twelve sites — was never exercised
+in Phase 0; measure it before designing the fix.
 
 ### Blob + `<a download>`: the audit's claim was WRONG, and desktop is fine
 
@@ -166,9 +214,14 @@ It works on iPad with a trackpad, which makes it easy to miss in testing.
   is the software keyboard shrinking only the visual viewport.
 - DevTools need no cable — wry calls `setInspectable(true)` and Safari Web
   Inspector attaches to the Simulator over loopback.
-- Chat streaming is immune to WebKit's missing
-  `ReadableStream[Symbol.asyncIterator]` — `aiService.js:1077` uses
-  `getReader()` manually. The polyfill exists for pdf.js, and stays.
+- Chat streaming is fine — `aiService.js:1077` uses `getReader()` manually, so it
+  never touches `ReadableStream[Symbol.asyncIterator]`. **Premise corrected
+  2026-08-09 by Phase 0: that method is not missing.** This bullet used to say
+  "immune to WebKit's *missing* `ReadableStream[Symbol.asyncIterator]`"; measured
+  on iOS 27.0 the symbol is **PRESENT**. The conclusion survives, the reason does
+  not. **Do not delete `src/readableStreamAsyncIterator.js` on the strength of
+  this** — the measurement is iOS 27 and the deployment floor is 17.4. The
+  polyfill exists for pdf.js, and stays.
 - `dialog.save()` **is** implemented on iOS (shipped 2024) — but broken. Do not
   build on it.
 - `@dnd-kit` already uses `PointerSensor`, which activates on touch.
@@ -204,8 +257,19 @@ Specific corrections:
 - `main.js:374` adds `desktop`/`electron` classes unconditionally.
 - `index.html:20` sets `data-tauri="true"` on any Tauri presence, and
   `glass.css:80` then forces `background: transparent !important` on
-  `:root`/`body`/`.app` with chrome tinted at 8–14% — over a bare UIView with no
-  vibrancy behind it. Gate on platform, not Tauri presence.
+  `:root`/`body`/`.app` with chrome tinted at 8–14%. Gate on platform, not Tauri
+  presence. **Fix shipped** in commit `66fa6a9`; Phase 0 confirms the gate works
+  (`data-tauri` is `null` on iOS).
+  **Consequence disproven, 2026-08-09.** This bullet used to justify itself with
+  "— over a bare UIView with no vibrancy behind it", and the transparency was
+  then blamed for the blank screen. **Neither holds.** glass.css was never
+  observed to cause any visual damage on iOS: the app was invisible for an
+  entirely unrelated reason (a 0×0 WKWebView inside a 0×0 superview inside a
+  scene-less `UIWindow` — see the findings), and throughout that period the probe
+  read `data-tauri` as `null` with an **opaque** `body` background of
+  `rgb(232,228,223)`. The gate is still correct and is kept — it is a
+  platform-hygiene fix, not a repair for observed washed-out chrome. Strike the
+  vibrancy claim as evidence for anything.
 - `tauriDrag.js:80` `startDragging()` on `mousedown` is dead on touch.
 - `main.js:1052` branches on deprecated `navigator.platform` for the undo/redo
   modifier. Unverified what it returns on iOS; determine in Phase 0.
@@ -234,10 +298,27 @@ CSP-block HMR on a physical device), and add `bundle.iOS`.
 iOS 13 and throws at runtime in PDF/DOCX import. Also set `developmentTeam`
 (`APPLE_TEAM_ID` secret exists) and `bundleVersion`.
 
-**Cargo target tables.** Widen `objc2` / `objc2-foundation` / `objc2-web-kit` /
-`block2` (`Cargo.toml:75-82`) and `lopdf` (`:95`) to include iOS; drop the
-`objc2-app-kit` feature on the iOS target. Move `tiny_http`, `rusty-leveldb`,
-`dirs` into the existing `cfg(not(any(android, ios)))` block.
+**Do NOT set `bundle.iOS.infoPlist` — corrected 2026-08-09 by Phase 0.**
+`Info.ios.plist` is picked up by filename automatically; the merge simply fires
+at **build** time, not at `init`. An implementer who checks straight after
+`tauri ios init`, sees no scene manifest and concludes there is no auto-detection
+will add an `infoPlist` block that is redundant at best. Verified at both ends:
+the generated `gen/apple/resume-designer_iOS/Info.plist` and the processed
+`On Paper.app/Info.plist` both carry `UIApplicationSceneManifest`,
+`CFBundleDisplayName`, and `ITSAppUsesNonExemptEncryption`.
+
+**Cargo target tables — corrected 2026-08-09.** This previously said "widen
+`objc2` / `objc2-foundation` / `objc2-web-kit` / `block2` (`Cargo.toml:75-82`)
+… to include iOS; drop the `objc2-app-kit` feature on the iOS target."
+**Widening is wrong**: that block is the macOS target table and it also carries
+`objc2-app-kit`, which `pdf_macos.rs` needs and which iOS cannot build — there is
+no per-dependency way to "drop a feature on the iOS target" once the two share
+one `[target.'cfg(…)'.dependencies]` table. **Add a separate
+`[target.'cfg(target_os = "ios")'.dependencies]` block** carrying only what iOS
+needs (`objc2`, `objc2-foundation`, `block2`, and the `objc2-web-kit` handling
+D5 settles), and leave the macOS block untouched. Widen `lopdf` (`:95`) to
+include iOS as stated. Move `tiny_http`, `rusty-leveldb`, `dirs` into the
+existing `cfg(not(any(android, ios)))` block.
 
 **Icons — audit claim corrected 2026-08-09.** The audit said `src-tauri/icons/`
 "has no `ios/` and no 1024px master." **Both halves are wrong.** `icons/ios/`
@@ -525,11 +606,17 @@ for 2026, and this design does not depend on the answer.
   `APPLE_API_ISSUER_ID` / `APPLE_API_PRIVATE_KEY` to the existing fail-fast
   secret check at `release.yml:163`. Build with `tauri ios build
   --export-method app-store-connect`, upload via `xcrun altool`.
-- **Test `productName` on first `tauri ios init`.** tauri#11257 describes this
-  exact config — `productName: "On Paper"` vs Cargo `name = "resume-designer"` —
-  producing a mis-named IPA and a failing `tauri ios dev`. The Cargo name is
-  frozen by policy. Force `PRODUCT_NAME` via `bundle.iOS.template` if it
-  reproduces; set `CFBundleDisplayName = "On Paper"` regardless.
+- **`productName` — tested, does NOT reproduce (Phase 0, 2026-08-09).** This
+  entry used to read "Test `productName` on first `tauri ios init`… force
+  `PRODUCT_NAME` via `bundle.iOS.template` if it reproduces". tauri#11257
+  describes this exact config — `productName: "On Paper"` vs Cargo `name =
+  "resume-designer"` — producing a mis-named IPA and a failing `tauri ios dev`.
+  **It did not happen.** The two coexist cleanly in the generated
+  `project.yml`/pbxproj; the CLI 2.11.2 handles it. **The conditional
+  `PRODUCT_NAME` workaround is struck** — do not budget for it, and do not add
+  a `bundle.iOS.template` for this reason. `CFBundleDisplayName = "On Paper"` is
+  still correct and is already shipping (verified in the built
+  `On Paper.app/Info.plist`).
 - **No OTA web-asset updates in v1.** Legally reachable under ADPLA §3.3.1(B)
   (the basis for CodePush/Expo/Capacitor), but there is an unpaid prerequisite:
   `tauri.conf.json:36` pins an inline script hash into the binary's CSP, so any
@@ -605,9 +692,11 @@ Planning Phase 3 today would be planning against nine unverified assumptions.
 ## Error handling
 
 - Every path that currently surfaces failure through `alert()` must route
-  through the existing `confirmDestructive` / `showMessage` instead. Priority is
-  `backupFlow.js:167`, which is the only signal that an import never reached
-  disk.
+  through the existing `confirmDestructive` / `showMessage` instead.
+  **Priority reordered 2026-08-09 by Phase 0:** the two `window.confirm()` gates
+  (`backupFlow.js:248` and `:336`) come first — on iOS they are a silent
+  data-loss path, not a cosmetic one. `backupFlow.js:167` is next, still the only
+  signal that an import never reached disk, now non-blocking rather than absent.
 - Sync failures are non-blocking and never destructive: on conflict, prompt;
   on network failure, queue.
 - PDF export failure must not leave the app in `pdf-export-mode` — the existing
@@ -624,6 +713,56 @@ is not built).
 
 Carried forward from the audit. None of these are settled; several gate
 estimates.
+
+### Answered by Phase 0 — 2026-08-09
+
+These were open questions (or, worse, confidently wrong answers) when this spec
+was written. Running the app on an iOS 27.0 simulator settled them. Do not
+re-derive work for any of them; the detail is in
+[`docs/ios/phase-0-findings.md`](../../ios/phase-0-findings.md).
+
+| Question | Answer |
+|---|---|
+| What `alert()` / `confirm()` actually do on iOS | **ANSWERED** — `confirm()` returns a truthy `Promise` in ~1 ms, so `if (confirm(…))` always runs the destructive branch; `alert()` presents a real panel but does not block. Not a no-op, not fail-safe. See the corrected finding above. |
+| Whether `icons/ios/` exists and blocks `tauri ios init` | **ANSWERED** — it exists (18 tracked files), `AppIcon-512@2x.png` is a real 1024×1024, `init` is not blocked. The `hasAlpha: yes` upload gate is confirmed and stays Phase 5. |
+| Whether tauri#11257 (`productName` vs Cargo `name`) reproduces | **ANSWERED — no.** Workaround struck; see D11. |
+| Whether `ReadableStream[Symbol.asyncIterator]` is missing on iOS WebKit | **ANSWERED — it is PRESENT** on iOS 27. Conclusion unchanged, premise was false; the polyfill still stays for the 17.4 floor. |
+| Whether `Info.ios.plist` is auto-detected | **ANSWERED — yes**, merged at build time, not at `init`. Do not set `bundle.iOS.infoPlist`. |
+| `TARGETED_DEVICE_FAMILY`, `IPHONEOS_DEPLOYMENT_TARGET`, `gen/` tracking | **ANSWERED** — `"1,2"`, `17.4`, and nothing under `gen/` becomes tracked. |
+| What `navigator.platform` returns on iOS (D1's `main.js:1052`) | **ANSWERED — `"iPhone"`** (on iPhone; see the new iPad unknown below). |
+
+**Still open, unchanged:** the `createPDF` rect question is **not** answered —
+Task 5's spike did not run in Phase 0. Everything in the list below stands.
+
+### New unknowns opened by Phase 0
+
+These replace the answered items and did not exist as questions before the app
+ran.
+
+- **Whether `dialog.ask` / `dialog.message` present *and resolve* on iOS.** This
+  is the natural single fix for all twelve `alert`/`confirm` sites, the
+  permissions are already in `capabilities/default.json`
+  (`dialog:allow-ask`, `allow-message`, `allow-confirm`), and the path was never
+  exercised. Measure before designing the Phase 1 fix — it decides whether that
+  work is a facade swap or needs React plumbing.
+- **What the iPad user agent is.** The platform gate and the UA string
+  (`…(iPhone; CPU iPhone OS 18_7 …)`, note the frozen `18_7`) were measured on
+  **iPhone only**. Any UA- or `navigator.platform`-derived branch must be
+  re-measured on iPad before it is trusted.
+- **Safe-area insets need re-measuring.** `env(safe-area-inset-*)` read `0` both
+  with and without `viewport-fit=cover` — but that reading was taken against a
+  **0×0 viewport**, which makes it worthless. Re-measure now the viewport is
+  non-zero, before D8's safe-area work is planned.
+- **Why wry returned navigation policy 2 (`Download`) on iOS.** During the
+  blank-screen investigation the log showed `decidePolicyForNavigationAction …
+  Client responded with policy 2` plus "Adding download 30 to UIProcess
+  DownloadProxyMap". Per wry `navigation.rs:70`, returning `Download` implies
+  `has_download_handler == true` — which contradicts the premise, shared by the
+  audit and by the corrected blob finding above, that Tauri leaves
+  `download_handler` at `None`. Unexplained, and it bears directly on the still-
+  open `<a download>`-on-iOS question below.
+
+### Carried forward
 
 - Whether `WKPDFConfiguration.rect` behaves as WebKit source implies on a real
   device with a 3-sheet résumé.
