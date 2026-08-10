@@ -54,6 +54,7 @@ import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from
 import { initSpacingService, applySpacingSettings, getSpacingSettings, saveSpacingSettings } from './spacingService.js';
 import { initAccentService } from './accentService.js';
 import { initPhotoService } from './photoService.js';
+import { installViewportHeight } from './viewportHeight.js';
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -310,6 +311,10 @@ function showMigrationToast(probe, result = null) {
 
 // Initialize the application
 export async function init() {
+  // Publish --app-height from visualViewport before any layout-dependent work
+  // runs, so the very first render already sees a keyboard-safe height.
+  installViewportHeight();
+
   // FIRST: bring up the storage facade, THEN pull in any legacy Electron data,
   // THEN resolve profiles — and only after ALL THREE settle, open the React
   // mount gate. On the first Tauri boot after an Electron install the facade
