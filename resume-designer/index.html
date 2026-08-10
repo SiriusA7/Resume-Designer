@@ -29,7 +29,15 @@
         // iOS has no NSVisualEffectView vibrancy layer behind the webview, so
         // clearing to transparent there leaves a bare black UIView. Only the
         // desktop targets (macOS/Windows/Linux) get the glass treatment.
-        var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        // iPadOS serves a DESKTOP-class user agent — measured on an iPad Pro
+        // (iOS 27): "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)…" with
+        // navigator.platform "MacIntel". A UA test alone therefore MISSES iPad,
+        // re-enabling the glass treatment and turning the app transparent over a
+        // bare black UIView. The touch-point check is the discriminator: iPadOS
+        // reports maxTouchPoints 5, a real Mac reports 0.
+        var isIOS =
+          /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
         if ((inTauri && !isIOS) || params.has('translucent')) {
           document.documentElement.setAttribute('data-tauri', 'true');
         }
