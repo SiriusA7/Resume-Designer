@@ -4,25 +4,45 @@
 //!
 //! Without it the app launches, runs, and renders perfectly into a 0×0 viewport
 //! on a UIWindow that never composites: a black screen with a fully live app
-//! behind it. Three stacked causes, all measured on an iOS 27.0 simulator
-//! during Phase 0 (see `docs/ios/phase-0-findings.md`):
+//! behind it. Measured on an iOS 27.0 simulator during Phase 0 (see
+//! `docs/ios/phase-0-findings.md`).
 //!
-//! 1. **The WKWebView is created 0×0 and never resized.** wry's iOS branch does
-//!    `initWithFrame: ns_view.frame()` (`wry-0.55.1/src/wkwebview/mod.rs:447-451`)
-//!    — the parent's frame *at creation time* — and sets no autoresizing mask.
-//!    Every `setAutoresizingMask` in that file (`:504`, `:507`, `:521`, `:677`)
-//!    is macOS-only; the iOS path is a bare `addSubview` at `:705`.
-//! 2. **The immediate superview is 0×0 too** (the grandparent is correct, at the
-//!    full 402×874), so sizing only the webview leaves it inside a zero-sized
-//!    ancestor.
-//! 3. **The UIWindow has no `windowScene`,** which orphans it on iOS 13+: it can
-//!    be sized, unhidden and fully populated and will still never be displayed,
-//!    and `makeKeyAndVisible()` is a silent no-op. tao only assigns a scene when
-//!    `multiple_scenes_enabled()` is true
-//!    (`tao-0.35.3/src/platform_impl/ios/view.rs:540`), i.e. when the Info.plist
-//!    manifest sets `UIApplicationSupportsMultipleScenes`. `set_focus()` then
-//!    branches on the very association nothing ever made
-//!    (`.../ios/window.rs:96-102`).
+//! **One root cause, two symptoms.**
+//!
+//! The root cause is that **the UIWindow has no `windowScene`**, which orphans
+//! it on iOS 13+: UIKit never lays the hierarchy out, the window never
+//! composites, and `makeKeyAndVisible()` is a silent no-op. tao assigns a scene
+//! only when `multiple_scenes_enabled()` is true
+//! (`tao-0.35.3/src/platform_impl/ios/view.rs:540`) — and that *same* flag gates
+//! the only call that registers `TaoSceneDelegate`
+//! (`.../ios/view.rs:750`), so with `UIApplicationSupportsMultipleScenes = false`
+//! the class is never registered and our static `UISceneDelegateClassName`
+//! cannot resolve. `set_focus()` then branches on the very association nothing
+//! ever made (`.../ios/window.rs:96-102`).
+//!
+//! Because nothing is ever laid out, two things follow:
+//!
+//! 1. **The immediate superview stays 0×0** (the grandparent is correct, at the
+//!    full screen size). This is the load-bearing one: sizing it is what makes
+//!    the webview visible.
+//! 2. **The WKWebView is created 0×0**, because wry's iOS branch does
+//!    `initWithFrame: ns_view.frame()`
+//!    (`wry-0.55.1/src/wkwebview/mod.rs:447-451`) — the parent's frame *at
+//!    creation time*.
+//!
+//! **Correction, because the delete-this-module contract depends on it:** an
+//! earlier version of this comment claimed wry "sets no autoresizing mask" on
+//! iOS. That is false. wry *does* set
+//! `FlexibleWidth | FlexibleHeight` on the iOS webview at
+//! `wry-0.55.1/src/wkwebview/mod.rs:519-523`. The mask is simply **inert**,
+//! because an autoresizing mask only fires when the superview changes size and
+//! the superview is never laid out at all. Do not wait for "wry adds an iOS
+//! autoresizing mask" — it already shipped. The thing to wait for is tao
+//! attaching a `windowScene` under a static scene manifest.
+//!
+//! **Do not try to fix this by setting `UIApplicationSupportsMultipleScenes` to
+//! `true`.** That activates both paths and makes `connect_scene` call
+//! `on_app_ready()` twice, hitting tao's own `bug!` panic.
 //!
 //! We trigger this ourselves and cannot stop: the `UIApplicationSceneManifest`
 //! in `Info.ios.plist` is mandatory (without it the app does not launch on the
@@ -37,8 +57,11 @@ use objc2_foundation::{NSPoint, NSRect, NSSize};
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
 
 /// `UIViewAutoresizingFlexibleWidth (1 << 1) | UIViewAutoresizingFlexibleHeight (1 << 4)`
-/// — the mask wry sets on macOS and omits on iOS. Once it is set, later
-/// rotations and split-view resizes are handled by UIKit rather than by us.
+/// — the same mask wry already sets on the webview itself
+/// (`wry-0.55.1/src/wkwebview/mod.rs:519-523`). We set it on the *superview*,
+/// which nobody sets and which is the view that actually needs it; re-setting it
+/// on the webview is redundant but harmless. Once both are set, later rotations
+/// and split-view resizes are handled by UIKit rather than by us.
 const FLEXIBLE_WIDTH_AND_HEIGHT: usize = (1 << 1) | (1 << 4);
 
 /// Upper bound on retries. See [`on_run_event`] for why retrying is needed at
@@ -76,6 +99,16 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     }
     if ATTEMPTS.fetch_add(1, Ordering::Relaxed) >= MAX_ATTEMPTS {
         FIXUP_COMPLETE.store(true, Ordering::Relaxed);
+        // Giving up here means a black screen — the exact failure this module
+        // exists to prevent — so say so. This reaches the Xcode / simulator
+        // console, the only diagnostic channel left after the file logger was
+        // removed. The bound counts run-loop passes, not milliseconds, so it
+        // carries no wall-clock guarantee; raise it before suspecting the objc
+        // calls.
+        eprintln!(
+            "[ios_view] gave up after {MAX_ATTEMPTS} run-loop passes without a \
+             scene-attached key window — the app will render into a 0x0 viewport"
+        );
         return;
     }
     let Some(window) = app.get_webview_window("main") else {
@@ -121,6 +154,10 @@ unsafe fn apply(webview: *mut AnyObject) {
     }
     let _: () = msg_send![webview, setFrame: target];
     let _: () = msg_send![webview, setAutoresizingMask: FLEXIBLE_WIDTH_AND_HEIGHT];
+    // Not a diagnosed cause: both were already correct every time they were
+    // measured (`hidden=false alpha=1`). Kept as belt-and-braces because a
+    // hidden or transparent webview is indistinguishable from this module's
+    // own failure mode, and ruling it out costs two selectors.
     let _: () = msg_send![webview, setHidden: false];
     let _: () = msg_send![webview, setAlpha: 1.0f64];
 
