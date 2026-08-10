@@ -994,12 +994,16 @@ function handleKeyDown(e) {
   if (!editable || !editable.isContentEditable) return;
 
   const modKey = e.metaKey || e.ctrlKey;
-  if (modKey && !e.altKey && e.key.toLowerCase() === 'b') {
-    e.preventDefault();
-    toggleBoldInEditable(editable);
-    return;
+  if (modKey && !e.altKey) {
+    // '**' bold, '_' italic, '++' underline — the same markers serializeEmphasis reads.
+    const marker = { b: '**', i: '_', u: '++' }[e.key.toLowerCase()];
+    if (marker) {
+      e.preventDefault();
+      toggleMarkerInEditable(editable, marker);
+      return;
+    }
   }
-  
+
   // Enter key finishes editing (except for multiline fields)
   if (e.key === 'Enter' && !e.shiftKey) {
     const isMultiline = editable.dataset.multiline === 'true';
@@ -1074,7 +1078,7 @@ function handleKeyDown(e) {
   }
 }
 
-function toggleBoldInEditable(editable) {
+function toggleMarkerInEditable(editable, marker) {
   // Skip structural rich text nodes that are reconstructed by specialized extractors.
   if (editable.querySelector('.skill-tag, .skill-tag-inline, .highlight-bullet')) {
     return;
@@ -1088,7 +1092,7 @@ function toggleBoldInEditable(editable) {
 
   const start = getTextOffset(editable, range.startContainer, range.startOffset);
   const end = getTextOffset(editable, range.endContainer, range.endOffset);
-  const result = toggleBoldMarkdown(editable.textContent || '', start, end);
+  const result = toggleMarkdownMarker(editable.textContent || '', start, end, marker);
 
   editable.textContent = result.value;
   setSelectionInEditable(editable, result.start, result.end);
@@ -1117,42 +1121,31 @@ function setSelectionInEditable(editable, start, end) {
   selection.addRange(range);
 }
 
-function toggleBoldMarkdown(value, start, end) {
-  const selectionStart = Math.min(start, end);
-  const selectionEnd = Math.max(start, end);
-  const selected = value.slice(selectionStart, selectionEnd);
+/**
+ * Toggle a markdown emphasis marker around [start, end) of `value`.
+ * Marker is the literal wrapper: '**' bold, '_' italic, '++' underline.
+ * Exported for unit testing; the DOM wrapper is toggleMarkerInEditable.
+ */
+export function toggleMarkdownMarker(value, start, end, marker) {
+  if (start === end) return { value, start, end };
+  const len = marker.length;
+  const before = value.slice(0, start);
+  const selected = value.slice(start, end);
+  const after = value.slice(end);
 
-  if (selectionStart === selectionEnd) {
-    const hasOuterBold = selectionStart >= 2 &&
-      value.slice(selectionStart - 2, selectionStart) === '**' &&
-      value.slice(selectionStart, selectionStart + 2) === '**';
-
-    if (hasOuterBold) {
-      const nextValue = value.slice(0, selectionStart - 2) + value.slice(selectionStart + 2);
-      return { value: nextValue, start: selectionStart - 2, end: selectionStart - 2 };
-    }
-
-    const nextValue = value.slice(0, selectionStart) + '****' + value.slice(selectionStart);
-    return { value: nextValue, start: selectionStart + 2, end: selectionStart + 2 };
+  // Already wrapped by this exact marker? Unwrap.
+  if (before.endsWith(marker) && after.startsWith(marker)) {
+    return {
+      value: before.slice(0, -len) + selected + after.slice(len),
+      start: start - len,
+      end: end - len,
+    };
   }
-
-  if (selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4) {
-    const unwrapped = selected.slice(2, -2);
-    const nextValue = value.slice(0, selectionStart) + unwrapped + value.slice(selectionEnd);
-    return { value: nextValue, start: selectionStart, end: selectionStart + unwrapped.length };
-  }
-
-  const hasOuterBold = selectionStart >= 2 &&
-    value.slice(selectionStart - 2, selectionStart) === '**' &&
-    value.slice(selectionEnd, selectionEnd + 2) === '**';
-
-  if (hasOuterBold) {
-    const nextValue = value.slice(0, selectionStart - 2) + selected + value.slice(selectionEnd + 2);
-    return { value: nextValue, start: selectionStart - 2, end: selectionEnd - 2 };
-  }
-
-  const nextValue = value.slice(0, selectionStart) + `**${selected}**` + value.slice(selectionEnd);
-  return { value: nextValue, start: selectionStart + 2, end: selectionEnd + 2 };
+  return {
+    value: `${before}${marker}${selected}${marker}${after}`,
+    start: start + len,
+    end: end + len,
+  };
 }
 
 // Handle input for validation/feedback
