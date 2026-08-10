@@ -254,21 +254,38 @@ returning `false` made the Import button merely "look dead", and rated it a
 low-severity, fail-safe defect. On iOS it is a **silent data-loss path**: a
 destructive whole-store replace runs with no confirmation at all.
 
-**Blast radius** — 3 real `window.confirm` sites:
+**Blast radius — 2 reachable `confirm()` gates.**
 
-| Site | Consequence |
+> **Correction.** An earlier version of this section listed
+> `src/native.js:108` as "the shared confirm facade… every caller is affected."
+> **That was wrong.** `native.js:85` `showMessage()` opens with
+> `if (isTauri) {` at `:86` and returns at `:95`/`:103` through
+> `tauri-plugin-dialog`'s `dialog.message` / `dialog.ask`. Lines 106-111 are the
+> **web fallback**, and `isTauri` is `true` on iOS (proved — `platform()`
+> returned `"ios"` and the migration probe ran, both of which require IPC).
+> `native.js:108` and `:110` are therefore unreachable on iOS.
+
+| Site | Consequence on iOS |
 |---|---|
-| `src/native.js:108` — `return confirm(options.message) ? 0 : 1;` | The **shared** confirm facade always returns `0` (= OK). Every caller is affected. |
-| `src/backupFlow.js:248` | Destructive whole-store replace proceeds unconfirmed |
-| `src/backupFlow.js:336` | Same pattern |
+| `src/backupFlow.js:248` | whole-store **REPLACE** proceeds unconfirmed |
+| `src/backupFlow.js:336` | legacy-Electron replace/merge, same pattern |
 
 (`components/PdfDialog.jsx:164`'s `confirm()` is a local callback prop, not
-`window.confirm` — unaffected.)
+`window.confirm` — unaffected. `native.js:108` is dead on iOS, per the
+correction above.)
 
-Plus 11 `alert()` sites (`native.js:110`, `pdf.js:71/111/376/393/404`,
-`variantManager.js:251`, `backupFlow.js:167/201/306/330/467`) that now fail to
-block, including `backupFlow.js:167` — the sole signal that an import never
-reached disk.
+Ten **reachable** `alert()` sites lose their blocking behaviour — direct calls,
+not routed through `showMessage()`: `backupFlow.js:167/201/306/330/467`,
+`pdf.js:71/111/376/393/404`, `variantManager.js:251`. `backupFlow.js:167` is the
+worst: it is the *only* signal that an import never reached disk.
+
+**Untested and important:** the iOS path through `showMessage()` —
+`dialog.ask` / `dialog.message` — was never exercised in Phase 0. The
+permissions are correctly in the cross-platform capability
+(`capabilities/default.json`: `dialog:allow-ask`, `allow-message`,
+`allow-confirm`), but whether the plugin actually **presents and resolves** on
+iOS is unknown. If it does, it is the right target for all twelve sites and
+needs no React plumbing. Measure it before designing the fix.
 
 **This raises the priority of the spec's Phase 1 "swap `backupFlow.js`
 alert/confirm for `confirmDestructive`" item from cleanup to a
