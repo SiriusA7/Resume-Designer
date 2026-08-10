@@ -104,9 +104,9 @@ all.
 
 `backupFlow.js:167` remains real but is a lesser, non-destructive defect: it is an
 `alert()` — still the only signal that an import never reached disk, now
-non-blocking rather than absent. Ten reachable `alert()` sites lose their blocking
-behaviour (`backupFlow.js:167/201/306/330/467`, `pdf.js:71/111/376/393/404`,
-`variantManager.js:251`).
+non-blocking rather than absent. Eleven reachable `alert()` sites lose their
+blocking behaviour (`backupFlow.js:167/201/306/330/467`,
+`pdf.js:71/111/376/393/404`, `variantManager.js:251`).
 
 **`native.js:108`'s `confirm` is UNREACHABLE on iOS.** `showMessage()` opens with
 `if (isTauri)` at `:86` and returns at `:95`/`:103` through
@@ -119,8 +119,9 @@ prop, not `window.confirm` — also unaffected.)
 **This moves Phase 1's "swap `backupFlow.js` alert/confirm for
 `confirmDestructive`" from cleanup to a data-loss blocker. Nothing that calls
 `window.confirm` may ship on iOS.** The iOS behaviour of `dialog.ask` /
-`dialog.message` — the natural target for all twelve sites — was never exercised
-in Phase 0; measure it before designing the fix.
+`dialog.message` — the natural target for all thirteen sites (eleven `alert()`
+calls plus the two `confirm()` gates) — was never exercised in Phase 0; measure
+it before designing the fix.
 
 ### Blob + `<a download>`: the audit's claim was WRONG, and desktop is fine
 
@@ -307,18 +308,26 @@ the generated `gen/apple/resume-designer_iOS/Info.plist` and the processed
 `On Paper.app/Info.plist` both carry `UIApplicationSceneManifest`,
 `CFBundleDisplayName`, and `ITSAppUsesNonExemptEncryption`.
 
-**Cargo target tables — corrected 2026-08-09.** This previously said "widen
-`objc2` / `objc2-foundation` / `objc2-web-kit` / `block2` (`Cargo.toml:75-82`)
-… to include iOS; drop the `objc2-app-kit` feature on the iOS target."
-**Widening is wrong**: that block is the macOS target table and it also carries
-`objc2-app-kit`, which `pdf_macos.rs` needs and which iOS cannot build — there is
-no per-dependency way to "drop a feature on the iOS target" once the two share
-one `[target.'cfg(…)'.dependencies]` table. **Add a separate
-`[target.'cfg(target_os = "ios")'.dependencies]` block** carrying only what iOS
-needs (`objc2`, `objc2-foundation`, `block2`, and the `objc2-web-kit` handling
-D5 settles), and leave the macOS block untouched. Widen `lopdf` (`:95`) to
-include iOS as stated. Move `tiny_http`, `rusty-leveldb`, `dirs` into the
-existing `cfg(not(any(android, ios)))` block.
+**Cargo target tables — corrected 2026-08-09 by the audit's own adversarial
+verification pass, not by a Phase 0 finding** (`phase-0-findings.md` says
+nothing about Cargo target tables; this is guidance, not an empirical result).
+The audit previously said "widen `objc2` / `objc2-foundation` / `objc2-web-kit`
+/ `block2` (`Cargo.toml:75-82`) … to include iOS; drop the `objc2-app-kit`
+feature on the iOS target." **Widening is wrong**: that block is the macOS
+target table and it also carries `objc2-app-kit`, which `pdf_macos.rs` needs
+and which iOS cannot build — there is no per-dependency way to "drop a feature
+on the iOS target" once the two share one `[target.'cfg(…)'.dependencies]`
+table. **Add a separate `[target.'cfg(target_os = "ios")'.dependencies]`
+block** carrying only what iOS needs, and leave the macOS block untouched.
+This is already the shape of `src-tauri/Cargo.toml` today: a
+`[target.'cfg(target_os = "ios")'.dependencies]` block exists, carrying `objc2`
+and `objc2-foundation` for the view-hierarchy workaround in `src/ios_view.rs`.
+It does **not** carry `block2` yet — that's forward-looking, needed only once
+D5's `createPDF` binding requires a completion-handler block (§6 of the
+audit), not required for what has shipped so far. Add it, and whatever the
+`objc2-web-kit` handling settles on, when D5's Rust work actually lands. Widen
+`lopdf` (`:95`) to include iOS as stated. Move `tiny_http`, `rusty-leveldb`,
+`dirs` into the existing `cfg(not(any(android, ios)))` block.
 
 **Icons — audit claim corrected 2026-08-09.** The audit said `src-tauri/icons/`
 "has no `ios/` and no 1024px master." **Both halves are wrong.** `icons/ios/`
@@ -335,7 +344,9 @@ radius) before the first upload.
 wholesale and XcodeGen regenerates the project on every `tauri ios
 init/dev/build`, destroying hand-added entitlements or Info.plist keys. Drive
 **every** customization from `tauri.conf.json` (`bundle.iOS.template`,
-`.infoPlist`, `.frameworks`) so regeneration is lossless. Never hand-edit the
+`.frameworks`) so regeneration is lossless — **except `.infoPlist`**, per the
+D2 correction above: `Info.ios.plist` auto-detection already works, and setting
+`bundle.iOS.infoPlist` on top of it is redundant at best. Never hand-edit the
 pbxproj.
 
 ### D3 — Dead-but-shipped Rust
@@ -740,7 +751,7 @@ These replace the answered items and did not exist as questions before the app
 ran.
 
 - **Whether `dialog.ask` / `dialog.message` present *and resolve* on iOS.** This
-  is the natural single fix for all twelve `alert`/`confirm` sites, the
+  is the natural single fix for all thirteen `alert`/`confirm` sites, the
   permissions are already in `capabilities/default.json`
   (`dialog:allow-ask`, `allow-message`, `allow-confirm`), and the path was never
   exercised. Measure before designing the Phase 1 fix — it decides whether that
@@ -754,13 +765,18 @@ ran.
   **0×0 viewport**, which makes it worthless. Re-measure now the viewport is
   non-zero, before D8's safe-area work is planned.
 - **Why wry returned navigation policy 2 (`Download`) on iOS.** During the
-  blank-screen investigation the log showed `decidePolicyForNavigationAction …
-  Client responded with policy 2` plus "Adding download 30 to UIProcess
-  DownloadProxyMap". Per wry `navigation.rs:70`, returning `Download` implies
+  blank-screen investigation, **before the 0×0-viewport fix landed**, the log
+  showed `decidePolicyForNavigationAction … Client responded with policy 2`
+  plus "Adding download 30 to UIProcess DownloadProxyMap" — recorded in
+  [`phase-0-findings.md`'s ASIDE
+  section](../../ios/phase-0-findings.md#aside-an-unexplained-navigation-policy-log--observed-pre-fix-needs-re-observation).
+  Per wry `navigation.rs:70`, returning `Download` implies
   `has_download_handler == true` — which contradicts the premise, shared by the
   audit and by the corrected blob finding above, that Tauri leaves
   `download_handler` at `None`. Unexplained, and it bears directly on the still-
-  open `<a download>`-on-iOS question below.
+  open `<a download>`-on-iOS question below — **but it was observed against a
+  broken render and must be re-confirmed on the now-visible app before anyone
+  invests time explaining it.**
 
 ### Carried forward
 

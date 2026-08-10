@@ -208,6 +208,35 @@ From Rust via `with_webview`, on a retry loop **after** the event loop starts
 This belongs upstream (tao/wry) rather than in app code. File it; carry the
 workaround until it lands.
 
+## ASIDE: an unexplained navigation-policy log — observed pre-fix, needs re-observation
+
+**This was captured during the blank-screen investigation above, before the
+0×0-viewport fix landed** (the app was still invisible, rendering into a
+0×0 `WKWebView` inside a scene-less `UIWindow`). It is recorded here because
+the design spec cites it as a still-open question, and this document is the
+declared authority — it should not cite a log line findings.md never wrote
+down.
+
+The console log at that point in the investigation included:
+
+```
+decidePolicyForNavigationAction … Client responded with policy 2
+Adding download 30 to UIProcess DownloadProxyMap
+```
+
+Policy `2` is wry's `WKNavigationActionPolicyDownload`. Per wry's
+`wkwebview/navigation.rs:70`, wry only returns `Download` when
+`has_download_handler == true` — which contradicts the premise, shared by the
+audit and by the corrected blob-download finding, that this app leaves
+`download_handler` at `None`. Unexplained.
+
+**Do not invest time explaining this, or treat it as evidence for the
+`<a download>`-on-iOS question, until it is reproduced on the now-visible
+app.** It was observed against a broken render (no content occupying the
+webview's frame at all), which is a plausible confound for almost anything
+navigation-related; a clean re-run on the fixed app is the prerequisite for
+trusting this log line at all.
+
 ## Task 4 — platform behaviour — ANSWERED
 
 Measured on the running app (iPhone 17, iOS 27.0, 402×874 pt).
@@ -286,8 +315,8 @@ destructive whole-store replace runs with no confirmation at all.
 `window.confirm` — unaffected. `native.js:108` is dead on iOS, per the
 correction above.)
 
-Ten **reachable** `alert()` sites lose their blocking behaviour — direct calls,
-not routed through `showMessage()`: `backupFlow.js:167/201/306/330/467`,
+Eleven **reachable** `alert()` sites lose their blocking behaviour — direct
+calls, not routed through `showMessage()`: `backupFlow.js:167/201/306/330/467`,
 `pdf.js:71/111/376/393/404`, `variantManager.js:251`. `backupFlow.js:167` is the
 worst: it is the *only* signal that an import never reached disk.
 
@@ -296,8 +325,9 @@ worst: it is the *only* signal that an import never reached disk.
 permissions are correctly in the cross-platform capability
 (`capabilities/default.json`: `dialog:allow-ask`, `allow-message`,
 `allow-confirm`), but whether the plugin actually **presents and resolves** on
-iOS is unknown. If it does, it is the right target for all twelve sites and
-needs no React plumbing. Measure it before designing the fix.
+iOS is unknown. If it does, it is the right target for all thirteen sites (the
+eleven `alert()` calls above plus the two `confirm()` gates) and needs no React
+plumbing. Measure it before designing the fix.
 
 **This raises the priority of the spec's Phase 1 "swap `backupFlow.js`
 alert/confirm for `confirmDestructive`" item from cleanup to a
