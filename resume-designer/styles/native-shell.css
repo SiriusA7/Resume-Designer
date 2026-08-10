@@ -1,0 +1,60 @@
+/* ==========================================================================
+   Native iOS shell
+
+   On iPhone and iPad the chrome is SwiftUI (src-tauri/ios/OPShell.swift) and
+   the webview shows ONLY the résumé canvas. Everything here is gated behind
+   `html.op-native-shell`, a class added by src/iosShell.js exclusively when
+   Swift calls `window.__opShell.activate()`. Desktop, the browser and the
+   print/PDF window never carry it, so this file is inert for them — which is
+   also the design decision on record: nothing is deleted from the web chrome,
+   only bypassed on iOS.
+
+   Loaded LAST in index.html so these win over main.css and glass.css without
+   needing !important.
+
+   The hidden controls are NOT removed: the native chrome drives them by
+   clicking them (see src/iosShell.js), so `display: none` is load-bearing —
+   swapping it for a React conditional would break the commands.
+   ========================================================================== */
+
+html.op-native-shell {
+  /* The SwiftUI navigation bar replaces the web header AND owns the top safe
+     area, so the header's height — and the Dynamic Island inset baked into it —
+     must both come out of the layout, or the canvas starts 100px down a page
+     that has no header on it. */
+  --header-height: 0px;
+}
+
+html.op-native-shell .header-bar {
+  display: none;
+}
+
+/* SwiftUI insets the webview inside the device's safe area already; applying
+   env() again here double-counts it on a notched phone in landscape. */
+html.op-native-shell .app {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The floating zoom pill is replaced by the native bottom toolbar. It carried
+   the text-formatting tools too, which is why the native toolbar has a Format
+   menu — hiding this without that menu would have silently dropped bold,
+   italic, underline, bullets and text size on iOS. */
+html.op-native-shell .zoom-controls {
+  display: none;
+}
+
+/* The two floating panel toggles become buttons in the native bottom toolbar.
+   These are the round buttons that sat on top of the résumé's name. */
+html.op-native-shell .chat-panel-toggle,
+html.op-native-shell .structure-panel-toggle {
+  display: none;
+}
+
+/* `padding-bottom: 70–100px` across main.css exists to keep the floating pill
+   from covering the page. With the pill gone and a real toolbar below the
+   webview, that reservation is just dead space at the bottom of every résumé. */
+html.op-native-shell .resume-scroller {
+  padding: 16px;
+  padding-bottom: 16px;
+}

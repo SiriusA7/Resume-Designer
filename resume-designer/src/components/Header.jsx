@@ -101,6 +101,30 @@ export default function Header() {
     return () => window.removeEventListener('rd:pdf-busy', onPdfBusy);
   }, []);
 
+  // The native iOS chrome (src-tauri/ios/OPShell.swift, via src/iosShell.js)
+  // replaces this header on iPhone/iPad but has no dialogs of its own, so its
+  // Résumé menu asks THIS component to run the three flows it already owns: the
+  // rename dialog, the delete path (confirm + last-variant guard + orphaned
+  // chat-thread reassignment), and the file picker. Reimplementing the delete
+  // path natively is how a delete quietly leaves threads behind.
+  //
+  // A ref, not the handlers directly: they close over `list`/`currentName` and
+  // are rebuilt every render, so a dependency-free listener would keep calling
+  // the first render's copy and delete against a stale variant list.
+  const flowsRef = useRef({});
+  useEffect(() => {
+    const run = (key) => () => flowsRef.current[key]?.();
+    const handlers = {
+      'rd:variant-rename': run('openRename'),
+      'rd:variant-delete': run('handleDelete'),
+      'rd:variant-import': run('pickImport'),
+    };
+    for (const [name, fn] of Object.entries(handlers)) window.addEventListener(name, fn);
+    return () => {
+      for (const [name, fn] of Object.entries(handlers)) window.removeEventListener(name, fn);
+    };
+  }, []);
+
   const host = typeof document !== 'undefined' ? document.getElementById('header-bar') : null;
   if (!host) return null;
 
@@ -161,6 +185,9 @@ export default function Header() {
     }
     deleteCurrentVariant();
   };
+
+  // Latest closures for the native-chrome listeners registered above.
+  flowsRef.current = { openRename, handleDelete, pickImport };
 
   // Variant action items reused by the expanded icon buttons, the kebab menu, and
   // the mobile hamburger. Delete is flagged `danger` and runs handleDelete, which

@@ -15,14 +15,18 @@ import { initPdfExport } from './pdf.js';
 import { paginate, resetPaginatedState } from './pagination.js';
 import { normalizePageSize, DEFAULT_PAGE_WIDTH_IN } from './pageSetup.js';
 import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from './inlineEditor.js';
-import { initVariants } from './variantManager.js';
+import {
+  initVariants, loadVariant, duplicateVariant, exportCurrentVariant,
+  subscribeVariants, getVariantsSnapshot,
+} from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
 import { initInlineChanges, decorateRenderedResume, isPreviewSuppressed } from './inlineChanges.js';
 import { applyPendingToData } from './changePreview.js';
 import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
-import { initZoomControls } from './zoomControls.js';
+import { initZoomControls, getZoom, fitToView } from './zoomControls.js';
+import { initIOSShell } from './iosShell.js';
 import { initWindowDrag } from './tauriDrag.js';
 import {
   migrateBuiltInVariants,
@@ -525,6 +529,15 @@ export async function init() {
 
   // Initialize shared text formatting tools in bottom toolbar
   initTextTools();
+
+  // Bridge to the native iOS chrome. Installs window.__opShell and its
+  // listeners on every platform but stays dormant until the SwiftUI shell
+  // calls activate(), so desktop and the browser are unaffected. Wired last:
+  // its commands drive the controls and window globals set up above.
+  initIOSShell({
+    subscribeVariants, getVariantsSnapshot, loadVariant, duplicateVariant,
+    exportCurrentVariant, getZoom, fitToView, openSettings,
+  });
   
   // Check for first-time user onboarding
   console.log('[Main] Setting up onboarding check...');

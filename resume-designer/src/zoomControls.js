@@ -158,9 +158,14 @@ function applyZoom() {
   if (zoomLevel) {
     zoomLevel.textContent = `${Math.round(currentZoom * 100)}%`;
   }
-  
+
   // Update button states
   updateButtonStates();
+
+  // The native iOS toolbar renders its own zoom readout and has no way to
+  // observe this module otherwise. Same event idiom as rd:pdf-busy; inert
+  // everywhere nothing is listening.
+  window.dispatchEvent(new CustomEvent('rd:zoom', { detail: { zoom: currentZoom } }));
 }
 
 // Fit resume to available view space

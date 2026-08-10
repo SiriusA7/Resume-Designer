@@ -66,6 +66,11 @@
        :root[data-tauri="true"], so it is inert in a plain browser and only
        turns the chrome translucent inside the Tauri desktop shell. -->
   <link rel="stylesheet" href="/styles/glass.css">
+  <!-- Native iOS shell overrides. Loaded LAST and fully gated behind
+       html.op-native-shell, a class only src/iosShell.js adds and only when the
+       SwiftUI chrome (src-tauri/ios/OPShell.swift) says it is installed. Inert
+       on desktop, in the browser, and in the print/PDF window. -->
+  <link rel="stylesheet" href="/styles/native-shell.css">
 </head>
 <body>
   <div id="root"></div>

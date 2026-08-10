@@ -1,21 +1,24 @@
-//! SPIKE — NOT PRODUCTION CODE. See `docs/ios/swiftui-lifecycle-spike.md`.
+//! Installs the native iOS chrome (`src-tauri/ios/OPShell.swift`).
 //!
-//! Route 1 ("reparent") of the SwiftUI-shell spike. tao keeps `start_app()`,
-//! the application lifecycle and the run loop, and builds the whole hierarchy
-//! exactly as it does today. Once the window is scene-attached (which is
-//! `ios_view.rs`'s job — this module deliberately waits for it rather than
-//! duplicating it), we call a Swift `@objc` class that:
+//! tao keeps `start_app()`, the application lifecycle and the run loop, and
+//! builds the whole UIKit hierarchy exactly as it does today. Once the window
+//! is scene-attached — which is `ios_view.rs`'s job, and this module waits for
+//! it rather than duplicating it — we call a Swift `@objc` class that:
 //!
 //!   1. builds a `UIHostingController` around a real SwiftUI `NavigationStack`,
 //!   2. makes it the window's `rootViewController`, and
 //!   3. moves wry's existing `WKWebView` into a container inside it.
 //!
-//! The Swift lives in `src-tauri/ios/OPSpikeShell.swift` (tracked) and must be
-//! copied into `src-tauri/gen/apple/Sources/resume-designer/` before building,
-//! because `gen/` is gitignored and regenerated.
+//! That is the entire Rust side. Everything visible is ordinary Swift; nothing
+//! here composes UI. See `docs/ios/swiftui-lifecycle-spike.md` for why the
+//! alternative — Swift owning `@main` — is ruled out rather than deferred.
 //!
-//! Set `OP_SPIKE_SHELL=0` in the scheme's environment to launch the unmodified
-//! web shell instead — that is the A/B control for the screenshots.
+//! The Swift is compiled straight from `src-tauri/ios/`: `project.yml` lists it
+//! as a source path (see `docs/ios/xcode-project-ownership.md`). There is no
+//! copy step.
+//!
+//! Set `OP_NATIVE_SHELL=0` in the scheme's environment to launch the plain web
+//! shell instead — the A/B control when deciding whether a bug is the chrome's.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -27,7 +30,7 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 static ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
 /// Same reasoning as `ios_view::MAX_ATTEMPTS`: bound the retry so a permanently
-/// sceneless app burns a fixed amount of work.
+/// sceneless app burns a fixed amount of work instead of spinning forever.
 const MAX_ATTEMPTS: usize = 240;
 
 pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
@@ -37,9 +40,9 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     if INSTALLED.load(Ordering::Relaxed) {
         return;
     }
-    if std::env::var("OP_SPIKE_SHELL").as_deref() == Ok("0") {
+    if std::env::var("OP_NATIVE_SHELL").as_deref() == Ok("0") {
         INSTALLED.store(true, Ordering::Relaxed);
-        eprintln!("[ios_shell] disabled by OP_SPIKE_SHELL=0");
+        eprintln!("[ios_shell] disabled by OP_NATIVE_SHELL=0");
         return;
     }
     if ATTEMPTS.fetch_add(1, Ordering::Relaxed) >= MAX_ATTEMPTS {
@@ -64,22 +67,23 @@ unsafe fn install(webview: *mut AnyObject) {
         return;
     }
     // Wait for ios_view.rs to attach the UIWindowScene. Installing before that
-    // would put a UIHostingController into a window UIKit never lays out, and
-    // SwiftUI would size everything to zero.
+    // puts a UIHostingController into a window UIKit never lays out, and
+    // SwiftUI sizes everything to zero — the blank-screen failure mode.
     let scene: *mut AnyObject = msg_send![ui_window, windowScene];
     if scene.is_null() {
         return;
     }
 
-    let Some(class) = AnyClass::get(c"OPSpikeShell") else {
-        // The Swift file was not compiled into the app. Say so loudly and stop
-        // retrying — this is the failure mode worth distinguishing from a
-        // blank screen.
+    let Some(class) = AnyClass::get(c"OPShell") else {
+        // The Swift was not compiled into the app — most likely `project.yml`
+        // lost its `../../ios` source path to a regeneration. Say so loudly and
+        // stop retrying: this is the failure worth distinguishing from a layout
+        // problem, because the app still works, just without native chrome.
         INSTALLED.store(true, Ordering::Relaxed);
-        eprintln!("[ios_shell] OPSpikeShell not found in the ObjC runtime — Swift file not built?");
+        eprintln!("[ios_shell] OPShell not found in the ObjC runtime — is ../../ios still a source path in project.yml?");
         return;
     };
     let _: () = msg_send![class, installShellInWindow: ui_window, webView: webview];
     INSTALLED.store(true, Ordering::Relaxed);
-    eprintln!("[ios_shell] SwiftUI shell installed");
+    eprintln!("[ios_shell] native shell installed");
 }

@@ -3,7 +3,8 @@ mod commands;
 // unattached UIWindow — see the module docs. Not app logic; delete on upstream fix.
 #[cfg(target_os = "ios")]
 mod ios_view;
-// SPIKE ONLY — SwiftUI shell reparent experiment. See docs/ios/swiftui-lifecycle-spike.md.
+// The native SwiftUI chrome. Reparents wry's WKWebView into a UIHostingController;
+// see the module docs and docs/ios/swiftui-lifecycle-spike.md.
 #[cfg(target_os = "ios")]
 mod ios_shell;
 
@@ -116,8 +117,9 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             ios_view::on_run_event(app_handle, &event);
 
-            // SPIKE ONLY — must run AFTER ios_view, which attaches the scene
-            // this depends on. See docs/ios/swiftui-lifecycle-spike.md.
+            // Native chrome. HARD ORDERING DEPENDENCY: must run AFTER ios_view,
+            // which attaches the UIWindowScene this needs. Installing first puts
+            // SwiftUI into a window UIKit never lays out, and it sizes to zero.
             #[cfg(target_os = "ios")]
             ios_shell::on_run_event(app_handle, &event);
 

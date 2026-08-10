@@ -1,0 +1,248 @@
+/**
+ * The bridge to the native iOS shell.
+ *
+ * On iOS the chrome is SwiftUI (`src-tauri/ios/OPShell.swift`) and only the
+ * résumé canvas is web. This module is the seam between them. It is
+ * deliberately a DISPATCHER, not a second implementation: every command routes
+ * to the same function or the same DOM control the web chrome uses, so the two
+ * shells cannot drift.
+ *
+ * Direction and transport:
+ *
+ *   Swift → JS   `webView.evaluateJavaScript("window.__opShell.command(json)")`
+ *   JS → Swift   `window.webkit.messageHandlers.opShell.postMessage(snapshot)`
+ *
+ * The message handler is added by Swift when it installs the shell, so its
+ * presence is also how the web side knows a native shell is there at all.
+ * Nothing here runs on desktop or in the browser: `activate()` is only ever
+ * called by Swift.
+ *
+ * The two pure pieces — `buildSnapshot` and `createCommandDispatcher` — carry
+ * the contract and are unit-tested (test/iosShell.test.js). The rest is glue
+ * that cannot be tested without a WKWebView.
+ */
+
+/** Name of the `WKScriptMessageHandler` Swift registers. Must match OPShell.swift. */
+export const SHELL_HANDLER = 'opShell';
+
+/** Class placed on `<html>` once the native shell owns the chrome. */
+export const NATIVE_SHELL_CLASS = 'op-native-shell';
+
+/**
+ * Project app state onto the wire shape the SwiftUI chrome renders from.
+ *
+ * Coarse on purpose: the chrome needs a title, a menu of names, and a zoom
+ * readout. Sending more would be a second document model living in Swift, which
+ * is the thing the design rules out until the structure panel (staging step 5).
+ *
+ * Pure — no DOM, no storage.
+ *
+ * @param {object} state
+ * @param {string|null} [state.currentId] id of the loaded résumé variant
+ * @param {Array<{id: string, name?: string}>} [state.list] every variant
+ * @param {number} [state.zoom] canvas scale, 1 = 100%
+ * @param {boolean} [state.pdfBusy] a PDF export is in flight
+ * @returns {{variantId: string|null, variantName: string, variants: Array<{id: string, name: string}>, zoom: number, zoomPercent: number, pdfBusy: boolean}}
+ */
+export function buildSnapshot({ currentId = null, list = [], zoom = 1, pdfBusy = false } = {}) {
+  const variants = (Array.isArray(list) ? list : [])
+    .filter((v) => v && typeof v.id === 'string')
+    .map((v) => ({ id: v.id, name: typeof v.name === 'string' && v.name ? v.name : 'Untitled' }));
+  // A non-finite zoom would render as "NaN%" in the toolbar, so it is clamped
+  // here rather than in Swift — the projection owns the wire shape's validity.
+  const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  return {
+    variantId: currentId,
+    variantName: variants.find((v) => v.id === currentId)?.name ?? '',
+    variants,
+    zoom: safeZoom,
+    zoomPercent: Math.round(safeZoom * 100),
+    pdfBusy: !!pdfBusy,
+  };
+}
+
+/**
+ * Build the command dispatcher from a map of `type → handler`.
+ *
+ * Returns a function that never throws: a handler that blows up must not take
+ * the shell's chrome down with it, and Swift has no way to catch a JS
+ * exception raised inside `evaluateJavaScript`. Failures come back as data.
+ *
+ * Pure — the impurity is entirely in the `actions` the caller supplies.
+ *
+ * @param {Record<string, (payload: object) => unknown>} actions
+ * @returns {(command: unknown) => {ok: boolean, error?: string}}
+ */
+export function createCommandDispatcher(actions) {
+  return function dispatch(command) {
+    let parsed = command;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return { ok: false, error: 'malformed-json' };
+      }
+    }
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') {
+      return { ok: false, error: 'malformed-command' };
+    }
+    const action = actions[parsed.type];
+    if (typeof action !== 'function') {
+      return { ok: false, error: `unknown-command:${parsed.type}` };
+    }
+    try {
+      action(parsed);
+      return { ok: true };
+    } catch (err) {
+      console.error('[iosShell] command failed:', parsed.type, err);
+      return { ok: false, error: String(err?.message ?? err) };
+    }
+  };
+}
+
+/** True when Swift has registered its message handler on this webview. */
+export function isNativeShellAvailable(win = globalThis) {
+  return typeof win?.webkit?.messageHandlers?.[SHELL_HANDLER]?.postMessage === 'function';
+}
+
+// --- glue -------------------------------------------------------------------
+
+/** Click an existing web control so the native command runs the SAME code path. */
+function click(id) {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`control not found: #${id}`);
+  el.click();
+}
+
+/** Ask the React chrome to run a flow it owns (confirm dialogs, file picker). */
+function ask(name, detail) {
+  window.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+let activated = false;
+let publish = () => {};
+
+/**
+ * Wire the bridge. Safe to call on every platform: it only installs
+ * `window.__opShell` and some listeners, and does nothing visible until Swift
+ * calls `activate()`.
+ *
+ * @param {object} deps injected so this stays testable and so main.js keeps
+ *   ownership of the module graph.
+ */
+export function initIOSShell(deps) {
+  const {
+    subscribeVariants,
+    getVariantsSnapshot,
+    getZoom,
+    fitToView,
+    duplicateVariant,
+    exportCurrentVariant,
+  } = deps;
+
+  const dispatch = createCommandDispatcher({
+    // Résumé selection and CRUD. Rename, delete and import route back through
+    // the React chrome, which owns the confirm dialogs, the last-variant guard
+    // and the orphaned-chat-thread handling — duplicating any of that in Swift
+    // is how a delete quietly loses threads.
+    selectVariant: ({ id }) => deps.loadVariant(id),
+    newVariant: () => window.showOnboardingWizard?.({ skipApiKeyStep: true }),
+    renameVariant: () => ask('rd:variant-rename'),
+    duplicateVariant: () => duplicateVariant(),
+    deleteVariant: () => ask('rd:variant-delete'),
+    importVariant: () => ask('rd:variant-import'),
+    exportVariant: ({ format }) => exportCurrentVariant(format === 'md' ? 'md' : 'json'),
+
+    // Tools. All of these already have a single entry point used by the web
+    // header; the native menu calls the same one.
+    openSettings: () => deps.openSettings(),
+    openProfile: () => window.openUserProfilePanel?.(),
+    openJobs: () => window.openJobDescriptionPanel?.(),
+    openLibrary: () => ask('rd:open-library'),
+    openHistory: () => window.openHistoryPanel?.(),
+
+    // Panels stay web in step 2 — the native buttons drive the web toggles.
+    toggleChat: () => click('toggle-chat-panel'),
+    toggleStructure: () => click('toggle-structure-panel'),
+
+    // Canvas. Clicking the hidden zoom buttons keeps the min/max clamping and
+    // the disabled states in one place (zoomControls.js) instead of two.
+    zoomIn: () => click('zoom-in'),
+    zoomOut: () => click('zoom-out'),
+    zoomReset: () => click('zoom-reset'),
+    zoomFit: () => fitToView(),
+    undo: () => click('undo-btn'),
+    redo: () => click('redo-btn'),
+
+    // Text formatting. These controls lived inside the floating zoom pill,
+    // which the native shell hides — without routing them here, hiding the pill
+    // would have quietly removed bold/italic/underline/bullets/text-size from
+    // iOS. Clicking the same buttons keeps initTextTools() the only
+    // implementation.
+    textBold: () => click('text-bold'),
+    textItalic: () => click('text-italic'),
+    textUnderline: () => click('text-underline'),
+    textBullets: () => click('text-bullets'),
+    textClearFormat: () => click('text-clear-format'),
+    textSizeIncrease: () => click('text-size-increase'),
+    textSizeDecrease: () => click('text-size-decrease'),
+
+    exportPdf: () => click('download-pdf'),
+  });
+
+  let pdfBusy = false;
+  let queued = false;
+  let waits = 0;
+
+  const send = () => {
+    queued = false;
+    if (!activated) return;
+    if (!isNativeShellAvailable()) {
+      // Swift adds its message handler and calls activate() in the same run
+      // loop pass, so the handler's JS namespace can lag the activation by a
+      // frame. Without this the chrome would launch with an empty title and
+      // stay that way until the user happened to change a variant or the zoom.
+      if (waits++ < 40) setTimeout(publish, 50);
+      return;
+    }
+    waits = 0;
+    const { currentId, list } = getVariantsSnapshot();
+    window.webkit.messageHandlers[SHELL_HANDLER].postMessage(
+      buildSnapshot({ currentId, list, zoom: getZoom(), pdfBusy })
+    );
+  };
+  // Coalesce: loading a variant fires the variant subscription AND a zoom
+  // refit in the same frame, and the chrome only needs the settled result.
+  publish = () => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(send);
+  };
+
+  subscribeVariants(publish);
+  window.addEventListener('rd:zoom', publish);
+  window.addEventListener('rd:pdf-busy', (e) => {
+    pdfBusy = !!e.detail?.busy;
+    publish();
+  });
+
+  window.__opShell = {
+    command: dispatch,
+    /**
+     * Called by Swift once the SwiftUI chrome is installed. Hides the web
+     * chrome and starts publishing. Idempotent — Swift may retry if the page
+     * had not finished booting on its first attempt.
+     */
+    activate: () => {
+      if (activated) return true;
+      activated = true;
+      document.documentElement.classList.add(NATIVE_SHELL_CLASS);
+      publish();
+      return true;
+    },
+  };
+
+  // Swift may win the race and call activate() before this module has run. It
+  // leaves this flag behind when it does, so the handshake completes either way.
+  if (window.__opShellPendingActivate) window.__opShell.activate();
+}
