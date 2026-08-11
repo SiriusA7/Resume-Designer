@@ -62,6 +62,12 @@ struct ShellSnapshot: Decodable, Equatable {
       let id: String
       let title: String
       let fields: [Field]
+      /// The path of the ARRAY behind this group's list rows, or nil when the
+      /// group is a set of fields on one object and cannot be reordered.
+      let listPath: String?
+      /// How many non-list rows precede the list (a section's heading, a role's
+      /// title/company/dates), so a row index maps to an array index.
+      let listOffset: Int
     }
     var groups: [Group]
   }
@@ -760,8 +766,24 @@ private struct StructureSheet: View {
           Form {
             ForEach(groups) { group in
               Section(group.title) {
-                ForEach(group.fields) { field in
-                  fieldRow(field)
+                // Split, not one ForEach with `.onMove`: attaching the move to
+                // the whole group put a drag handle on Role, Company and Dates
+                // too, and a handle that refuses to do anything is worse than
+                // no handle. Only the rows backed by an array get one.
+                ForEach(fixedFields(of: group)) { fieldRow($0) }
+                if let listPath = group.listPath {
+                  ForEach(listFields(of: group)) { fieldRow($0) }
+                    .onMove { indices, destination in
+                      // Indices are already list-relative here, so there is no
+                      // offset arithmetic to get wrong. Swift moves within a
+                      // list it was TOLD about and never builds an element path.
+                      guard let from = indices.first else { return }
+                      model.send("moveItem", [
+                        "path": listPath,
+                        "from": String(from),
+                        "to": String(destination),
+                      ])
+                    }
                 }
               }
             }
@@ -776,6 +798,7 @@ private struct StructureSheet: View {
         }
       }
     }
+    .environment(\.editMode, .constant(.active))
     .onChange(of: focusedPath) { previous, _ in
       // Drop the draft once focus leaves, so the field goes back to rendering
       // the store's value — including any normalisation the store applied.
@@ -799,6 +822,22 @@ private struct StructureSheet: View {
       }
     }
     .padding(.vertical, 2)
+  }
+
+  /// The rows above the list: a section's heading, a role's title/company/dates.
+  private func fixedFields(
+    of group: ShellSnapshot.DocumentOutline.Group
+  ) -> [ShellSnapshot.DocumentOutline.Field] {
+    guard group.listPath != nil else { return group.fields }
+    return Array(group.fields.prefix(group.listOffset))
+  }
+
+  /// The rows backed by the array at `group.listPath`.
+  private func listFields(
+    of group: ShellSnapshot.DocumentOutline.Group
+  ) -> [ShellSnapshot.DocumentOutline.Field] {
+    guard group.listPath != nil else { return [] }
+    return Array(group.fields.dropFirst(group.listOffset))
   }
 
   private func binding(for field: ShellSnapshot.DocumentOutline.Field) -> Binding<String> {

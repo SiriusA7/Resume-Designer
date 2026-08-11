@@ -48,37 +48,20 @@ schema and cannot construct a path. Writes go through `setField` to
 focus rule holds: 16 characters typed into the middle of a value kept the
 caret in place. The outline only streams while the panel is open.
 
-## Outstanding — the one real bug
+## Closed: the "post-export touch" bug was the test harness
 
-**After a PDF export, the web preview dialog stops responding to touches.**
-Save, Cancel and its × all do nothing; a later `Rename` dialog on a fresh
-launch responds normally, so it is specific to what the export leaves behind.
+Recorded here because it cost real time and the wrong conclusion was one step
+away. On the simulator the PDF preview dialog appeared to stop accepting taps
+after an export — Save, Cancel and its × all did nothing, reproducibly, across
+several builds. Ruling out the modal handling, `.disabled` propagation and the
+layout took a DOM dump and three rebuilds.
 
-What has been ruled out, with evidence:
+**On a real device both buttons work.** The taps were being lost by
+`simctl`-injected input, not by the app.
 
-- **Not the modal handling.** Rename's Cancel works with `modalOpen` true.
-- **Not `.disabled` propagation.** That was a real bug (it disabled the hosted
-  webview, not just the toolbar) and is fixed; the symptom outlived the fix.
-- **Not layout.** A DOM dump during the failure shows `elementFromPoint` at the
-  Save button correctly returning the DialogContent, `innerHeight` matching the
-  content area, and scroll at 0/0. Rendering and hit-testing agree; only touch
-  delivery disagrees.
-- **Not the share code.** `stage_pdf_for_share` runs and writes the named PDF
-  (verified on disk), so JS gets that far. `OPShell`'s share handler never logs,
-  and the dialog never enters its "Saving…" state — i.e. React's `confirm()`
-  never fires, so the tap is lost before any of it.
-
-Left as the next thing to chase. **Check it on a real device first**: every
-observation above comes from `simctl`-injected taps, which behaved
-inconsistently across runs (the document picker's remote service did launch
-once, from the same coordinates that later did nothing). A real finger may not
-reproduce this at all, and if it does not, the bug is in the harness rather
-than the app.
-
-The prime suspect not yet tested: WKWebView's internal scroll view keeping a
-stale `contentSize` from `pdf-export-mode`, which makes the document as tall as
-the whole résumé. That would shift where touches land while leaving layout
-coordinates — and therefore `elementFromPoint` — correct.
+The lesson for next time: `simctl` taps are good enough to prove a control
+WORKS, and not good enough to prove one is broken. A negative result from them
+is not evidence.
 
 ## Also unverified
 

@@ -155,6 +155,8 @@ export function buildDocumentOutline(data) {
   groups.push({
     id: 'header',
     title: 'Header',
+    listPath: null,
+    listOffset: 0,
     fields: [
       { path: 'name', label: 'Name', value: text(data.name), multiline: false },
       { path: 'tagline', label: 'Professional title', value: text(data.tagline), multiline: false },
@@ -168,6 +170,8 @@ export function buildDocumentOutline(data) {
   groups.push({
     id: 'summary',
     title: 'Summary',
+    listPath: null,
+    listOffset: 0,
     fields: [{ path: 'summary', label: 'Summary', value: text(data.summary), multiline: true }],
   });
 
@@ -185,7 +189,15 @@ export function buildDocumentOutline(data) {
         multiline: true,
       });
     });
-    groups.push({ id: `experience-${i}`, title: text(role?.title) || `Role ${i + 1}`, fields });
+    groups.push({
+      id: `experience-${i}`,
+      title: text(role?.title) || `Role ${i + 1}`,
+      fields,
+      // Only the bullets are a reorderable list here; the role's own
+      // title/company/dates are fields of one object.
+      listPath: `experience[${i}].bullets`,
+      listOffset: 3,
+    });
   });
 
   const education = list(data.education);
@@ -196,6 +208,8 @@ export function buildDocumentOutline(data) {
       fields: education.map((entry, i) => ({
         path: `education[${i}]`, label: `Entry ${i + 1}`, value: text(entry), multiline: true,
       })),
+      listPath: 'education',
+      listOffset: 0,
     });
   }
 
@@ -213,13 +227,23 @@ export function buildDocumentOutline(data) {
       // Prose sections keep their content as one string, not a list.
       fields.push({ path: `sections[${i}].content`, label: 'Text', value: section.content, multiline: true });
     }
-    groups.push({ id: `section-${i}`, title: text(section?.title) || `Section ${i + 1}`, fields });
+    groups.push({
+      id: `section-${i}`,
+      title: text(section?.title) || `Section ${i + 1}`,
+      fields,
+      // The heading occupies row 0, so the list starts one row in. A string
+      // (prose) section is not a list and gets no listPath.
+      listPath: Array.isArray(section?.content) ? `sections[${i}].content` : null,
+      listOffset: 1,
+    });
   });
 
   if (typeof data.tools === 'string' && data.tools) {
     groups.push({
       id: 'tools',
       title: 'Tools',
+      listPath: null,
+      listOffset: 0,
       fields: [{ path: 'tools', label: 'Tools', value: data.tools, multiline: true }],
     });
   }
@@ -398,6 +422,12 @@ export function initIOSShell(deps) {
     setField: ({ path, value }) => {
       if (typeof path !== 'string' || !path) throw new Error('setField needs a path');
       deps.updateField(path, String(value ?? ''));
+    },
+    // Reordering. Swift sends the LIST's path and two indices — it never
+    // builds an element path, so the grammar stays owned by the projection.
+    moveItem: ({ path, from, to }) => {
+      if (typeof path !== 'string' || !path) throw new Error('moveItem needs a list path');
+      deps.moveListItem(path, Number(from), Number(to));
     },
     // The outline is only projected while the panel is open. It is by far the
     // largest thing on the wire, and the canvas re-renders on every keystroke,

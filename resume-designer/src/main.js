@@ -4,6 +4,7 @@
  */
 
 import { store } from './store.js';
+import { getByPath } from './diffEngine.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
 import {
@@ -547,6 +548,19 @@ export async function init() {
     // and only ever comes back as a path the projection handed out.
     getDocument: () => buildDocumentOutline(store.getDataRef()),
     updateField: (path, value) => store.update(path, value),
+    // Reorder by rewriting the WHOLE array through the same `store.update`
+    // every other edit uses, rather than adding a second mutation path. The
+    // list path comes from the projection, so it is always a real array.
+    moveListItem: (listPath, from, to) => {
+      const current = getByPath(store.getDataRef(), listPath);
+      if (!Array.isArray(current)) return;
+      if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+      if (from < 0 || from >= current.length || to < 0 || to > current.length) return;
+      const next = current.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, moved);
+      store.update(listPath, next);
+    },
     subscribeDocument: (cb) => store.subscribe(cb),
   });
   
