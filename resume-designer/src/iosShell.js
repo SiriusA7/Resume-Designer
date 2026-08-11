@@ -296,6 +296,7 @@ export function buildPendingChanges(changes) {
 export function buildChatView({
   threads = [], currentThreadId = null, messages = [], loading = false,
   streamingMessage = null, configured = false, thinking = null,
+  currentModel = '', models = [], reasoningEffort = 'medium', reasoningSupported = false,
 } = {}) {
   const text = (v) => (typeof v === 'string' ? v : '');
   const visible = (Array.isArray(messages) ? messages : [])
@@ -336,6 +337,20 @@ export function buildChatView({
     configured: !!configured,
     // The engine's live status line ('Thinking…', tool names). Null when idle.
     thinking: typeof thinking === 'string' ? thinking : '',
+    currentModel: text(currentModel),
+    // Flattened from the engine's grouped list: a native Menu renders sections
+    // from a flat array with a group key more easily than nested arrays, and
+    // the grouping is presentational either way.
+    models: (Array.isArray(models) ? models : []).flatMap((g) =>
+      (Array.isArray(g?.options) ? g.options : []).map((o) => ({
+        id: text(o?.value), label: text(o?.label), group: text(g?.group),
+      }))
+    ).filter((m) => m.id),
+    reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(reasoningEffort)
+      ? reasoningEffort : 'medium',
+    // Effort is meaningless on a model that does not reason; the picker hides
+    // rather than offering a setting with no effect.
+    reasoningSupported: !!reasoningSupported,
   };
 }
 
@@ -564,6 +579,8 @@ export function initIOSShell(deps) {
     chatStop: () => ask('rd:chat-stop'),
     chatNewThread: () => ask('rd:chat-new-thread'),
     chatSelectThread: ({ id }) => ask('rd:chat-select-thread', { id }),
+    chatSetModel: ({ id }) => ask('rd:chat-set-model', { id }),
+    chatSetReasoning: ({ value }) => ask('rd:chat-set-reasoning', { value }),
     // Reviewing the AI's proposed edits. Each routes to the same session the
     // web review uses, so a change applied here goes through `applyChangeToStore`
     // with the same ordering rules — leaf paths are indexed against the proposed

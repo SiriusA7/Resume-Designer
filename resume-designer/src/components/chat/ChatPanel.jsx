@@ -8,7 +8,7 @@ import { getSettings, saveSettings } from '../../persistence.js';
 import { openSettings } from '../../settingsModal.js';
 import { getThreadDisplayName } from '../../chatThreads.js';
 import { useVariants } from '../../hooks/useVariants.js';
-import { useChat } from './useChat.js';
+import { useChat, getAIModels } from './useChat.js';
 import { MessageList } from './MessageList.jsx';
 import { ChatComposer } from './ChatComposer.jsx';
 import { ThreadSelector } from './ThreadSelector.jsx';
@@ -54,6 +54,10 @@ export default function ChatPanel() {
       streamingMessage: c.streamingMessage,
       configured: c.configured,
       thinking: c.thinking,
+      currentModel: c.currentModel,
+      models: getAIModels(),
+      reasoningEffort: c.reasoningEffort,
+      reasoningSupported: c.reasoningSupported,
     });
   };
 
@@ -66,10 +70,15 @@ export default function ChatPanel() {
       streamingMessage: chat.streamingMessage,
       configured: chat.configured,
       thinking: chat.thinking,
+      currentModel: chat.currentModel,
+      models: getAIModels(),
+      reasoningEffort: chat.reasoningEffort,
+      reasoningSupported: chat.reasoningSupported,
     });
   }, [
     chat.threads, chat.currentThreadId, chat.messages, chat.loading,
     chat.streamingMessage, chat.configured, chat.thinking,
+    chat.currentModel, chat.reasoningEffort, chat.reasoningSupported, chat.catalogRev,
   ]);
 
   useEffect(() => {
@@ -80,6 +89,8 @@ export default function ChatPanel() {
       },
       'rd:chat-stop': () => chatRef.current.stop(),
       'rd:chat-publish': () => publishChatState(),
+      'rd:chat-set-model': (e) => { if (e.detail?.id) chatRef.current.selectModel(e.detail.id); },
+      'rd:chat-set-reasoning': (e) => { if (e.detail?.value) chatRef.current.setReasoning(e.detail.value); },
       'rd:chat-new-thread': () => chatRef.current.newThread(),
       'rd:chat-select-thread': (e) => {
         if (e.detail?.id) chatRef.current.switchThread(e.detail.id);

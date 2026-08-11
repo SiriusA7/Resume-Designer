@@ -85,6 +85,16 @@ struct ShellSnapshot: Decodable, Equatable {
     var configured: Bool
     /// The engine's live status line. Empty when idle.
     var thinking: String
+    var currentModel: String
+    var models: [ModelOption]
+    var reasoningEffort: String
+    var reasoningSupported: Bool
+
+    struct ModelOption: Decodable, Equatable, Identifiable {
+      let id: String
+      let label: String
+      let group: String
+    }
   }
 
   /// `nil` means the panel is closed and the outline is not being streamed —
@@ -1005,6 +1015,8 @@ struct ReasoningStep: Identifiable, Equatable {
   let content: String
   let isFirst: Bool
   let isLast: Bool
+  /// The terminal "Done" row, shown only once reasoning has settled.
+  var isDone: Bool = false
 }
 
 /// Strip `**Title**` markers from a reasoning summary.
@@ -1063,15 +1075,15 @@ struct ReasoningTimeline: View {
   }
 }
 
-private struct ReasoningTimelineRow: View {
+struct ReasoningTimelineRow: View {
   let step: ReasoningStep
   var animateAppearance: Bool = false
 
   @State private var hasAppeared = false
 
   var body: some View {
-    HStack(alignment: .top, spacing: 12) {
-      ZStack(alignment: .top) {
+    HStack(alignment: step.isDone ? .center : .top, spacing: 12) {
+      ZStack(alignment: step.isDone ? .center : .top) {
         if !step.isFirst {
           Rectangle()
             .fill(Color.secondary.opacity(0.3))
@@ -1085,16 +1097,23 @@ private struct ReasoningTimelineRow: View {
             .frame(maxHeight: .infinity)
             .padding(.top, 20)
         }
-        Circle()
-          .fill(Color.secondary)
-          .frame(width: 8, height: 8)
-          .padding(.top, 6)
+        if step.isDone {
+          Image(systemName: "checkmark.circle")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.primary)
+        } else {
+          Circle()
+            .fill(Color.secondary)
+            .frame(width: 8, height: 8)
+            .padding(.top, 6)
+        }
       }
       .frame(width: 16)
 
       Text(step.content)
         .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .fontWeight(step.isDone ? .medium : .regular)
+        .foregroundStyle(step.isDone ? .primary : .secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, step.isLast ? 0 : 20)
     }
@@ -1103,6 +1122,187 @@ private struct ReasoningTimelineRow: View {
     .onAppear {
       guard animateAppearance, !hasAppeared else { return }
       withAnimation(.easeOut(duration: 0.3)) { hasAppeared = true }
+    }
+  }
+}
+
+/// Find the last `**Title**` in a reasoning summary.
+///
+/// Ported from Olia. Models emit section titles as bold markdown, and the
+/// closing `**` frequently lands on the NEXT line — hence the second pattern.
+/// This is what the inline indicator shows while reasoning streams.
+func findLastTitle(in content: String) -> String? {
+  for pattern in [#"\*\*([^*]+)\*\*"#, #"\*\*([^*\n]+)\n\*\*"#] {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+    let range = NSRange(content.startIndex..., in: content)
+    if let last = regex.matches(in: content, range: range).last,
+       let titleRange = Range(last.range(at: 1), in: content) {
+      return String(content[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+  }
+  return nil
+}
+
+/// Strip inline markdown for a one-line preview.
+private func stripMarkdownForPreview(_ text: String) -> String {
+  var result = text
+  let replacements: [(String, String)] = [
+    ("`(.+?)`", "$1"),
+    ("\\[(.+?)\\]\\(.+?\\)", "$1"),
+    ("^#{1,6}\\s*", ""),
+    ("\\*\\*\\*(.+?)\\*\\*\\*", "$1"),
+    ("\\*\\*(.+?)\\*\\*", "$1"),
+    ("\\*([^*\\n]+)\\*", "$1"),
+    ("^[\\p{Pd}\\*]\\s+", ""),
+  ]
+  for (pattern, template) in replacements {
+    result = result.replacingOccurrences(
+      of: pattern, with: template, options: .regularExpression
+    )
+  }
+  return result.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// Shimmer, for text that is still arriving. Ported from Olia.
+private struct Shimmer: ViewModifier {
+  let active: Bool
+  @State private var start = UnitPoint(x: -1, y: 0.5)
+  @State private var end = UnitPoint(x: 0, y: 0.5)
+
+  func body(content: Content) -> some View {
+    if active {
+      content
+        .mask(
+          LinearGradient(
+            stops: [
+              .init(color: .black.opacity(0.4), location: 0),
+              .init(color: .black, location: 0.3),
+              .init(color: .black, location: 0.7),
+              .init(color: .black.opacity(0.4), location: 1),
+            ],
+            startPoint: start, endPoint: end
+          )
+        )
+        .onAppear {
+          withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+            start = UnitPoint(x: 1, y: 0.5)
+            end = UnitPoint(x: 2, y: 0.5)
+          }
+        }
+    } else {
+      content
+    }
+  }
+}
+
+extension View {
+  func shimmering(active: Bool = true) -> some View { modifier(Shimmer(active: active)) }
+}
+
+/// The one-line, tappable reasoning summary — Olia's shape, and the thing this
+/// port originally got wrong by rendering the timeline inline.
+///
+/// While reasoning streams it shows the CURRENT section title (the last
+/// `**Title**` in the completed lines) and shimmers; when it settles it reads
+/// "Thought process". Either way the chevron says it opens, and the timeline
+/// lives in the sheet behind it.
+struct InlineReasoningIndicator: View {
+  let reasoning: String
+  let isStreaming: Bool
+  @State private var showSheet = false
+
+  /// Only COMPLETE lines are considered, so a half-streamed title never shows.
+  private var summary: String {
+    guard isStreaming, let lastNewline = reasoning.lastIndex(of: "\n") else { return "" }
+    let complete = String(reasoning[...lastNewline])
+    if let title = findLastTitle(in: complete) { return title }
+    let lines = complete.components(separatedBy: .newlines)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return stripMarkdownForPreview(lines.last ?? "")
+  }
+
+  private var displayText: String {
+    if !isStreaming { return "Thought process" }
+    return summary.isEmpty ? "Thinking…" : summary
+  }
+
+  var body: some View {
+    Button { showSheet = true } label: {
+      HStack(spacing: 6) {
+        Text(displayText).font(.subheadline).lineLimit(1)
+        Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+      }
+      .foregroundStyle(.secondary)
+      .shimmering(active: isStreaming)
+    }
+    .buttonStyle(.plain)
+    .sheet(isPresented: $showSheet) {
+      ReasoningSheet(content: reasoning, isStreaming: isStreaming)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+    .accessibilityHint("Opens the model's thought process")
+  }
+}
+
+/// The reasoning timeline, in a sheet.
+///
+/// A `List` rather than a `ScrollView`: on iOS 26 a ScrollView inside a sheet
+/// picks up a green background tint. Olia hit that and the workaround is
+/// carried over with it.
+struct ReasoningSheet: View {
+  let content: String
+  let isStreaming: Bool
+
+  private var visibleLines: [String] {
+    let source: String
+    if isStreaming {
+      // Only complete lines while streaming, so a row never appears half-written.
+      guard let lastNewline = content.lastIndex(of: "\n") else { return [] }
+      source = String(content[...lastNewline])
+    } else {
+      source = content
+    }
+    return stripReasoningTitles(source)
+      .components(separatedBy: .newlines)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+  }
+
+  private var steps: [ReasoningStep] {
+    let lines = visibleLines
+    let showDone = !isStreaming && !lines.isEmpty
+    var result = lines.enumerated().map { index, line in
+      ReasoningStep(
+        id: index, content: line,
+        isFirst: index == 0,
+        isLast: !showDone && index == lines.count - 1,
+        isDone: false
+      )
+    }
+    if showDone {
+      result.append(ReasoningStep(
+        id: result.count, content: "Done", isFirst: result.isEmpty, isLast: true, isDone: true
+      ))
+    }
+    return result
+  }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        ForEach(steps) { step in
+          ReasoningTimelineRow(step: step, animateAppearance: isStreaming)
+            .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 28))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        }
+      }
+      .listStyle(.inset)
+      .environment(\.defaultMinListRowHeight, 0)
+      .navigationTitle(isStreaming ? (findLastTitle(in: content) ?? "Thinking…") : "Thought process")
+      .navigationBarTitleDisplayMode(.inline)
     }
   }
 }
@@ -1272,10 +1472,10 @@ private struct ChatSheet: View {
           .padding(.bottom, 8)
         }
       }
-      .navigationTitle("Assistant")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) { threadMenu }
+        ToolbarItem(placement: .principal) { modelMenu }
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
       }
       .sheet(isPresented: $showReview) {
@@ -1315,7 +1515,12 @@ private struct ChatSheet: View {
     let isUser = message.role == "user"
     VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
       if !message.reasoning.isEmpty {
-        ReasoningTimeline(content: message.reasoning, animateAppearance: message.id == "streaming")
+        // Olia's shape: a one-line, tappable summary — NOT the timeline inline.
+        // The timeline lives in a sheet behind it.
+        InlineReasoningIndicator(
+          reasoning: message.reasoning,
+          isStreaming: message.id == "streaming"
+        )
       }
       if !message.text.isEmpty {
         Text(message.text)
@@ -1354,6 +1559,54 @@ private struct ChatSheet: View {
     case "error": return .red.opacity(0.15)
     default: return Color(.secondarySystemBackground)
     }
+  }
+
+  /// Model and reasoning effort, in the bar's centre where the title would be.
+  ///
+  /// Effort only appears for models that reason — offering a setting with no
+  /// effect is worse than not offering it.
+  private var modelMenu: some View {
+    Menu {
+      Section("Model") {
+        ForEach(chat?.models ?? []) { option in
+          Button {
+            model.send("chatSetModel", ["id": option.id])
+          } label: {
+            if option.id == chat?.currentModel {
+              Label(option.label, systemImage: "checkmark")
+            } else {
+              Text(option.label)
+            }
+          }
+        }
+      }
+      if chat?.reasoningSupported == true {
+        Section("Reasoning effort") {
+          ForEach(["low", "medium", "high"], id: \.self) { effort in
+            Button {
+              model.send("chatSetReasoning", ["value": effort])
+            } label: {
+              if effort == chat?.reasoningEffort {
+                Label(effort.capitalized, systemImage: "checkmark")
+              } else {
+                Text(effort.capitalized)
+              }
+            }
+          }
+        }
+      }
+    } label: {
+      HStack(spacing: 4) {
+        Text(currentModelLabel).font(.subheadline.weight(.semibold)).lineLimit(1)
+        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+      }
+      .frame(maxWidth: 180)
+    }
+    .accessibilityLabel("Model and reasoning effort")
+  }
+
+  private var currentModelLabel: String {
+    chat?.models.first { $0.id == chat?.currentModel }?.label ?? "Assistant"
   }
 
   private var threadMenu: some View {
