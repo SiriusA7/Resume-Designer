@@ -360,7 +360,15 @@ export function buildChatView({
 
   const streaming = text(streamingMessage?.content);
   const streamingReasoning = text(streamingMessage?.reasoning);
-  if (streaming || streamingReasoning) {
+  const statusLine = typeof thinking === 'string' ? thinking : '';
+  // The placeholder — an EMPTY streaming row while the request is in flight but
+  // nothing has come back yet — is what lets the native sheet show "Thinking…"
+  // from the moment Send is tapped, the way Olia does. Without it the transcript
+  // sits unchanged for the seconds before the first token and the send reads as
+  // dropped. Suppressed while `thinking` is set: helper turns (/feedback,
+  // /improve) render that status line instead, and both at once is two spinners
+  // for one request.
+  if (streaming || streamingReasoning || (loading && !statusLine)) {
     visible.push({
       id: 'streaming', role: 'assistant', text: streaming,
       hasChanges: false, reasoning: streamingReasoning,
@@ -377,8 +385,8 @@ export function buildChatView({
     loading: !!loading,
     streaming: !!streaming,
     configured: !!configured,
-    // The engine's live status line ('Thinking…', tool names). Null when idle.
-    thinking: typeof thinking === 'string' ? thinking : '',
+    // The engine's live status line ('Thinking…', tool names). Empty when idle.
+    thinking: statusLine,
     currentModel: text(currentModel),
     // Flattened from the engine's grouped list: a native Menu renders sections
     // from a flat array with a group key more easily than nested arrays, and
@@ -624,6 +632,9 @@ export function initIOSShell(deps) {
     chatStop: () => ask('rd:chat-stop'),
     chatNewThread: () => ask('rd:chat-new-thread'),
     chatSelectThread: ({ id }) => ask('rd:chat-select-thread', { id }),
+    chatRenameThread: ({ id, title }) =>
+      ask('rd:chat-rename-thread', { id, title: String(title ?? '') }),
+    chatDeleteThread: ({ id }) => ask('rd:chat-delete-thread', { id }),
     chatSetModel: ({ id }) => ask('rd:chat-set-model', { id }),
     chatSetReasoning: ({ value }) => ask('rd:chat-set-reasoning', { value }),
     // Reviewing the AI's proposed edits. Each routes to the same session the

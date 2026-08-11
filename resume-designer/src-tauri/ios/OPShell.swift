@@ -18,6 +18,7 @@
 // Its JS counterpart is `src/iosShell.js`; the two share a wire contract that
 // is unit-tested there (test/iosShell.test.js).
 
+import Observation
 import SwiftUI
 import UIKit
 import WebKit
@@ -164,6 +165,126 @@ struct ShellSnapshot: Decodable, Equatable {
   )
 }
 
+// MARK: - Reply pacing
+
+/// Paces the live reply so it flows instead of landing in bursts.
+///
+/// Ported from Olia (`Screens/Chat/MessageBubble.swift`,
+/// `StreamingAnimationController`). Tokens do not arrive smoothly — the network
+/// delivers them in clumps and the JS side coalesces them again before
+/// publishing — so rendering the snapshot directly makes a reply appear a
+/// paragraph at a time. This holds a target and walks toward it a couple of
+/// characters per tick, accelerating when it falls behind, which is what turns
+/// arrival into typing.
+///
+/// A class, not view state: the timer has to outlive any view rebuild, and
+/// `deinit` is the only place its invalidation can be guaranteed.
+@MainActor
+@Observable
+final class ReplyStream {
+  private(set) var visible = ""
+  /// True once the pacing has drawn level with what has actually arrived. Until
+  /// then the last line is still being typed.
+  private(set) var caughtUp = false
+
+  private var target = ""
+  private var displayed = ""
+
+  @ObservationIgnored
+  private nonisolated(unsafe) var timer: Timer?
+
+  private enum Pace {
+    static let interval: TimeInterval = 0.03   // ~33fps
+    static let baseChunk = 2                   // characters per tick at rest
+    static let maxChunk = 8                    // ceiling, so catching up is not a jump
+    static let accelerateOver = 30             // characters behind before speeding up
+  }
+
+  deinit { timer?.invalidate() }
+
+  /// Point the pacing at what has actually arrived so far.
+  ///
+  /// Shrinking or empty input means a NEW reply (or none), so the pacing resets
+  /// rather than trying to walk backwards.
+  func update(to text: String) {
+    guard text != target else { return }
+    if text.isEmpty || !text.hasPrefix(displayed) {
+      timer?.invalidate()
+      timer = nil
+      displayed = ""
+      visible = ""
+    }
+    target = text
+    guard !text.isEmpty else { caughtUp = true; return }
+    caughtUp = false
+    start()
+  }
+
+  private func start() {
+    guard timer == nil else { return }
+    // `.common` mode, not the default one: a timer scheduled the ordinary way
+    // stops firing the moment a scroll gesture begins, which freezes the reply
+    // for exactly as long as the user is reading it.
+    let created = Timer(timeInterval: Pace.interval, repeats: true) { [weak self] t in
+      guard t.isValid else { return }
+      Task { @MainActor in self?.tick(t) }
+    }
+    RunLoop.current.add(created, forMode: .common)
+    timer = created
+  }
+
+  private func tick(_ t: Timer) {
+    guard displayed.count < target.count else {
+      displayed = target
+      t.invalidate()
+      timer = nil
+      withAnimation(.easeOut(duration: 0.3)) {
+        visible = displayed
+        caughtUp = true
+      }
+      return
+    }
+
+    let behind = target.count - displayed.count
+    let acceleration = min(Double(behind) / Double(Pace.accelerateOver), 3)
+    let chunk = max(Pace.baseChunk, min(Int(Double(Pace.baseChunk) * acceleration), Pace.maxChunk))
+    let end = wordBoundary(after: displayed.count, within: chunk, in: target)
+
+    let from = target.index(target.startIndex, offsetBy: displayed.count)
+    let to = target.index(target.startIndex, offsetBy: end)
+    displayed += target[from..<to]
+    visible = Self.completeLines(of: displayed)
+  }
+
+  /// While typing, prefer to publish only COMPLETE lines: a half-written `##` or
+  /// `- ` renders as a heading or a bullet that then changes shape, and the
+  /// flicker is worse than the wait.
+  ///
+  /// Deliberately different from Olia in one place: with no complete line yet it
+  /// shows the partial one rather than nothing. Olia waits, which is invisible
+  /// there because its replies are short; here a long opening paragraph would
+  /// leave the transcript blank for the whole time it was being written.
+  private static func completeLines(of text: String) -> String {
+    guard let lastNewline = text.lastIndex(of: "\n") else { return text }
+    return String(text[...lastNewline])
+  }
+
+  /// End the chunk on a word boundary where one is close, so words are never
+  /// half-drawn.
+  private func wordBoundary(after start: Int, within maxChars: Int, in text: String) -> Int {
+    let length = text.count
+    let ideal = min(start + maxChars, length)
+    guard ideal < length else { return ideal }
+
+    let from = text.index(text.startIndex, offsetBy: ideal)
+    let to = text.index(text.startIndex, offsetBy: min(ideal + 3, length))
+    if let boundary = text[from..<to].firstIndex(where: { $0.isWhitespace || $0.isPunctuation }) {
+      return ideal + text.distance(from: from, to: boundary) + 1
+    }
+    return ideal
+  }
+}
+
 // MARK: - Model
 
 /// The single piece of state the chrome renders from. Deliberately not durable:
@@ -171,7 +292,17 @@ struct ShellSnapshot: Decodable, Equatable {
 /// projection of them that is thrown away on every update.
 @MainActor
 final class ShellModel: ObservableObject {
-  @Published var snapshot: ShellSnapshot = .empty
+  @Published var snapshot: ShellSnapshot = .empty {
+    didSet { reply.update(to: Self.liveReplyText(in: snapshot)) }
+  }
+
+  /// Paces the live reply's text. Lives here rather than in the chat sheet so
+  /// closing and reopening the sheet mid-reply does not retype it from the top.
+  let reply = ReplyStream()
+
+  private static func liveReplyText(in snapshot: ShellSnapshot) -> String {
+    snapshot.chat?.messages.first { $0.id == "streaming" }?.text ?? ""
+  }
 
   /// Weak: the webview belongs to wry and is retained by the view hierarchy.
   weak var webView: WKWebView?
@@ -1221,14 +1352,24 @@ extension View {
 /// The one-line, tappable reasoning summary — Olia's shape, and the thing this
 /// port originally got wrong by rendering the timeline inline.
 ///
-/// While reasoning streams it shows the CURRENT section title (the last
-/// `**Title**` in the completed lines) and shimmers; when it settles it reads
-/// "Thought process". Either way the chevron says it opens, and the timeline
-/// lives in the sheet behind it.
+/// While the model is thinking it shows the CURRENT section title (the last
+/// `**Title**` in the completed lines) and shimmers; once the answer starts it
+/// settles to "Thought process". The timeline lives in the sheet behind it.
+///
+/// The chevron is the affordance, so it appears ONLY once there is something to
+/// open — before the first summary line arrives this is an inert "Thinking…"
+/// label, not a button that opens an empty sheet.
 struct InlineReasoningIndicator: View {
   let reasoning: String
+  /// True while the model is still thinking: reasoning may still be arriving and
+  /// the answer has not started. Goes false the moment the first content token
+  /// lands, which is what stops the shimmer and settles the label.
   let isStreaming: Bool
   @State private var showSheet = false
+
+  private var hasReasoning: Bool {
+    !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
 
   /// Only COMPLETE lines are considered, so a half-streamed title never shows.
   private var summary: String {
@@ -1247,21 +1388,25 @@ struct InlineReasoningIndicator: View {
   }
 
   var body: some View {
-    Button { showSheet = true } label: {
+    Button { if hasReasoning { showSheet = true } } label: {
       HStack(spacing: 6) {
         Text(displayText).font(.subheadline).lineLimit(1)
-        Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+        if hasReasoning {
+          Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+        }
       }
       .foregroundStyle(.secondary)
       .shimmering(active: isStreaming)
     }
     .buttonStyle(.plain)
+    .disabled(!hasReasoning)
     .sheet(isPresented: $showSheet) {
       ReasoningSheet(content: reasoning, isStreaming: isStreaming)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
-    .accessibilityHint("Opens the model's thought process")
+    .accessibilityLabel(displayText)
+    .accessibilityHint(hasReasoning ? "Opens the model's thought process" : "")
   }
 }
 
@@ -1326,95 +1471,417 @@ struct ReasoningSheet: View {
   }
 }
 
+// MARK: - Markdown
+
+/// Block-level markdown for a chat reply, ported from Olia
+/// (`Screens/Chat/MarkdownText.swift`).
+///
+/// The models write in markdown — headings, bullets, numbered steps, the
+/// occasional fenced block — and rendering that as one flat `Text` puts literal
+/// `##` and `- ` in front of the user. SwiftUI's `Text` handles INLINE markdown
+/// on its own (via `LocalizedStringKey`: bold, italic, code, links) but has no
+/// notion of blocks, so this splits the text into blocks and lets `Text` finish
+/// each one.
+///
+/// A hand-rolled parser rather than `AttributedString(markdown:)`: that one
+/// throws on the half-formed markdown a stream produces mid-token, and it has no
+/// block layout either.
+struct MarkdownText: View {
+  let text: String
+  var spacing: CGFloat = 8
+  /// Fade-and-rise each block in as it arrives, the way the reasoning timeline
+  /// does its rows. Off for settled history, where every block would animate at
+  /// once when the transcript scrolled into view.
+  var isStreaming: Bool = false
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  init(_ text: String, spacing: CGFloat = 8, isStreaming: Bool = false) {
+    self.text = text
+    self.spacing = spacing
+    self.isStreaming = isStreaming
+  }
+
+  var body: some View {
+    let blocks = Self.parse(text)
+    VStack(alignment: .leading, spacing: spacing) {
+      ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
+        blockView(block)
+          .transition(arrival)
+          .animation(arrivalAnimation(at: index), value: block.contentHash)
+      }
+    }
+    .animation(isStreaming ? .easeOut(duration: 0.25) : .easeOut(duration: 0.3), value: blocks.count)
+  }
+
+  private var arrival: AnyTransition {
+    guard isStreaming, !reduceMotion else { return .opacity }
+    return .asymmetric(insertion: .opacity.combined(with: .offset(y: 4)), removal: .opacity)
+  }
+
+  /// Stagger the first few blocks so a burst that lands in one update still
+  /// reads as arriving rather than appearing. Capped, or a long reply would
+  /// queue an ever-growing delay.
+  private func arrivalAnimation(at index: Int) -> Animation {
+    guard isStreaming else { return .easeOut(duration: 0.3) }
+    guard !reduceMotion else { return .easeOut(duration: 0.1) }
+    return .easeOut(duration: 0.25).delay(min(Double(index) * 0.05, 0.15))
+  }
+
+  @ViewBuilder
+  private func blockView(_ block: Block) -> some View {
+    switch block.kind {
+    case let .heading(level, content):
+      Text(LocalizedStringKey(content))
+        .font(level == 1 ? .title3 : level == 2 ? .headline : .subheadline)
+        .fontWeight(.semibold)
+        .padding(.top, 2)
+    case let .paragraph(content):
+      Text(LocalizedStringKey(content))
+        .fixedSize(horizontal: false, vertical: true)
+    case let .list(items):
+      VStack(alignment: .leading, spacing: 6) {
+        ForEach(items) { item in
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(item.marker).fontWeight(.semibold).monospacedDigit()
+            Text(LocalizedStringKey(item.content))
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .padding(.leading, CGFloat(item.indent) * 16)
+        }
+      }
+    case let .code(content):
+      // Horizontally scrollable: a wrapped code line is unreadable, and a
+      // clipped one silently hides the end of a command.
+      ScrollView(.horizontal, showsIndicators: false) {
+        Text(content)
+          .font(.system(.footnote, design: .monospaced))
+          .padding(10)
+      }
+      .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 8))
+    case let .quote(content):
+      HStack(spacing: 10) {
+        Rectangle().fill(Color.secondary.opacity(0.4)).frame(width: 3)
+        Text(LocalizedStringKey(content))
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    case .rule:
+      Divider()
+    }
+  }
+
+  // MARK: parsing
+
+  struct Block: Identifiable {
+    let id: Int
+    let kind: Kind
+
+    /// Changes when this block's text does, which is what the arrival animation
+    /// keys on — a block that grew re-animates, its neighbours do not.
+    var contentHash: Int {
+      switch kind {
+      case let .heading(_, content): return content.hashValue
+      case let .paragraph(content): return content.hashValue
+      case let .list(items): return items.map(\.content).joined().hashValue
+      case let .code(content): return content.hashValue
+      case let .quote(content): return content.hashValue
+      case .rule: return 0
+      }
+    }
+
+    enum Kind {
+      case heading(level: Int, content: String)
+      case paragraph(String)
+      case list([Item])
+      case code(String)
+      case quote(String)
+      case rule
+    }
+
+    struct Item: Identifiable {
+      let id: Int
+      let content: String
+      let indent: Int
+      let marker: String
+    }
+  }
+
+  /// Split markdown into blocks. Consecutive list lines coalesce into one list
+  /// so the rows share a container and line up; everything else is one block per
+  /// line, which is also what makes a streaming reply grow a block at a time
+  /// instead of re-laying out the whole reply on every token.
+  static func parse(_ text: String) -> [Block] {
+    var blocks: [Block] = []
+    var items: [Block.Item] = []
+    var codeLines: [String] = []
+    var inCode = false
+    var nextID = 0
+
+    func add(_ kind: Block.Kind) {
+      blocks.append(Block(id: nextID, kind: kind))
+      nextID += 1
+    }
+    func flushList() {
+      guard !items.isEmpty else { return }
+      add(.list(items))
+      items = []
+    }
+
+    for line in text.components(separatedBy: .newlines) {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+      if trimmed.hasPrefix("```") {
+        if inCode {
+          add(.code(codeLines.joined(separator: "\n")))
+          codeLines = []
+        } else {
+          flushList()
+        }
+        inCode.toggle()
+        continue
+      }
+      if inCode {
+        codeLines.append(line)
+        continue
+      }
+
+      if trimmed.count >= 3, Set(trimmed).isSubset(of: ["-", "*", "_"]), Set(trimmed).count == 1 {
+        flushList()
+        add(.rule)
+        continue
+      }
+      if trimmed.hasPrefix("#") {
+        flushList()
+        let level = trimmed.prefix(while: { $0 == "#" }).count
+        let content = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
+        add(.heading(level: min(level, 3), content: content))
+        continue
+      }
+      if trimmed.hasPrefix(">") {
+        flushList()
+        add(.quote(String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)))
+        continue
+      }
+      if let item = listItem(line, id: items.count) {
+        items.append(item)
+        continue
+      }
+      if !trimmed.isEmpty {
+        flushList()
+        add(.paragraph(trimmed))
+      }
+    }
+
+    // An unterminated fence is the normal state mid-stream, not an error: show
+    // what has arrived rather than dropping it until the closing ``` lands.
+    if inCode, !codeLines.isEmpty { add(.code(codeLines.joined(separator: "\n"))) }
+    flushList()
+    return blocks
+  }
+
+  private static func listItem(_ line: String, id: Int) -> Block.Item? {
+    var spaces = 0
+    for char in line {
+      if char == " " { spaces += 1 } else if char == "\t" { spaces += 4 } else { break }
+    }
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    let indent = spaces / 2
+
+    for bullet in ["- ", "* ", "+ "] where trimmed.hasPrefix(bullet) {
+      let content = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+      return Block.Item(id: id, content: content, indent: indent, marker: "•")
+    }
+    if let space = trimmed.firstIndex(of: " ") {
+      let prefix = trimmed[..<space]
+      if prefix.hasSuffix(".") || prefix.hasSuffix(")"), Int(prefix.dropLast()) != nil {
+        let content = String(trimmed[space...]).trimmingCharacters(in: .whitespaces)
+        return Block.Item(id: id, content: content, indent: indent, marker: String(prefix))
+      }
+    }
+    return nil
+  }
+}
+
 // MARK: - Composer
 
-/// The message composer, ported from Olia (`Screens/Chat/MessageComposer.swift`).
+/// Reasoning effort, mirroring `REASONING_OPTIONS` in
+/// `src/components/chat/ChatComposer.jsx` — the same four levels and the same
+/// descriptions, so the phone and the desktop offer the same setting.
+private let reasoningLevels: [(value: String, label: String, detail: String)] = [
+  ("none", "Off", "Fastest responses"),
+  ("low", "Low", "Quick thinking"),
+  ("medium", "Medium", "Balanced"),
+  ("high", "High", "Deep analysis"),
+]
+
+/// The message composer: one rounded card holding the field, the model and
+/// reasoning-effort controls, and Send — the arrangement ChatGPT and Claude both
+/// use on iOS.
 ///
-/// The iOS 26 branch is the point: the field and the send button live in one
-/// `GlassEffectContainer` with matched `glassEffectID`s in a shared namespace,
-/// so the two MORPH into each other rather than sitting side by side. That is
-/// the effect — a glass background alone does not produce it.
+/// The controls live HERE rather than in the navigation bar because the model in
+/// use is part of asking the question, not a property of the conversation: on a
+/// fresh chat the bar showed a title and nothing about the model, so there was
+/// no way to see what you were about to talk to. The bar's centre is the chat's
+/// own title and management menu instead.
 ///
-/// The pre-26 branch is not optional: On Paper's deployment target is 17.4.
+/// It is one glass surface, not a bar: the transcript scrolls UNDER it (the
+/// sheet mounts this as a `safeAreaInset`), which is the whole point of putting
+/// glass there.
 private struct ChatComposer: View {
   @Binding var text: String
   let isSending: Bool
+  let models: [ShellSnapshot.ChatView.ModelOption]
+  let currentModel: String
+  let reasoningEffort: String
+  let reasoningSupported: Bool
+  /// Bumped on send. See `fieldGeneration` below — this is what makes a
+  /// multi-line field collapse back to one line.
+  let generation: Int
   let onSend: () -> Void
   let onStop: () -> Void
+  let onSelectModel: (String) -> Void
+  let onSetReasoning: (String) -> Void
 
   @FocusState private var isFocused: Bool
-  @Namespace private var glassNamespace
 
   private let characterLimit = 4000
 
-  private var trimmed: String {
-    text.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
+  private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
   private var canSend: Bool { !trimmed.isEmpty && !isSending && text.count <= characterLimit }
   private var isNearLimit: Bool { text.count > characterLimit * 80 / 100 }
 
   var body: some View {
-    VStack(alignment: .center, spacing: 0) {
-      if #available(iOS 26.0, *) {
-        GlassEffectContainer(spacing: 8) {
-          HStack(alignment: .bottom, spacing: 8) { field; trailingButton }
-            .padding(.leading, 16)
-            .padding(.trailing, 12)
-        }
-      } else {
-        HStack(alignment: .bottom, spacing: 8) { fallbackField; trailingButton }
-          .padding(.leading, 16)
-          .padding(.trailing, 12)
-      }
+    VStack(alignment: .leading, spacing: 8) {
+      TextField("Ask about this resume", text: $text, axis: .vertical)
+        .textFieldStyle(.plain)
+        .focused($isFocused)
+        .disabled(isSending)
+        .lineLimit(1...6)
+        .padding(.horizontal, 6)
+        .padding(.top, 6)
+        // A vertical-axis TextField is a UITextView underneath, and clearing its
+        // binding does not invalidate the intrinsic height it grew to — so after
+        // sending a multi-line message the composer stayed tall until something
+        // unrelated forced a layout pass. Changing the identity rebuilds it, at
+        // the only moment where losing the field's internal state is what we
+        // want anyway.
+        .id(generation)
 
-      if isNearLimit {
-        HStack {
-          Spacer()
+      HStack(spacing: 8) {
+        modelButton
+        if reasoningSupported { effortButton }
+        Spacer(minLength: 0)
+        if isNearLimit {
           Text("\(text.count)/\(characterLimit)")
             .font(.caption)
             .foregroundStyle(text.count > characterLimit ? Color.red : Color.secondary)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 4)
         }
+        trailingButton
       }
     }
+    .padding(.horizontal, ChatComposer.innerPadding)
+    .padding(.vertical, ChatComposer.innerPadding)
+    .modifier(ComposerSurface())
+    .padding(.horizontal, 12)
+    // No bottom padding: `safeAreaInset` already holds the bar clear of the home
+    // indicator, and anything on top of that reads as the bar floating.
+    .padding(.bottom, 0)
   }
 
-  @available(iOS 26.0, *)
-  private var field: some View {
-    TextField("Ask about this resume", text: $text, axis: .vertical)
-      .textFieldStyle(.plain)
-      .focused($isFocused)
-      .disabled(isSending)
-      .lineLimit(1...8)
-      .frame(minHeight: 44)
-      .padding(.horizontal, 16)
-      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-      .glassEffectID("textField", in: glassNamespace)
+  /// Concentricity, the reason these three numbers are named rather than
+  /// sprinkled: a nested shape reads as belonging to its container only when
+  /// their curves share a centre, which means the inner radius has to be the
+  /// outer radius minus the padding between them. 26 − 8 = 18, and a capsule
+  /// 36pt tall has exactly an 18pt radius. Change one, change all three.
+  static let surfaceRadius: CGFloat = 26
+  static let innerPadding: CGFloat = 8
+  static let controlHeight: CGFloat = 36
+
+  /// Grouped the way the web picker groups them (by provider), preserving the
+  /// order the catalogue arrived in rather than sorting — the featured models
+  /// lead it deliberately.
+  private var groupedModels: [(group: String, options: [ShellSnapshot.ChatView.ModelOption])] {
+    var order: [String] = []
+    var byGroup: [String: [ShellSnapshot.ChatView.ModelOption]] = [:]
+    for option in models {
+      let key = option.group.isEmpty ? "Models" : option.group
+      if byGroup[key] == nil { order.append(key) }
+      byGroup[key, default: []].append(option)
+    }
+    return order.map { ($0, byGroup[$0] ?? []) }
   }
 
-  private var fallbackField: some View {
-    TextField("Ask about this resume", text: $text, axis: .vertical)
-      .textFieldStyle(.plain)
-      .focused($isFocused)
-      .disabled(isSending)
-      .lineLimit(1...8)
-      .frame(minHeight: 44)
-      .padding(.horizontal, 16)
-      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
-          .stroke(Color.primary.opacity(isFocused ? 0.2 : 0.08), lineWidth: 0.5)
-      )
+  private var currentModelLabel: String {
+    models.first { $0.id == currentModel }?.label ?? "Model"
+  }
+
+  private var modelButton: some View {
+    Menu {
+      ForEach(groupedModels, id: \.group) { group in
+        Section(group.group) {
+          ForEach(group.options) { option in
+            Button { onSelectModel(option.id) } label: {
+              if option.id == currentModel {
+                Label(option.label, systemImage: "checkmark")
+              } else {
+                Text(option.label)
+              }
+            }
+          }
+        }
+      }
+    } label: {
+      HStack(spacing: 4) {
+        Text(currentModelLabel).lineLimit(1)
+        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+      }
+      .modifier(ComposerChip())
+    }
+    .buttonStyle(.plain)
+    .menuOrder(.fixed)
+    .accessibilityLabel("Model: \(currentModelLabel)")
+  }
+
+  private var effortLabel: String {
+    reasoningLevels.first { $0.value == reasoningEffort }?.label ?? "Medium"
+  }
+
+  private var effortButton: some View {
+    Menu {
+      Section("Reasoning effort") {
+        ForEach(reasoningLevels, id: \.value) { level in
+          Button { onSetReasoning(level.value) } label: {
+            if level.value == reasoningEffort {
+              Label("\(level.label) — \(level.detail)", systemImage: "checkmark")
+            } else {
+              Text("\(level.label) — \(level.detail)")
+            }
+          }
+        }
+      }
+    } label: {
+      HStack(spacing: 4) {
+        Image(systemName: "brain")
+        Text(effortLabel)
+      }
+      .modifier(ComposerChip())
+    }
+    .buttonStyle(.plain)
+    .menuOrder(.fixed)
+    .accessibilityLabel("Reasoning effort: \(effortLabel)")
   }
 
   @ViewBuilder
   private var trailingButton: some View {
     if isSending {
       Button(action: onStop) {
-        Image(systemName: "stop.fill").font(.system(size: 18, weight: .semibold)).padding(4)
+        Image(systemName: "stop.fill")
+          .font(.system(size: 14, weight: .semibold))
+          .modifier(ComposerSendStyle(enabled: true))
       }
-      .modifier(ComposerButtonStyle())
+      .buttonStyle(.plain)
       .accessibilityLabel("Stop")
     } else {
       Button {
@@ -1423,28 +1890,78 @@ private struct ChatComposer: View {
         isFocused = false
       } label: {
         Image(systemName: "arrow.up")
-          .font(.system(size: 20, weight: .semibold))
-          .symbolEffect(.bounce, value: isSending)
-          .padding(4)
+          .font(.system(size: 16, weight: .semibold))
+          .modifier(ComposerSendStyle(enabled: canSend))
       }
-      .modifier(ComposerButtonStyle())
+      .buttonStyle(.plain)
       .disabled(!canSend)
       .accessibilityLabel("Send")
     }
   }
 }
 
-/// `.glassProminent` where it exists, `.borderedProminent` before it — extracted
-/// so the two composer branches do not each carry an availability check.
-private struct ComposerButtonStyle: ViewModifier {
+/// The composer's own surface: liquid glass where it exists, a material before
+/// it. Interactive glass on 26 so it responds to touch the way the system's own
+/// input bars do.
+private struct ComposerSurface: ViewModifier {
   func body(content: Content) -> some View {
+    let shape = RoundedRectangle(cornerRadius: ChatComposer.surfaceRadius, style: .continuous)
     if #available(iOS 26.0, *) {
-      content
-        .buttonStyle(.glassProminent)
-        .glassEffectID("sendButton", in: Namespace().wrappedValue)
-        .buttonBorderShape(.circle)
+      content.glassEffect(.regular.interactive(), in: shape)
     } else {
-      content.buttonStyle(.borderedProminent).buttonBorderShape(.circle)
+      content
+        .background(.ultraThinMaterial, in: shape)
+        .overlay(shape.stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+    }
+  }
+}
+
+/// The model and effort chips.
+///
+/// The capsule is part of the LABEL rather than a button style's background,
+/// which is what fixes the sizing: as a `.bordered` Menu the pill was sized on
+/// one pass and the text on another, so a label that changed — "Model" becoming
+/// "Claude Sonnet 4.6" when the catalogue arrives — briefly overflowed its own
+/// pill. Drawn behind the label, the shape cannot be out of date.
+private struct ComposerChip: ViewModifier {
+  func body(content: Content) -> some View {
+    let base = content
+      .font(.subheadline)
+      .foregroundStyle(.primary)
+      .lineLimit(1)
+      .padding(.horizontal, 12)
+      .frame(height: ChatComposer.controlHeight)
+
+    if #available(iOS 26.0, *) {
+      base.glassEffect(.regular.interactive(), in: .capsule)
+    } else {
+      base
+        .background(.quaternary, in: .capsule)
+        .contentShape(.capsule)
+    }
+  }
+}
+
+/// Send/Stop: the same 36pt as the chips beside it, drawn rather than left to
+/// `.glassProminent`.
+///
+/// The button style would add its own padding around whatever frame it was
+/// given, which made this the tallest thing in the row — and since the row
+/// centres its contents, that pushed the chips up off the card's bottom edge and
+/// broke the concentricity they were sized for. One height for every control in
+/// the row is what keeps that arithmetic true.
+private struct ComposerSendStyle: ViewModifier {
+  let enabled: Bool
+
+  func body(content: Content) -> some View {
+    let sized = content
+      .foregroundStyle(enabled ? Color.white : Color.secondary)
+      .frame(width: ChatComposer.controlHeight, height: ChatComposer.controlHeight)
+
+    if #available(iOS 26.0, *), enabled {
+      sized.glassEffect(.regular.tint(.accentColor).interactive(), in: .circle)
+    } else {
+      sized.background(enabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary), in: .circle)
     }
   }
 }
@@ -1468,12 +1985,18 @@ private struct ChatSheet: View {
 
   @State private var draft = ""
   @State private var showReview = false
+  @State private var showRename = false
+  @State private var showDeleteConfirm = false
+  @State private var renameDraft = ""
+  /// Bumped on every send; the composer's field is keyed on it. See the comment
+  /// on the `.id` there.
+  @State private var fieldGeneration = 0
 
   private var chat: ShellSnapshot.ChatView? { model.snapshot.chat }
 
   var body: some View {
     NavigationStack {
-      VStack(spacing: 0) {
+      Group {
         if let chat, !chat.configured {
           ContentUnavailableView(
             "No API key",
@@ -1482,31 +2005,71 @@ private struct ChatSheet: View {
           )
         } else {
           transcript
-          ChatComposer(
-            text: $draft,
-            isSending: chat?.loading ?? false,
-            onSend: sendDraft,
-            onStop: { model.send("chatStop") }
-          )
-          .padding(.bottom, 8)
+            // An INSET, not a row in a VStack: the transcript keeps the full
+            // height of the sheet and scrolls under the composer, so text passes
+            // behind the glass instead of stopping at an opaque band above it.
+            .safeAreaInset(edge: .bottom) {
+              ChatComposer(
+                text: $draft,
+                isSending: chat?.loading ?? false,
+                models: chat?.models ?? [],
+                currentModel: chat?.currentModel ?? "",
+                reasoningEffort: chat?.reasoningEffort ?? "medium",
+                reasoningSupported: chat?.reasoningSupported ?? false,
+                generation: fieldGeneration,
+                onSend: sendDraft,
+                onStop: { model.send("chatStop") },
+                onSelectModel: { model.send("chatSetModel", ["id": $0]) },
+                onSetReasoning: { model.send("chatSetReasoning", ["value": $0]) }
+              )
+            }
         }
       }
       .navigationBarTitleDisplayMode(.inline)
+      // One tap on the transition from thinking to answering — the moment the
+      // user has been waiting through. Mounted on the sheet, not on a message:
+      // per-message it would fire once per row in the transcript. `nil` on the
+      // way back suppresses a second tap when the finished stream row is
+      // replaced by the committed message.
+      .sensoryFeedback(trigger: responseStarted) { _, started in
+        started ? .impact(weight: .light) : nil
+      }
       .toolbar {
-        ToolbarItem(placement: .topBarLeading) { threadMenu }
-        ToolbarItem(placement: .principal) { modelMenu }
+        ToolbarItem(placement: .topBarLeading) { threadsMenu }
+        ToolbarItem(placement: .principal) { titleMenu }
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
       }
       .sheet(isPresented: $showReview) {
         ChangeReviewSheet(model: model)
       }
+      .alert("Rename chat", isPresented: $showRename) {
+        TextField("Name", text: $renameDraft)
+        Button("Cancel", role: .cancel) {}
+        Button("Rename") {
+          let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+          guard !title.isEmpty, let id = currentThread?.id else { return }
+          model.send("chatRenameThread", ["id": id, "title": title])
+        }
+      }
+      .confirmationDialog(
+        "Delete this chat?", isPresented: $showDeleteConfirm, titleVisibility: .visible
+      ) {
+        Button("Delete", role: .destructive) {
+          guard let id = currentThread?.id else { return }
+          model.send("chatDeleteThread", ["id": id])
+        }
+      } message: {
+        Text("The messages in it are removed. Your resume is not affected.")
+      }
     }
   }
+
+  // MARK: transcript
 
   private var transcript: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: 20) {
           ForEach(chat?.messages ?? []) { message in
             messageView(message).id(message.id)
           }
@@ -1518,35 +2081,60 @@ private struct ChatSheet: View {
             .id("thinking")
           }
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
       }
-      // Keyed on the last message's text, not its id, so a reply that is still
-      // growing keeps the view pinned to its tail.
-      .onChange(of: chat?.messages.last?.text) { _, _ in
-        guard let last = chat?.messages.last else { return }
-        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+      .scrollDismissesKeyboard(.interactively)
+      // Keyed on the message COUNT, not the last message's text. Keying it on
+      // the text scrolled on every token, which took the scroll away from anyone
+      // who had scrolled up to re-read something while the answer streamed. A
+      // new turn is worth following; a growing one is the user's to follow.
+      .onChange(of: chat?.messages.count ?? 0) { _, _ in
+        scrollToEnd(proxy, animated: true)
       }
+      .onAppear { scrollToEnd(proxy, animated: false) }
     }
+  }
+
+  private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool) {
+    guard let last = chat?.messages.last else { return }
+    if animated {
+      withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+    } else {
+      proxy.scrollTo(last.id, anchor: .bottom)
+    }
+  }
+
+  /// True once the reply itself has started arriving.
+  ///
+  /// This is the line between thinking and answering, and it drives three things
+  /// at once: the shimmer stops, the reasoning summary settles to "Thought
+  /// process", and the phone taps once. Models interleave — reasoning tokens can
+  /// keep arriving after the answer starts — so treating the first content token
+  /// as the end of thinking is a deliberate simplification; showing both live at
+  /// once reads as two answers being written at the same time.
+  private var responseStarted: Bool {
+    guard chat?.messages.contains(where: { $0.id == "streaming" }) == true else { return false }
+    // The PACED text, not the snapshot's: this drives the shimmer, the label and
+    // the haptic, and all three should land when the answer becomes visible
+    // rather than when its first token quietly arrives behind the pacing.
+    return !model.reply.visible.isEmpty
   }
 
   @ViewBuilder
   private func messageView(_ message: ShellSnapshot.ChatView.Message) -> some View {
     let isUser = message.role == "user"
-    VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
-      if !message.reasoning.isEmpty {
+    let isLive = message.id == "streaming"
+    let stillThinking = isLive && !responseStarted
+
+    VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+      if !isUser, !message.reasoning.isEmpty || stillThinking {
         // Olia's shape: a one-line, tappable summary — NOT the timeline inline.
         // The timeline lives in a sheet behind it.
-        InlineReasoningIndicator(
-          reasoning: message.reasoning,
-          isStreaming: message.id == "streaming"
-        )
+        InlineReasoningIndicator(reasoning: message.reasoning, isStreaming: stillThinking)
       }
       if !message.text.isEmpty {
-        Text(message.text)
-          .textSelection(.enabled)
-          .padding(10)
-          .background(bubbleBackground(for: message.role), in: .rect(cornerRadius: 18))
-          .foregroundStyle(isUser ? .white : .primary)
+        messageBody(message, isUser: isUser)
       }
       if message.hasChanges, let pending = chat?.pendingChanges, !pending.isEmpty {
         Button {
@@ -1569,72 +2157,65 @@ private struct ChatSheet: View {
           .foregroundStyle(.secondary)
       }
     }
+    // The user's turn is a bubble and keeps a gutter on its leading edge; the
+    // reply is not. A shape around the reply boxed in the one thing that should
+    // read as the page's own text, and cost it the full width it needs for
+    // lists and headings.
+    .padding(.leading, isUser ? 48 : 0)
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
   }
 
-  private func bubbleBackground(for role: String) -> Color {
-    switch role {
-    case "user": return .accentColor
-    case "error": return .red.opacity(0.15)
-    default: return Color(.secondarySystemBackground)
+  @ViewBuilder
+  private func messageBody(_ message: ShellSnapshot.ChatView.Message, isUser: Bool) -> some View {
+    if message.id == "streaming" {
+      // The paced text, not the snapshot's: `ReplyStream` walks toward what has
+      // arrived so the reply types itself in instead of landing a paragraph at a
+      // time, and MarkdownText fades each block in as it completes.
+      MarkdownText(model.reply.visible, isStreaming: !model.reply.caughtUp)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    } else if isUser {
+      Text(message.text)
+        .textSelection(.enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.accentColor, in: .rect(cornerRadius: 20))
+        .foregroundStyle(.white)
+    } else if message.role == "error" {
+      Label(message.text, systemImage: "exclamationmark.triangle")
+        .font(.subheadline)
+        .textSelection(.enabled)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.12), in: .rect(cornerRadius: 14))
+    } else {
+      MarkdownText(message.text)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
-  /// Model and reasoning effort, in the bar's centre where the title would be.
-  ///
-  /// Effort only appears for models that reason — offering a setting with no
-  /// effect is worse than not offering it.
-  private var modelMenu: some View {
-    Menu {
-      Section("Model") {
-        ForEach(chat?.models ?? []) { option in
-          Button {
-            model.send("chatSetModel", ["id": option.id])
-          } label: {
-            if option.id == chat?.currentModel {
-              Label(option.label, systemImage: "checkmark")
-            } else {
-              Text(option.label)
-            }
-          }
-        }
-      }
-      if chat?.reasoningSupported == true {
-        Section("Reasoning effort") {
-          ForEach(["low", "medium", "high"], id: \.self) { effort in
-            Button {
-              model.send("chatSetReasoning", ["value": effort])
-            } label: {
-              if effort == chat?.reasoningEffort {
-                Label(effort.capitalized, systemImage: "checkmark")
-              } else {
-                Text(effort.capitalized)
-              }
-            }
-          }
-        }
-      }
-    } label: {
-      HStack(spacing: 4) {
-        Text(currentModelLabel).font(.subheadline.weight(.semibold)).lineLimit(1)
-        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-      }
-      .frame(maxWidth: 180)
-    }
-    .accessibilityLabel("Model and reasoning effort")
+  // MARK: chat management
+
+  private var currentThread: ShellSnapshot.ChatView.Thread? {
+    chat?.threads.first { $0.isCurrent }
   }
 
-  private var currentModelLabel: String {
-    chat?.models.first { $0.id == chat?.currentModel }?.label ?? "Assistant"
-  }
+  private var currentTitle: String { currentThread?.title ?? "New chat" }
 
-  private var threadMenu: some View {
+  /// The left button: which chat you are in, and starting another. Navigation
+  /// between chats, kept apart from the title menu — that one acts on the chat
+  /// you are already looking at.
+  private var threadsMenu: some View {
     Menu {
       Section {
+        Button { model.send("chatNewThread") } label: {
+          Label("New chat", systemImage: "square.and.pencil")
+        }
+      }
+      Section("Chats") {
         ForEach(chat?.threads ?? []) { thread in
-          Button {
-            model.send("chatSelectThread", ["id": thread.id])
-          } label: {
+          Button { model.send("chatSelectThread", ["id": thread.id]) } label: {
             if thread.isCurrent {
               Label(thread.title, systemImage: "checkmark")
             } else {
@@ -1643,13 +2224,36 @@ private struct ChatSheet: View {
           }
         }
       }
-      Section {
-        Button { model.send("chatNewThread") } label: { Label("New chat", systemImage: "plus") }
-      }
     } label: {
       Image(systemName: "bubble.left.and.bubble.right")
     }
+    .menuOrder(.fixed)
     .accessibilityLabel("Chats")
+  }
+
+  /// The bar's centre: this chat's name and what you can do to it. The model
+  /// picker used to live here, which put a per-message choice in the place a
+  /// document's title belongs.
+  private var titleMenu: some View {
+    Menu {
+      Button {
+        renameDraft = currentTitle
+        showRename = true
+      } label: {
+        Label("Rename", systemImage: "pencil")
+      }
+      Button(role: .destructive) { showDeleteConfirm = true } label: {
+        Label("Delete chat", systemImage: "trash")
+      }
+    } label: {
+      HStack(spacing: 4) {
+        Text(currentTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+      }
+      .frame(maxWidth: 200)
+    }
+    .menuOrder(.fixed)
+    .accessibilityLabel("Chat: \(currentTitle)")
   }
 
   private func sendDraft() {
@@ -1657,6 +2261,7 @@ private struct ChatSheet: View {
     guard !text.isEmpty else { return }
     model.send("chatSend", ["text": text])
     draft = ""
+    fieldGeneration += 1
   }
 }
 

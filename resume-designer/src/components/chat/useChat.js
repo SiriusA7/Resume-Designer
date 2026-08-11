@@ -515,7 +515,7 @@ export function useChat() {
     }
   };
 
-  const requestAIChanges = async (instruction, targetPath = null) => {
+  const requestAIChanges = async (instruction, targetPath = null, hasExplicitContext = false) => {
     const startThreadId = currentThreadIdRef.current;
     // Stamp the committed turns with the resume active at request START (the one
     // startThreadId belongs to), not getCurrentId() at completion — see getAIResponse.
@@ -548,6 +548,22 @@ export function useChat() {
       finishRequest(controller);
 
       if (!result.changes || Object.keys(result.changes).length === 0) {
+        // Nothing to apply. The router that sent us here is keyword-based
+        // (isChangeRequest), so questions land in this path constantly —
+        // "how would you improve my summary?" contains "improve" — and the
+        // change model answers them by explaining why it made no edits: "No
+        // resume edits were made because this was a question rather than an
+        // edit request." That is a non-answer to a question the user actually
+        // asked. Ask conversationally instead and let the real reply stand on
+        // its own.
+        //
+        // Only when the origin thread is still the one in view: getAIResponse
+        // captures currentThreadId itself, so retrying after a mid-request
+        // switch would commit this thread's answer into another one.
+        if (currentThreadIdRef.current === startThreadId) {
+          await getAIResponse(instruction, hasExplicitContext);
+          return;
+        }
         commitToThread(startThreadId, {
           id: uid(), role: 'assistant',
           content: result.explanation || 'No changes were generated. The AI may need more specific instructions.',
@@ -848,7 +864,7 @@ Let's begin!`);
       await continueInterview(text);
       return;
     }
-    if (isChangeRequest(text)) await requestAIChanges(messageWithContext, targetPath);
+    if (isChangeRequest(text)) await requestAIChanges(messageWithContext, targetPath, chips.length > 0);
     else await getAIResponse(messageWithContext, chips.length > 0);
   };
 
@@ -903,6 +919,16 @@ Let's begin!`);
     setThreads(next);
     persistThreads(next);
     switchThread(t.id, true);
+  };
+  // Give a thread an explicit name. Deliberately does NOT bump updatedAt:
+  // selection reopens the most-recently-updated thread, so renaming one would
+  // otherwise change which thread opens next time the panel does.
+  const renameThread = (threadId, name) => {
+    const title = (name || '').trim();
+    if (!title) return;
+    const next = threadsRef.current.map((t) => (t.id === threadId ? { ...t, name: title } : t));
+    setThreads(next);
+    persistThreads(next);
   };
   const deleteThread = (threadId) => {
     if (!threadsRef.current.some((t) => t.id === threadId)) return; // not found
@@ -1132,7 +1158,7 @@ Let's begin!`);
     // actions
     send, stop, selectModel, applyCustomSlug, removeCustomModelEntry,
     setReasoning, toggleWebSearch, addChip, openWithContext, removeChip, clearChips,
-    newThread, switchThread, deleteThread, moveThreadToCurrentVariant, jumpToVariant,
+    newThread, switchThread, deleteThread, renameThread, moveThreadToCurrentVariant, jumpToVariant,
     openDiffForMessage, applyAction,
     startInterview, refresh,
   };

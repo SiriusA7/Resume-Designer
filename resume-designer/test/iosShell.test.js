@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  buildChatView,
   buildDocumentOutline,
   buildPendingChanges,
   buildSettings,
@@ -320,5 +321,51 @@ describe('buildPendingChanges', () => {
   it('survives a missing change set', () => {
     expect(buildPendingChanges(undefined)).toEqual([]);
     expect(buildPendingChanges(null)).toEqual([]);
+  });
+});
+
+describe('buildChatView', () => {
+  const view = (over = {}) => buildChatView({ configured: true, ...over });
+
+  it('opens a streaming row the moment a request starts', () => {
+    // The native sheet reads this row as "Thinking…" — with no reasoning and no
+    // text yet, it is the only thing that tells the user the send landed.
+    const { messages } = view({ loading: true });
+    expect(messages).toEqual([
+      { id: 'streaming', role: 'assistant', text: '', hasChanges: false, reasoning: '' },
+    ]);
+  });
+
+  it('leaves the placeholder out while a helper turn owns the status line', () => {
+    // /feedback and /improve report through `thinking`; both at once would be
+    // two spinners for one request.
+    expect(view({ loading: true, thinking: 'Analyzing your resume...' }).messages).toEqual([]);
+  });
+
+  it('carries reasoning and text on the streaming row as they arrive', () => {
+    const { messages } = view({
+      loading: true,
+      streamingMessage: { content: 'Here is', reasoning: '**Reading**\nthe summary\n' },
+    });
+    expect(messages.at(-1)).toEqual({
+      id: 'streaming', role: 'assistant', text: 'Here is',
+      hasChanges: false, reasoning: '**Reading**\nthe summary\n',
+    });
+  });
+
+  it('marks the thread the sheet titles itself from', () => {
+    const { threads } = view({
+      currentThreadId: 't2',
+      threads: [{ id: 't1', title: 'Older chat' }, { id: 't2', title: 'Tailoring for Acme' }],
+    });
+    expect(threads).toEqual([
+      { id: 't1', title: 'Older chat', isCurrent: false },
+      { id: 't2', title: 'Tailoring for Acme', isCurrent: true },
+    ]);
+  });
+
+  it('says nothing is in flight when nothing is', () => {
+    expect(view().messages).toEqual([]);
+    expect(view().thinking).toBe('');
   });
 });

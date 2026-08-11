@@ -16,6 +16,26 @@ import { ThreadSelector } from './ThreadSelector.jsx';
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 500;
 
+// What the native iOS chat sheet renders from, projected out of the engine.
+// Module scope so the effect that publishes it keeps a precise dependency list.
+//
+// Threads carry `name`, which stays "New Chat" until the user renames one, so
+// send the DISPLAYED name — the same first-message preview the web selector
+// shows. The sheet titles its management menu from it.
+const chatSnapshot = (c) => ({
+  threads: c.threads.map((t) => ({ id: t.id, title: getThreadDisplayName(t) })),
+  currentThreadId: c.currentThreadId,
+  messages: c.messages,
+  loading: c.loading,
+  streamingMessage: c.streamingMessage,
+  configured: c.configured,
+  thinking: c.thinking,
+  currentModel: c.currentModel,
+  models: getAIModels(),
+  reasoningEffort: c.reasoningEffort,
+  reasoningSupported: c.reasoningSupported,
+});
+
 /**
  * The docked AI chat panel. React owns the entire interior of the existing
  * `<aside id="chat-panel">` shell (the skeleton ships it empty), portaling its
@@ -45,36 +65,14 @@ export default function ChatPanel() {
   // about the engine is reimplemented natively; the sheet is a second VIEW of
   // this one.
   const publishChatState = () => {
-    const c = chatRef.current;
-    window.__opShell?.publishChat?.({
-      threads: c.threads,
-      currentThreadId: c.currentThreadId,
-      messages: c.messages,
-      loading: c.loading,
-      streamingMessage: c.streamingMessage,
-      configured: c.configured,
-      thinking: c.thinking,
-      currentModel: c.currentModel,
-      models: getAIModels(),
-      reasoningEffort: c.reasoningEffort,
-      reasoningSupported: c.reasoningSupported,
-    });
+    window.__opShell?.publishChat?.(chatSnapshot(chatRef.current));
   };
 
+  // Reads chatRef rather than `chat`: the ref is assigned during render, so it
+  // holds this render's engine by the time any effect runs, and the dependency
+  // array below stays the explicit list of what the sheet actually renders from.
   useEffect(() => {
-    window.__opShell?.publishChat?.({
-      threads: chat.threads,
-      currentThreadId: chat.currentThreadId,
-      messages: chat.messages,
-      loading: chat.loading,
-      streamingMessage: chat.streamingMessage,
-      configured: chat.configured,
-      thinking: chat.thinking,
-      currentModel: chat.currentModel,
-      models: getAIModels(),
-      reasoningEffort: chat.reasoningEffort,
-      reasoningSupported: chat.reasoningSupported,
-    });
+    publishChatState();
   }, [
     chat.threads, chat.currentThreadId, chat.messages, chat.loading,
     chat.streamingMessage, chat.configured, chat.thinking,
@@ -94,6 +92,12 @@ export default function ChatPanel() {
       'rd:chat-new-thread': () => chatRef.current.newThread(),
       'rd:chat-select-thread': (e) => {
         if (e.detail?.id) chatRef.current.switchThread(e.detail.id);
+      },
+      'rd:chat-rename-thread': (e) => {
+        if (e.detail?.id) chatRef.current.renameThread(e.detail.id, e.detail.title);
+      },
+      'rd:chat-delete-thread': (e) => {
+        if (e.detail?.id) chatRef.current.deleteThread(e.detail.id);
       },
     };
     for (const [name, fn] of Object.entries(handlers)) window.addEventListener(name, fn);
