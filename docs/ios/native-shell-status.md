@@ -86,11 +86,22 @@ the "post-export touch" bug look real. Before debugging the SwiftUI further,
 reproduce on a device, or at least confirm On Paper is frontmost immediately
 before and after each tap.
 
-The next concrete thing to check: whether `.chat-panel-toggle` is genuinely
-non-interactive under `html.op-native-shell`. `native-shell.css` sets
-`display: none` on it, which should also remove it from hit-testing — but a
-tap landing on the webview and reaching that button is the only mechanism that
-opens the drawer, so it is worth proving rather than assuming.
+**`.chat-panel-toggle` is NOT the culprit — measured.** A probe at handover
+reported `display: none` and a 0x0 rect for both floating toggles, so neither
+can receive a tap. That hypothesis is closed.
+
+**The same probe found something else, and it is probably the real lead:**
+`window.innerHeight` is **724 with the bottom toolbar visible** — identical to
+the value measured with the toolbar hidden. 874 - 724 = 150, which is the
+navigation bar plus the bottom safe area and nothing else. **The toolbar
+overlays the webview rather than insetting it.**
+
+That means the bottom ~49pt of the page sits underneath the toolbar, and every
+tap in that strip is resolved between two overlapping views. It is a layout bug
+in its own right (the canvas is taller than the visible area again, the same
+class of bug as the 114pt one fixed earlier), and it is a plausible mechanism
+for a tap near the toolbar reaching neither the button nor the element the user
+aimed at. Fix the inset first, then re-test the chat button.
 
 ## Also unverified
 
