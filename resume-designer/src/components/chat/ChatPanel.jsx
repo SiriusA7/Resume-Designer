@@ -44,6 +44,19 @@ export default function ChatPanel() {
   // here — the same shape the Header uses for rename/delete/import. Nothing
   // about the engine is reimplemented natively; the sheet is a second VIEW of
   // this one.
+  const publishChatState = () => {
+    const c = chatRef.current;
+    window.__opShell?.publishChat?.({
+      threads: c.threads,
+      currentThreadId: c.currentThreadId,
+      messages: c.messages,
+      loading: c.loading,
+      streamingMessage: c.streamingMessage,
+      configured: c.configured,
+      thinking: c.thinking,
+    });
+  };
+
   useEffect(() => {
     window.__opShell?.publishChat?.({
       threads: chat.threads,
@@ -52,10 +65,11 @@ export default function ChatPanel() {
       loading: chat.loading,
       streamingMessage: chat.streamingMessage,
       configured: chat.configured,
+      thinking: chat.thinking,
     });
   }, [
     chat.threads, chat.currentThreadId, chat.messages, chat.loading,
-    chat.streamingMessage, chat.configured,
+    chat.streamingMessage, chat.configured, chat.thinking,
   ]);
 
   useEffect(() => {
@@ -65,6 +79,7 @@ export default function ChatPanel() {
         if (text) chatRef.current.send(text);
       },
       'rd:chat-stop': () => chatRef.current.stop(),
+      'rd:chat-publish': () => publishChatState(),
       'rd:chat-new-thread': () => chatRef.current.newThread(),
       'rd:chat-select-thread': (e) => {
         if (e.detail?.id) chatRef.current.switchThread(e.detail.id);

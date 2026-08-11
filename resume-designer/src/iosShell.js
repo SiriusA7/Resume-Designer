@@ -267,7 +267,7 @@ export function buildDocumentOutline(data) {
  */
 export function buildChatView({
   threads = [], currentThreadId = null, messages = [], loading = false,
-  streamingMessage = null, configured = false,
+  streamingMessage = null, configured = false, thinking = null,
 } = {}) {
   const text = (v) => (typeof v === 'string' ? v : '');
   const visible = (Array.isArray(messages) ? messages : [])
@@ -281,12 +281,19 @@ export function buildChatView({
       // The engine hands proposals to the web panel; say so rather than
       // silently dropping the part of the reply that matters.
       hasChanges: Array.isArray(m.pendingChanges) && m.pendingChanges.length > 0,
+      // Raw reasoning summary. The native timeline splits and strips it — the
+      // same job LiveReasoning.jsx does on the web — so it crosses unparsed.
+      reasoning: text(m.reasoning),
     }))
-    .filter((m) => m.text || m.hasChanges);
+    .filter((m) => m.text || m.hasChanges || m.reasoning);
 
   const streaming = text(streamingMessage?.content);
-  if (streaming) {
-    visible.push({ id: 'streaming', role: 'assistant', text: streaming, hasChanges: false });
+  const streamingReasoning = text(streamingMessage?.reasoning);
+  if (streaming || streamingReasoning) {
+    visible.push({
+      id: 'streaming', role: 'assistant', text: streaming,
+      hasChanges: false, reasoning: streamingReasoning,
+    });
   }
 
   return {
@@ -299,6 +306,8 @@ export function buildChatView({
     loading: !!loading,
     streaming: !!streaming,
     configured: !!configured,
+    // The engine's live status line ('Thinking…', tool names). Null when idle.
+    thinking: typeof thinking === 'string' ? thinking : '',
   };
 }
 
@@ -529,6 +538,12 @@ export function initIOSShell(deps) {
     chatSelectThread: ({ id }) => ask('rd:chat-select-thread', { id }),
     setChatOpen: ({ value }) => {
       streamChat = value === 'true';
+      // Ask the panel to re-push. Its first publish is normally LOST: React
+      // mounts ChatPanel before main.js's init() has defined window.__opShell,
+      // so the mount-time effect optional-chains into nothing, and the effect
+      // does not run again until the engine's state changes — which, in a quiet
+      // chat, is never. Without this the sheet opens permanently empty.
+      if (streamChat) ask('rd:chat-publish');
       publish();
     },
     // The outline is only projected while the panel is open. It is by far the

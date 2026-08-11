@@ -61,12 +61,17 @@ struct ShellSnapshot: Decodable, Equatable {
       let role: String
       let text: String
       let hasChanges: Bool
+      /// Raw reasoning summary, unparsed. `ReasoningTimeline` splits and strips
+      /// it — the same job `LiveReasoning.jsx` does on the web.
+      let reasoning: String
     }
     var threads: [Thread]
     var messages: [Message]
     var loading: Bool
     var streaming: Bool
     var configured: Bool
+    /// The engine's live status line. Empty when idle.
+    var thinking: String
   }
 
   /// `nil` means the panel is closed and the outline is not being streamed —
@@ -979,26 +984,257 @@ private struct StructureSheet: View {
   }
 }
 
+// MARK: - Reasoning timeline
+
+/// One line of the model's reasoning summary.
+struct ReasoningStep: Identifiable, Equatable {
+  let id: Int
+  let content: String
+  let isFirst: Bool
+  let isLast: Bool
+}
+
+/// Strip `**Title**` markers from a reasoning summary.
+///
+/// Ported from Olia (`Screens/Chat/ReasoningTimelineView.swift`), which learned
+/// the shapes the hard way: models emit `**Title**` on one line, but the closing
+/// `**` often lands on the NEXT line, and sometimes appears orphaned on its own.
+/// All three have to go or the timeline shows asterisks as content.
+func stripReasoningTitles(_ content: String) -> String {
+  var result = content
+  let patterns: [(String, NSRegularExpression.Options)] = [
+    (#"\*\*[^*]+\*\*"#, []),          // **Title** on one line
+    (#"\*\*[^*\n]+\n\*\*"#, []),      // **Title\n**
+    (#"^\*\*$"#, [.anchorsMatchLines]) // an orphaned closing **
+  ]
+  for (pattern, options) in patterns {
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { continue }
+    result = regex.stringByReplacingMatches(
+      in: result, options: [], range: NSRange(result.startIndex..., in: result), withTemplate: ""
+    )
+  }
+  return result
+}
+
+/// A vertical timeline of reasoning steps: a dot per line, joined by rules.
+///
+/// Ported from Olia. The rules are drawn as `Rectangle`s above and below each
+/// dot rather than as one line behind the column, which is what lets a row size
+/// itself to its own text without the connector stretching or breaking.
+struct ReasoningTimeline: View {
+  let content: String
+  /// Fade-and-rise rows in as they arrive. Off for settled history, where every
+  /// row would animate at once on open.
+  var animateAppearance: Bool = false
+
+  private var steps: [ReasoningStep] {
+    let lines = stripReasoningTitles(content)
+      .components(separatedBy: .newlines)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+    return lines.enumerated().map { index, line in
+      ReasoningStep(
+        id: index, content: line,
+        isFirst: index == 0, isLast: index == lines.count - 1
+      )
+    }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(steps) { step in
+        ReasoningTimelineRow(step: step, animateAppearance: animateAppearance)
+      }
+    }
+    .padding(.vertical, 8)
+  }
+}
+
+private struct ReasoningTimelineRow: View {
+  let step: ReasoningStep
+  var animateAppearance: Bool = false
+
+  @State private var hasAppeared = false
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      ZStack(alignment: .top) {
+        if !step.isFirst {
+          Rectangle()
+            .fill(Color.secondary.opacity(0.3))
+            .frame(width: 1, height: 20)
+            .offset(y: -20)
+        }
+        if !step.isLast {
+          Rectangle()
+            .fill(Color.secondary.opacity(0.3))
+            .frame(width: 1)
+            .frame(maxHeight: .infinity)
+            .padding(.top, 20)
+        }
+        Circle()
+          .fill(Color.secondary)
+          .frame(width: 8, height: 8)
+          .padding(.top, 6)
+      }
+      .frame(width: 16)
+
+      Text(step.content)
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, step.isLast ? 0 : 20)
+    }
+    .opacity(animateAppearance ? (hasAppeared ? 1 : 0) : 1)
+    .offset(y: animateAppearance ? (hasAppeared ? 0 : 6) : 0)
+    .onAppear {
+      guard animateAppearance, !hasAppeared else { return }
+      withAnimation(.easeOut(duration: 0.3)) { hasAppeared = true }
+    }
+  }
+}
+
+// MARK: - Composer
+
+/// The message composer, ported from Olia (`Screens/Chat/MessageComposer.swift`).
+///
+/// The iOS 26 branch is the point: the field and the send button live in one
+/// `GlassEffectContainer` with matched `glassEffectID`s in a shared namespace,
+/// so the two MORPH into each other rather than sitting side by side. That is
+/// the effect — a glass background alone does not produce it.
+///
+/// The pre-26 branch is not optional: On Paper's deployment target is 17.4.
+private struct ChatComposer: View {
+  @Binding var text: String
+  let isSending: Bool
+  let onSend: () -> Void
+  let onStop: () -> Void
+
+  @FocusState private var isFocused: Bool
+  @Namespace private var glassNamespace
+
+  private let characterLimit = 4000
+
+  private var trimmed: String {
+    text.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+  private var canSend: Bool { !trimmed.isEmpty && !isSending && text.count <= characterLimit }
+  private var isNearLimit: Bool { text.count > characterLimit * 80 / 100 }
+
+  var body: some View {
+    VStack(alignment: .center, spacing: 0) {
+      if #available(iOS 26.0, *) {
+        GlassEffectContainer(spacing: 8) {
+          HStack(alignment: .bottom, spacing: 8) { field; trailingButton }
+            .padding(.leading, 16)
+            .padding(.trailing, 12)
+        }
+      } else {
+        HStack(alignment: .bottom, spacing: 8) { fallbackField; trailingButton }
+          .padding(.leading, 16)
+          .padding(.trailing, 12)
+      }
+
+      if isNearLimit {
+        HStack {
+          Spacer()
+          Text("\(text.count)/\(characterLimit)")
+            .font(.caption)
+            .foregroundStyle(text.count > characterLimit ? Color.red : Color.secondary)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
+        }
+      }
+    }
+  }
+
+  @available(iOS 26.0, *)
+  private var field: some View {
+    TextField("Ask about this resume", text: $text, axis: .vertical)
+      .textFieldStyle(.plain)
+      .focused($isFocused)
+      .disabled(isSending)
+      .lineLimit(1...8)
+      .frame(minHeight: 44)
+      .padding(.horizontal, 16)
+      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+      .glassEffectID("textField", in: glassNamespace)
+  }
+
+  private var fallbackField: some View {
+    TextField("Ask about this resume", text: $text, axis: .vertical)
+      .textFieldStyle(.plain)
+      .focused($isFocused)
+      .disabled(isSending)
+      .lineLimit(1...8)
+      .frame(minHeight: 44)
+      .padding(.horizontal, 16)
+      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+          .stroke(Color.primary.opacity(isFocused ? 0.2 : 0.08), lineWidth: 0.5)
+      )
+  }
+
+  @ViewBuilder
+  private var trailingButton: some View {
+    if isSending {
+      Button(action: onStop) {
+        Image(systemName: "stop.fill").font(.system(size: 18, weight: .semibold)).padding(4)
+      }
+      .modifier(ComposerButtonStyle())
+      .accessibilityLabel("Stop")
+    } else {
+      Button {
+        guard canSend else { return }
+        onSend()
+        isFocused = false
+      } label: {
+        Image(systemName: "arrow.up")
+          .font(.system(size: 20, weight: .semibold))
+          .symbolEffect(.bounce, value: isSending)
+          .padding(4)
+      }
+      .modifier(ComposerButtonStyle())
+      .disabled(!canSend)
+      .accessibilityLabel("Send")
+    }
+  }
+}
+
+/// `.glassProminent` where it exists, `.borderedProminent` before it — extracted
+/// so the two composer branches do not each carry an availability check.
+private struct ComposerButtonStyle: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content
+        .buttonStyle(.glassProminent)
+        .glassEffectID("sendButton", in: Namespace().wrappedValue)
+        .buttonBorderShape(.circle)
+    } else {
+      content.buttonStyle(.borderedProminent).buttonBorderShape(.circle)
+    }
+  }
+}
+
 // MARK: - Chat
 
-/// The native chat sheet.
+/// The native chat sheet, shaped after Olia's.
 ///
-/// A second VIEW of the engine in `src/components/chat/useChat.js`, not a
-/// second engine: every action here dispatches an event the React panel
-/// handles, so threading, streaming, aborting and persistence all stay in the
-/// one implementation that already works on desktop.
+/// A second VIEW of the engine in `src/components/chat/useChat.js`, not a second
+/// engine: every action dispatches an event the React panel handles, so
+/// threading, streaming, aborting and persistence stay in the one implementation
+/// that already works on desktop.
 ///
-/// Scope is deliberately short of the web panel — no model picker, no context
-/// chips, and no applying the AI's proposed changes. That last one is why:
-/// applying a change runs the diff engine and opens a review session, and a
-/// partial native version of it would let someone accept an edit they never
-/// saw. Replies that carry proposals say so and point back to the web panel.
+/// Still short of the web panel on purpose — no model picker, no context chips,
+/// and no applying the AI's proposed CHANGES. Applying one runs the diff engine
+/// and opens a review session; a partial native version of that is how someone
+/// accepts an edit they never saw.
 private struct ChatSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
 
   @State private var draft = ""
-  @FocusState private var composerFocused: Bool
 
   private var chat: ShellSnapshot.ChatView? { model.snapshot.chat }
 
@@ -1013,7 +1249,13 @@ private struct ChatSheet: View {
           )
         } else {
           transcript
-          composer
+          ChatComposer(
+            text: $draft,
+            isSending: chat?.loading ?? false,
+            onSend: sendDraft,
+            onStop: { model.send("chatStop") }
+          )
+          .padding(.bottom, 8)
         }
       }
       .navigationTitle("Assistant")
@@ -1028,18 +1270,22 @@ private struct ChatSheet: View {
   private var transcript: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 16) {
           ForEach(chat?.messages ?? []) { message in
-            bubble(message).id(message.id)
+            messageView(message).id(message.id)
           }
-          if chat?.loading == true && chat?.streaming != true {
-            ProgressView().frame(maxWidth: .infinity, alignment: .leading)
+          if let thinking = chat?.thinking, !thinking.isEmpty {
+            HStack(spacing: 8) {
+              ProgressView().controlSize(.small)
+              Text(thinking).font(.subheadline).foregroundStyle(.secondary)
+            }
+            .id("thinking")
           }
         }
         .padding()
       }
-      // Follow the stream. Keyed on the last message's text, not its id, so a
-      // reply that is still growing keeps the view pinned to its tail.
+      // Keyed on the last message's text, not its id, so a reply that is still
+      // growing keeps the view pinned to its tail.
       .onChange(of: chat?.messages.last?.text) { _, _ in
         guard let last = chat?.messages.last else { return }
         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -1048,17 +1294,20 @@ private struct ChatSheet: View {
   }
 
   @ViewBuilder
-  private func bubble(_ message: ShellSnapshot.ChatView.Message) -> some View {
+  private func messageView(_ message: ShellSnapshot.ChatView.Message) -> some View {
     let isUser = message.role == "user"
-    VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-      Text(message.text)
-        .textSelection(.enabled)
-        .padding(10)
-        .background(bubbleBackground(for: message.role), in: .rect(cornerRadius: 14))
-        .foregroundStyle(isUser ? .white : .primary)
+    VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
+      if !message.reasoning.isEmpty {
+        ReasoningTimeline(content: message.reasoning, animateAppearance: message.id == "streaming")
+      }
+      if !message.text.isEmpty {
+        Text(message.text)
+          .textSelection(.enabled)
+          .padding(10)
+          .background(bubbleBackground(for: message.role), in: .rect(cornerRadius: 18))
+          .foregroundStyle(isUser ? .white : .primary)
+      }
       if message.hasChanges {
-        // The reply proposed edits this sheet cannot apply. Saying so is the
-        // honest version of dropping them silently.
         Label("Suggested edits — open the assistant on desktop to review",
               systemImage: "wand.and.stars")
           .font(.caption)
@@ -1074,29 +1323,6 @@ private struct ChatSheet: View {
     case "error": return .red.opacity(0.15)
     default: return Color(.secondarySystemBackground)
     }
-  }
-
-  private var composer: some View {
-    HStack(spacing: 8) {
-      TextField("Ask about this resume", text: $draft, axis: .vertical)
-        .lineLimit(1...5)
-        .textFieldStyle(.roundedBorder)
-        .focused($composerFocused)
-      if chat?.loading == true {
-        Button { model.send("chatStop") } label: {
-          Image(systemName: "stop.circle.fill").font(.title2)
-        }
-        .accessibilityLabel("Stop")
-      } else {
-        Button { sendDraft() } label: {
-          Image(systemName: "arrow.up.circle.fill").font(.title2)
-        }
-        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        .accessibilityLabel("Send")
-      }
-    }
-    .padding()
-    .background(.bar)
   }
 
   private var threadMenu: some View {
