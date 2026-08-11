@@ -408,25 +408,12 @@ private struct CanvasHost: UIViewControllerRepresentable {
 
   func updateUIViewController(_ controller: UIViewController, context: Context) {}
 
-  /// Pin to the parent's edges horizontally and at the top, but to its SAFE
-  /// AREA at the bottom.
-  ///
-  /// iOS 26's bottom bar floats OVER content rather than shrinking it — that is
-  /// the platform's intent, and SwiftUI compensates by insetting scroll views
-  /// automatically. A hosted `UIViewRepresentable` gets no such treatment, so
-  /// the webview ran the full height and the bottom ~49pt of every page sat
-  /// underneath the toolbar. Measured: `window.innerHeight` was 724 with the
-  /// toolbar visible AND hidden, when the visible area differs by the bar.
-  ///
-  /// The top stays pinned to the raw edge because the container already begins
-  /// below the navigation bar; pinning it to the guide as well would inset it
-  /// twice.
   private func pin(_ view: UIView, to parent: UIView) {
     NSLayoutConstraint.activate([
       view.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
       view.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
       view.topAnchor.constraint(equalTo: parent.topAnchor),
-      view.bottomAnchor.constraint(equalTo: parent.safeAreaLayoutGuide.bottomAnchor),
+      view.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
     ])
   }
 }
