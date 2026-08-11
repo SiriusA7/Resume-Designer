@@ -81,6 +81,35 @@ export function overflowingPages(blockHeightsPx, assign, { firstPageContentPx, p
 // --- measurement (getBoundingClientRect is VISUAL px; divide by the zoom scale
 // on .resume-container to recover layout px) ---
 
+/**
+ * The scale the canvas is ACTUALLY rendered at, read off its own transform.
+ *
+ * `getZoom()` is the target, and the two disagree for the 0.2s the zoom
+ * transition takes: rects come back at the in-flight scale while `getZoom()`
+ * already reports where it is heading, so every measured height is out by
+ * (rendered ÷ target) and pages break at that fraction of the right height.
+ * Reading the matrix keeps the divisor consistent with the rects it divides,
+ * whenever the measurement happens to land.
+ *
+ * Returns 0 when there is no transform to read — no container, no
+ * `DOMMatrixReadOnly` (jsdom), an unparsable value — so the caller falls back
+ * to `getZoom()`.
+ *
+ * @param {Element} resumeEl the `#resume` element inside `.resume-container`
+ */
+function renderedScale(resumeEl) {
+  const container = resumeEl?.closest?.('.resume-container');
+  if (!container || typeof DOMMatrixReadOnly !== 'function') return 0;
+  const transform = getComputedStyle(container).transform;
+  if (!transform || transform === 'none') return 0;
+  try {
+    const scale = new DOMMatrixReadOnly(transform).a;
+    return Number.isFinite(scale) && scale > 0 ? scale : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function computedV(el, prop) {
   const v = parseFloat(getComputedStyle(el)[prop]);
   return Number.isFinite(v) ? v : 0;
@@ -323,7 +352,7 @@ export function paginate(resumeEl, setup, layoutId) {
   const { widthIn, heightIn } = pageDimsIn(setup);
   const widthPx = Math.round(widthIn * PX_PER_IN);
   const heightPx = heightIn == null ? null : Math.round(heightIn * PX_PER_IN);
-  const scale = getZoom() || 1;
+  const scale = renderedScale(resumeEl) || getZoom() || 1;
 
   // Enter paginated state (idempotent; persists across re-renders on the
   // long-lived #resume / #resume-container elements).

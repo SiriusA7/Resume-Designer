@@ -45,11 +45,23 @@ export function initZoomControls() {
 
   if (!zoomIn || !zoomOut || !zoomFit || !zoomReset) return;
   
-  // Load saved zoom level
+  // Load saved zoom level.
+  //
+  // Without a transition, for two reasons. The page should not visibly zoom
+  // itself as the app opens — it was never at 100%, it was saved at this.
+  // And the 0.2s animation is a window in which `getBoundingClientRect()`
+  // reports an in-flight scale while `getZoom()` reports the target, so
+  // anything that measures inside it measures wrongly: pagination divides
+  // rects by `getZoom()`, so a repaginate landing mid-restore broke pages at
+  // roughly (rendered ÷ target) of the right height. On a WARM load — the
+  // webfonts already cached, as they are every time the app is reopened —
+  // `document.fonts.ready` resolves inside those 200ms and main.js
+  // re-renders exactly there, which is why it showed up on resume from
+  // background and not on a cold start.
   const savedZoom = appStorage.getItem('resume-zoom');
   if (savedZoom) {
     currentZoom = parseFloat(savedZoom);
-    applyZoom();
+    withoutTransition(document.getElementById('resume-container'), applyZoom);
   }
   
   // Zoom in
