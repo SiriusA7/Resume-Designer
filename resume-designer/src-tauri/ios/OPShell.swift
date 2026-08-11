@@ -919,8 +919,9 @@ private struct ShellView: View {
   @State private var sheet: Sheet?
   /// The zoom a pinch started from; nil when no pinch is in flight.
   @State private var pinchBase: Double?
-  /// The percentage readout is transient — see `showZoomReadout`.
-  @State private var zoomReadoutVisible = false
+  /// The bar is showing the zoom controls rather than the tools — see
+  /// `keepZoomOpen`.
+  @State private var zoomExpanded = false
   /// Counts zoom interactions so a stale hide cannot cut a newer one short.
   @State private var zoomInteraction = 0
 
@@ -940,16 +941,16 @@ private struct ShellView: View {
         switch state {
         case .began:
           pinchBase = snapshot.zoom
-          showZoomReadout()
+          keepZoomOpen()
         case .changed:
           model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: true)
-          showZoomReadout()
+          keepZoomOpen()
         default:
           // One final non-live value closes the gesture on the web side, which
           // is what puts the zoom transition back for the buttons.
           model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: false)
           pinchBase = nil
-          showZoomReadout()
+          keepZoomOpen()
         }
       }
         // The canvas runs the full height of the window, not from the bottom of
@@ -965,6 +966,9 @@ private struct ShellView: View {
         // set includes it), which is what stops SwiftUI and WKWebView both
         // avoiding it and collapsing the canvas to a ~90pt strip.
         .ignoresSafeArea(edges: [.top, .bottom])
+        .overlay(alignment: .bottomTrailing) {
+          zoomControl.padding(.bottom, snapshot.modalOpen ? 0 : 4)
+        }
         .navigationBarTitleDisplayMode(.inline)
         // No bar backgrounds: the résumé runs edge to edge and shows THROUGH the
         // chrome, which is the whole point of glass controls floating over it.
@@ -990,7 +994,7 @@ private struct ShellView: View {
           // webview, so it covered the PDF preview's Save button — the dialog
           // rendered fine and simply could not be completed. Its commands
           // would act on the canvas behind the dialog anyway.
-          if !snapshot.modalOpen {
+          if !snapshot.modalOpen && !zoomExpanded {
             ToolbarItemGroup(placement: .bottomBar) { bottomBar }
           }
         }
@@ -1189,42 +1193,65 @@ private struct ShellView: View {
     .accessibilityLabel("Design")
 
     formatMenu
-
-    Spacer()
-
-    Button {
-      model.send("zoomOut")
-      showZoomReadout()
-    } label: {
-      Image(systemName: "minus")
-    }
-    .accessibilityLabel("Zoom out")
-
-    zoomMenu
-
-    Button {
-      model.send("zoomIn")
-      showZoomReadout()
-    } label: {
-      Image(systemName: "plus")
-    }
-    .accessibilityLabel("Zoom in")
   }
 
-  /// Show the percentage, and start the clock on hiding it again.
+  /// Zoom, as its own floating control rather than three more items in the bar.
   ///
-  /// The readout is only worth its space while the zoom is being changed; the
-  /// rest of the time it is a number nobody is reading, sitting where the
-  /// canvas could be. Each call restarts the delay, so a run of taps or a pinch
-  /// keeps it up throughout and it leaves once together.
-  private func showZoomReadout() {
+  /// It was three (−, readout, +) and the bar ran out of room once Design
+  /// joined it — the last button was clipped off the screen edge. It is also
+  /// not a thing you use continuously, which is what Safari's zoom UI is built
+  /// around: a percentage sitting in the corner, and the controls only while
+  /// you are actually changing it.
+  ///
+  /// An overlay rather than toolbar items on purpose. A `ToolbarItemGroup`
+  /// whose item COUNT changes is not reliably re-diffed by SwiftUI — the first
+  /// version of this simply never redrew — and an overlay also owns its own
+  /// animation, so the two states can morph rather than swap.
+  private var zoomControl: some View {
+    HStack(spacing: 4) {
+      if zoomExpanded {
+        Button {
+          model.send("zoomOut")
+          keepZoomOpen()
+        } label: {
+          Image(systemName: "minus").frame(width: 34, height: 34)
+        }
+        .accessibilityLabel("Zoom out")
+      }
+
+      zoomMenu
+
+      if zoomExpanded {
+        Button {
+          model.send("zoomIn")
+          keepZoomOpen()
+        } label: {
+          Image(systemName: "plus").frame(width: 34, height: 34)
+        }
+        .accessibilityLabel("Zoom in")
+      }
+    }
+    .buttonStyle(.plain)
+    .padding(.horizontal, 8)
+    .frame(height: 44)
+    .modifier(ZoomControlSurface())
+    .padding(.trailing, 12)
+    .padding(.bottom, 10)
+  }
+
+  /// Open the zoom controls, and restart the clock on closing them again.
+  ///
+  /// Called by the pill, by every zoom button, and by a pinch. Each call
+  /// restarts the delay, so a run of taps or a long pinch keeps the controls up
+  /// throughout and they leave once, together, when the user stops.
+  private func keepZoomOpen() {
     zoomInteraction += 1
     let generation = zoomInteraction
-    withAnimation(.easeOut(duration: 0.15)) { zoomReadoutVisible = true }
+    withAnimation(.snappy(duration: 0.25)) { zoomExpanded = true }
     Task { @MainActor in
-      try? await Task.sleep(for: .seconds(1.4))
+      try? await Task.sleep(for: .seconds(2.5))
       guard generation == zoomInteraction else { return }
-      withAnimation(.easeIn(duration: 0.25)) { zoomReadoutVisible = false }
+      withAnimation(.snappy(duration: 0.3)) { zoomExpanded = false }
     }
   }
 
@@ -1250,29 +1277,40 @@ private struct ShellView: View {
     .accessibilityLabel("Text formatting")
   }
 
-  /// Fit and Actual size, labelled with the percentage while the zoom is being
-  /// changed and with a magnifier the rest of the time.
+  /// The centre of the control: always the live percentage.
+  ///
+  /// Collapsed it is the button that opens the controls. Expanded it carries
+  /// the two commands that are not a step — Fit and Actual size — because by
+  /// then there is a bar to hang them off.
+  @ViewBuilder
   private var zoomMenu: some View {
-    Menu {
-      Button { model.send("zoomFit"); showZoomReadout() } label: {
-        Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
+    if zoomExpanded {
+      Menu {
+        Button { model.send("zoomFit"); keepZoomOpen() } label: {
+          Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
+        }
+        Button { model.send("zoomReset"); keepZoomOpen() } label: {
+          Label("Actual size", systemImage: "1.magnifyingglass")
+        }
+      } label: {
+        zoomReadout
       }
-      Button { model.send("zoomReset"); showZoomReadout() } label: {
-        Label("Actual size", systemImage: "1.magnifyingglass")
-      }
-    } label: {
-      if zoomReadoutVisible {
-        Text("\(snapshot.zoomPercent)%")
-          .font(.subheadline)
-          .monospacedDigit()
-          // Fixed, or the bar's other items shift on 99% → 100%.
-          .frame(minWidth: 44)
-          .transition(.opacity)
-      } else {
-        Image(systemName: "magnifyingglass")
-      }
+      .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
+    } else {
+      Button { keepZoomOpen() } label: { zoomReadout }
+        .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent. Opens the zoom controls.")
     }
-    .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
+  }
+
+  private var zoomReadout: some View {
+    Text("\(snapshot.zoomPercent)%")
+      .font(.subheadline)
+      .monospacedDigit()
+      // Fixed, or the pill resizes on 99% → 100%.
+      .frame(minWidth: 46, minHeight: 34)
+      // Text is only hit-testable where its glyphs are; without this the pill
+      // has a live centre and dead corners.
+      .contentShape(.rect)
   }
 }
 
@@ -2363,6 +2401,21 @@ private struct ComposerSurface: ViewModifier {
       content
         .background(.ultraThinMaterial, in: shape)
         .overlay(shape.stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+    }
+  }
+}
+
+/// The zoom control's own surface. Its own modifier rather than
+/// `ComposerSurface`'s: this one is a capsule and floats over the résumé, where
+/// the composer's is a 26pt card at the bottom of a sheet.
+private struct ZoomControlSurface: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content.glassEffect(.regular.interactive(), in: .capsule)
+    } else {
+      content
+        .background(.regularMaterial, in: .capsule)
+        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
     }
   }
 }
