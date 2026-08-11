@@ -29,6 +29,17 @@ Exercised by hand, each confirmed working:
 | Structure panel opens from the toolbar | |
 | PDF export produces a correct vector PDF and the preview renders it | |
 
+**Step 3 — Settings is a native sheet.** Theme, OpenRouter key, automatic
+fallback, backup export/import, replay onboarding, version. Every control
+renders from the snapshot, so a write that does not land springs the control
+back. `hasApiKey` crosses the bridge, never the key. The native chrome also
+follows the app's own theme now, not the system's.
+
+**Step 4 — the keyboard.** Its planned deliverable was already done by the 3.1
+revert; the real work was that WKWebView and SwiftUI were both avoiding the
+keyboard, which collapsed the canvas to a ~90pt strip. The canvas now opts out
+with `.ignoresSafeArea(.keyboard)` and leaves it to the webview.
+
 ## Outstanding — the one real bug
 
 **After a PDF export, the web preview dialog stops responding to touches.**
@@ -63,8 +74,6 @@ coordinates — and therefore `elementFromPoint` — correct.
 
 ## Also unverified
 
-- **Keyboard avoidance.** Staging step 4 deletes `viewportHeight.js` and lets
-  SwiftUI inset; neither has been exercised.
 - **iPad**, including Stage Manager and split view. The shell is written not to
   foreclose a split view, but no iPad layout exists.
 - **Device builds.** Everything here is the simulator. `DEVELOPMENT_TEAM` is
@@ -72,8 +81,7 @@ coordinates — and therefore `elementFromPoint` — correct.
 
 ## Still to build
 
-Staging steps 3–5 of the design: Settings as a native sheet, the keyboard, and
-the structure panel. Step 5 is the only one that needs the document, via
+Staging step 5, the last one and the only one that needs the document, via
 snapshot-in / path-writes-out over the existing `experience[3].bullets[1]`
 grammar, with the focus rule that stops an inbound snapshot moving the cursor
 mid-word.
