@@ -594,7 +594,10 @@ export function initIOSShell(deps) {
     zoomFit: () => fitToView(),
     // Driven by the native pinch. Sent continuously during a gesture, so it
     // goes straight to the zoom model rather than through a button click.
-    setZoom: ({ value }) => deps.setZoomLevel(Number(value)),
+    // `live` marks the frames of a pinch, which run without the zoom
+    // transition — see setZoomLevel. Swift sends one final non-live setZoom
+    // when the gesture ends to put the animation back.
+    setZoom: ({ value, live }) => deps.setZoomLevel(Number(value), live === 'true'),
     undo: () => click('undo-btn'),
     redo: () => click('redo-btn'),
 
@@ -796,12 +799,31 @@ export function initIOSShell(deps) {
       activated = true;
       document.documentElement.classList.add(NATIVE_SHELL_CLASS);
       disablePageZoom();
+      // Tell Swift a document just came up, so it can re-disable WKWebView's own
+      // pinch zoom. Those settings live on the scroll view and WebKit re-derives
+      // them from the new page's viewport, so a reload hands the canvas back a
+      // second scale that fights the app's own.
+      if (isNativeShellAvailable()) {
+        window.webkit.messageHandlers[SHELL_HANDLER].postMessage({ kind: 'activated' });
+      }
       publish();
       return true;
     },
   };
 
-  // Swift may win the race and call activate() before this module has run. It
-  // leaves this flag behind when it does, so the handshake completes either way.
-  if (window.__opShellPendingActivate) window.__opShell.activate();
+  // Two ways in, because the handshake has two failure modes.
+  //
+  // Swift may win the race and call activate() before this module has run; it
+  // leaves a flag behind when it does, so that ordering still completes.
+  //
+  // And the page can be RELOADED without Swift knowing — WebKit reclaims the
+  // content process of a backgrounded app and reloads on return, which reran
+  // this module against a document with no `op-native-shell` class on it and
+  // brought the web header back under the native one. Swift's own handover is
+  // one-shot, so it cannot help. The message handler's presence is proof the
+  // native shell is installed, and it survives a reload because it belongs to
+  // the webview's configuration, so the web side can just re-assert.
+  if (window.__opShellPendingActivate || isNativeShellAvailable(window)) {
+    window.__opShell.activate();
+  }
 }

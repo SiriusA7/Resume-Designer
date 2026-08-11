@@ -222,6 +222,9 @@ function saveZoom() {
   appStorage.setItem('resume-zoom', currentZoom.toString());
 }
 
+// True while a native pinch is in flight. See setZoomLevel.
+let liveGesture = false;
+
 /**
  * Set the zoom programmatically, clamped to the same range the buttons use.
  *
@@ -230,11 +233,27 @@ function saveZoom() {
  * one canvas: the buttons moved the CSS transform, the pinch moved the webview,
  * and the readout only ever tracked the first — so pinching moved the page and
  * the percentage sat still. The webview's zoom is disabled on iOS (see
- * `lockViewportScale` in iosShell.js) and this is the single survivor, because
+ * `disablePageZoom` in iosShell.js) and this is the single survivor, because
  * it is the one that can go BELOW 100% to fit a whole page.
+ *
+ * `live` says a gesture is driving this, and it suppresses the transition for
+ * the duration. Without it the canvas ANIMATES to each of the ~30 values a
+ * pinch produces per second, so it is always 200ms behind the fingers and never
+ * settles — which reads on the device as the page stuttering and fighting back,
+ * not as a smooth zoom. Ordinary button-driven zoom keeps its animation.
  */
-export function setZoomLevel(level) {
+export function setZoomLevel(level, live = false) {
   if (!Number.isFinite(level)) return currentZoom;
+  const container = document.getElementById('resume-container');
+  if (live !== liveGesture) {
+    liveGesture = live;
+    if (live) {
+      container?.classList.add('is-zooming');
+    } else if (container) {
+      container.offsetHeight; // commit the final value before animating again
+      requestAnimationFrame(() => container.classList.remove('is-zooming'));
+    }
+  }
   setZoom(Math.min(Math.max(level, MIN_ZOOM), MAX_ZOOM));
   return currentZoom;
 }

@@ -309,18 +309,26 @@ final class ShellModel: ObservableObject {
 
   /// Percent last sent, so a pinch does not fire a command per touch event.
   private var lastZoomPercentSent = -1
+  private var lastZoomWasLive = false
 
   /// Drive the web zoom model from a native pinch.
   ///
   /// Clamped to the same range `zoomControls.js` uses, and throttled to whole
   /// percent changes — a pinch delivers events far faster than the store wants
   /// writes, and the readout cannot show more precision than this anyway.
-  func setZoom(_ value: Double) {
+  ///
+  /// `live` marks the frames of a gesture, which the web side applies without
+  /// its zoom transition. The throttle deliberately lets a repeat through when
+  /// `live` changes: the last frame of a pinch is usually the same percent as
+  /// the one before it, and swallowing it would leave the canvas stuck in
+  /// no-transition mode for good.
+  func setZoom(_ value: Double, live: Bool = false) {
     let clamped = min(max(value, 0.25), 2.0)
     let percent = Int((clamped * 100).rounded())
-    guard percent != lastZoomPercentSent else { return }
+    guard percent != lastZoomPercentSent || live != lastZoomWasLive else { return }
     lastZoomPercentSent = percent
-    send("setZoom", ["value": String(format: "%.4f", clamped)])
+    lastZoomWasLive = live
+    send("setZoom", ["value": String(format: "%.4f", clamped), "live": live ? "true" : "false"])
   }
 
   /// Send a command to `window.__opShell.command()`.
@@ -382,6 +390,12 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
       }
       NSLog("[OPShell] share requested: \(path)")
       Task { @MainActor in OPShell.presentShareSheet(path: path) }
+    case "activated":
+      // A document just came up — the first one, or a reload after WebKit
+      // reclaimed the content process of a backgrounded app. Either way the
+      // scroll view's zoom settings were re-derived from the new page, so the
+      // lock has to be re-applied or the canvas gets a second scale back.
+      Task { @MainActor in OPShell.lockWebViewZoom() }
     default:
       guard let snapshot = try? JSONDecoder().decode(ShellSnapshot.self, from: data) else {
         NSLog("[OPShell] undecodable snapshot: \(message.body)")
@@ -488,16 +502,17 @@ final class OPShell: NSObject {
   /// a pinch went on scaling the page while the toolbar's readout sat still.
   ///
   /// Re-asserted once a second later because the recognizer can arrive after
-  /// the first JS callback returns.
+  /// the first JS callback returns, and again on every `activated` message —
+  /// each page load re-derives these from the new document's viewport.
   @MainActor
-  private static func disableWebViewPinch(attempt: Int = 0) {
+  static func lockWebViewZoom(attempt: Int = 0) {
     guard let scrollView = model?.webView?.scrollView else { return }
     scrollView.pinchGestureRecognizer?.isEnabled = false
     scrollView.minimumZoomScale = 1
     scrollView.maximumZoomScale = 1
     scrollView.bouncesZoom = false
     if attempt == 0 {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { disableWebViewPinch(attempt: 1) }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { lockWebViewZoom(attempt: 1) }
     }
   }
 
@@ -537,7 +552,7 @@ final class OPShell: NSObject {
         if result as? Bool == true, !handedOver {
           handedOver = true
           NSLog("[OPShell] web chrome handed over after \(attempt) retries")
-          disableWebViewPinch()
+          lockWebViewZoom()
         } else if let error, attempt == 0 {
           NSLog("[OPShell] first activation attempt errored (expected while loading): \(error)")
         }
@@ -672,6 +687,10 @@ private struct ShellView: View {
   @State private var sheet: Sheet?
   /// The zoom a pinch started from; nil when no pinch is in flight.
   @State private var pinchBase: Double?
+  /// The percentage readout is transient — see `showZoomReadout`.
+  @State private var zoomReadoutVisible = false
+  /// Counts zoom interactions so a stale hide cannot cut a newer one short.
+  @State private var zoomInteraction = 0
 
   private enum Sheet: String, Identifiable {
     case settings, structure, chat, library
@@ -689,17 +708,37 @@ private struct ShellView: View {
         switch state {
         case .began:
           pinchBase = snapshot.zoom
+          showZoomReadout()
         case .changed:
-          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale))
+          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: true)
+          showZoomReadout()
         default:
+          // One final non-live value closes the gesture on the web side, which
+          // is what puts the zoom transition back for the buttons.
+          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: false)
           pinchBase = nil
+          showZoomReadout()
         }
       }
+        // The canvas runs the full height of the window, not from the bottom of
+        // the navigation bar to the top of the home indicator. Both bars are
+        // transparent, so this is what actually puts the résumé behind them —
+        // inset to the safe area it would be sitting between two strips of
+        // empty window instead. Running under the bottom bar is deliberate and
+        // was reverted once when "fixed". `.resume-scroller` reserves the top
+        // bar's height as padding, so the page starts below the chrome and
+        // scrolls up behind it.
+        //
+        // This also keeps the KEYBOARD out of the layout (the default region
+        // set includes it), which is what stops SwiftUI and WKWebView both
+        // avoiding it and collapsing the canvas to a ~90pt strip.
+        .ignoresSafeArea(edges: [.top, .bottom])
         .navigationBarTitleDisplayMode(.inline)
-        // The content is a webview, so SwiftUI cannot observe its scrolling and
-        // will not decide to show a bar background on its own. Pin both visible
-        // rather than let the canvas bleed under floating glyphs.
-        .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
+        // No bar backgrounds: the résumé runs edge to edge and shows THROUGH the
+        // chrome, which is the whole point of glass controls floating over it.
+        // Each toolbar item carries its own backing, so nothing here depends on
+        // the bar for legibility.
+        .toolbarBackground(.hidden, for: .navigationBar, .bottomBar)
         .toolbar {
           // `.disabled` is applied per ITEM, never to the NavigationStack's
           // content. It is an environment modifier that propagates down the
@@ -872,13 +911,40 @@ private struct ShellView: View {
 
     Spacer()
 
-    Button { model.send("zoomOut") } label: { Image(systemName: "minus.magnifyingglass") }
-      .accessibilityLabel("Zoom out")
+    Button {
+      model.send("zoomOut")
+      showZoomReadout()
+    } label: {
+      Image(systemName: "minus")
+    }
+    .accessibilityLabel("Zoom out")
 
     zoomMenu
 
-    Button { model.send("zoomIn") } label: { Image(systemName: "plus.magnifyingglass") }
-      .accessibilityLabel("Zoom in")
+    Button {
+      model.send("zoomIn")
+      showZoomReadout()
+    } label: {
+      Image(systemName: "plus")
+    }
+    .accessibilityLabel("Zoom in")
+  }
+
+  /// Show the percentage, and start the clock on hiding it again.
+  ///
+  /// The readout is only worth its space while the zoom is being changed; the
+  /// rest of the time it is a number nobody is reading, sitting where the
+  /// canvas could be. Each call restarts the delay, so a run of taps or a pinch
+  /// keeps it up throughout and it leaves once together.
+  private func showZoomReadout() {
+    zoomInteraction += 1
+    let generation = zoomInteraction
+    withAnimation(.easeOut(duration: 0.15)) { zoomReadoutVisible = true }
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(1.4))
+      guard generation == zoomInteraction else { return }
+      withAnimation(.easeIn(duration: 0.25)) { zoomReadoutVisible = false }
+    }
   }
 
   // The formatting controls used to live in the floating web toolbar that this
@@ -903,17 +969,27 @@ private struct ShellView: View {
     .accessibilityLabel("Text formatting")
   }
 
+  /// Fit and Actual size, labelled with the percentage while the zoom is being
+  /// changed and with a magnifier the rest of the time.
   private var zoomMenu: some View {
     Menu {
-      Button { model.send("zoomFit") } label: { Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right") }
-      Button { model.send("zoomReset") } label: { Label("Actual size", systemImage: "1.magnifyingglass") }
+      Button { model.send("zoomFit"); showZoomReadout() } label: {
+        Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
+      }
+      Button { model.send("zoomReset"); showZoomReadout() } label: {
+        Label("Actual size", systemImage: "1.magnifyingglass")
+      }
     } label: {
-      Text("\(snapshot.zoomPercent)%")
-        .font(.subheadline)
-        .monospacedDigit()
-        // Without a fixed width the bar's other items shift every time the
-        // readout goes 99% → 100%.
-        .frame(minWidth: 48)
+      if zoomReadoutVisible {
+        Text("\(snapshot.zoomPercent)%")
+          .font(.subheadline)
+          .monospacedDigit()
+          // Fixed, or the bar's other items shift on 99% → 100%.
+          .frame(minWidth: 44)
+          .transition(.opacity)
+      } else {
+        Image(systemName: "magnifyingglass")
+      }
     }
     .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
   }

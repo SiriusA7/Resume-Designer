@@ -53,9 +53,17 @@ html.op-native-shell .structure-panel-toggle {
 
 /* `padding-bottom: 70–100px` across main.css exists to keep the floating pill
    from covering the page. With the pill gone and a real toolbar below the
-   webview, that reservation is just dead space at the bottom of every résumé. */
+   webview, that reservation is just dead space at the bottom of every résumé.
+
+   The top is the opposite case. The canvas extends UNDER the navigation bar
+   (OPShell.swift ignores the top safe area) so the résumé shows through the
+   glass, which means the scroller has to reserve the bar's height itself or the
+   top of page one starts life hidden behind it. Reserved as padding rather than
+   inset as layout, so the page still scrolls up behind the chrome — which is
+   the effect, and matches what the bottom bar already does. */
 html.op-native-shell .resume-scroller {
   padding: 16px;
+  padding-top: calc(env(safe-area-inset-top) + 52px);
   padding-bottom: 16px;
 }
 
@@ -77,7 +85,12 @@ html.op-native-shell .resume-scroller {
    ========================================================================== */
 html.op-native-shell [role='dialog'],
 html.op-native-shell [role='alertdialog'] {
-  max-height: calc(100vh - 16px - env(safe-area-inset-bottom));
+  /* Both insets, because the viewport now spans the whole window: the canvas
+     extends under the navigation bar as well as the toolbar, so a dialog sized
+     to the full height would put its own header under the status bar. */
+  max-height: calc(
+    100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+  );
   overflow-y: auto;
   /* Stop a flick at the end of the dialog's scroll from scrolling the résumé
      behind it. */
