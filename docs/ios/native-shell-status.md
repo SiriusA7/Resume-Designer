@@ -210,6 +210,66 @@ Regenerating the Xcode project is no longer pure churn either — `OPJobs.swift`
 and `OPProfile.swift` have to be in the target, and only `scripts/ios-sim.sh`
 runs `xcodegen generate` for you.
 
+## The bottom bar is ours, not a toolbar
+
+`ShellView` draws it as an overlay on the NavigationStack. It was a
+`ToolbarItemGroup` until the zoom controls had to take its place, and three
+separate attempts established why they could not:
+
+- **A `ToolbarItemGroup` whose item COUNT changes is not reliably re-diffed.**
+  The state flips and the bar does not redraw. Removing the WHOLE group works;
+  making items inside it come and go does not.
+- **A toolbar item cannot carry a `glassEffectID`** or be animated across a
+  layout change, so a system bar can only be swapped for the zoom control, never
+  morphed into it.
+
+So the bar keeps the system's shape deliberately — 44pt `.regular.interactive()`
+capsules at the bottom safe area — and owns its own animation. The zoom capsule
+is never unmounted: it grows from the trailing readout into the centred control
+and shrinks back, while the tools scale away. It is NOT wrapped in a
+`GlassEffectContainer`; one around both capsules merges them into a single hazy
+shape spanning the bar.
+
+Open question for the device: the simulator renders these capsules with a wider,
+softer wash than the system bar did. iOS 26 glass renders differently there and
+the system bar draws through UIKit, so it may be an artifact — if it is not, the
+fallback is a system toolbar for the tools and a cut instead of a morph.
+
+## Anything measuring the canvas must use the RENDERED scale
+
+`pagination.js` divides `getBoundingClientRect()` by the zoom to recover layout
+px. `getZoom()` is the TARGET, and the two disagree for the 0.2s the zoom
+transition runs — so a measurement landing in that window is out by
+(rendered ÷ target) and pages break at that fraction of the right height.
+
+That was the "backgrounding breaks pagination" bug. It was resume-only because on
+a warm load the webfonts are cached, so `document.fonts.ready` resolves inside
+those 200ms and main.js re-renders exactly there; a cold start lands after the
+transition. Fixed at both ends — the restored zoom no longer animates, and
+pagination reads the scale off the transform it is actually measuring.
+
+## Verifying a UI that hides itself
+
+The zoom controls auto-collapse 2.5s after the last interaction, and three
+separate "it does not work" conclusions were just screenshots landing after the
+collapse. Start a background screenshot burst FIRST, then tap, then hash the
+frames and read the odd ones out:
+
+```
+for i in $(seq 1 20); do xcrun simctl io <udid> screenshot .../burst$i.png; sleep 0.4; done
+```
+
+## Seeding a résumé to test with
+
+The app's own creation path is the AI wizard, so tests need storage seeded
+directly. Write `resume-p--<profile>--resume-designer-data` with a variant whose
+`data` is shaped EXACTLY like `EMPTY_RESUME` in store.js — `education` is an
+array of STRINGS, sections carry `id`/`type`/`area`. **A malformed document
+throws during boot BEFORE `initIOSShell` runs**, which brings the whole web
+chrome back and reads as a shell bug; that cost an hour once. Page size is
+`settings.pageSize` ("continuous" does not paginate at all) and the zoom is its
+own key.
+
 ## Fastest way past onboarding on a fresh install
 
 The wizard blocks the shell on every clean install, and the flag is
