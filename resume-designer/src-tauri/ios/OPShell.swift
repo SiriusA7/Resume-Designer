@@ -44,6 +44,18 @@ struct ShellSnapshot: Decodable, Equatable {
   var settings: Settings
   /// `nil` while the chat sheet is closed. Same reasoning as `document`.
   var chat: ChatView?
+  /// `nil` while the library is closed.
+  var library: [LibraryEntry]?
+
+  struct LibraryEntry: Decodable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let updatedAt: String
+    let applicationCount: Int
+    let status: String
+    let snippet: String
+    let snippetSource: String
+  }
 
   /// Mirrors `buildChatView()` in src/iosShell.js. A subset: threads, messages,
   /// streaming and sending. The model picker, context chips and the AI's
@@ -148,7 +160,7 @@ struct ShellSnapshot: Decodable, Equatable {
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
     zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
-    chat: nil, document: nil
+    chat: nil, library: nil, document: nil
   )
 }
 
@@ -531,7 +543,7 @@ private struct ShellView: View {
   @State private var pinchBase: Double?
 
   private enum Sheet: String, Identifiable {
-    case settings, structure, chat
+    case settings, structure, chat, library
     var id: String { rawValue }
   }
 
@@ -585,6 +597,7 @@ private struct ShellView: View {
           case .settings: SettingsSheet(model: model)
           case .structure: StructureSheet(model: model)
           case .chat: ChatSheet(model: model)
+          case .library: LibrarySheet(model: model)
           }
         }
         .onChange(of: sheet) { previous, _ in
@@ -594,6 +607,7 @@ private struct ShellView: View {
           switch previous {
           case .structure: model.send("setStructureOpen", ["value": "false"])
           case .chat: model.send("setChatOpen", ["value": "false"])
+          case .library: model.send("setLibraryOpen", ["value": "false"])
           default: break
           }
         }
@@ -635,7 +649,12 @@ private struct ShellView: View {
       }
       Section {
         Button { model.send("newVariant") } label: { Label("New resume", systemImage: "plus") }
-        Button { model.send("openLibrary") } label: { Label("All resumes…", systemImage: "books.vertical") }
+        Button {
+          model.send("setLibraryOpen", ["value": "true"])
+          sheet = .library
+        } label: {
+          Label("All resumes…", systemImage: "books.vertical")
+        }
       }
     } label: {
       HStack(spacing: 4) {
@@ -1733,5 +1752,98 @@ private struct ChangeReviewSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(.vertical, 2)
+  }
+}
+
+// MARK: - Library
+
+/// Every résumé, searchable.
+///
+/// A phone list rather than the desktop dialog's split view: one row per
+/// résumé, and tapping it opens that résumé — which is what the desktop's
+/// preview pane was for. Search runs in JS against the same `searchLibrary` the
+/// dialog uses, so results cannot diverge; Swift owns only the query string.
+///
+/// Deep search is a toggle because it is materially slower: it flattens every
+/// résumé's text and every attached job description, and on a phone that is
+/// worth asking for rather than doing on every keystroke.
+private struct LibrarySheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var query = ""
+  @State private var deep = false
+
+  private var entries: [ShellSnapshot.LibraryEntry] { model.snapshot.library ?? [] }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          Toggle("Search inside résumés and job descriptions", isOn: $deep)
+            .font(.subheadline)
+            .onChange(of: deep) { _, _ in search() }
+        }
+        Section {
+          if entries.isEmpty {
+            Text(query.isEmpty ? "No resumes yet." : "No matches.")
+              .foregroundStyle(.secondary)
+          } else {
+            ForEach(entries) { entry in
+              Button {
+                model.send("openVariant", ["id": entry.id])
+                dismiss()
+              } label: {
+                row(entry)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        } header: {
+          Text(entries.count == 1 ? "1 resume" : "\(entries.count) resumes")
+        }
+      }
+      .searchable(text: $query, prompt: "Search resumes")
+      .onChange(of: query) { _, _ in search() }
+      .navigationTitle("All resumes")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }
+      .onAppear { search() }
+    }
+  }
+
+  private func row(_ entry: ShellSnapshot.LibraryEntry) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        Text(entry.name).font(.body)
+        Spacer()
+        if entry.applicationCount > 0 {
+          Text("\(entry.applicationCount)")
+            .font(.caption.monospacedDigit())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color(.tertiarySystemFill), in: .capsule)
+        }
+      }
+      if !entry.status.isEmpty {
+        Text(entry.status.capitalized).font(.caption).foregroundStyle(.secondary)
+      }
+      if !entry.snippet.isEmpty {
+        // Says WHERE the match was, because a snippet with no source reads as
+        // if it came from the résumé when it may have come from a job post.
+        Text("\(entry.snippetSource.capitalized): \(entry.snippet)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+    }
+    .padding(.vertical, 2)
+    .contentShape(.rect)
+  }
+
+  private func search() {
+    model.send("librarySearch", ["query": query, "deep": deep ? "true" : "false"])
   }
 }

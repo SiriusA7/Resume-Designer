@@ -19,6 +19,7 @@ import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from '
 import {
   initVariants, loadVariant, duplicateVariant, exportCurrentVariant,
   subscribeVariants, getVariantsSnapshot,
+  getVariantList,
 } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
@@ -32,7 +33,9 @@ import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
 import { initZoomControls, getZoom, fitToView, setZoomLevel } from './zoomControls.js';
 import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
-import { initIOSShell, buildDocumentOutline } from './iosShell.js';
+import { initIOSShell, buildDocumentOutline, buildLibrary } from './iosShell.js';
+import { searchLibrary } from './librarySearch.js';
+import { getAllApplications } from './applications.js';
 import { initWindowDrag } from './tauriDrag.js';
 import {
   migrateBuiltInVariants,
@@ -567,6 +570,16 @@ export async function init() {
     },
     subscribeDocument: (cb) => store.subscribe(cb),
     // AI change review, routed to the live session rather than a copy of it.
+    // Library search, against the same searchLibrary the desktop dialog uses.
+    getLibrary: (query, deep) => buildLibrary(
+      searchLibrary(query, {
+        variants: getVariantList().map((v) => ({ ...v, data: getVariants()[v.id]?.data })),
+        applications: getAllApplications(),
+        deep,
+      }),
+      getVariantList(),
+      getAllApplications(),
+    ),
     getPendingChanges,
     applyInlineChange,
     rejectInlineChange,

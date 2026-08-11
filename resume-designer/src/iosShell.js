@@ -75,7 +75,7 @@ export function hasOpenModal(root = document) {
  */
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
-  document: outline = null, chat = null,
+  document: outline = null, chat = null, library = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -96,6 +96,7 @@ export function buildSnapshot({
     // an empty outline, which would blank a panel that is open.
     document: outline,
     chat,
+    library,
   };
 }
 
@@ -278,6 +279,47 @@ export function buildPendingChanges(changes) {
       before: clip(text(c.displayOld)),
       after: clip(text(c.displayNew)),
     }));
+}
+
+/**
+ * Project the résumé library for the native list.
+ *
+ * A phone list, not the desktop dialog: one row per résumé with its name, when
+ * it changed, how many applications it carries, and — when a deep search
+ * matched — the snippet that matched. The desktop's split preview pane has no
+ * equivalent here; tapping a row opens the résumé, which is what the pane was
+ * for.
+ *
+ * Pure.
+ *
+ * @param {Array} results rows from `searchLibrary`
+ * @param {Array} variants every variant, for names and dates
+ * @param {Array} applications every application, for the per-résumé counts
+ */
+export function buildLibrary(results, variants, applications) {
+  const text = (v) => (typeof v === 'string' ? v : '');
+  const byId = new Map((Array.isArray(variants) ? variants : []).map((v) => [v?.id, v]));
+  const apps = Array.isArray(applications) ? applications : [];
+
+  return (Array.isArray(results) ? results : [])
+    .filter((r) => r && typeof r.variantId === 'string')
+    .map((r) => {
+      const variant = byId.get(r.variantId) || {};
+      const mine = apps.filter((a) => a?.variantId === r.variantId);
+      return {
+        id: r.variantId,
+        name: text(variant.name) || 'Untitled',
+        updatedAt: text(variant.updatedAt),
+        applicationCount: mine.length,
+        // Latest status is the one worth surfacing in a one-line row; the full
+        // history stays on desktop.
+        status: text(mine[mine.length - 1]?.status),
+        // Only deep search produces these, and only the first is shown — a row
+        // is one line, and a second snippet pushes the name off it.
+        snippet: text(r.deepHits?.[0]?.snippet),
+        snippetSource: text(r.deepHits?.[0]?.source),
+      };
+    });
 }
 
 /**
@@ -488,6 +530,9 @@ let activated = false;
 let streamDocument = false;
 let streamChat = false;
 let chatView = null;
+let streamLibrary = false;
+let libraryQuery = '';
+let libraryDeep = false;
 let publish = () => {};
 
 /**
@@ -589,6 +634,19 @@ export function initIOSShell(deps) {
     rejectChange: ({ path }) => deps.rejectInlineChange(String(path)),
     applyAllChanges: () => deps.applyAllInlineChanges(),
     rejectAllChanges: () => deps.rejectAllInlineChanges(),
+    // The library. Search runs in JS against the same `searchLibrary` the
+    // desktop dialog uses; Swift owns only the query string.
+    librarySearch: ({ query, deep }) => {
+      libraryQuery = String(query ?? '');
+      libraryDeep = deep === 'true';
+      publish();
+    },
+    setLibraryOpen: ({ value }) => {
+      streamLibrary = value === 'true';
+      publish();
+    },
+    openVariant: ({ id }) => deps.loadVariant(String(id)),
+
     setChatOpen: ({ value }) => {
       streamChat = value === 'true';
       // Ask the panel to re-push. Its first publish is normally LOST: React
@@ -667,6 +725,7 @@ export function initIOSShell(deps) {
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),
           document: streamDocument ? deps.getDocument() : null,
+          library: streamLibrary ? deps.getLibrary(libraryQuery, libraryDeep) : null,
           chat: streamChat
             ? { ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()) }
             : null,

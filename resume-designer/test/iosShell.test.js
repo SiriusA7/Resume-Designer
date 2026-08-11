@@ -69,6 +69,7 @@ describe('buildSnapshot', () => {
       settings: { theme: 'system', hasApiKey: false, autoFallback: false, version: '' },
       document: null,
       chat: null,
+      library: null,
     });
   });
 });

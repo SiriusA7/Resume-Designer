@@ -121,6 +121,19 @@ modifications or a write hits the wrong element.
 key, which no agent should enter. What is confirmed: the sheet opens, the
 snapshot arrives, and `configured: false` renders correctly.
 
+## Open: does the web Library dialog open by itself?
+
+On a clean relaunch the web Library dialog was seen already on screen before any
+deliberate tap on it. Nothing in the codebase dispatches `rd:open-library` at
+boot — the only emitters are the Header's two menu entries, the empty-state
+button, and the shell's own `openLibrary` command, which the Swift no longer
+sends anywhere.
+
+**Treat that observation as unconfirmed.** The attempt to A/B it with
+`OP_NATIVE_SHELL=0` was contaminated by an unrelated app taking the simulator's
+foreground mid-test, which has happened repeatedly and has already produced two
+false bug reports in this work. Reproduce on a device before investigating.
+
 ## Also unverified
 
 - **iPad**, including Stage Manager and split view. The shell is written not to
