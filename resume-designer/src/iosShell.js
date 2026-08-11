@@ -862,7 +862,16 @@ export function initIOSShell(deps) {
     // `live` marks the frames of a pinch, which run without the zoom
     // transition — see setZoomLevel. Swift sends one final non-live setZoom
     // when the gesture ends to put the animation back.
-    setZoom: ({ value, live }) => deps.setZoomLevel(Number(value), live === 'true'),
+    //
+    // `x`/`y` are the point between the fingers, and they are what makes the
+    // zoom happen where the gesture is rather than at the top-left corner.
+    // Absent — from a caller that has no gesture to report — the canvas keeps
+    // scaling from the corner, which is the button behaviour.
+    setZoom: ({ value, live, x, y }) => deps.setZoomLevel(
+      Number(value),
+      live === 'true',
+      x === undefined || y === undefined ? null : { x: Number(x), y: Number(y) },
+    ),
     undo: () => click('undo-btn'),
     redo: () => click('redo-btn'),
 

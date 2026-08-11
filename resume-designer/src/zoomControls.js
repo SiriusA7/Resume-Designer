@@ -129,10 +129,18 @@ export function initZoomControls() {
 }
 
 // Set zoom level
-function setZoom(level) {
-  currentZoom = Math.round(level * 100) / 100;
+//
+// `live` marks a frame of a gesture, and it changes two things. The value is
+// kept RAW rather than rounded to whole percent: 0.01 of absolute scale is a
+// 2% relative jump at a typical fit zoom of ~50%, which is what made a pinch
+// travel in visible steps instead of tracking the fingers. And the write is
+// not persisted — a pinch produces ~60 of these a second, and only where the
+// fingers come to rest is worth saving. The final non-live frame of a gesture
+// rounds and saves, so what reaches storage is the same tidy value as before.
+function setZoom(level, live = false) {
+  currentZoom = live ? level : Math.round(level * 100) / 100;
   applyZoom();
-  saveZoom();
+  if (!live) saveZoom();
 }
 
 /**
@@ -237,6 +245,100 @@ function saveZoom() {
 // True while a native pinch is in flight. See setZoomLevel.
 let liveGesture = false;
 
+// The point the running gesture is anchored to, in UNSCALED content
+// coordinates, or null when no gesture is in flight. See setZoomLevel.
+let gestureAnchor = null;
+
+/**
+ * Which point of the page is under the fingers, in UNSCALED content px
+ * measured from the container's own top-left.
+ *
+ * `focus` and `origin` are both client (viewport) px. The container scales
+ * from `top left`, so its rect origin IS the transformed origin, and undoing
+ * the scale is the whole conversion.
+ *
+ * Pure, and paired with anchorScrollDelta below, so the arithmetic that is
+ * easy to get backwards — the sign of the delta, which side the scale
+ * multiplies — is testable without a layout engine. Reading the right rect at
+ * the right moment is the caller's job.
+ */
+export function contentPointAt({ focusX, focusY, originX, originY, scale }) {
+  const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return { x: (focusX - originX) / s, y: (focusY - originY) / s };
+}
+
+/**
+ * How far to scroll to put an anchored content point back under the fingers,
+ * given where the container's origin ended up at the new scale.
+ *
+ * The inverse of contentPointAt: applying this delta makes
+ * `origin + anchor * scale` land exactly on `focus`.
+ */
+export function anchorScrollDelta({
+  anchorX, anchorY, focusX, focusY, originX, originY, scale,
+}) {
+  return {
+    dx: originX + anchorX * scale - focusX,
+    dy: originY + anchorY * scale - focusY,
+  };
+}
+
+/**
+ * Record which point of the page is under the fingers.
+ *
+ * `focus` is in client px, which is what the native side measures in — iOS
+ * points and CSS px are the same unit here, because the page's own zoom is off
+ * and the webview is pinned edge-to-edge with the view the recognizer is
+ * attached to.
+ */
+function captureAnchor(focus) {
+  const container = document.getElementById('resume-container');
+  if (!container || !Number.isFinite(focus?.x) || !Number.isFinite(focus?.y)) return null;
+  const rect = container.getBoundingClientRect();
+  const { x, y } = contentPointAt({
+    focusX: focus.x, focusY: focus.y, originX: rect.left, originY: rect.top, scale: currentZoom,
+  });
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+/**
+ * Scroll so the anchored content point sits back under the fingers.
+ *
+ * This is what makes a pinch zoom toward the gesture instead of toward the
+ * top-left corner. The container scales from `top left` — deliberately, see
+ * the margin comment in main.css — so with no compensation the whole page just
+ * grows away from that corner, and pinching the bottom of page 2 zoomed the
+ * top of page 1.
+ *
+ * The origin is MEASURED after the scale is applied rather than predicted: the
+ * container's margins are themselves a function of `--zoom` (they are what
+ * makes the scaled page scrollable at all), so the origin moves when the scale
+ * does. Reading the rect back forces the layout the transform write already
+ * made pending.
+ *
+ * Re-anchoring to the CURRENT focal point every frame, rather than accumulating
+ * per-frame deltas, also means a two-finger drag pans the canvas and nothing
+ * drifts — each frame is corrected against what is actually on screen,
+ * including any scrolling WebKit did on its own.
+ */
+function restoreAnchor(focus) {
+  const scroller = document.getElementById('resume-scroller');
+  const container = document.getElementById('resume-container');
+  if (!scroller || !container || !gestureAnchor) return;
+  const rect = container.getBoundingClientRect();
+  const { dx, dy } = anchorScrollDelta({
+    anchorX: gestureAnchor.x, anchorY: gestureAnchor.y,
+    focusX: focus.x, focusY: focus.y,
+    originX: rect.left, originY: rect.top,
+    scale: currentZoom,
+  });
+  // The scroller clamps these itself. Below the fitted width there is no scroll
+  // room and the container's auto margins keep the page centred, so a pinch
+  // there zooms from the middle — which is what every other viewer does too.
+  scroller.scrollLeft += dx;
+  scroller.scrollTop += dy;
+}
+
 /**
  * Set the zoom programmatically, clamped to the same range the buttons use.
  *
@@ -253,20 +355,35 @@ let liveGesture = false;
  * pinch produces per second, so it is always 200ms behind the fingers and never
  * settles — which reads on the device as the page stuttering and fighting back,
  * not as a smooth zoom. Ordinary button-driven zoom keeps its animation.
+ *
+ * `focus` is the point between the fingers, in client px. When it is given the
+ * canvas is scrolled to keep the content under that point fixed, so the zoom
+ * happens where the gesture is. The buttons pass nothing and keep scaling from
+ * the corner, which is what they should do — there is no gesture to follow.
  */
-export function setZoomLevel(level, live = false) {
+export function setZoomLevel(level, live = false, focus = null) {
   if (!Number.isFinite(level)) return currentZoom;
   const container = document.getElementById('resume-container');
-  if (live !== liveGesture) {
-    liveGesture = live;
-    if (live) {
-      container?.classList.add('is-zooming');
-    } else if (container) {
+  if (live && !liveGesture) {
+    liveGesture = true;
+    container?.classList.add('is-zooming');
+  }
+  // Captured before the scale changes, so it is read at the zoom the gesture
+  // began at. Held for the whole gesture: re-capturing per frame would anchor
+  // to wherever the fingers had already dragged the page to, which is a no-op.
+  if (focus && !gestureAnchor) gestureAnchor = captureAnchor(focus);
+
+  setZoom(Math.min(Math.max(level, MIN_ZOOM), MAX_ZOOM), live);
+  if (focus) restoreAnchor(focus);
+
+  if (!live && liveGesture) {
+    liveGesture = false;
+    gestureAnchor = null;
+    if (container) {
       container.offsetHeight; // commit the final value before animating again
       requestAnimationFrame(() => container.classList.remove('is-zooming'));
     }
   }
-  setZoom(Math.min(Math.max(level, MIN_ZOOM), MAX_ZOOM));
   return currentZoom;
 }
 

@@ -519,28 +519,54 @@ final class ShellModel: ObservableObject {
   /// Weak: the webview belongs to wry and is retained by the view hierarchy.
   weak var webView: WKWebView?
 
-  /// Percent last sent, so a pinch does not fire a command per touch event.
-  private var lastZoomPercentSent = -1
-  private var lastZoomWasLive = false
+  /// What the last `setZoom` said, so a finger resting still does not fire a
+  /// command per touch event. Everything a frame carries is in here, because
+  /// dropping a frame whose SCALE was unchanged would also drop the pan a
+  /// two-finger drag produces.
+  private struct ZoomFrame: Equatable {
+    let milliPercent: Int
+    let live: Bool
+    let focus: CGPoint?
+  }
+  private var lastZoomFrame: ZoomFrame?
 
   /// Drive the web zoom model from a native pinch.
   ///
-  /// Clamped to the same range `zoomControls.js` uses, and throttled to whole
-  /// percent changes — a pinch delivers events far faster than the store wants
-  /// writes, and the readout cannot show more precision than this anyway.
+  /// Clamped to the same range `zoomControls.js` uses, and de-duplicated at a
+  /// tenth of a percent. NOT at a whole percent, which is where this started:
+  /// one percent of absolute scale is a 2% jump at a typical fit zoom, so the
+  /// canvas visibly stepped from one value to the next instead of tracking the
+  /// fingers. A tenth is ~0.8px on the page's 816px width — finer than the
+  /// display can show, and the readout still rounds to whole percent.
   ///
   /// `live` marks the frames of a gesture, which the web side applies without
-  /// its zoom transition. The throttle deliberately lets a repeat through when
-  /// `live` changes: the last frame of a pinch is usually the same percent as
+  /// its zoom transition. The de-dupe deliberately lets a repeat through when
+  /// `live` changes: the last frame of a pinch is usually the same value as
   /// the one before it, and swallowing it would leave the canvas stuck in
   /// no-transition mode for good.
-  func setZoom(_ value: Double, live: Bool = false) {
+  ///
+  /// `focus` is the midpoint between the fingers, in the canvas view's own
+  /// coordinates — which are also the page's client px, because page zoom is
+  /// off and the webview is pinned to that view edge to edge. The web side
+  /// scrolls to hold that point still, so the zoom happens under the gesture.
+  func setZoom(_ value: Double, live: Bool = false, focus: CGPoint? = nil) {
     let clamped = min(max(value, 0.25), 2.0)
-    let percent = Int((clamped * 100).rounded())
-    guard percent != lastZoomPercentSent || live != lastZoomWasLive else { return }
-    lastZoomPercentSent = percent
-    lastZoomWasLive = live
-    send("setZoom", ["value": String(format: "%.4f", clamped), "live": live ? "true" : "false"])
+    let frame = ZoomFrame(
+      milliPercent: Int((clamped * 1000).rounded()),
+      live: live,
+      focus: focus.map { CGPoint(x: $0.x.rounded(), y: $0.y.rounded()) }
+    )
+    guard frame != lastZoomFrame else { return }
+    lastZoomFrame = frame
+    var payload = [
+      "value": String(format: "%.4f", clamped),
+      "live": live ? "true" : "false",
+    ]
+    if let focus {
+      payload["x"] = String(format: "%.1f", focus.x)
+      payload["y"] = String(format: "%.1f", focus.y)
+    }
+    send("setZoom", payload)
   }
 
   /// Send a command to `window.__opShell.command()`.
@@ -822,7 +848,8 @@ final class OPShell: NSObject {
 private struct CanvasHost: UIViewControllerRepresentable {
   let taoController: UIViewController?
   let webView: UIView
-  let onPinch: (CGFloat, UIGestureRecognizer.State) -> Void
+  /// Cumulative scale, the midpoint between the fingers, and the state.
+  let onPinch: (CGFloat, CGPoint, UIGestureRecognizer.State) -> Void
 
   /// A real `UIPinchGestureRecognizer`, not SwiftUI's `MagnifyGesture`.
   ///
@@ -832,12 +859,43 @@ private struct CanvasHost: UIViewControllerRepresentable {
   /// recognizer directly, with a delegate that allows simultaneous recognition,
   /// puts us in the same arbitration WebKit is in rather than above it.
   final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-    let onPinch: (CGFloat, UIGestureRecognizer.State) -> Void
-    init(onPinch: @escaping (CGFloat, UIGestureRecognizer.State) -> Void) {
+    let onPinch: (CGFloat, CGPoint, UIGestureRecognizer.State) -> Void
+    /// The last focal point measured with both fingers still down. See below.
+    private var twoFingerFocus: CGPoint?
+
+    init(onPinch: @escaping (CGFloat, CGPoint, UIGestureRecognizer.State) -> Void) {
       self.onPinch = onPinch
     }
+
     @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
-      onPinch(recognizer.scale, recognizer.state)
+      // `location(in:)` is the centroid of the touches STILL DOWN, in the
+      // recognizer's own view — which is already the page's client coordinate
+      // space, because the webview is pinned to that view.
+      //
+      // A pinch ends when the second finger lifts, and real fingers never lift
+      // on the same frame. So on the final event the centroid has already
+      // collapsed onto whichever finger is still there — up to half the finger
+      // separation from where the gesture actually was. Anchoring the canvas to
+      // that scrolled it by that much at the instant of release, which is the
+      // snap. A simulated pinch does not show it: `simctl` lifts both touches
+      // together, so its last event still reports two.
+      //
+      // Below two touches there is no meaningful focal point for a pinch, so
+      // hold the last real one rather than trusting the collapsed centroid.
+      let focus: CGPoint
+      if recognizer.numberOfTouches >= 2 {
+        focus = recognizer.location(in: recognizer.view)
+        twoFingerFocus = focus
+      } else {
+        focus = twoFingerFocus ?? recognizer.location(in: recognizer.view)
+      }
+      switch recognizer.state {
+      case .ended, .cancelled, .failed:
+        twoFingerFocus = nil
+      default:
+        break
+      }
+      onPinch(recognizer.scale, focus, recognizer.state)
     }
     func gestureRecognizer(
       _ gestureRecognizer: UIGestureRecognizer,
@@ -934,7 +992,7 @@ private struct ShellView: View {
 
   var body: some View {
     NavigationStack {
-      CanvasHost(taoController: taoController, webView: webView) { scale, state in
+      CanvasHost(taoController: taoController, webView: webView) { scale, focus, state in
         // `scale` is cumulative from the START of the pinch, so it multiplies
         // the zoom the gesture began at. Multiplying the LIVE zoom instead
         // compounds and runs away within a few frames.
@@ -943,12 +1001,14 @@ private struct ShellView: View {
           pinchBase = snapshot.zoom
           keepZoomOpen()
         case .changed:
-          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: true)
+          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: true, focus: focus)
           keepZoomOpen()
         default:
           // One final non-live value closes the gesture on the web side, which
-          // is what puts the zoom transition back for the buttons.
-          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: false)
+          // is what puts the zoom transition back for the buttons. It still
+          // carries the focal point, so the last frame does not jump back to
+          // the corner as the gesture lifts.
+          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale), live: false, focus: focus)
           pinchBase = nil
           keepZoomOpen()
         }
