@@ -11,9 +11,11 @@
 		06AF95A5701BC1D586B4A815 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4ED538225C2B89B0B74B9238 /* QuartzCore.framework */; };
 		183BDC2AC585FBFBC1B8EC3C /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0941D4F19255C0F1089055FF /* CoreGraphics.framework */; };
 		3C7969A8468941C590381228 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 129E38387B051F17EF9D53E5 /* LaunchScreen.storyboard */; };
+		4B1E68FD7C05B6ED7630813C /* OPProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 047806FF26AAFE76BECD9C42 /* OPProfile.swift */; };
 		5418EC314A3B990066ED85E4 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 87E409B1C7E66819D8BCED98 /* libapp.a */; };
 		7735759748A8A13B6AE32296 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 40E9A11DE6BB4B3F6CD679B0 /* UIKit.framework */; };
 		7BD85CDCBFB176F90470ADF0 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F2ECBB747B05C1B37AC115E /* MetalKit.framework */; };
+		8E62FE24B5DB3826FEE18744 /* OPJobs.swift in Sources */ = {isa = PBXBuildFile; fileRef = C665389A04CB90B3400E715B /* OPJobs.swift */; };
 		9385AF1EC7B487DC17F29DF0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 40AC3895B0F50D73B4EAA992 /* WebKit.framework */; };
 		984AAC14A9168AA9C439B19A /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9152E668470BC82F185D95EB /* Metal.framework */; };
 		9BEEA6B6EF4FE4B81856F179 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D82239C056B94F6C12B6AFF /* Security.framework */; };
@@ -23,6 +25,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		047806FF26AAFE76BECD9C42 /* OPProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPProfile.swift; sourceTree = "<group>"; };
 		0941D4F19255C0F1089055FF /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		0B741A1A2068BFDDD8E0BC7E /* pdf_apple.rs */ = {isa = PBXFileReference; path = pdf_apple.rs; sourceTree = "<group>"; };
 		0F2ECBB747B05C1B37AC115E /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
@@ -49,6 +52,7 @@
 		B88B98D3680A30C30A6A6462 /* updater.rs */ = {isa = PBXFileReference; path = updater.rs; sourceTree = "<group>"; };
 		BDC7AE925FF8A5E78E4092E3 /* resume-designer_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "resume-designer_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3298D515A47F34CE46B1895 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		C665389A04CB90B3400E715B /* OPJobs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPJobs.swift; sourceTree = "<group>"; };
 		D0B324E3BDB2150B1FCB4350 /* resume-designer_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "resume-designer_iOS.entitlements"; sourceTree = "<group>"; };
 		DCF643378505CF59EB076023 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E0E20CAEEACE3F9ED75B90D8 /* migration.rs */ = {isa = PBXFileReference; path = migration.rs; sourceTree = "<group>"; };
@@ -93,6 +97,8 @@
 		2C210BA60A255C62C6A238E1 /* Shell */ = {
 			isa = PBXGroup;
 			children = (
+				C665389A04CB90B3400E715B /* OPJobs.swift */,
+				047806FF26AAFE76BECD9C42 /* OPProfile.swift */,
 				EFDC81558432D9A46C5B9FFB /* OPShell.swift */,
 			);
 			name = Shell;
@@ -194,18 +200,18 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_2870AA4F-51D3-4D24-AB6C-F54014EC8978" /* arm64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = arm64;
-			sourceTree = "<group>";
-		};
-		"TEMP_A60E8646-BA16-4DE6-A159-B42FF052C766" /* x86_64 */ = {
+		"TEMP_2979BAF1-16DC-486E-811C-B3E5D364DA73" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = x86_64;
+			sourceTree = "<group>";
+		};
+		"TEMP_F0C6B03C-487A-4E52-A72F-D3253E4A7CCF" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -306,6 +312,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8E62FE24B5DB3826FEE18744 /* OPJobs.swift in Sources */,
+				4B1E68FD7C05B6ED7630813C /* OPProfile.swift in Sources */,
 				06374AE0C0946D2AB07C94AC /* OPShell.swift in Sources */,
 				FC45B961568C0DF70307199A /* main.mm in Sources */,
 			);
