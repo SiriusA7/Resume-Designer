@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   buildChatView,
+  buildDesign,
   buildDocumentOutline,
   buildPendingChanges,
   buildSettings,
@@ -72,6 +73,7 @@ describe('buildSnapshot', () => {
       document: null,
       chat: null,
       library: null,
+      design: null,
     });
   });
 });
@@ -368,6 +370,310 @@ describe('buildChatView', () => {
   it('says nothing is in flight when nothing is', () => {
     expect(view().messages).toEqual([]);
     expect(view().thinking).toBe('');
+  });
+});
+
+describe('buildDesign', () => {
+  // Swift decodes this into ONE Codable struct and holds no catalog of its own,
+  // so the shape below is the whole Design sheet: settings on the left of each
+  // group, the options the pickers offer on the right.
+  const state = () => ({
+    page: { size: 'letter', orientation: 'portrait', widthIn: 8.5, groupPositions: true },
+    pageSizes: [{ id: 'continuous', name: 'Continuous' }, { id: 'letter', name: 'Letter' }],
+    color: { palette: 'ocean', customColor: '#2563eb' },
+    palettes: [{ id: 'ocean', name: 'Ocean', p1: '#2563eb', p2: '#1e3a5f', p3: '#dbeafe' }],
+    layout: 'sidebar-left',
+    layouts: [{ id: 'sidebar-left', name: 'Sidebar Left' }, { id: 'timeline', name: 'Timeline' }],
+    header: { type: 'gradient', styleId: 'linear-135', imageOpacity: 0.4, imageFit: 'cover', hasImage: false },
+    headerStyles: [
+      { id: 'linear-135', name: 'Diagonal', group: 'gradient', css: 'linear-gradient(135deg, #2563eb 0%, #1e3a5f 100%)' },
+      { id: 'dots', name: 'Dots', group: 'pattern', css: 'radial-gradient(#2563eb15 2px, transparent 2px)' },
+    ],
+    fonts: { mode: 'pairing', pairingId: 'modern-clean', displayName: 'Inter', bodyName: 'Inter' },
+    fontPairings: [{ id: 'modern-clean', name: 'Modern Clean', display: 'Inter', body: 'Inter' }],
+    systemFonts: [{ id: 'helvetica', name: 'Helvetica Neue' }],
+    googleFonts: [{ family: 'Karla', category: 'sans-serif' }, { family: 'Merriweather', category: 'serif' }],
+    spacing: {
+      fontScale: 1, lineHeight: 1.45, sectionSpacing: 0.8, sidebarWidth: 2.4,
+      marginTop: 0.5, marginRight: 0.5, marginBottom: 0.5, marginLeft: 0.5, presetId: 'default',
+    },
+    spacingPresets: [{ id: 'default', name: 'Default' }, { id: 'compact', name: 'Compact' }],
+    accent: {
+      underlineStyle: 'solid', underlineWidth: 2, bulletStyle: 'disc', borderRadius: 'subtle',
+      skillTagStyle: 'plain', showCornerTriangle: true, showSidebarGradient: false,
+    },
+    underlines: [{ id: 'solid', name: 'Solid' }, { id: 'none', name: 'None' }],
+    bullets: [{ id: 'disc', name: 'Circle', char: '•' }, { id: 'none', name: 'None', char: '' }],
+    radii: [{ id: 'subtle', name: 'Subtle' }],
+    skillTags: [{ id: 'plain', name: 'Plain' }],
+    photo: {
+      enabled: true, hasImage: true, placement: 'header', shape: 'circle', size: 'medium',
+      borderColor: '#ffffff', objectPosition: '50% 50%', scale: 1.2,
+    },
+    placements: [{ id: 'header', name: 'Header' }],
+    shapes: [{ id: 'circle', name: 'Circle' }],
+    sizes: [{ id: 'medium', name: 'Medium' }],
+  });
+
+  // Every leaf on the wire, so a decode-breaking value cannot hide in a group
+  // no assertion happens to name.
+  const leaves = (value, path = '') =>
+    value && typeof value === 'object'
+      ? Object.entries(value).flatMap(([k, v]) => leaves(v, path ? `${path}.${k}` : k))
+      : [[path, value]];
+
+  it('carries each control its current setting', () => {
+    const d = buildDesign(state());
+    expect(d.page).toEqual({ size: 'letter', orientation: 'portrait', widthIn: 8.5, groupPositions: true });
+    expect(d.color).toEqual({ palette: 'ocean', customColor: '#2563eb' });
+    expect(d.layout).toBe('sidebar-left');
+    expect(d.fonts).toEqual({
+      mode: 'pairing', pairingId: 'modern-clean', displayName: 'Inter', bodyName: 'Inter',
+    });
+    expect(d.spacing.lineHeight).toBe(1.45);
+    expect(d.accent.showSidebarGradient).toBe(false);
+    expect(d.photo.scale).toBe(1.2);
+  });
+
+  it('carries the catalogs, because Swift has no copy of them', () => {
+    // A style added to headerStyleService.js has to reach iOS without a Swift
+    // change, and Swift must only ever send back an id it was given here.
+    const d = buildDesign(state());
+    expect(d.headerStyles[0]).toEqual({
+      id: 'linear-135', name: 'Diagonal', group: 'gradient',
+      css: 'linear-gradient(135deg, #2563eb 0%, #1e3a5f 100%)',
+    });
+    expect(d.palettes[0]).toEqual({
+      id: 'ocean', name: 'Ocean', p1: '#2563eb', p2: '#1e3a5f', p3: '#dbeafe',
+    });
+    expect(d.googleFonts).toEqual([
+      { family: 'Karla', category: 'sans-serif' },
+      { family: 'Merriweather', category: 'serif' },
+    ]);
+    // The 'none' bullet's glyph is legitimately empty; it must survive as a
+    // row rather than being read as a missing value and dropped.
+    expect(d.bullets.at(-1)).toEqual({ id: 'none', name: 'None', char: '' });
+  });
+
+  it('never emits a value Swift could not decode', () => {
+    // One `null` where the struct expects a Double fails the WHOLE decode, so a
+    // single bad catalog row would blank the entire sheet, not just its line.
+    const messy = {
+      page: { size: 42, widthIn: '8.5', groupPositions: 'true' },
+      color: { palette: null },
+      spacing: { fontScale: NaN, lineHeight: null, marginTop: undefined, presetId: null },
+      accent: { underlineWidth: Infinity, showCornerTriangle: 'no' },
+      photo: { scale: '1.2', hasImage: 'yes' },
+      palettes: [{ id: 'ocean', name: null, p1: 1 }],
+      bullets: [{ id: 'disc', char: undefined }],
+      googleFonts: [{ family: 'Karla', category: null }],
+    };
+    for (const [path, value] of leaves(buildDesign(messy))) {
+      expect(['string', 'number', 'boolean'], path).toContain(typeof value);
+      if (typeof value === 'number') expect(Number.isFinite(value), path).toBe(true);
+    }
+  });
+
+  it('reports a missing number as 0 rather than as the service default', () => {
+    // A value that only appears because the read went wrong must not look like
+    // a setting the user chose — and the real defaults stay single-sourced in
+    // spacingService/accentService instead of being restated on the wire.
+    const d = buildDesign({ spacing: { fontScale: NaN }, page: { widthIn: '8.5' } });
+    expect(d.spacing.fontScale).toBe(0);
+    expect(d.spacing.sidebarWidth).toBe(0);
+    expect(d.page.widthIn).toBe(0);
+  });
+
+  it('says "" and never null when nothing matches', () => {
+    // Both bind to a String selection in Swift. Null would fail the decode; the
+    // empty string is how the sheet shows "no preset selected".
+    const d = buildDesign({ spacing: { presetId: null }, fonts: { pairingId: undefined } });
+    expect(d.spacing.presetId).toBe('');
+    expect(d.fonts.pairingId).toBe('');
+  });
+
+  it('drops a catalog row with no id, which could not be selected', () => {
+    // It would also collide with any other blank row as a SwiftUI ForEach id.
+    const d = buildDesign({
+      palettes: [{ id: 'ocean', name: 'Ocean' }, { name: 'Nameless' }, null, { id: '' }],
+      googleFonts: [{ family: 'Karla' }, { category: 'serif' }],
+    });
+    expect(d.palettes.map((p) => p.id)).toEqual(['ocean']);
+    expect(d.googleFonts.map((f) => f.family)).toEqual(['Karla']);
+  });
+
+  it('labels an unlabelled row with its id instead of leaving it blank', () => {
+    const d = buildDesign({ layouts: [{ id: 'timeline' }], headerStyles: [{ id: 'linear-135' }] });
+    expect(d.layouts[0].name).toBe('timeline');
+    expect(d.headerStyles[0].name).toBe('linear-135');
+  });
+
+  it('reports only WHETHER an image is set', () => {
+    // A header or photo image is a multi-megabyte data URL and this projection
+    // goes out on every publish; the canvas is already rendering it.
+    const d = buildDesign({
+      header: { hasImage: true, image: 'data:image/png;base64,AAAA' },
+      photo: { hasImage: true, dataUrl: 'data:image/jpeg;base64,BBBB' },
+    });
+    expect(d.header.hasImage).toBe(true);
+    expect(d.photo.hasImage).toBe(true);
+    expect(JSON.stringify(d)).not.toContain('data:image');
+  });
+
+  it('survives a missing or malformed state', () => {
+    // The sheet opening empty is recoverable; a throw inside a publish is not.
+    for (const bad of [undefined, null, 'nope', 42, []]) {
+      const d = buildDesign(bad);
+      expect(d.palettes).toEqual([]);
+      expect(d.spacing.fontScale).toBe(0);
+      expect(d.photo.enabled).toBe(false);
+    }
+    // A group that arrived as the wrong TYPE must not take its neighbours down.
+    const d = buildDesign({ page: 'letter', palettes: 'ocean', layout: 'timeline' });
+    expect(d.page.size).toBe('');
+    expect(d.palettes).toEqual([]);
+    expect(d.layout).toBe('timeline');
+  });
+});
+
+describe('the Design sheet commands', () => {
+  // These run against the dispatcher initIOSShell actually builds, not a
+  // hand-made one: which dep each command reaches, and what it is handed, is
+  // the part Swift depends on and the part a createCommandDispatcher test
+  // cannot see. Each mount re-imports the module so the streaming flags — which
+  // live at module scope — do not leak between tests.
+  const mount = async (over = {}) => {
+    vi.resetModules();
+    const postMessage = vi.fn();
+    globalThis.webkit = { messageHandlers: { [SHELL_HANDLER]: { postMessage } } };
+    const deps = {
+      subscribeVariants: vi.fn(),
+      subscribeDocument: vi.fn(),
+      getVariantsSnapshot: () => ({ currentId: null, list: [] }),
+      getZoom: () => 1,
+      fitToView: vi.fn(),
+      duplicateVariant: vi.fn(),
+      exportCurrentVariant: vi.fn(),
+      getAppInfo: () => Promise.resolve({ version: '2.1.0' }),
+      getSettings: () => ({}),
+      getTheme: () => 'system',
+      getDocument: vi.fn(),
+      getLibrary: vi.fn(),
+      getPendingChanges: () => [],
+      getDesign: vi.fn(() => ({ palettes: [{ id: 'ocean', name: 'Ocean' }] })),
+      applyDesign: vi.fn(),
+      resetDesign: vi.fn(),
+      setDesignImage: vi.fn(),
+      clearDesignImage: vi.fn(),
+      ...over,
+    };
+    const { initIOSShell } = await import('../src/iosShell.js');
+    initIOSShell(deps);
+    return { deps, postMessage, send: (command) => window.__opShell.command(command) };
+  };
+
+  // publish() coalesces into a microtask, so nothing is on the wire until one
+  // has run.
+  const settled = () => new Promise((resolve) => queueMicrotask(() => queueMicrotask(resolve)));
+  const lastSnapshot = (postMessage) =>
+    postMessage.mock.calls.map(([m]) => m).filter((m) => m.kind === 'snapshot').at(-1);
+
+  afterEach(() => { delete globalThis.webkit; });
+
+  it('projects the catalogs only while the sheet is open', async () => {
+    // They are the largest payload the bridge carries and they never change;
+    // the canvas re-renders on every keystroke.
+    const { deps, postMessage, send } = await mount();
+    await settled();
+    expect(deps.getDesign).not.toHaveBeenCalled();
+    expect(lastSnapshot(postMessage).design).toBe(null);
+
+    send({ type: 'setDesignOpen', value: 'true' });
+    await settled();
+    expect(deps.getDesign).toHaveBeenCalled();
+    expect(lastSnapshot(postMessage).design.palettes).toEqual([{ id: 'ocean', name: 'Ocean' }]);
+  });
+
+  it('stops projecting them when the sheet closes', async () => {
+    const { deps, postMessage, send } = await mount();
+    send({ type: 'setDesignOpen', value: 'true' });
+    await settled();
+    deps.getDesign.mockClear();
+
+    send({ type: 'setDesignOpen', value: 'false' });
+    await settled();
+    expect(deps.getDesign).not.toHaveBeenCalled();
+    expect(lastSnapshot(postMessage).design).toBe(null);
+  });
+
+  it('writes through the controller, with the string Swift sent', async () => {
+    // Payload values are always strings on this bridge; designController owns
+    // every coercion, so nothing about what a setting means is decided twice.
+    const { deps, send } = await mount();
+    expect(send({ type: 'setDesign', group: 'spacing', property: 'fontScale', value: '1.1' }))
+      .toEqual({ ok: true });
+    expect(deps.applyDesign).toHaveBeenCalledWith({
+      group: 'spacing', property: 'fontScale', value: '1.1',
+    });
+  });
+
+  it('sends an empty string rather than undefined when a value is cleared', async () => {
+    const { deps, send } = await mount();
+    send({ type: 'setDesign', group: 'color', property: 'customColor' });
+    expect(deps.applyDesign).toHaveBeenCalledWith({
+      group: 'color', property: 'customColor', value: '',
+    });
+  });
+
+  it('refuses a write that names no group or no property', async () => {
+    // Guessing either one would write a real setting from a malformed command.
+    const { deps, send } = await mount();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(send({ type: 'setDesign', property: 'fontScale', value: '1.1' }).ok).toBe(false);
+    expect(send({ type: 'setDesign', group: 'spacing', value: '1.1' }).ok).toBe(false);
+    expect(deps.applyDesign).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('republishes after a write, so derived fields reach the sheet', async () => {
+    // Moving one spacing slider empties `presetId`, and the sheet cannot work
+    // that out for itself — without the re-push it keeps a preset highlighted
+    // that the values no longer match.
+    const { deps, send } = await mount();
+    send({ type: 'setDesignOpen', value: 'true' });
+    await settled();
+    deps.getDesign.mockClear();
+
+    send({ type: 'setDesign', group: 'spacing', property: 'fontScale', value: '1.1' });
+    await settled();
+    expect(deps.getDesign).toHaveBeenCalled();
+  });
+
+  it('resets a whole group through the controller', async () => {
+    // Rather than by replaying every property, which would put the defaults in
+    // Swift.
+    const { deps, send } = await mount();
+    expect(send({ type: 'resetDesign', group: 'spacing' })).toEqual({ ok: true });
+    expect(deps.resetDesign).toHaveBeenCalledWith('spacing');
+  });
+
+  it('hands a picked image to the controller and refuses an empty one', async () => {
+    const { deps, send } = await mount();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(send({ type: 'setDesignImage', target: 'photo', dataUrl: 'data:image/png;base64,AAAA' }))
+      .toEqual({ ok: true });
+    expect(deps.setDesignImage).toHaveBeenCalledWith('photo', 'data:image/png;base64,AAAA');
+    // An empty data URL would set a header background to nothing at all, which
+    // reads as a broken image rather than as no image.
+    expect(send({ type: 'setDesignImage', target: 'header', dataUrl: '' }).ok).toBe(false);
+    expect(deps.setDesignImage).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('clears an image through the controller', async () => {
+    const { deps, send } = await mount();
+    expect(send({ type: 'clearDesignImage', target: 'header' })).toEqual({ ok: true });
+    expect(deps.clearDesignImage).toHaveBeenCalledWith('header');
   });
 });
 

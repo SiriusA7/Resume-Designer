@@ -20,6 +20,7 @@
 
 import Observation
 import PDFKit
+import PhotosUI
 import SwiftUI
 import UIKit
 import WebKit
@@ -141,6 +142,162 @@ struct ShellSnapshot: Decodable, Equatable {
     var groups: [Group]
   }
 
+  /// `nil` while the design sheet is closed. Same reasoning as `document`, and
+  /// more of it: this projection carries a dozen option lists and the whole font
+  /// catalogue, and it is rebuilt after every design write — which is per FRAME
+  /// while a slider is moving.
+  var design: Design?
+
+  /// Mirrors `buildDesign()` in src/iosShell.js.
+  ///
+  /// Every value is a String, Bool or Double: the design model is a pile of CSS
+  /// — gradients, hex colours, font stacks — and Swift decodes none of it. It
+  /// renders the names it was given, echoes back the ids it was given, and
+  /// leaves the meaning of `linear-135` or `#c45c3e` entirely on the web side.
+  struct Design: Decodable, Equatable {
+    /// An `{ id, name }` pair. Seven of the contract's lists are exactly this
+    /// and nothing more; giving each its own type would buy nothing.
+    struct Option: Decodable, Equatable, Identifiable {
+      let id: String
+      let name: String
+    }
+
+    struct Page: Decodable, Equatable {
+      var size: String
+      var orientation: String
+      var widthIn: Double
+      var groupPositions: Bool
+    }
+
+    /// Named for what it holds rather than `Color`, which inside this scope
+    /// would shadow SwiftUI's own and make every tile's fill ambiguous.
+    struct ColorSettings: Decodable, Equatable {
+      var palette: String
+      var customColor: String
+    }
+
+    /// `p1` accent, `p2` dark, `p3` light — the three tones the web swatch
+    /// stripes, in that order.
+    struct Palette: Decodable, Equatable, Identifiable {
+      let id: String
+      let name: String
+      let p1: String
+      let p2: String
+      let p3: String
+    }
+
+    struct Header: Decodable, Equatable {
+      /// solid | gradient | pattern | texture | image
+      var type: String
+      var styleId: String
+      var imageOpacity: Double
+      var imageFit: String
+      /// Whether an image is set — never the image. A header background is a
+      /// megabyte of base64 and the sheet has nothing to say about its pixels.
+      var hasImage: Bool
+    }
+
+    struct HeaderStyle: Decodable, Equatable, Identifiable {
+      let id: String
+      let name: String
+      /// gradient | pattern | texture — the picker's three sections.
+      let group: String
+      /// The CSS background the web tile paints with, already resolved against
+      /// the current palette. Swift renders no CSS; `designSwatchColors` mines
+      /// the hex out of it so a tile is at least the right colours.
+      let css: String
+    }
+
+    struct Fonts: Decodable, Equatable {
+      /// preset | google | system
+      var mode: String
+      /// "" when the two fonts do not add up to a pairing.
+      var pairingId: String
+      var displayName: String
+      var bodyName: String
+    }
+
+    struct FontPairing: Decodable, Equatable, Identifiable {
+      let id: String
+      let name: String
+      let display: String
+      let body: String
+    }
+
+    struct GoogleFont: Decodable, Equatable, Identifiable {
+      let family: String
+      let category: String
+      var id: String { family }
+    }
+
+    struct Spacing: Decodable, Equatable {
+      var fontScale: Double
+      var lineHeight: Double
+      var sectionSpacing: Double
+      var sidebarWidth: Double
+      var marginTop: Double
+      var marginRight: Double
+      var marginBottom: Double
+      var marginLeft: Double
+      /// "" once the sliders have been moved off every preset.
+      var presetId: String
+    }
+
+    struct Accent: Decodable, Equatable {
+      var underlineStyle: String
+      var underlineWidth: Double
+      var bulletStyle: String
+      var borderRadius: String
+      var skillTagStyle: String
+      var showCornerTriangle: Bool
+      var showSidebarGradient: Bool
+    }
+
+    struct Bullet: Decodable, Equatable, Identifiable {
+      let id: String
+      let name: String
+      /// The glyph itself, so a row shows what the résumé will show. Empty for
+      /// "None".
+      let char: String
+    }
+
+    struct Photo: Decodable, Equatable {
+      var enabled: Bool
+      var hasImage: Bool
+      var placement: String
+      var shape: String
+      var size: String
+      var borderColor: String
+      /// A CSS `object-position` pair, "left top" through "right bottom".
+      var objectPosition: String
+      var scale: Double
+    }
+
+    var page: Page
+    var pageSizes: [Option]
+    var color: ColorSettings
+    var palettes: [Palette]
+    var layout: String
+    var layouts: [Option]
+    var header: Header
+    var headerStyles: [HeaderStyle]
+    var fonts: Fonts
+    var fontPairings: [FontPairing]
+    var systemFonts: [Option]
+    var googleFonts: [GoogleFont]
+    var spacing: Spacing
+    var spacingPresets: [Option]
+    var accent: Accent
+    var underlines: [Option]
+    var bullets: [Bullet]
+    var radii: [Option]
+    var skillTags: [Option]
+    var photo: Photo
+    var placements: [Option]
+    var shapes: [Option]
+    var sizes: [Option]
+  }
+
   /// Mirrors `buildSettings()` in src/iosShell.js. A SUBSET of the web Settings
   /// dialog: the updater, the companion bridge and the legacy Electron import
   /// are all desktop-only, and showing controls that cannot work is worse than
@@ -162,7 +319,7 @@ struct ShellSnapshot: Decodable, Equatable {
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
     zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
-    chat: nil, library: nil, document: nil
+    chat: nil, library: nil, document: nil, design: nil
   )
 }
 
@@ -718,7 +875,7 @@ private struct ShellView: View {
   @State private var zoomInteraction = 0
 
   private enum Sheet: String, Identifiable {
-    case settings, structure, chat, library, pdfPreview
+    case settings, structure, design, chat, library, pdfPreview
     var id: String { rawValue }
   }
 
@@ -791,6 +948,7 @@ private struct ShellView: View {
           switch which {
           case .settings: SettingsSheet(model: model)
           case .structure: StructureSheet(model: model)
+          case .design: DesignSheet(model: model)
           case .chat: ChatSheet(model: model)
           case .library: LibrarySheet(model: model)
           case .pdfPreview:
@@ -810,6 +968,7 @@ private struct ShellView: View {
           // re-renders on every keystroke.
           switch previous {
           case .structure: model.send("setStructureOpen", ["value": "false"])
+          case .design: model.send("setDesignOpen", ["value": "false"])
           case .chat: model.send("setChatOpen", ["value": "false"])
           case .library: model.send("setLibraryOpen", ["value": "false"])
           case .pdfPreview:
@@ -949,6 +1108,14 @@ private struct ShellView: View {
       Image(systemName: "list.bullet.rectangle")
     }
     .accessibilityLabel("Edit structure")
+
+    Button {
+      model.send("setDesignOpen", ["value": "true"])
+      sheet = .design
+    } label: {
+      Image(systemName: "paintbrush")
+    }
+    .accessibilityLabel("Design")
 
     formatMenu
 
@@ -2663,5 +2830,1258 @@ private struct LibrarySheet: View {
 
   private func search() {
     model.send("librarySearch", ["query": query, "deep": deep ? "true" : "false"])
+  }
+}
+
+// MARK: - Design
+
+private typealias Design = ShellSnapshot.Design
+
+/// The native design panel.
+///
+/// A LIST of screens rather than one Form: the web panel is nine collapsing
+/// sections holding sixty-odd controls, and a phone-width form of that is a
+/// scroll nobody can hold their place in. Each row names a section and shows
+/// what it is currently set to, which is also what makes the panel worth
+/// reading without opening anything.
+///
+/// Nothing in here previews the résumé, and nothing needs to: the canvas is
+/// directly behind the sheet and every control writes straight through to it,
+/// so a grid of layout tiles only has to name them — tapping one re-renders the
+/// page underneath.
+private struct DesignSheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if let design = model.snapshot.design {
+          List {
+            Section {
+              row("Page", "doc", pageSummary(design)) { PageScreen(model: model) }
+              row("Colour", "paintpalette", colorSummary(design)) { ColorScreen(model: model) }
+              row("Layout", "square.split.2x1", optionName(design.layout, in: design.layouts)) {
+                LayoutScreen(model: model)
+              }
+              row("Header", "rectangle.tophalf.filled", headerSummary(design)) {
+                HeaderScreen(model: model)
+              }
+            }
+            Section {
+              row("Typography", "textformat", fontsSummary(design)) { TypographyScreen(model: model) }
+              row("Spacing", "arrow.up.and.down", spacingSummary(design)) { SpacingScreen(model: model) }
+              row("Accents", "sparkles", accentSummary(design)) { AccentsScreen(model: model) }
+              row("Photo", "person.crop.circle", photoSummary(design)) { PhotoScreen(model: model) }
+            }
+          }
+        } else {
+          // The first projection lands a frame after the sheet opens; an empty
+          // list would read as a design panel with nothing in it.
+          ProgressView()
+        }
+      }
+      .navigationTitle("Design")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }
+        }
+      }
+    }
+  }
+
+  private func row<Destination: View>(
+    _ title: String, _ symbol: String, _ value: String,
+    @ViewBuilder destination: () -> Destination
+  ) -> some View {
+    NavigationLink {
+      destination()
+    } label: {
+      LabeledContent {
+        Text(value).lineLimit(1)
+      } label: {
+        Label(title, systemImage: symbol)
+      }
+    }
+  }
+
+  // The summaries below all fall back to the raw id. A projection that gains a
+  // value before this file learns its name should show the value rather than an
+  // empty row that looks like nothing is set.
+
+  private func pageSummary(_ design: Design) -> String {
+    optionName(design.page.size, in: design.pageSizes)
+  }
+
+  private func colorSummary(_ design: Design) -> String {
+    if design.color.palette == "custom" { return "Custom" }
+    return design.palettes.first { $0.id == design.color.palette }?.name ?? design.color.palette
+  }
+
+  private func headerSummary(_ design: Design) -> String {
+    switch design.header.type {
+    case "solid": return "Solid"
+    case "image": return "Image"
+    default:
+      return design.headerStyles.first { $0.id == design.header.styleId }?.name
+        ?? design.header.styleId
+    }
+  }
+
+  private func fontsSummary(_ design: Design) -> String {
+    if design.fonts.mode == "preset",
+       let pairing = design.fontPairings.first(where: { $0.id == design.fonts.pairingId }) {
+      return pairing.name
+    }
+    let names = [design.fonts.displayName, design.fonts.bodyName].filter { !$0.isEmpty }
+    return names.isEmpty ? "Default" : names.joined(separator: " + ")
+  }
+
+  private func spacingSummary(_ design: Design) -> String {
+    design.spacing.presetId.isEmpty
+      ? "Custom"
+      : optionName(design.spacing.presetId, in: design.spacingPresets)
+  }
+
+  private func accentSummary(_ design: Design) -> String {
+    let underline = optionName(design.accent.underlineStyle, in: design.underlines)
+    let bullet = design.bullets.first { $0.id == design.accent.bulletStyle }?.name
+      ?? design.accent.bulletStyle
+    return "\(underline) · \(bullet)"
+  }
+
+  private func photoSummary(_ design: Design) -> String {
+    guard design.photo.hasImage else { return "None" }
+    guard design.photo.enabled else { return "Off" }
+    return optionName(design.photo.placement, in: design.placements)
+  }
+}
+
+// MARK: design plumbing
+
+/// The name of the option with this id, or the id itself.
+private func optionName(_ id: String, in options: [Design.Option]) -> String {
+  options.first { $0.id == id }?.name ?? id
+}
+
+/// Bindings that WRITE through `setDesign` and READ from the LIVE snapshot.
+///
+/// The SettingsSheet rule, and it earns more here: `applyDesign` clamps and
+/// normalises what it is given, and a preset write moves eight other controls at
+/// once. A control holding its own copy would show a value the résumé never
+/// took; reading the snapshot back means a rejected write simply springs the
+/// control to what actually landed.
+///
+/// The fallbacks are inert — `design` is only nil while the sheet is closing,
+/// and a control on its way off screen showing one frame of nothing is not
+/// worth a second code path.
+///
+/// `@MainActor` on all three: a `Binding`'s get and set are `@Sendable`, and a
+/// closure formed in a nonisolated function cannot then touch the model at all.
+/// The isolation is what a View gets for free — every caller here is one — and
+/// stating it is what keeps these free functions on the same footing.
+@MainActor
+private func designText(
+  _ model: ShellModel, _ group: String, _ property: String,
+  _ read: @escaping (Design) -> String
+) -> Binding<String> {
+  Binding(
+    get: { model.snapshot.design.map(read) ?? "" },
+    set: { model.send("setDesign", ["group": group, "property": property, "value": $0]) }
+  )
+}
+
+@MainActor
+private func designFlag(
+  _ model: ShellModel, _ group: String, _ property: String,
+  _ read: @escaping (Design) -> Bool
+) -> Binding<Bool> {
+  Binding(
+    get: { model.snapshot.design.map(read) ?? false },
+    set: {
+      model.send(
+        "setDesign", ["group": group, "property": property, "value": $0 ? "true" : "false"]
+      )
+    }
+  )
+}
+
+/// `places` is the STEP's precision, not a display choice: the string is the
+/// number the store keeps, and "%.2f" on a 0.1-step margin is what stops
+/// 0.30000000000000004 crossing the bridge.
+///
+/// A slider sends on every frame of the drag, deliberately. The web side
+/// debounces repagination by 200ms, so the canvas keeps up on its own and a
+/// throttle here would only make the résumé lag the thumb.
+@MainActor
+private func designNumber(
+  _ model: ShellModel, _ group: String, _ property: String,
+  fallback: Double, places: Int,
+  _ read: @escaping (Design) -> Double
+) -> Binding<Double> {
+  Binding(
+    get: { model.snapshot.design.map(read) ?? fallback },
+    set: {
+      model.send(
+        "setDesign",
+        ["group": group, "property": property, "value": String(format: "%.\(places)f", $0)]
+      )
+    }
+  )
+}
+
+/// A six-digit CSS hex as a Color. Everything on this wire is written the way
+/// CSS writes it, because the store's own colour maths reads it back the same
+/// way — `generateDarkColor` slices the string three bytes at a time.
+private func designColor(_ hex: String) -> Color? {
+  var digits = hex.trimmingCharacters(in: .whitespaces)
+  if digits.hasPrefix("#") { digits.removeFirst() }
+  guard digits.count == 6, let value = UInt64(digits, radix: 16) else { return nil }
+  return Color(
+    .sRGB,
+    red: Double((value >> 16) & 0xFF) / 255,
+    green: Double((value >> 8) & 0xFF) / 255,
+    blue: Double(value & 0xFF) / 255,
+    opacity: 1
+  )
+}
+
+/// Back to `#rrggbb`, which is the only form the store parses.
+///
+/// The picker can hand back a wide-gamut colour whose components fall outside
+/// 0–1. Clamping shifts it a shade; the alternative is a string the store reads
+/// as NaN and paints black with.
+private func designHex(_ color: Color) -> String {
+  var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+  _ = UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+  func byte(_ value: CGFloat) -> Int { Int((min(max(value, 0), 1) * 255).rounded()) }
+  return String(format: "#%02X%02X%02X", byte(red), byte(green), byte(blue))
+}
+
+/// The opaque colours in a header style's CSS, in the order they appear.
+///
+/// Swift renders no CSS, and a grid of identical grey rectangles is a picker
+/// nobody can use. Mining the hex out of the string the web tile paints with
+/// gets the tile the right COLOURS, which is what a header style is mostly
+/// about — the pattern families then differ only by name, and the résumé behind
+/// the sheet is the real preview.
+///
+/// Only the six-digit ones: a pattern lists its accent tint first as a hex with
+/// a two-digit alpha suffix, and a tile starting from an 8%-opaque overlay
+/// reads as broken.
+private func designSwatchColors(in css: String) -> [Color] {
+  var tokens: [String] = []
+  var current: String?
+  for character in css {
+    if character == "#" {
+      if let pending = current { tokens.append(pending) }
+      current = ""
+    } else if current != nil, character.isHexDigit {
+      current?.append(character)
+    } else if let pending = current {
+      tokens.append(pending)
+      current = nil
+    }
+  }
+  if let pending = current { tokens.append(pending) }
+  return tokens.filter { $0.count == 6 }.compactMap(designColor)
+}
+
+/// The web swatch's three bands, at the same 135° and the same stops.
+private func paletteSwatch(_ palette: Design.Palette) -> some View {
+  let accent = designColor(palette.p1) ?? .secondary
+  let dark = designColor(palette.p2) ?? .secondary
+  let light = designColor(palette.p3) ?? .secondary
+  return LinearGradient(
+    stops: [
+      .init(color: dark, location: 0),
+      .init(color: dark, location: 0.4),
+      .init(color: accent, location: 0.4),
+      .init(color: accent, location: 0.6),
+      .init(color: light, location: 0.6),
+      .init(color: light, location: 1),
+    ],
+    startPoint: .topLeading,
+    endPoint: .bottomTrailing
+  )
+}
+
+/// The columns every tile grid in this panel uses. Adaptive rather than a fixed
+/// count so the same grid works on a phone and on an iPad's wider sheet.
+private let designTileColumns = [GridItem(.adaptive(minimum: 84), spacing: 12)]
+
+/// A tile in one of the pickers: a swatch, its name under it, and a ring when it
+/// is the chosen one.
+private struct DesignTile<Swatch: View>: View {
+  let name: String
+  let selected: Bool
+  let action: () -> Void
+  @ViewBuilder let swatch: () -> Swatch
+
+  var body: some View {
+    Button(action: action) {
+      VStack(spacing: 6) {
+        swatch()
+          .frame(height: 44)
+          .frame(maxWidth: .infinity)
+          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(
+                selected ? Color.accentColor : Color.primary.opacity(0.12),
+                lineWidth: selected ? 2.5 : 0.5
+              )
+          }
+        Text(name)
+          .font(.caption)
+          .lineLimit(1)
+          .foregroundStyle(selected ? Color.primary : Color.secondary)
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(name)
+    .accessibilityAddTraits(selected ? [.isSelected] : [])
+  }
+}
+
+/// A row that is a choice: its own content, and a checkmark when it is the one
+/// in force.
+///
+/// A `Button` rather than a `Picker` row, because these lists carry a second
+/// line of detail — a pairing's two font names, a font's category — and a picker
+/// row is one line of text.
+private struct DesignChoiceRow<Content: View>: View {
+  let selected: Bool
+  let action: () -> Void
+  @ViewBuilder let content: () -> Content
+
+  var body: some View {
+    Button(action: action) {
+      HStack {
+        content()
+        Spacer(minLength: 8)
+        if selected {
+          Image(systemName: "checkmark")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(Color.accentColor)
+        }
+      }
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? [.isSelected] : [])
+  }
+}
+
+/// A labelled slider with its readout above the track.
+///
+/// The web panel puts the label beside the slider. A phone row leaves about
+/// 100pt of track once it has, which is not enough to pick a 1% step out of.
+private struct DesignSlider: View {
+  let title: String
+  let readout: String
+  let value: Binding<Double>
+  let range: ClosedRange<Double>
+  var step: Double = 0.01
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      LabeledContent(title) {
+        Text(readout).monospacedDigit().foregroundStyle(.secondary)
+      }
+      Slider(value: value, in: range, step: step)
+        .accessibilityLabel(title)
+        .accessibilityValue(readout)
+    }
+    .padding(.vertical, 2)
+  }
+}
+
+private func designPercent(_ fraction: Double) -> String {
+  "\(Int((fraction * 100).rounded()))%"
+}
+
+// MARK: design images
+
+/// The longest edge, in pixels, of an image this sends across the bridge.
+///
+/// Generous enough that a header background still has detail at print
+/// resolution, small enough that the data URL — which is stored with the
+/// résumé, copied into every backup and re-parsed on every render — stays in
+/// the hundreds of kilobytes.
+private let designImageMaxEdge: CGFloat = 1600
+
+/// Load a picked image and encode it as a data URL for `setDesignImage`.
+private func designImageDataURL(for item: PhotosPickerItem) async -> String? {
+  guard let data = try? await item.loadTransferable(type: Data.self) else { return nil }
+  // Detached: decoding and redrawing a full-resolution photo takes long enough
+  // to drop frames, and the picker is dismissing over the top of it.
+  return await Task.detached { designEncodedImage(data) }.value
+}
+
+/// Downscale and re-encode picked image data.
+///
+/// Two things rule out passing the picked bytes through untouched. The picker
+/// hands back whatever the library holds, which on an iPhone is usually HEIC —
+/// WebKit renders it, the Windows build's WebView2 does not, and a résumé
+/// travels between them through backup export. And a 12-megapixel photo is
+/// ~4MB before base64 inflates it by a third, for an image the résumé draws
+/// 100pt wide.
+///
+/// PNG only when the source actually carries alpha: JPEG fills it black, which
+/// on a cut-out header image is the whole point of the file, and PNG on a
+/// photograph is several megabytes for nothing.
+private func designEncodedImage(_ data: Data) -> String? {
+  guard let image = UIImage(data: data) else { return nil }
+  let longEdge = max(image.size.width, image.size.height)
+  guard longEdge > 0 else { return nil }
+  let ratio = min(designImageMaxEdge / longEdge, 1)
+  let size = CGSize(
+    width: max((image.size.width * ratio).rounded(), 1),
+    height: max((image.size.height * ratio).rounded(), 1)
+  )
+
+  let format = UIGraphicsImageRendererFormat.default()
+  // 1, not the screen's 3: the renderer would otherwise return a bitmap three
+  // times the size just asked for, which is the cap undone.
+  format.scale = 1
+  format.opaque = !designImageHasAlpha(image)
+  let scaled = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+    image.draw(in: CGRect(origin: .zero, size: size))
+  }
+
+  if format.opaque, let jpeg = scaled.jpegData(compressionQuality: 0.85) {
+    return "data:image/jpeg;base64," + jpeg.base64EncodedString()
+  }
+  guard let png = scaled.pngData() else { return nil }
+  return "data:image/png;base64," + png.base64EncodedString()
+}
+
+private func designImageHasAlpha(_ image: UIImage) -> Bool {
+  guard let info = image.cgImage?.alphaInfo else { return false }
+  switch info {
+  case .first, .last, .premultipliedFirst, .premultipliedLast, .alphaOnly: return true
+  default: return false
+  }
+}
+
+// MARK: page
+
+private struct PageScreen: View {
+  @ObservedObject var model: ShellModel
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Page")
+      .navigationBarTitleDisplayMode(.inline)
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section {
+        Picker("Size", selection: designText(model, "page", "size") { $0.page.size }) {
+          ForEach(design.pageSizes) { Text($0.name).tag($0.id) }
+        }
+        // Width and orientation are alternatives, not both: a continuous page
+        // has no second dimension to turn.
+        if design.page.size == "continuous" {
+          Stepper(
+            value: designNumber(model, "page", "widthIn", fallback: 8.5, places: 2) {
+              $0.page.widthIn
+            },
+            in: 3...20,
+            step: 0.1
+          ) {
+            LabeledContent("Width", value: String(format: "%.1f in", design.page.widthIn))
+          }
+        } else {
+          Picker(
+            "Orientation",
+            selection: designText(model, "page", "orientation") { $0.page.orientation }
+          ) {
+            Text("Portrait").tag("portrait")
+            Text("Landscape").tag("landscape")
+          }
+          .pickerStyle(.segmented)
+        }
+      }
+
+      Section {
+        Picker(
+          "Positions at one employer",
+          selection: designFlag(model, "page", "groupPositions") { $0.page.groupPositions }
+        ) {
+          Text("Grouped").tag(true)
+          Text("Separate").tag(false)
+        }
+        .pickerStyle(.segmented)
+        // The label is longer than the row, so it moves to the header and the
+        // segments take the full width. It stays here for VoiceOver.
+        .labelsHidden()
+      } header: {
+        Text("Positions at one employer")
+      } footer: {
+        Text(
+          "Grouped puts one heading over every role at the same employer. "
+          + "Separate gives each role its own."
+        )
+      }
+    }
+  }
+}
+
+// MARK: colour
+
+private struct ColorScreen: View {
+  @ObservedObject var model: ShellModel
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Colour")
+      .navigationBarTitleDisplayMode(.inline)
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section {
+        LazyVGrid(columns: designTileColumns, spacing: 12) {
+          ForEach(design.palettes) { palette in
+            DesignTile(
+              name: palette.name,
+              selected: design.color.palette == palette.id,
+              action: {
+                model.send(
+                  "setDesign", ["group": "color", "property": "palette", "value": palette.id]
+                )
+              },
+              swatch: { paletteSwatch(palette) }
+            )
+          }
+        }
+        .padding(.vertical, 6)
+      } header: {
+        Text("Palette")
+      }
+
+      Section {
+        ColorPicker(
+          "Custom colour",
+          selection: Binding(
+            get: { designColor(model.snapshot.design?.color.customColor ?? "") ?? .accentColor },
+            set: {
+              model.send(
+                "setDesign",
+                ["group": "color", "property": "customColor", "value": designHex($0)]
+              )
+            }
+          ),
+          supportsOpacity: false
+        )
+        DesignChoiceRow(
+          selected: design.color.palette == "custom",
+          action: {
+            model.send("setDesign", ["group": "color", "property": "palette", "value": "custom"])
+          },
+          content: { Text("Use the custom colour") }
+        )
+      } footer: {
+        // Two controls rather than one, because that is what the model is: the
+        // custom colour is remembered whether or not it is in use, and picking
+        // one on the web does not switch the résumé to it either.
+        Text(
+          design.color.palette == "custom"
+            ? "The resume is using your custom colour."
+            : "Pick a colour, then use it — the palette above stays in charge until you do."
+        )
+      }
+    }
+  }
+}
+
+// MARK: layout
+
+private struct LayoutScreen: View {
+  @ObservedObject var model: ShellModel
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Layout")
+      .navigationBarTitleDisplayMode(.inline)
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section {
+        // Names, not thumbnails. Drawing eleven schematics here would mean
+        // teaching Swift what each layout looks like — a second description of
+        // the templates, free to drift from the ones that render — and the
+        // résumé itself is one tap away behind the sheet.
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+          ForEach(design.layouts) { layout in
+            let selected = design.layout == layout.id
+            Button {
+              model.send("setDesign", ["group": "layout", "property": "value", "value": layout.id])
+            } label: {
+              HStack(spacing: 6) {
+                Text(layout.name).lineLimit(1)
+                Spacer(minLength: 0)
+                if selected {
+                  Image(systemName: "checkmark")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                }
+              }
+              .padding(.horizontal, 12)
+              .frame(height: 44)
+              .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                  .fill(selected ? Color.accentColor.opacity(0.10) : Color.clear)
+              )
+              .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                  .strokeBorder(
+                    selected ? Color.accentColor : Color.primary.opacity(0.12),
+                    lineWidth: selected ? 2 : 0.5
+                  )
+              }
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(selected ? [.isSelected] : [])
+          }
+        }
+        .padding(.vertical, 6)
+      } footer: {
+        Text("The resume behind this sheet re-renders as you tap.")
+      }
+    }
+  }
+}
+
+// MARK: header
+
+private struct HeaderScreen: View {
+  @ObservedObject var model: ShellModel
+
+  @State private var pick: PhotosPickerItem?
+  @State private var confirmRemove = false
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Header")
+      .navigationBarTitleDisplayMode(.inline)
+      .onChange(of: pick) { _, item in
+        guard let item else { return }
+        Task {
+          let url = await designImageDataURL(for: item)
+          // Cleared either way, or picking the same photo twice in a row is the
+          // same item and never fires this again.
+          pick = nil
+          guard let url else {
+            NSLog("[OPShell] could not read the picked header image")
+            return
+          }
+          model.send("setDesignImage", ["target": "header", "dataUrl": url])
+        }
+      }
+      .confirmationDialog(
+        "Remove the header image?", isPresented: $confirmRemove, titleVisibility: .visible
+      ) {
+        Button("Remove", role: .destructive) {
+          model.send("clearDesignImage", ["target": "header"])
+        }
+      } message: {
+        Text("The header goes back to a gradient. The image is not kept.")
+      }
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section {
+        DesignChoiceRow(
+          selected: design.header.type == "solid",
+          action: { selectStyle(type: "solid", id: "solid") },
+          content: { Text("Solid colour") }
+        )
+      } footer: {
+        Text("The header takes the palette's own colour, with nothing over it.")
+      }
+
+      ForEach(styleGroups(design), id: \.self) { group in
+        Section(groupTitle(group)) {
+          LazyVGrid(columns: designTileColumns, spacing: 12) {
+            ForEach(design.headerStyles.filter { $0.group == group }) { style in
+              DesignTile(
+                name: style.name,
+                selected: design.header.type == group && design.header.styleId == style.id,
+                action: { selectStyle(type: group, id: style.id) },
+                swatch: { styleSwatch(style) }
+              )
+            }
+          }
+          .padding(.vertical, 6)
+        }
+      }
+
+      Section {
+        // No `photoLibrary:` argument, so the picker runs out of process: it
+        // needs neither a permission prompt nor an `NSPhotoLibraryUsageDescription`
+        // in an Info.plist this file does not own, and it still hands back the
+        // one image that was chosen.
+        PhotosPicker(selection: $pick, matching: .images) {
+          Label(
+            design.header.hasImage ? "Replace image" : "Add an image",
+            systemImage: "photo.on.rectangle"
+          )
+        }
+        if design.header.hasImage {
+          DesignSlider(
+            title: "Opacity",
+            readout: designPercent(design.header.imageOpacity),
+            value: designNumber(model, "header", "imageOpacity", fallback: 0.3, places: 2) {
+              $0.header.imageOpacity
+            },
+            range: 0...1
+          )
+          Picker(
+            "Fit",
+            selection: designText(model, "header", "imageFit") { $0.header.imageFit }
+          ) {
+            Text("Cover").tag("cover")
+            Text("Contain").tag("contain")
+            Text("Tile").tag("tile")
+          }
+          .pickerStyle(.segmented)
+          Button("Remove image", role: .destructive) { confirmRemove = true }
+        }
+      } header: {
+        Text("Image")
+      } footer: {
+        // No preview of the image itself: the contract carries `hasImage` and
+        // not the data URL, on purpose — a header background is a megabyte of
+        // base64 and re-sending it on every design write would be the largest
+        // thing on this wire by an order of magnitude.
+        Text("An image sits behind the header at the opacity you choose, and is saved with the resume.")
+      }
+    }
+  }
+
+  /// The groups the contract sent, in the order it sent them.
+  private func styleGroups(_ design: Design) -> [String] {
+    var groups: [String] = []
+    for style in design.headerStyles where !groups.contains(style.group) {
+      groups.append(style.group)
+    }
+    return groups
+  }
+
+  /// gradient → Gradients. The contract's group ids are already the words.
+  private func groupTitle(_ group: String) -> String {
+    group.capitalized + "s"
+  }
+
+  private func selectStyle(type: String, id: String) {
+    model.send("setDesign", ["group": "header", "property": "style", "value": "\(type):\(id)"])
+  }
+
+  @ViewBuilder
+  private func styleSwatch(_ style: Design.HeaderStyle) -> some View {
+    let colors = designSwatchColors(in: style.css)
+    if colors.count >= 2 {
+      LinearGradient(
+        colors: Array(colors.prefix(3)), startPoint: .topLeading, endPoint: .bottomTrailing
+      )
+    } else if let only = colors.first {
+      only
+    } else {
+      Color.secondary.opacity(0.2)
+    }
+  }
+}
+
+// MARK: typography
+
+private struct TypographyScreen: View {
+  @ObservedObject var model: ShellModel
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Typography")
+      .navigationBarTitleDisplayMode(.inline)
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section {
+        ForEach(design.fontPairings) { pairing in
+          DesignChoiceRow(
+            selected: design.fonts.mode == "preset" && design.fonts.pairingId == pairing.id,
+            action: {
+              model.send(
+                "setDesign", ["group": "fonts", "property": "pairing", "value": pairing.id]
+              )
+            },
+            content: {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(pairing.name)
+                Text("\(pairing.display) + \(pairing.body)")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+            }
+          )
+        }
+      } header: {
+        Text("Pairings")
+      } footer: {
+        Text("A pairing sets both fonts at once. Choosing either font below leaves it.")
+      }
+
+      Section("Fonts") {
+        NavigationLink {
+          FontScreen(model: model, role: "display", title: "Headings")
+        } label: {
+          LabeledContent("Headings", value: fontLabel(design.fonts.displayName))
+        }
+        NavigationLink {
+          FontScreen(model: model, role: "body", title: "Body")
+        } label: {
+          LabeledContent("Body", value: fontLabel(design.fonts.bodyName))
+        }
+      }
+    }
+  }
+
+  private func fontLabel(_ value: String) -> String {
+    value.isEmpty ? "Default" : value
+  }
+}
+
+private struct FontScreen: View {
+  @ObservedObject var model: ShellModel
+  /// "display" or "body" — the `setDesign` property, carried rather than
+  /// derived, so this screen never has to know which of the two it is.
+  let role: String
+  let title: String
+
+  @State private var query = ""
+
+  var body: some View {
+    List { content }
+      // Filtered here rather than by a round trip, unlike the library's search:
+      // the whole catalogue is a few dozen names and it is already in hand.
+      .searchable(text: $query, prompt: "Search fonts")
+      .navigationTitle(title)
+      .navigationBarTitleDisplayMode(.inline)
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      // The contract sends the font's NAME, not the id it was chosen by, so
+      // that is what the checkmark matches on. It is the only handle there is,
+      // and it is enough: two fonts with one name are one font.
+      let current = role == "display" ? design.fonts.displayName : design.fonts.bodyName
+      let systemFonts = design.systemFonts.filter { matches($0.name) }
+      let googleFonts = design.googleFonts.filter { matches($0.family) }
+
+      if systemFonts.isEmpty, googleFonts.isEmpty {
+        ContentUnavailableView.search(text: query)
+      }
+
+      if !systemFonts.isEmpty {
+        Section {
+          ForEach(systemFonts) { font in
+            DesignChoiceRow(
+              selected: font.name == current,
+              action: { select("system:\(font.id)") },
+              content: { Text(font.name) }
+            )
+          }
+        } header: {
+          Text("System")
+        } footer: {
+          Text("System fonts work offline and render the same on every device.")
+        }
+      }
+
+      if !googleFonts.isEmpty {
+        Section("Google Fonts") {
+          ForEach(googleFonts) { font in
+            DesignChoiceRow(
+              selected: font.family == current,
+              action: { select("google:\(font.family):\(font.category)") },
+              content: {
+                HStack(spacing: 8) {
+                  Text(font.family)
+                  Text(font.category).font(.caption).foregroundStyle(.secondary)
+                }
+              }
+            )
+          }
+        }
+      }
+    }
+  }
+
+  private func matches(_ name: String) -> Bool {
+    query.isEmpty || name.localizedCaseInsensitiveContains(query)
+  }
+
+  private func select(_ value: String) {
+    model.send("setDesign", ["group": "fonts", "property": role, "value": value])
+  }
+}
+
+// MARK: spacing
+
+private struct SpacingScreen: View {
+  @ObservedObject var model: ShellModel
+
+  @State private var confirmReset = false
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Spacing")
+      .navigationBarTitleDisplayMode(.inline)
+      .confirmationDialog(
+        "Reset spacing?", isPresented: $confirmReset, titleVisibility: .visible
+      ) {
+        Button("Reset", role: .destructive) {
+          model.send("resetDesign", ["group": "spacing"])
+        }
+      } message: {
+        Text("Every size and margin here goes back to its default. Your text is not affected.")
+      }
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section {
+        Picker(
+          "Preset",
+          selection: designText(model, "spacing", "preset") { $0.spacing.presetId }
+        ) {
+          ForEach(design.spacingPresets) { Text($0.name).tag($0.id) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+      } header: {
+        Text("Preset")
+      } footer: {
+        // "" arrives once a slider has been moved off every preset, and no
+        // segment being lit is then the truth: the spacing is none of them.
+        Text(
+          design.spacing.presetId.isEmpty
+            ? "Fine-tuned — no preset is in force."
+            : "A preset sets everything below at once."
+        )
+      }
+
+      Section("Fine tune") {
+        DesignSlider(
+          title: "Font size",
+          readout: designPercent(design.spacing.fontScale),
+          value: designNumber(model, "spacing", "fontScale", fallback: 1, places: 2) {
+            $0.spacing.fontScale
+          },
+          range: 0.7...1.3
+        )
+        DesignSlider(
+          title: "Line height",
+          readout: String(format: "%.2f", design.spacing.lineHeight),
+          value: designNumber(model, "spacing", "lineHeight", fallback: 1.45, places: 2) {
+            $0.spacing.lineHeight
+          },
+          range: 1.2...1.8
+        )
+        DesignSlider(
+          title: "Section gap",
+          readout: String(format: "%.1f rem", design.spacing.sectionSpacing),
+          value: designNumber(model, "spacing", "sectionSpacing", fallback: 0.8, places: 1) {
+            $0.spacing.sectionSpacing
+          },
+          range: 0.4...1.6,
+          step: 0.1
+        )
+        DesignSlider(
+          title: "Sidebar width",
+          readout: String(format: "%.1f in", design.spacing.sidebarWidth),
+          value: designNumber(model, "spacing", "sidebarWidth", fallback: 2.2, places: 1) {
+            $0.spacing.sidebarWidth
+          },
+          range: 1.8...3.2,
+          step: 0.1
+        )
+      }
+
+      Section {
+        marginStepper("Top", "marginTop") { $0.spacing.marginTop }
+        marginStepper("Right", "marginRight") { $0.spacing.marginRight }
+        marginStepper("Bottom", "marginBottom") { $0.spacing.marginBottom }
+        marginStepper("Left", "marginLeft") { $0.spacing.marginLeft }
+      } header: {
+        Text("Page margins")
+      } footer: {
+        Text("Sidebar width and margins apply to the layouts that have them.")
+      }
+
+      Section {
+        // Behind a dialog, where the desktop has a 28pt ghost icon in a section
+        // header. On a phone an unconfirmed reset is one mis-tap away from an
+        // hour of fitting a résumé onto one page.
+        Button("Reset spacing", role: .destructive) { confirmReset = true }
+      }
+    }
+  }
+
+  private func marginStepper(
+    _ title: String, _ property: String, _ read: @escaping (Design) -> Double
+  ) -> some View {
+    Stepper(
+      value: designNumber(model, "spacing", property, fallback: 0.5, places: 2, read),
+      in: 0.2...1.0,
+      step: 0.1
+    ) {
+      LabeledContent(
+        title, value: String(format: "%.1f in", model.snapshot.design.map(read) ?? 0.5)
+      )
+    }
+  }
+}
+
+// MARK: accents
+
+private struct AccentsScreen: View {
+  @ObservedObject var model: ShellModel
+
+  @State private var confirmReset = false
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Accents")
+      .navigationBarTitleDisplayMode(.inline)
+      .confirmationDialog(
+        "Reset accents?", isPresented: $confirmReset, titleVisibility: .visible
+      ) {
+        Button("Reset", role: .destructive) {
+          model.send("resetDesign", ["group": "accent"])
+        }
+      } message: {
+        Text("Underlines, bullets, corners and skill tags all go back to their defaults.")
+      }
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section("Section titles") {
+        Picker(
+          "Underline",
+          selection: designText(model, "accent", "underlineStyle") { $0.accent.underlineStyle }
+        ) {
+          ForEach(design.underlines) { Text($0.name).tag($0.id) }
+        }
+        DesignSlider(
+          title: "Underline width",
+          readout: "\(Int(design.accent.underlineWidth.rounded()))px",
+          value: designNumber(model, "accent", "underlineWidth", fallback: 2, places: 0) {
+            $0.accent.underlineWidth
+          },
+          range: 1...4,
+          step: 1
+        )
+      }
+
+      Section("Lists") {
+        Picker(
+          "Bullet",
+          selection: designText(model, "accent", "bulletStyle") { $0.accent.bulletStyle }
+        ) {
+          // The glyph in front of the name, so the row shows what the résumé
+          // will show. "None" has no glyph to show.
+          ForEach(design.bullets) { bullet in
+            Text(bullet.char.isEmpty ? bullet.name : "\(bullet.char)  \(bullet.name)")
+              .tag(bullet.id)
+          }
+        }
+      }
+
+      Section("Shapes") {
+        Picker(
+          "Corner rounding",
+          selection: designText(model, "accent", "borderRadius") { $0.accent.borderRadius }
+        ) {
+          ForEach(design.radii) { Text($0.name).tag($0.id) }
+        }
+        Picker(
+          "Skill tags",
+          selection: designText(model, "accent", "skillTagStyle") { $0.accent.skillTagStyle }
+        ) {
+          ForEach(design.skillTags) { Text($0.name).tag($0.id) }
+        }
+      }
+
+      Section("Decoration") {
+        Toggle(
+          "Header corner accent",
+          isOn: designFlag(model, "accent", "showCornerTriangle") { $0.accent.showCornerTriangle }
+        )
+        Toggle(
+          "Sidebar gradient",
+          isOn: designFlag(model, "accent", "showSidebarGradient") { $0.accent.showSidebarGradient }
+        )
+      }
+
+      Section {
+        Button("Reset accents", role: .destructive) { confirmReset = true }
+      }
+    }
+  }
+}
+
+// MARK: photo
+
+/// The nine `object-position` values, in reading order.
+///
+/// These are not on the wire and do not need to be: the pad's geometry IS the
+/// value — top left is the button in the top left corner — so a list of ids
+/// would not tell this screen anything the grid does not already say.
+private let designFocusPositions = [
+  "left top", "center top", "right top",
+  "left center", "center center", "right center",
+  "left bottom", "center bottom", "right bottom",
+]
+
+private struct PhotoScreen: View {
+  @ObservedObject var model: ShellModel
+
+  @State private var pick: PhotosPickerItem?
+  @State private var confirmRemove = false
+
+  var body: some View {
+    Form { content }
+      .navigationTitle("Photo")
+      .navigationBarTitleDisplayMode(.inline)
+      .onChange(of: pick) { _, item in
+        guard let item else { return }
+        Task {
+          let url = await designImageDataURL(for: item)
+          pick = nil
+          guard let url else {
+            NSLog("[OPShell] could not read the picked photo")
+            return
+          }
+          model.send("setDesignImage", ["target": "photo", "dataUrl": url])
+        }
+      }
+      .confirmationDialog(
+        "Remove the photo?", isPresented: $confirmRemove, titleVisibility: .visible
+      ) {
+        Button("Remove", role: .destructive) {
+          model.send("clearDesignImage", ["target": "photo"])
+        }
+      } message: {
+        Text("The photo is deleted from this resume. Adding one again means picking it again.")
+      }
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    if let design = model.snapshot.design {
+      Section {
+        // Out of process, as on the header screen — no permission, no plist.
+        PhotosPicker(selection: $pick, matching: .images) {
+          Label(
+            design.photo.hasImage ? "Replace photo" : "Add a photo",
+            systemImage: "person.crop.square"
+          )
+        }
+        if design.photo.hasImage {
+          Toggle("Show the photo", isOn: designFlag(model, "photo", "enabled") { $0.photo.enabled })
+          Button("Remove photo", role: .destructive) { confirmRemove = true }
+        }
+      } footer: {
+        Text(
+          design.photo.hasImage
+            ? "The photo is stored with this resume and travels with its backup."
+            : "Photos suit some templates and some countries. Many hiring processes prefer none."
+        )
+      }
+
+      if design.photo.hasImage {
+        Section("Placement") {
+          Picker(
+            "Position",
+            selection: designText(model, "photo", "placement") { $0.photo.placement }
+          ) {
+            ForEach(design.placements) { Text($0.name).tag($0.id) }
+          }
+          Picker("Shape", selection: designText(model, "photo", "shape") { $0.photo.shape }) {
+            ForEach(design.shapes) { Text($0.name).tag($0.id) }
+          }
+          Picker("Size", selection: designText(model, "photo", "size") { $0.photo.size }) {
+            ForEach(design.sizes) { Text($0.name).tag($0.id) }
+          }
+          Picker(
+            "Border",
+            selection: designText(model, "photo", "borderColor") { $0.photo.borderColor }
+          ) {
+            Text("Accent").tag("accent")
+            Text("White").tag("white")
+            Text("None").tag("none")
+          }
+        }
+
+        Section {
+          focusPad(design)
+          DesignSlider(
+            title: "Zoom",
+            readout: designPercent(design.photo.scale),
+            value: designNumber(model, "photo", "scale", fallback: 1, places: 2) { $0.photo.scale },
+            range: 1...2
+          )
+        } header: {
+          Text("Crop")
+        } footer: {
+          Text("The focus point decides which part of the photo survives the crop.")
+        }
+      }
+    }
+  }
+
+  private func focusPad(_ design: Design) -> some View {
+    LazyVGrid(
+      columns: Array(repeating: GridItem(.fixed(40), spacing: 8), count: 3), spacing: 8
+    ) {
+      ForEach(designFocusPositions, id: \.self) { position in
+        let selected = design.photo.objectPosition == position
+        Button {
+          model.send(
+            "setDesign", ["group": "photo", "property": "objectPosition", "value": position]
+          )
+        } label: {
+          RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12))
+            .frame(width: 40, height: 40)
+            .overlay {
+              Circle()
+                .fill(selected ? Color.accentColor : Color.secondary)
+                .frame(width: 8, height: 8)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(position.capitalized)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+      }
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.vertical, 4)
   }
 }

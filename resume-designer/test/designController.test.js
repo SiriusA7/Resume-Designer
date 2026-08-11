@@ -1,0 +1,192 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  COLOR_PALETTES,
+  LAYOUTS,
+  SPACING_PRESETS,
+  applyDesign,
+  detectSpacingPreset,
+  getDesignState,
+  setDesignImage,
+} from '../src/designController.js';
+
+// The controller is the ONE implementation of what a design control means, for
+// the web panel and for the native sheet alike. Covered here: the coercions
+// (Swift sends every value as a string, the web sends the control's own type,
+// and both have to land on the same stored value), the spacing-preset match
+// (inferred, not stored), and the projection's shape (Swift decodes it into one
+// Codable struct, so a missing field blanks the whole sheet).
+
+// jsdom gives appStorage its passthrough localStorage mode, so every service
+// reads and writes for real; nothing finds a `.resume` element, so the apply
+// half is a no-op and only the save half is observable.
+beforeEach(() => {
+  localStorage.clear();
+});
+
+// The projection is the only read path, so it is also how a write is checked.
+const state = () => getDesignState();
+
+describe('value coercion', () => {
+  it('takes a number from the web control and a string from the bridge', async () => {
+    await applyDesign({ group: 'spacing', property: 'fontScale', value: 1.15 });
+    expect(state().spacing.fontScale).toBe(1.15);
+
+    await applyDesign({ group: 'spacing', property: 'fontScale', value: '0.85' });
+    expect(state().spacing.fontScale).toBe(0.85);
+  });
+
+  it('coerces booleans from both shells, and only "true" is true', async () => {
+    for (const [sent, stored] of [[true, true], [false, false], ['true', true], ['false', false]]) {
+      await applyDesign({ group: 'accent', property: 'showCornerTriangle', value: sent });
+      expect(state().accent.showCornerTriangle).toBe(stored);
+    }
+  });
+
+  it('flattens a margin back onto pageMargins', async () => {
+    await applyDesign({ group: 'spacing', property: 'marginLeft', value: '0.75' });
+    expect(state().spacing.marginLeft).toBe(0.75);
+    // Untouched sides keep their own values rather than the one just written.
+    expect(state().spacing.marginRight).toBe(0.5);
+  });
+
+  it('applies all five fields of a spacing preset at once', async () => {
+    await applyDesign({ group: 'spacing', property: 'preset', value: 'compact' });
+    const { spacing } = state();
+    expect(spacing.fontScale).toBe(SPACING_PRESETS.compact.fontScale);
+    expect(spacing.sidebarWidth).toBe(SPACING_PRESETS.compact.sidebarWidth);
+    expect(spacing.marginTop).toBe(SPACING_PRESETS.compact.pageMargins.top);
+  });
+
+  it('splits a header style into its family and id', async () => {
+    await applyDesign({ group: 'header', property: 'style', value: 'pattern:chevron' });
+    expect(state().header).toMatchObject({ type: 'pattern', styleId: 'chevron' });
+  });
+
+  it('splits a font choice into its source, family and category', async () => {
+    await applyDesign({ group: 'fonts', property: 'body', value: 'system:georgia' });
+    expect(state().fonts).toMatchObject({ mode: 'system', bodyName: 'Georgia' });
+
+    // Switching source starts both halves over: a system stack id is not a
+    // Google family, so keeping the other half would leave one that cannot
+    // resolve.
+    await applyDesign({ group: 'fonts', property: 'display', value: 'google:Lora:serif' });
+    expect(state().fonts).toMatchObject({ mode: 'google', displayName: 'Lora', bodyName: '' });
+  });
+
+  it('rejects a group or property it was not given, rather than writing nothing quietly', async () => {
+    await expect(applyDesign({ group: 'colour', property: 'palette', value: 'teal' }))
+      .rejects.toThrow(/unknown design group/);
+    await expect(applyDesign({ group: 'accent', property: 'underlineColor', value: 'red' }))
+      .rejects.toThrow(/unknown design property/);
+    await expect(applyDesign({ group: 'header', property: 'style', value: 'gradient' }))
+      .rejects.toThrow(/<type>:<id>/);
+  });
+});
+
+describe('detectSpacingPreset', () => {
+  it('names the preset whose values were applied', () => {
+    for (const [id, preset] of Object.entries(SPACING_PRESETS)) {
+      expect(detectSpacingPreset(preset)).toBe(id);
+    }
+  });
+
+  it('still reads as the preset after a nudge inside the tolerances', () => {
+    // ±0.05 font scale, ±0.1 line height and section spacing — what makes
+    // "Normal, then a touch tighter" go on showing Normal.
+    expect(detectSpacingPreset({ ...SPACING_PRESETS.normal, fontScale: 1.04 })).toBe('normal');
+    expect(detectSpacingPreset({ ...SPACING_PRESETS.normal, lineHeight: 1.54 })).toBe('normal');
+    expect(detectSpacingPreset({ ...SPACING_PRESETS.normal, sectionSpacing: 0.89 })).toBe('normal');
+  });
+
+  it('gives up once a value is outside them', () => {
+    expect(detectSpacingPreset({ ...SPACING_PRESETS.normal, fontScale: 1.2 })).toBe('');
+  });
+
+  it('ignores sidebar width and margins, which no tolerance covers', () => {
+    // A preset writes five fields but is recognised by three. Widening the
+    // sidebar must not deselect the preset the type still matches.
+    expect(detectSpacingPreset({ ...SPACING_PRESETS.airy, sidebarWidth: 3.1 })).toBe('airy');
+  });
+
+  it('returns "" and never null, which Swift binds as a String selection', () => {
+    expect(detectSpacingPreset({ fontScale: 5, lineHeight: 5, sectionSpacing: 5 })).toBe('');
+  });
+});
+
+describe('getDesignState', () => {
+  it('carries every group and its catalog', () => {
+    expect(Object.keys(state()).sort()).toEqual([
+      'accent', 'bullets', 'color', 'fontPairings', 'fonts', 'googleFonts', 'header',
+      'headerStyles', 'layout', 'layouts', 'page', 'pageSizes', 'palettes', 'photo',
+      'placements', 'radii', 'shapes', 'sizes', 'skillTags', 'spacing', 'spacingPresets',
+      'systemFonts', 'underlines',
+    ]);
+  });
+
+  it('projects nothing but strings, numbers, booleans and arrays of those', () => {
+    const walk = (value, path) => {
+      if (Array.isArray(value)) {
+        value.forEach((v, i) => walk(v, `${path}[${i}]`));
+        return;
+      }
+      if (value && typeof value === 'object') {
+        for (const [k, v] of Object.entries(value)) walk(v, `${path}.${k}`);
+        return;
+      }
+      // A function cannot serialise and a null fails Swift's decode of a
+      // non-optional field — either one takes the whole sheet down, not just
+      // its own row.
+      expect(['string', 'number', 'boolean'], `${path} is ${value}`).toContain(typeof value);
+    };
+    walk(state(), 'design');
+  });
+
+  it('evaluates the header-style previews, which are CSS generator functions', () => {
+    const { headerStyles } = state();
+    const diagonal = headerStyles.find((h) => h.id === 'linear-135');
+    // Against the default palette's own header colours, not a placeholder.
+    expect(diagonal).toMatchObject({ group: 'gradient', name: 'Diagonal' });
+    expect(diagonal.css).toContain(COLOR_PALETTES.terracotta.p2);
+    expect(headerStyles.map((h) => h.group)).toContain('pattern');
+    expect(headerStyles.map((h) => h.group)).toContain('texture');
+  });
+
+  it('reports whether an image is set, never the image', async () => {
+    const dataUrl = `data:image/png;base64,${'A'.repeat(64)}`;
+    await applyDesign({ group: 'photo', property: 'placement', value: 'floating' });
+    expect(state().photo.hasImage).toBe(false);
+
+    setDesignImage('photo', dataUrl);
+    setDesignImage('header', dataUrl);
+
+    const projected = JSON.stringify(state());
+    expect(state().photo.hasImage).toBe(true);
+    expect(state().header.hasImage).toBe(true);
+    expect(projected).not.toContain(dataUrl);
+    expect(projected).not.toContain('imageData');
+    expect(projected).not.toContain('customImage');
+  });
+
+  it('empties pairingId outside preset mode rather than naming an unselected preset', async () => {
+    expect(state().fonts.pairingId).toBe('classic-elegant');
+    await applyDesign({ group: 'fonts', property: 'display', value: 'system:georgia' });
+    expect(state().fonts.pairingId).toBe('');
+  });
+
+  it('lists a layout once, with the name the web tiles show', () => {
+    expect(state().layouts).toEqual(LAYOUTS);
+    // The web tiles read the same table, so the sheet cannot call it anything
+    // else — 'stacked-vertical' has been shown as "Flow" since the reskin.
+    expect(LAYOUTS.find((l) => l.id === 'stacked-vertical').name).toBe('Flow');
+  });
+
+  it('reads back what a write to another group stored', async () => {
+    await applyDesign({ group: 'photo', property: 'shape', value: 'rounded-lg' });
+    await applyDesign({ group: 'accent', property: 'bulletStyle', value: 'arrow' });
+    expect(state().photo.shape).toBe('rounded-lg');
+    expect(state().accent.bulletStyle).toBe('arrow');
+    // The bullet catalog carries the glyph, so a native list can render the
+    // choice instead of the word for it.
+    expect(state().bullets.find((b) => b.id === 'arrow').char).toBe('→');
+  });
+});

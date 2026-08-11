@@ -33,7 +33,10 @@ import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
 import { initZoomControls, getZoom, fitToView, setZoomLevel } from './zoomControls.js';
 import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
-import { initIOSShell, buildDocumentOutline, buildLibrary } from './iosShell.js';
+import { initIOSShell, buildDocumentOutline, buildLibrary, buildDesign } from './iosShell.js';
+import {
+  getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
+} from './designController.js';
 import { searchLibrary } from './librarySearch.js';
 import { getAllApplications } from './applications.js';
 import { initWindowDrag } from './tauriDrag.js';
@@ -585,6 +588,15 @@ export async function init() {
     rejectInlineChange,
     applyAllInlineChanges,
     rejectAllInlineChanges,
+    // The Design sheet. Every one of these is the SAME function the web Design
+    // tab calls — designController.js exists precisely so there is one
+    // implementation of apply-save-repaginate rather than a second one written
+    // in Swift. The projection is built here for the same reason the outline is.
+    getDesign: () => buildDesign(getDesignState()),
+    applyDesign,
+    resetDesign,
+    setDesignImage,
+    clearDesignImage,
   });
   
   // Check for first-time user onboarding

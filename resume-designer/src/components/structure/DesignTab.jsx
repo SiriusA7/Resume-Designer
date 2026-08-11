@@ -4,18 +4,20 @@
  *
  * Faithful, behavior-preserving reskin of the seven design sections (Color
  * Theme, Header Style, Typography, Layout, Spacing & Sizing, Accents, Profile
- * Photo). Every handler still calls the same service apply/save APIs with the
- * same values in the same order as the vanilla port did. Data-driven visuals
- * (palette swatches, gradient/pattern/texture previews, font families, the
- * photo preview) keep inline styles — that's content, not theme; all chrome
- * colors are semantic token classes.
+ * Photo). Data-driven visuals (palette swatches, gradient/pattern/texture
+ * previews, font families, the photo preview) keep inline styles — that's
+ * content, not theme; all chrome colors are semantic token classes.
  *
- * Only palette / layout / customColor / pageSize / orientation / pageWidthIn /
- * groupPositions dispatch `rd:design-change` for main.js to consume — every
- * other control just applies + saves through its service.
+ * This tab is a VIEW over designController.js, which owns what every control
+ * means: the apply + save + debounced re-paginate for each group, the catalogs
+ * the pickers list, and the colour derivation the header styles are generated
+ * from. The native Design sheet calls the same functions, and it never mounts
+ * this component — so a composition written here instead would exist for the
+ * web only. Each handler therefore writes through the controller and re-reads
+ * the group it wrote, because the settings live in storage, not in this state.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Image as ImageIcon, RotateCcw, Trash2, User, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -30,13 +32,23 @@ import { cn } from '@/lib/utils';
 import { PanelSection } from './PanelSection.jsx';
 import { getSettings } from '../../persistence.js';
 import {
+  COLOR_PALETTES,
+  LAYOUTS,
+  PAGE_SIZES,
+  SKILL_TAG_STYLES,
+  SPACING_PRESETS,
+  applyDesign,
+  clearDesignImage,
+  detectSpacingPreset,
+  generateDarkColor,
+  getCurrentColors,
+  resetDesign,
+  setDesignImage,
+} from '../../designController.js';
+import {
   FONT_PAIRINGS,
   SYSTEM_FONT_STACKS,
-  loadFontPairing,
-  loadGoogleFont,
-  applyFontSettings,
   getCurrentFontSettings,
-  saveFontSettings,
   searchGoogleFonts,
 } from '../../fontService.js';
 import {
@@ -44,242 +56,134 @@ import {
   PATTERN_STYLES,
   TEXTURE_STYLES,
   getHeaderStyleSettings,
-  saveHeaderStyleSettings,
-  applyHeaderStyle,
 } from '../../headerStyleService.js';
-import {
-  getSpacingSettings,
-  saveSpacingSettings,
-  applySpacingSettings,
-  resetSpacingSettings,
-} from '../../spacingService.js';
+import { getSpacingSettings } from '../../spacingService.js';
 import {
   UNDERLINE_STYLES,
   BULLET_STYLES,
   BORDER_RADIUS_PRESETS,
   getAccentSettings,
-  saveAccentSettings,
-  applyAccentSettings,
-  resetAccentSettings,
 } from '../../accentService.js';
 import {
   PHOTO_PLACEMENTS,
   PHOTO_SHAPES,
   PHOTO_SIZES,
   getPhotoSettings,
-  savePhotoSettings,
-  applyPhotoSettings,
-  removePhoto,
 } from '../../photoService.js';
 
 // ---------------------------------------------------------------------------
 // Static data (ported verbatim from structurePanel.js)
 // ---------------------------------------------------------------------------
 
-// Color palette definitions
-const COLOR_PALETTES = {
-  terracotta: { p1: '#c45c3e', p2: '#2d2a26', p3: '#f4e8e4' },
-  rose: { p1: '#e11d48', p2: '#4a1025', p3: '#fce7f3' },
-  amber: { p1: '#d97706', p2: '#451a03', p3: '#fef3c7' },
-  coral: { p1: '#f97316', p2: '#431407', p3: '#ffedd5' },
-  ocean: { p1: '#2563eb', p2: '#1e3a5f', p3: '#e8f0fe' },
-  teal: { p1: '#0d9488', p2: '#134e4a', p3: '#ccfbf1' },
-  forest: { p1: '#059669', p2: '#1a3c34', p3: '#e6f4f0' },
-  cyan: { p1: '#0891b2', p2: '#164e63', p3: '#cffafe' },
-  plum: { p1: '#7c3aed', p2: '#2d1f47', p3: '#f3e8ff' },
-  indigo: { p1: '#4f46e5', p2: '#1e1b4b', p3: '#e0e7ff' },
-  slate: { p1: '#64748b', p2: '#1e293b', p3: '#f1f5f9' },
-  zinc: { p1: '#52525b', p2: '#18181b', p3: '#f4f4f5' },
+// Layout thumbnails, keyed by the ids in the controller's LAYOUTS — the ids and
+// names live there because the native sheet lists the same layouts, and only
+// these Tailwind block previews (the old inline-SVG icons, redrawn on
+// bg-muted-foreground tints) are web-only.
+const LAYOUT_PREVIEWS = {
+  sidebar: (
+    <span className="flex h-12 w-full gap-1">
+      <span className="w-1/3 rounded-sm bg-muted-foreground/40" />
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+    </span>
+  ),
+  'right-sidebar': (
+    <span className="flex h-12 w-full gap-1">
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+      <span className="w-1/3 rounded-sm bg-muted-foreground/40" />
+    </span>
+  ),
+  stacked: (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="flex-1 rounded-sm bg-muted-foreground/40" />
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+    </span>
+  ),
+  'stacked-vertical': (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-3 rounded-sm bg-muted-foreground/40" />
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+      <span className="h-1.5 rounded-sm bg-muted-foreground/15" />
+    </span>
+  ),
+  compact: (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-3 rounded-sm bg-muted-foreground/40" />
+      <span className="flex flex-1 gap-1">
+        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+        <span className="w-2.5 rounded-sm bg-muted-foreground/25" />
+      </span>
+    </span>
+  ),
+  executive: (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-4 rounded-sm bg-muted-foreground/40" />
+      <span className="flex flex-1 gap-1">
+        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+        <span className="w-2.5 rounded-sm bg-muted-foreground/25" />
+      </span>
+    </span>
+  ),
+  classic: (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-3 rounded-sm bg-muted-foreground/40" />
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+    </span>
+  ),
+  'classic-featured': (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-2 rounded-sm bg-muted-foreground/40" />
+      <span className="h-2.5 rounded-sm bg-muted-foreground/25" />
+      <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+    </span>
+  ),
+  modern: (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-2.5 rounded-sm bg-muted-foreground/40" />
+      <span className="flex flex-1 gap-1">
+        <span className="w-1/4 rounded-sm bg-muted-foreground/25" />
+        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+      </span>
+    </span>
+  ),
+  timeline: (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-3 rounded-sm bg-muted-foreground/40" />
+      <span className="flex flex-1 gap-1.5">
+        <span className="ml-1 border-l border-dashed border-muted-foreground/40" />
+        <span className="flex flex-1 flex-col gap-1">
+          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+        </span>
+      </span>
+    </span>
+  ),
+  creative: (
+    <span className="flex h-12 w-full flex-col gap-1">
+      <span className="h-3.5 rounded-sm bg-muted-foreground/40" />
+      <span className="flex flex-1 gap-1">
+        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
+      </span>
+      <span className="h-2.5 rounded-sm bg-muted-foreground/25" />
+    </span>
+  ),
 };
 
-// Spacing presets
-const SPACING_PRESETS = {
-  compact: {
-    name: 'Compact',
-    description: 'Tighter spacing for more content',
-    fontScale: 0.9,
-    lineHeight: 1.3,
-    sectionSpacing: 0.6,
-    sidebarWidth: 2.0,
-    pageMargins: { top: 0.35, right: 0.35, bottom: 0.35, left: 0.35 },
-  },
-  normal: {
-    name: 'Normal',
-    description: 'Balanced and readable',
-    fontScale: 1.0,
-    lineHeight: 1.45,
-    sectionSpacing: 0.8,
-    sidebarWidth: 2.2,
-    pageMargins: { top: 0.4, right: 0.4, bottom: 0.4, left: 0.4 },
-  },
-  relaxed: {
-    name: 'Relaxed',
-    description: 'More breathing room',
-    fontScale: 1.05,
-    lineHeight: 1.6,
-    sectionSpacing: 1.0,
-    sidebarWidth: 2.4,
-    pageMargins: { top: 0.5, right: 0.5, bottom: 0.5, left: 0.5 },
-  },
-  airy: {
-    name: 'Airy',
-    description: 'Maximum whitespace',
-    fontScale: 1.1,
-    lineHeight: 1.75,
-    sectionSpacing: 1.2,
-    sidebarWidth: 2.5,
-    pageMargins: { top: 0.6, right: 0.6, bottom: 0.6, left: 0.6 },
-  },
+// Skill-tag samples, keyed the same way against the controller's
+// SKILL_TAG_STYLES. Each renders the style it selects.
+const SKILL_TAG_PREVIEWS = {
+  plain: <span className="text-xs text-muted-foreground">A • B</span>,
+  filled: (
+    <span className="rounded bg-primary px-1.5 py-0.5 text-xs text-primary-foreground">Skill</span>
+  ),
+  outlined: (
+    <span className="rounded border border-primary px-1.5 py-0.5 text-xs text-primary">Skill</span>
+  ),
+  minimal: <span className="text-xs text-muted-foreground underline">Skill</span>,
 };
-
-// Layout picker definitions — values/labels ported verbatim from the inline
-// grid; the old inline-SVG icons are recreated as Tailwind block thumbnails
-// (bg-muted-foreground tints on token colors only).
-const LAYOUT_OPTIONS = [
-  {
-    value: 'sidebar',
-    label: 'Sidebar',
-    preview: (
-      <span className="flex h-12 w-full gap-1">
-        <span className="w-1/3 rounded-sm bg-muted-foreground/40" />
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-      </span>
-    ),
-  },
-  {
-    value: 'right-sidebar',
-    label: 'Right side',
-    preview: (
-      <span className="flex h-12 w-full gap-1">
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-        <span className="w-1/3 rounded-sm bg-muted-foreground/40" />
-      </span>
-    ),
-  },
-  {
-    value: 'stacked',
-    label: 'Stacked',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="flex-1 rounded-sm bg-muted-foreground/40" />
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-      </span>
-    ),
-  },
-  {
-    value: 'stacked-vertical',
-    label: 'Flow',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-3 rounded-sm bg-muted-foreground/40" />
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-        <span className="h-1.5 rounded-sm bg-muted-foreground/15" />
-      </span>
-    ),
-  },
-  {
-    value: 'compact',
-    label: 'Compact',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-3 rounded-sm bg-muted-foreground/40" />
-        <span className="flex flex-1 gap-1">
-          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-          <span className="w-2.5 rounded-sm bg-muted-foreground/25" />
-        </span>
-      </span>
-    ),
-  },
-  {
-    value: 'executive',
-    label: 'Executive',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-4 rounded-sm bg-muted-foreground/40" />
-        <span className="flex flex-1 gap-1">
-          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-          <span className="w-2.5 rounded-sm bg-muted-foreground/25" />
-        </span>
-      </span>
-    ),
-  },
-  {
-    value: 'classic',
-    label: 'Classic',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-3 rounded-sm bg-muted-foreground/40" />
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-      </span>
-    ),
-  },
-  {
-    value: 'classic-featured',
-    label: 'Featured',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-2 rounded-sm bg-muted-foreground/40" />
-        <span className="h-2.5 rounded-sm bg-muted-foreground/25" />
-        <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-      </span>
-    ),
-  },
-  {
-    value: 'modern',
-    label: 'Modern',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-2.5 rounded-sm bg-muted-foreground/40" />
-        <span className="flex flex-1 gap-1">
-          <span className="w-1/4 rounded-sm bg-muted-foreground/25" />
-          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-        </span>
-      </span>
-    ),
-  },
-  {
-    value: 'timeline',
-    label: 'Timeline',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-3 rounded-sm bg-muted-foreground/40" />
-        <span className="flex flex-1 gap-1.5">
-          <span className="ml-1 border-l border-dashed border-muted-foreground/40" />
-          <span className="flex flex-1 flex-col gap-1">
-            <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-            <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-            <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-          </span>
-        </span>
-      </span>
-    ),
-  },
-  {
-    value: 'creative',
-    label: 'Creative',
-    preview: (
-      <span className="flex h-12 w-full flex-col gap-1">
-        <span className="h-3.5 rounded-sm bg-muted-foreground/40" />
-        <span className="flex flex-1 gap-1">
-          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-          <span className="flex-1 rounded-sm bg-muted-foreground/15" />
-        </span>
-        <span className="h-2.5 rounded-sm bg-muted-foreground/25" />
-      </span>
-    ),
-  },
-];
-
-// Page-size options for the Page Setup section (value → human label with dims).
-const PAGE_SIZE_OPTIONS = [
-  { value: 'continuous', label: 'Continuous' },
-  { value: 'letter', label: 'Letter (8.5 × 11 in)' },
-  { value: 'a4', label: 'A4 (210 × 297 mm)' },
-  { value: 'legal', label: 'Legal (8.5 × 14 in)' },
-  { value: 'tabloid', label: 'Tabloid (11 × 17 in)' },
-];
 
 // Image-focus position titles (ported verbatim from the position grid).
 const PHOTO_FOCUS_POSITIONS = [
@@ -309,19 +213,9 @@ const PHOTO_FOCUS_TITLES = {
 // Local helpers (ported verbatim)
 // ---------------------------------------------------------------------------
 
-// Helper to generate dark color from hex
-function generateDarkColor(hex) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  // Darken by 70%
-  const dr = Math.round(r * 0.2).toString(16).padStart(2, '0');
-  const dg = Math.round(g * 0.2).toString(16).padStart(2, '0');
-  const db = Math.round(b * 0.2).toString(16).padStart(2, '0');
-  return `#${dr}${dg}${db}`;
-}
-
-// Helper to generate light color from hex
+// Helper to generate light color from hex. Its dark counterpart lives in the
+// controller, where getCurrentColors needs it; this one only ever paints the
+// third band of the custom swatch.
 function generateLightColor(hex) {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -331,50 +225,6 @@ function generateLightColor(hex) {
   const lg = Math.round(g + (255 - g) * 0.9).toString(16).padStart(2, '0');
   const lb = Math.round(b + (255 - b) * 0.9).toString(16).padStart(2, '0');
   return `#${lr}${lg}${lb}`;
-}
-
-// Helper to adjust color brightness (used by getCurrentColors)
-function adjustColorBrightness(hex, factor) {
-  hex = hex.replace('#', '');
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-
-  const newR = Math.min(255, Math.max(0, Math.round(r + (255 - r) * factor)));
-  const newG = Math.min(255, Math.max(0, Math.round(g + (255 - g) * factor)));
-  const newB = Math.min(255, Math.max(0, Math.round(b + (255 - b) * factor)));
-
-  return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
-}
-
-// Dispatch the design-change event consumed by main.js. Only palette / layout /
-// customColor go through here; main.js is a no-op for the other detail types.
-function dispatchDesignChange(detail) {
-  window.dispatchEvent(new CustomEvent('rd:design-change', { detail }));
-}
-
-// Spacing and font changes alter the rendered height but only apply CSS / load a
-// font — they don't re-split paginated sheets. Debounce a re-paginate (main.js
-// no-ops it in continuous mode) so a slider drag stays smooth and the breaks
-// settle once the change lands.
-let repaginateTimer = null;
-function scheduleRepaginate() {
-  clearTimeout(repaginateTimer);
-  repaginateTimer = setTimeout(() => dispatchDesignChange({ type: 'spacing' }), 200);
-}
-
-// Detect if current spacing matches a preset (ported verbatim)
-function detectSpacingPreset(spacing) {
-  for (const [id, preset] of Object.entries(SPACING_PRESETS)) {
-    if (
-      Math.abs(spacing.fontScale - preset.fontScale) < 0.05 &&
-      Math.abs(spacing.lineHeight - preset.lineHeight) < 0.1 &&
-      Math.abs(spacing.sectionSpacing - preset.sectionSpacing) < 0.1
-    ) {
-      return id;
-    }
-  }
-  return null;
 }
 
 // The old .design-palette-preview three-stripe swatch, as a data-driven inline
@@ -532,55 +382,37 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
   const [accent, setAccent] = useState(() => getAccentSettings());
   const [photo, setPhoto] = useState(() => getPhotoSettings());
 
-  // ----- Derived color values (mirrors vanilla getCurrentColors) -----------
-  function getCurrentColors() {
-    const p = COLOR_PALETTES[palette];
-    if (palette === 'custom') {
-      return {
-        headerBg: generateDarkColor(customColor),
-        headerBgEnd: adjustColorBrightness(generateDarkColor(customColor), 0.1),
-        accent: customColor,
-      };
-    }
-    return {
-      headerBg: p.p2,
-      headerBgEnd: adjustColorBrightness(p.p2, 0.15),
-      accent: p.p1,
-    };
-  }
-
   // ===== Color Theme handlers ==============================================
 
   function handleSetPalette(key) {
     setPalette(key);
-    dispatchDesignChange({ type: 'palette', value: key, customColor });
+    applyDesign({ group: 'color', property: 'palette', value: key });
   }
 
   function handleCustomColorChange(color) {
     setCustomColor(color);
-    // If custom palette is active, apply immediately (matches vanilla).
-    if (palette === 'custom') {
-      dispatchDesignChange({ type: 'customColor', value: color });
-    }
+    // The controller applies this only while the custom palette is active; on
+    // any other palette it just stores the colour the swatch is previewing.
+    applyDesign({ group: 'color', property: 'customColor', value: color });
   }
 
   // ===== Layout handler ====================================================
 
   function handleSetLayout(value) {
     setLayout(value);
-    dispatchDesignChange({ type: 'layout', value });
+    applyDesign({ group: 'layout', property: 'value', value });
   }
 
   // ===== Page Setup handlers ===============================================
 
   function handleSetPageSize(value) {
     setPageSize(value);
-    dispatchDesignChange({ type: 'pageSize', value });
+    applyDesign({ group: 'page', property: 'size', value });
   }
 
   function handleSetOrientation(value) {
     setOrientation(value);
-    dispatchDesignChange({ type: 'orientation', value });
+    applyDesign({ group: 'page', property: 'orientation', value });
   }
 
   function handleSetGroupPositions(value) {
@@ -588,13 +420,14 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
     // Collapsing a run into flat cards changes block heights, so the sheets must
     // re-split — a stale .resume-page split is how content gets clipped out of
     // the exported PDF.
-    dispatchDesignChange({ type: 'groupPositions', value });
+    applyDesign({ group: 'page', property: 'groupPositions', value });
   }
 
   function handleSetPageWidth(raw) {
+    // The field keeps whatever was typed; the controller ignores anything that
+    // is not yet a width.
     setPageWidthIn(raw);
-    const n = parseFloat(raw);
-    if (Number.isFinite(n) && n > 0) dispatchDesignChange({ type: 'pageWidthIn', value: n });
+    applyDesign({ group: 'page', property: 'widthIn', value: raw });
   }
 
   // ===== Typography handlers ===============================================
@@ -629,198 +462,102 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
   }
 
   async function handleSelectFontPreset(presetId) {
-    const next = { mode: 'preset', pairingId: presetId };
-    await loadFontPairing(presetId);
-    applyFontSettings(next);
-    saveFontSettings(next);
-    setFontSettings(next);
-    scheduleRepaginate();
+    await applyDesign({ group: 'fonts', property: 'pairing', value: presetId });
+    setFontSettings(getCurrentFontSettings());
   }
 
   async function handleSelectGoogleFont(family, category, fontType) {
-    await loadGoogleFont(family, [400, 500, 600, 700]);
-
-    let next = fontSettings;
-    if (next.mode !== 'google') {
-      next = { mode: 'google', displayFont: null, bodyFont: null };
-    } else {
-      next = { ...next };
-    }
-
-    if (fontType === 'display') {
-      next.displayFont = { family, category };
-    } else if (fontType === 'body') {
-      next.bodyFont = { family, category };
-    }
-
-    applyFontSettings(next);
-    saveFontSettings(next);
-    setFontSettings(next);
-    scheduleRepaginate();
+    await applyDesign({
+      group: 'fonts',
+      property: fontType,
+      value: `google:${family}:${category}`,
+    });
+    setFontSettings(getCurrentFontSettings());
   }
 
-  function handleSelectSystemFont(fontId, fontType) {
-    let next = fontSettings;
-    if (next.mode !== 'system') {
-      next = { mode: 'system', displayFont: null, bodyFont: null };
-    } else {
-      next = { ...next };
-    }
-
-    if (fontType === 'display') {
-      next.displayFont = fontId;
-    } else if (fontType === 'body') {
-      next.bodyFont = fontId;
-    }
-
-    applyFontSettings(next);
-    saveFontSettings(next);
-    setFontSettings(next);
-    scheduleRepaginate();
+  async function handleSelectSystemFont(fontId, fontType) {
+    await applyDesign({ group: 'fonts', property: fontType, value: `system:${fontId}` });
+    setFontSettings(getCurrentFontSettings());
   }
 
   // ===== Header Style handlers =============================================
 
+  async function handleHeaderChange(property, value) {
+    await applyDesign({ group: 'header', property, value });
+    setHeaderStyle(getHeaderStyleSettings());
+  }
+
   function handleSelectHeaderStyle(styleType, styleId) {
-    const next = { ...headerStyle, type: styleType, styleId };
-    applyHeaderStyle(next, getCurrentColors());
-    saveHeaderStyleSettings(next);
-    setHeaderStyle(next);
-  }
-
-  function handleHeaderImageOpacity(value) {
-    const next = { ...headerStyle, imageOpacity: parseInt(value, 10) / 100 };
-    applyHeaderStyle(next, getCurrentColors());
-    saveHeaderStyleSettings(next);
-    setHeaderStyle(next);
-  }
-
-  function handleHeaderImageFit(value) {
-    const next = { ...headerStyle, imageFit: value };
-    applyHeaderStyle(next, getCurrentColors());
-    saveHeaderStyleSettings(next);
-    setHeaderStyle(next);
+    return handleHeaderChange('style', `${styleType}:${styleId}`);
   }
 
   function handleRemoveHeaderImage() {
-    const next = {
-      type: 'gradient',
-      styleId: 'linear-135',
-      customImage: null,
-      imageOpacity: 0.3,
-      imageFit: 'cover',
-    };
-    applyHeaderStyle(next, getCurrentColors());
-    saveHeaderStyleSettings(next);
-    setHeaderStyle(next);
+    clearDesignImage('header');
+    setHeaderStyle(getHeaderStyleSettings());
   }
 
   function handleHeaderImageFile(file) {
     if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-      const next = {
-        ...headerStyle,
-        type: 'image',
-        styleId: 'custom',
-        customImage: e.target.result,
-        imageOpacity: headerStyle.imageOpacity || 0.3,
-        imageFit: headerStyle.imageFit || 'cover',
-      };
-      applyHeaderStyle(next, getCurrentColors());
-      saveHeaderStyleSettings(next);
-      setHeaderStyle(next);
+      setDesignImage('header', e.target.result);
+      setHeaderStyle(getHeaderStyleSettings());
     };
     reader.readAsDataURL(file);
   }
 
   // ===== Spacing handlers ==================================================
 
-  function handleSpacingChange(property, value) {
-    const next = { ...spacing, [property]: value };
-    applySpacingSettings(next);
-    saveSpacingSettings(next);
-    setSpacing(next);
-    scheduleRepaginate();
-  }
-
-  function handleMarginChange(side, value) {
-    const next = { ...spacing, pageMargins: { ...spacing.pageMargins, [side]: value } };
-    applySpacingSettings(next);
-    saveSpacingSettings(next);
-    setSpacing(next);
-    scheduleRepaginate();
+  async function handleSpacingChange(property, value) {
+    await applyDesign({ group: 'spacing', property, value });
+    setSpacing(getSpacingSettings());
   }
 
   function handleResetSpacing() {
-    setSpacing(resetSpacingSettings());
-    scheduleRepaginate();
-  }
-
-  function handleApplySpacingPreset(presetId) {
-    const preset = SPACING_PRESETS[presetId];
-    if (!preset) return;
-    const next = {
-      fontScale: preset.fontScale,
-      lineHeight: preset.lineHeight,
-      sectionSpacing: preset.sectionSpacing,
-      sidebarWidth: preset.sidebarWidth,
-      pageMargins: { ...preset.pageMargins },
-    };
-    applySpacingSettings(next);
-    saveSpacingSettings(next);
-    setSpacing(next);
-    scheduleRepaginate();
+    resetDesign('spacing');
+    setSpacing(getSpacingSettings());
   }
 
   // ===== Accent handlers ===================================================
 
-  function handleAccentChange(property, value) {
-    const next = { ...accent, [property]: value };
-    applyAccentSettings(next);
-    saveAccentSettings(next);
-    setAccent(next);
-    // Some accent options change layout height (e.g. filled/outlined skill-tag
-    // styles add padding), so a fixed page size needs fresh page breaks.
-    scheduleRepaginate();
+  async function handleAccentChange(property, value) {
+    await applyDesign({ group: 'accent', property, value });
+    setAccent(getAccentSettings());
   }
 
   function handleResetAccent() {
-    setAccent(resetAccentSettings());
-    scheduleRepaginate();
+    resetDesign('accent');
+    setAccent(getAccentSettings());
   }
 
   // ===== Photo handlers ====================================================
 
-  function handlePhotoChange(property, value) {
-    const next = { ...photo, [property]: value };
-    applyPhotoSettings(next);
-    savePhotoSettings(next);
-    setPhoto(next);
-    scheduleRepaginate();
+  async function handlePhotoChange(property, value) {
+    await applyDesign({ group: 'photo', property, value });
+    setPhoto(getPhotoSettings());
   }
 
   function handleRemovePhoto() {
-    setPhoto(removePhoto());
-    scheduleRepaginate();
+    clearDesignImage('photo');
+    setPhoto(getPhotoSettings());
   }
 
   function handlePhotoFile(file) {
     if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-      const next = { ...photo, enabled: true, imageData: e.target.result };
-      applyPhotoSettings(next);
-      savePhotoSettings(next);
-      setPhoto(next);
-      scheduleRepaginate();
+      setDesignImage('photo', e.target.result);
+      setPhoto(getPhotoSettings());
     };
     reader.readAsDataURL(file);
   }
 
   // ===== Derived view values ===============================================
   const previewFonts = getCurrentPreviewFonts();
-  const colors = getCurrentColors();
+  // The controller derives these from stored settings, which means a storage
+  // read; the two state values below are the mirror of exactly the two fields
+  // it reads, so this recomputes when they change and not on every slider frame.
+  const colors = useMemo(getCurrentColors, [palette, customColor]);
   const isSolidHeader = headerStyle.type === 'solid';
   const currentSpacingPreset = detectSpacingPreset(spacing);
   const bulletChar = BULLET_STYLES[accent.bulletStyle]?.char || '•';
@@ -900,9 +637,9 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {PAGE_SIZE_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
+              {PAGE_SIZES.map((o) => (
+                <SelectItem key={o.id} value={o.id}>
+                  {o.name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -958,7 +695,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
               key={key}
               type="button"
               aria-pressed={palette === key}
-              title={key.charAt(0).toUpperCase() + key.slice(1)}
+              title={c.name}
               onClick={() => handleSetPalette(key)}
               className={cn(
                 'h-[34px] w-full rounded-lg border',
@@ -1075,7 +812,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
                       max={100}
                       step={1}
                       value={[Math.round((headerStyle.imageOpacity || 0.3) * 100)]}
-                      onValueChange={([v]) => handleHeaderImageOpacity(v)}
+                      onValueChange={([v]) => handleHeaderChange('imageOpacity', v / 100)}
                     />
 
                     <ControlGroup label="Fit">
@@ -1086,7 +823,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
                           { value: 'tile', label: 'Tile' },
                         ]}
                         value={headerStyle.imageFit}
-                        onChange={handleHeaderImageFit}
+                        onChange={(v) => handleHeaderChange('imageFit', v)}
                       />
                     </ControlGroup>
                   </>
@@ -1336,17 +1073,17 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
       {/* ===== Layout ===== */}
       <PanelSection title="Layout" {...sectionProps('layout')}>
         <div className="grid grid-cols-2 gap-2">
-          {LAYOUT_OPTIONS.map((opt) => (
+          {LAYOUTS.map((opt) => (
             <button
-              key={opt.value}
+              key={opt.id}
               type="button"
-              aria-pressed={layout === opt.value}
-              title={opt.label}
-              onClick={() => handleSetLayout(opt.value)}
-              className={tileClass(layout === opt.value, 'flex flex-col items-center gap-2 rounded-lg p-2.5')}
+              aria-pressed={layout === opt.id}
+              title={opt.name}
+              onClick={() => handleSetLayout(opt.id)}
+              className={tileClass(layout === opt.id, 'flex flex-col items-center gap-2 rounded-lg p-2.5')}
             >
-              {opt.preview}
-              <span className="block w-full truncate text-center text-xs font-medium">{opt.label}</span>
+              {LAYOUT_PREVIEWS[opt.id]}
+              <span className="block w-full truncate text-center text-xs font-medium">{opt.name}</span>
             </button>
           ))}
         </div>
@@ -1364,7 +1101,7 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
             title: preset.description,
           }))}
           value={currentSpacingPreset}
-          onChange={handleApplySpacingPreset}
+          onChange={(id) => handleSpacingChange('preset', id)}
         />
 
         <div className="flex items-center gap-2">
@@ -1416,22 +1153,25 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         {/* Page margins */}
         <ControlGroup label="Page margins (inches)">
           <div className="grid grid-cols-4 gap-1.5">
-            {['top', 'right', 'bottom', 'left'].map((side) => (
-              <div key={side} className="space-y-1">
-                <Label className="text-xs text-muted-foreground">
-                  {side.charAt(0).toUpperCase() + side.slice(1)}
-                </Label>
-                <Input
-                  type="number"
-                  step="0.1"
-                  min="0.2"
-                  max="1.0"
-                  className="h-8 px-2"
-                  value={spacing.pageMargins[side]}
-                  onChange={(e) => handleMarginChange(side, parseFloat(e.target.value))}
-                />
-              </div>
-            ))}
+            {['top', 'right', 'bottom', 'left'].map((side) => {
+              // 'top' → 'Top' for the label and 'marginTop' for the controller,
+              // which flattens pageMargins the way the wire shape does.
+              const label = side.charAt(0).toUpperCase() + side.slice(1);
+              return (
+                <div key={side} className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{label}</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0.2"
+                    max="1.0"
+                    className="h-8 px-2"
+                    value={spacing.pageMargins[side]}
+                    onChange={(e) => handleSpacingChange(`margin${label}`, e.target.value)}
+                  />
+                </div>
+              );
+            })}
           </div>
         </ControlGroup>
       </PanelSection>
@@ -1555,58 +1295,21 @@ export default function DesignTab({ sectionProps = () => ({}) }) {
         {/* Skill tag style */}
         <ControlGroup label="Skill tags">
           <div className="grid grid-cols-4 gap-1.5">
-            <button
-              type="button"
-              aria-pressed={accent.skillTagStyle === 'plain'}
-              title="Plain (bullet-separated)"
-              onClick={() => handleAccentChange('skillTagStyle', 'plain')}
-              className={tileClass(
-                accent.skillTagStyle === 'plain',
-                'flex h-9 items-center justify-center',
-              )}
-            >
-              <span className="text-xs text-muted-foreground">A • B</span>
-            </button>
-            <button
-              type="button"
-              aria-pressed={accent.skillTagStyle === 'filled'}
-              title="Filled"
-              onClick={() => handleAccentChange('skillTagStyle', 'filled')}
-              className={tileClass(
-                accent.skillTagStyle === 'filled',
-                'flex h-9 items-center justify-center',
-              )}
-            >
-              <span className="rounded bg-primary px-1.5 py-0.5 text-xs text-primary-foreground">
-                Skill
-              </span>
-            </button>
-            <button
-              type="button"
-              aria-pressed={accent.skillTagStyle === 'outlined'}
-              title="Outlined"
-              onClick={() => handleAccentChange('skillTagStyle', 'outlined')}
-              className={tileClass(
-                accent.skillTagStyle === 'outlined',
-                'flex h-9 items-center justify-center',
-              )}
-            >
-              <span className="rounded border border-primary px-1.5 py-0.5 text-xs text-primary">
-                Skill
-              </span>
-            </button>
-            <button
-              type="button"
-              aria-pressed={accent.skillTagStyle === 'minimal'}
-              title="Minimal"
-              onClick={() => handleAccentChange('skillTagStyle', 'minimal')}
-              className={tileClass(
-                accent.skillTagStyle === 'minimal',
-                'flex h-9 items-center justify-center',
-              )}
-            >
-              <span className="text-xs text-muted-foreground underline">Skill</span>
-            </button>
+            {Object.entries(SKILL_TAG_STYLES).map(([id, style]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={accent.skillTagStyle === id}
+                title={style.description}
+                onClick={() => handleAccentChange('skillTagStyle', id)}
+                className={tileClass(
+                  accent.skillTagStyle === id,
+                  'flex h-9 items-center justify-center',
+                )}
+              >
+                {SKILL_TAG_PREVIEWS[id]}
+              </button>
+            ))}
           </div>
         </ControlGroup>
 

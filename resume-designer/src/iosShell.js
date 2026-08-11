@@ -75,7 +75,7 @@ export function hasOpenModal(root = document) {
  */
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
-  document: outline = null, chat = null, library = null,
+  document: outline = null, chat = null, library = null, design = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -97,6 +97,7 @@ export function buildSnapshot({
     document: outline,
     chat,
     library,
+    design,
   };
 }
 
@@ -405,6 +406,152 @@ export function buildChatView({
 }
 
 /**
+ * Project the design settings and the pickers' catalogs for the native Design
+ * sheet.
+ *
+ * Two things at once, and both have to be here. The SETTINGS are what the
+ * controls read; the CATALOGS are every palette, header style, font pairing and
+ * Google font the pickers offer. Swift holds no catalog of its own, so a style
+ * added to headerStyleService.js appears on iOS with no Swift change — and,
+ * more importantly, Swift can only ever send back an id it was GIVEN, the same
+ * property that keeps the structure panel's path grammar single-sourced.
+ *
+ * Everything crosses as a String, Bool or Double. Swift decodes this into one
+ * Codable struct, so a `null` where it expects a Double fails the WHOLE decode:
+ * a single malformed catalog row would blank the entire sheet rather than its
+ * own line. That is why every value below is coerced instead of trusted, and
+ * why ids that could not round-trip are dropped rather than passed on.
+ *
+ * Pure — no DOM, no storage.
+ *
+ * @param {object|null} state what `designController.getDesignState()` returns
+ */
+export function buildDesign(state) {
+  const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+  const text = (v) => (typeof v === 'string' ? v : '');
+  // 0, never the service's own default. A number that only appears when the
+  // read went wrong must not look like a setting the user chose — nobody picks
+  // a zero font scale, but a 1.0 sitting in a broken sheet is indistinguishable
+  // from a real one. It also keeps the defaults single-sourced in
+  // spacingService/accentService rather than restated on the wire.
+  const num = (v) => (Number.isFinite(v) ? v : 0);
+  // An entry with no id cannot be selected, and duplicates a SwiftUI ForEach
+  // identity if another blank one follows it.
+  const rows = (v) => (Array.isArray(v) ? v : []).filter((o) => o && typeof o.id === 'string' && o.id);
+  // Falling back to the id rather than to 'Untitled': these are catalog rows,
+  // and 'linear-135' at least tells the user which one they are tapping.
+  const options = (v) => rows(v).map((o) => ({ id: o.id, name: text(o.name) || o.id }));
+
+  const s = obj(state);
+  const page = obj(s.page);
+  const color = obj(s.color);
+  const header = obj(s.header);
+  const fonts = obj(s.fonts);
+  const spacing = obj(s.spacing);
+  const accent = obj(s.accent);
+  const photo = obj(s.photo);
+
+  return {
+    page: {
+      size: text(page.size),
+      orientation: text(page.orientation),
+      widthIn: num(page.widthIn),
+      groupPositions: !!page.groupPositions,
+    },
+    pageSizes: options(s.pageSizes),
+    color: { palette: text(color.palette), customColor: text(color.customColor) },
+    // Three swatches per row, not the palette's semantics: the sheet paints
+    // them and nothing else, so accent/header/sidebar stay a web concern.
+    palettes: rows(s.palettes).map((p) => ({
+      id: p.id, name: text(p.name) || p.id, p1: text(p.p1), p2: text(p.p2), p3: text(p.p3),
+    })),
+    layout: text(s.layout),
+    layouts: options(s.layouts),
+    header: {
+      type: text(header.type),
+      styleId: text(header.styleId),
+      imageOpacity: num(header.imageOpacity),
+      imageFit: text(header.imageFit),
+      // Whether an image is set, NEVER the image. A header photo is a
+      // multi-megabyte data URL and this snapshot goes out on every publish;
+      // the canvas is already rendering it a few pixels away.
+      hasImage: !!header.hasImage,
+    },
+    headerStyles: rows(s.headerStyles).map((h) => ({
+      id: h.id,
+      name: text(h.name) || h.id,
+      group: text(h.group),
+      // The resolved CSS background, so a native swatch can preview the style
+      // itself instead of listing thirty names the user has to try one by one.
+      css: text(h.css),
+    })),
+    fonts: {
+      mode: text(fonts.mode),
+      // '' when a custom pair matches no preset — the contract says never null,
+      // because Swift binds this to a String selection.
+      pairingId: text(fonts.pairingId),
+      displayName: text(fonts.displayName),
+      bodyName: text(fonts.bodyName),
+    },
+    fontPairings: rows(s.fontPairings).map((p) => ({
+      id: p.id, name: text(p.name) || p.id, display: text(p.display), body: text(p.body),
+    })),
+    systemFonts: options(s.systemFonts),
+    // Keyed by family, which is also the value `setDesign` sends back; a font
+    // with no family names nothing and could not be loaded.
+    googleFonts: (Array.isArray(s.googleFonts) ? s.googleFonts : [])
+      .filter((f) => f && typeof f.family === 'string' && f.family)
+      .map((f) => ({ family: f.family, category: text(f.category) })),
+    spacing: {
+      fontScale: num(spacing.fontScale),
+      lineHeight: num(spacing.lineHeight),
+      sectionSpacing: num(spacing.sectionSpacing),
+      sidebarWidth: num(spacing.sidebarWidth),
+      marginTop: num(spacing.marginTop),
+      marginRight: num(spacing.marginRight),
+      marginBottom: num(spacing.marginBottom),
+      marginLeft: num(spacing.marginLeft),
+      // '' once a slider has moved off every preset, so the sheet shows no
+      // preset selected rather than the one the values no longer match.
+      presetId: text(spacing.presetId),
+    },
+    spacingPresets: options(s.spacingPresets),
+    accent: {
+      underlineStyle: text(accent.underlineStyle),
+      underlineWidth: num(accent.underlineWidth),
+      bulletStyle: text(accent.bulletStyle),
+      borderRadius: text(accent.borderRadius),
+      skillTagStyle: text(accent.skillTagStyle),
+      showCornerTriangle: !!accent.showCornerTriangle,
+      showSidebarGradient: !!accent.showSidebarGradient,
+    },
+    underlines: options(s.underlines),
+    bullets: rows(s.bullets).map((b) => ({
+      id: b.id,
+      name: text(b.name) || b.id,
+      // '' is a real glyph here — it is what the 'none' bullet style renders.
+      char: text(b.char),
+    })),
+    radii: options(s.radii),
+    skillTags: options(s.skillTags),
+    photo: {
+      enabled: !!photo.enabled,
+      // Same rule as the header image: presence only.
+      hasImage: !!photo.hasImage,
+      placement: text(photo.placement),
+      shape: text(photo.shape),
+      size: text(photo.size),
+      borderColor: text(photo.borderColor),
+      objectPosition: text(photo.objectPosition),
+      scale: num(photo.scale),
+    },
+    placements: options(s.placements),
+    shapes: options(s.shapes),
+    sizes: options(s.sizes),
+  };
+}
+
+/**
  * Build the command dispatcher from a map of `type → handler`.
  *
  * Returns a function that never throws: a handler that blows up must not take
@@ -581,6 +728,7 @@ let chatView = null;
 let streamLibrary = false;
 let libraryQuery = '';
 let libraryDeep = false;
+let streamDesign = false;
 let publish = () => {};
 
 /**
@@ -725,6 +873,39 @@ export function initIOSShell(deps) {
       streamDocument = value === 'true';
       publish();
     },
+    // The Design sheet. Gated for the same reason the outline is, only more so:
+    // the catalogs are the largest payload the bridge carries and they never
+    // change, so streaming them alongside every canvas re-render would spend the
+    // most bytes on the least news.
+    setDesignOpen: ({ value }) => {
+      streamDesign = value === 'true';
+      publish();
+    },
+    // `setDesign` is the ONLY way design settings are written from Swift, the
+    // way `setField` is for the document. Swift names a group and a property it
+    // was handed in the projection and returns a string; designController owns
+    // every coercion and every service call, so what a design setting MEANS is
+    // never decided twice.
+    //
+    // Each write republishes because the sheet cannot derive what a write
+    // changes elsewhere: moving one spacing slider empties `presetId`, and
+    // picking a font empties `pairingId`. Without the re-push the sheet keeps a
+    // preset highlighted that the values no longer match.
+    setDesign: ({ group, property, value }) => {
+      if (typeof group !== 'string' || !group) throw new Error('setDesign needs a group');
+      if (typeof property !== 'string' || !property) throw new Error('setDesign needs a property');
+      deps.applyDesign({ group, property, value: String(value ?? '') });
+      publish();
+    },
+    resetDesign: ({ group }) => { deps.resetDesign(String(group ?? '')); publish(); },
+    // Images travel native → web only. Swift reads the picked photo and sends a
+    // data URL; nothing sends one back, which is what `hasImage` is for.
+    setDesignImage: ({ target, dataUrl }) => {
+      if (typeof dataUrl !== 'string' || !dataUrl) throw new Error('setDesignImage needs a dataUrl');
+      deps.setDesignImage(String(target ?? ''), dataUrl);
+      publish();
+    },
+    clearDesignImage: ({ target }) => { deps.clearDesignImage(String(target ?? '')); publish(); },
 
     // Settings, for the native sheet. Each writes through the same service the
     // web dialog uses, then republishes so the sheet reflects what landed
@@ -786,6 +967,7 @@ export function initIOSShell(deps) {
           settings: readSettings(),
           document: streamDocument ? deps.getDocument() : null,
           library: streamLibrary ? deps.getLibrary(libraryQuery, libraryDeep) : null,
+          design: streamDesign ? deps.getDesign() : null,
           chat: streamChat
             ? { ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()) }
             : null,
