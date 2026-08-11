@@ -222,6 +222,23 @@ function saveZoom() {
   appStorage.setItem('resume-zoom', currentZoom.toString());
 }
 
+/**
+ * Set the zoom programmatically, clamped to the same range the buttons use.
+ *
+ * Exported for the native iOS shell, where a pinch drives THIS model rather
+ * than WKWebView's own scroll-view zoom. Those were two independent scales on
+ * one canvas: the buttons moved the CSS transform, the pinch moved the webview,
+ * and the readout only ever tracked the first — so pinching moved the page and
+ * the percentage sat still. The webview's zoom is disabled on iOS (see
+ * `lockViewportScale` in iosShell.js) and this is the single survivor, because
+ * it is the one that can go BELOW 100% to fit a whole page.
+ */
+export function setZoomLevel(level) {
+  if (!Number.isFinite(level)) return currentZoom;
+  setZoom(Math.min(Math.max(level, MIN_ZOOM), MAX_ZOOM));
+  return currentZoom;
+}
+
 // Get current zoom level (for external use)
 export function getZoom() {
   return currentZoom;

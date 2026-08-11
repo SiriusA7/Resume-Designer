@@ -26,7 +26,7 @@ import { initInlineChanges, decorateRenderedResume, isPreviewSuppressed } from '
 import { applyPendingToData } from './changePreview.js';
 import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
-import { initZoomControls, getZoom, fitToView } from './zoomControls.js';
+import { initZoomControls, getZoom, fitToView, setZoomLevel } from './zoomControls.js';
 import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
 import { initIOSShell, buildDocumentOutline } from './iosShell.js';
 import { initWindowDrag } from './tauriDrag.js';
@@ -540,7 +540,7 @@ export async function init() {
   // its commands drive the controls and window globals set up above.
   initIOSShell({
     subscribeVariants, getVariantsSnapshot, loadVariant, duplicateVariant,
-    exportCurrentVariant, getZoom, fitToView, openSettings,
+    exportCurrentVariant, getZoom, fitToView, setZoomLevel, openSettings,
     // Settings sheet.
     getTheme, setTheme, getSettings, saveSettings, saveApiKey, getAppInfo,
     exportFullBackupWithFeedback, importBackupFromFile,

@@ -136,6 +136,22 @@ final class ShellModel: ObservableObject {
   /// Weak: the webview belongs to wry and is retained by the view hierarchy.
   weak var webView: WKWebView?
 
+  /// Percent last sent, so a pinch does not fire a command per touch event.
+  private var lastZoomPercentSent = -1
+
+  /// Drive the web zoom model from a native pinch.
+  ///
+  /// Clamped to the same range `zoomControls.js` uses, and throttled to whole
+  /// percent changes — a pinch delivers events far faster than the store wants
+  /// writes, and the readout cannot show more precision than this anyway.
+  func setZoom(_ value: Double) {
+    let clamped = min(max(value, 0.25), 2.0)
+    let percent = Int((clamped * 100).rounded())
+    guard percent != lastZoomPercentSent else { return }
+    lastZoomPercentSent = percent
+    send("setZoom", ["value": String(format: "%.4f", clamped)])
+  }
+
   /// Send a command to `window.__opShell.command()`.
   ///
   /// The payload crosses as a JS *string literal* rather than an object
@@ -291,6 +307,29 @@ final class OPShell: NSObject {
 
   @MainActor private static var handedOver = false
 
+  /// Turn off WKWebView's own pinch zoom, so the app's CSS zoom model — the
+  /// only one that reaches below 100% — is the single scale on the canvas.
+  ///
+  /// Called AFTER the handover, not at install: WebKit creates the scroll
+  /// view's `pinchGestureRecognizer` lazily once the page and its viewport are
+  /// parsed, so at install time it is still nil and disabling it is a silent
+  /// no-op. Measured — that is exactly what the first version of this did, and
+  /// a pinch went on scaling the page while the toolbar's readout sat still.
+  ///
+  /// Re-asserted once a second later because the recognizer can arrive after
+  /// the first JS callback returns.
+  @MainActor
+  private static func disableWebViewPinch(attempt: Int = 0) {
+    guard let scrollView = model?.webView?.scrollView else { return }
+    scrollView.pinchGestureRecognizer?.isEnabled = false
+    scrollView.minimumZoomScale = 1
+    scrollView.maximumZoomScale = 1
+    scrollView.bouncesZoom = false
+    if attempt == 0 {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { disableWebViewPinch(attempt: 1) }
+    }
+  }
+
   /// Hand the web side the class that hides its own chrome and ask it for a
   /// first snapshot.
   ///
@@ -327,6 +366,7 @@ final class OPShell: NSObject {
         if result as? Bool == true, !handedOver {
           handedOver = true
           NSLog("[OPShell] web chrome handed over after \(attempt) retries")
+          disableWebViewPinch()
         } else if let error, attempt == 0 {
           NSLog("[OPShell] first activation attempt errored (expected while loading): \(error)")
         }
@@ -364,10 +404,40 @@ final class OPShell: NSObject {
 private struct CanvasHost: UIViewControllerRepresentable {
   let taoController: UIViewController?
   let webView: UIView
+  let onPinch: (CGFloat, UIGestureRecognizer.State) -> Void
+
+  /// A real `UIPinchGestureRecognizer`, not SwiftUI's `MagnifyGesture`.
+  ///
+  /// SwiftUI gestures attached to a hosted UIKit view lose the arbitration to
+  /// WKWebView's own recognizers — measured: `MagnifyGesture.onChanged` never
+  /// fired once while the page went on scaling underneath. Attaching the
+  /// recognizer directly, with a delegate that allows simultaneous recognition,
+  /// puts us in the same arbitration WebKit is in rather than above it.
+  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    let onPinch: (CGFloat, UIGestureRecognizer.State) -> Void
+    init(onPinch: @escaping (CGFloat, UIGestureRecognizer.State) -> Void) {
+      self.onPinch = onPinch
+    }
+    @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+      onPinch(recognizer.scale, recognizer.state)
+    }
+    func gestureRecognizer(
+      _ gestureRecognizer: UIGestureRecognizer,
+      shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { true }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(onPinch: onPinch) }
 
   func makeUIViewController(context: Context) -> UIViewController {
     let container = UIViewController()
     container.view.backgroundColor = .systemBackground
+
+    let pinch = UIPinchGestureRecognizer(
+      target: context.coordinator, action: #selector(Coordinator.handlePinch(_:))
+    )
+    pinch.delegate = context.coordinator
+    container.view.addGestureRecognizer(pinch)
 
     // ios_view.rs drives these views by frame + autoresizing mask. Inside
     // SwiftUI it has to be Auto Layout's job instead, which is also why
@@ -429,6 +499,8 @@ private struct ShellView: View {
   /// silently does nothing. Measured: chat and structure both no-op'd while
   /// settings worked.
   @State private var sheet: Sheet?
+  /// The zoom a pinch started from; nil when no pinch is in flight.
+  @State private var pinchBase: Double?
 
   private enum Sheet: String, Identifiable {
     case settings, structure, chat
@@ -439,15 +511,19 @@ private struct ShellView: View {
 
   var body: some View {
     NavigationStack {
-      CanvasHost(taoController: taoController, webView: webView)
-        // WKWebView already does its own keyboard avoidance — it insets its
-        // scroll view and scrolls the focused element into view. Letting
-        // SwiftUI ALSO shrink the content for the keyboard applies the inset
-        // twice: the canvas collapsed to a ~90pt strip above a black void,
-        // scrolled somewhere unrelated to the caret. Opt out and leave the
-        // keyboard to the webview, which is the only side that knows where
-        // the caret is.
-        .ignoresSafeArea(.keyboard, edges: .bottom)
+      CanvasHost(taoController: taoController, webView: webView) { scale, state in
+        // `scale` is cumulative from the START of the pinch, so it multiplies
+        // the zoom the gesture began at. Multiplying the LIVE zoom instead
+        // compounds and runs away within a few frames.
+        switch state {
+        case .began:
+          pinchBase = snapshot.zoom
+        case .changed:
+          model.setZoom((pinchBase ?? snapshot.zoom) * Double(scale))
+        default:
+          pinchBase = nil
+        }
+      }
         .navigationBarTitleDisplayMode(.inline)
         // The content is a webview, so SwiftUI cannot observe its scrolling and
         // will not decide to show a bar background on its own. Pin both visible

@@ -396,6 +396,42 @@ function pickBackupFile(onFile) {
   input.click();
 }
 
+/**
+ * Turn OFF WKWebView's own pinch zoom, so the app's zoom model is the only one.
+ *
+ * The two used to run side by side: the toolbar moved a CSS transform on
+ * `.resume-container`, a pinch moved the webview's scroll view, and neither
+ * knew about the other. The CSS transform wins because it is the one that
+ * reaches below 100% — WebKit clamps `minimumZoomScale` to the fitted width and
+ * re-derives it on every layout, so its own zoom cannot fit a whole page.
+ *
+ * Three belts, because two were not enough (measured — with only the viewport
+ * meta and a disabled `pinchGestureRecognizer`, a pinch still scaled the page
+ * and left the toolbar reading its old value):
+ *
+ *   1. `user-scalable=no` in the viewport, which WKWebView honours unless
+ *      `ignoresViewportScaleLimits` is set.
+ *   2. `preventDefault()` on WebKit's `gesturestart`/`gesturechange`/`gestureend`
+ *      — the actual pinch-zoom hooks on iOS, and the only one of the three that
+ *      a relayout cannot quietly undo.
+ *   3. `scrollView.pinchGestureRecognizer.isEnabled = false` in OPShell.swift.
+ *
+ * With the page's own zoom out of the way, the native `MagnifyGesture` is the
+ * only thing left that sees a pinch, and it drives `setZoom` here.
+ */
+function disablePageZoom() {
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (meta && !/user-scalable/.test(meta.getAttribute('content') || '')) {
+    meta.setAttribute(
+      'content',
+      `${meta.getAttribute('content')}, maximum-scale=1.0, user-scalable=no`
+    );
+  }
+  for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+  }
+}
+
 let activated = false;
 let streamDocument = false;
 let streamChat = false;
@@ -451,6 +487,9 @@ export function initIOSShell(deps) {
     zoomOut: () => click('zoom-out'),
     zoomReset: () => click('zoom-reset'),
     zoomFit: () => fitToView(),
+    // Driven by the native pinch. Sent continuously during a gesture, so it
+    // goes straight to the zoom model rather than through a button click.
+    setZoom: ({ value }) => deps.setZoomLevel(Number(value)),
     undo: () => click('undo-btn'),
     redo: () => click('redo-btn'),
 
@@ -616,6 +655,7 @@ export function initIOSShell(deps) {
       if (activated) return true;
       activated = true;
       document.documentElement.classList.add(NATIVE_SHELL_CLASS);
+      disablePageZoom();
       publish();
       return true;
     },
