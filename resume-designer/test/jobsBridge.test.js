@@ -415,3 +415,18 @@ describe('applyJobs — tailor', () => {
     expect(view.run.busy).toBe(false);
   });
 });
+
+describe('buildJobs — a write that did not land', () => {
+  // The web's answer to a full disk is a toast, and nothing renders the web's
+  // toasts under the native shell: the job stayed in the list all session and
+  // was gone on the next launch. Same projection the profile sheet uses.
+  it('carries the failure so the sheet can say so', () => {
+    expect(buildJobs({ saveFailed: true }).saveFailed).toBe(true);
+  });
+
+  it('is false when the write landed, and for a state that never said', () => {
+    expect(buildJobs({ saveFailed: false }).saveFailed).toBe(false);
+    expect(buildJobs({}).saveFailed).toBe(false);
+    expect(buildJobs(undefined).saveFailed).toBe(false);
+  });
+});

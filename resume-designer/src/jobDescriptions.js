@@ -38,11 +38,16 @@ export function initJobDescriptions() {
 /**
  * Save job descriptions to storage
  */
+// Whether the last write reached storage. Read through `jobStorageFailed()`.
+let saveFailed = false;
+
 function save() {
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(jobDescriptions));
+    saveFailed = false;
   } catch (e) {
     console.error('Failed to save job descriptions:', e);
+    saveFailed = true;
     // Browser passthrough at storage quota: the in-memory list still holds
     // the JD, but it won't survive a reload — say so instead of vanishing it.
     storageErrorToast(
@@ -51,6 +56,23 @@ function save() {
       { once: true },
     );
   }
+}
+
+/**
+ * True when the last write did not reach storage.
+ *
+ * The toast above is the whole story on the desktop and none of it under the
+ * native iOS shell, where nothing renders the web's toasts: a job added at
+ * quota looked saved, sat in the list for the rest of the session, and was
+ * gone on the next launch. The native sheet renders this instead, the same way
+ * the profile sheet renders `saveFailed`.
+ *
+ * Same caveat as there: `appStorage.setItem` only throws in the browser's
+ * passthrough mode. In the app the write is coalesced and queued, so a disk
+ * failure surfaces through `appStorage.flush()` rather than here.
+ */
+export function jobStorageFailed() {
+  return saveFailed;
 }
 
 /**

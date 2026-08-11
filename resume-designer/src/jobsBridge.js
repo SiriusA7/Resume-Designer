@@ -29,7 +29,7 @@
 import {
   initJobDescriptions, getAllJobDescriptions, getActiveJobDescriptions, getJobDescription,
   addJobDescription, updateJobDescription, deleteJobDescription, toggleJobDescriptionActive,
-  parseJobDescriptionText,
+  parseJobDescriptionText, jobStorageFailed,
 } from './jobDescriptions.js';
 import {
   analyzeAgainstJobs, generateResumeChanges, getAllModels, getConfiguredProviders,
@@ -138,6 +138,10 @@ export function getJobsState() {
   return {
     jobs: getAllJobDescriptions(),
     activeCount: getActiveJobDescriptions().length,
+    // The web's own answer to a full disk is a toast, and nothing renders the
+    // web's toasts under the native shell — a job added at quota looked saved,
+    // stayed in the list all session, and was gone on the next launch.
+    saveFailed: jobStorageFailed(),
     configured: getConfiguredProviders().length > 0,
     models: flattenModels(),
     // Seeded from the per-area remembered choice, falling back to the global
@@ -206,6 +210,7 @@ export function buildJobs(state) {
       })),
     activeCount: int(s.activeCount),
     configured: !!s.configured,
+    saveFailed: !!s.saveFailed,
     models: list(s.models)
       .filter((m) => m && typeof m.id === 'string' && m.id)
       .map((m) => ({ id: m.id, label: text(m.label) || m.id, group: text(m.group) })),

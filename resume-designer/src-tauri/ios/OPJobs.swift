@@ -120,6 +120,9 @@ struct JobsView: Decodable, Equatable {
   var jobs: [Job]
   var activeCount: Int
   var configured: Bool
+  /// The last write did not reach storage. The web answers this with a toast,
+  /// which nothing renders under the native shell.
+  var saveFailed: Bool
   var models: [ModelOption]
   var analysisModelId: String
   var analysisReasoning: String
@@ -152,6 +155,25 @@ private extension ShellModel {
 private let jobsReasoningOptions: [(id: String, label: String)] = [
   ("none", "Off"), ("low", "Low"), ("medium", "Medium"), ("high", "High"),
 ]
+
+/// Shown while a write is not reaching storage. Deliberately the same words as
+/// the profile sheet's: it is the same failure, and two descriptions of it
+/// would read as two different problems.
+private struct JobsSaveWarning: View {
+  var body: some View {
+    Label {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Not being saved").font(.subheadline.weight(.semibold))
+        Text("Storage is full, so these jobs are not on disk. Free up space — reloading now would lose them.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    } icon: {
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+    }
+    .padding(.vertical, 2)
+  }
+}
 
 // MARK: - Root
 
@@ -261,6 +283,12 @@ struct JobsSheet: View {
 
   private func list(_ view: JobsView) -> some View {
     List {
+      // First, and not a one-shot notice: a full disk stays full, and a job
+      // that is only in memory is one relaunch from being gone.
+      if view.saveFailed {
+        Section { JobsSaveWarning() }
+      }
+
       Section {
         ForEach(view.jobs) { row($0) }
       } header: {
