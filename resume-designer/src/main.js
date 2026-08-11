@@ -22,7 +22,11 @@ import {
 } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
-import { initInlineChanges, decorateRenderedResume, isPreviewSuppressed } from './inlineChanges.js';
+import {
+  initInlineChanges, decorateRenderedResume, isPreviewSuppressed,
+  getPendingChanges, applyInlineChange, rejectInlineChange,
+  applyAllInlineChanges, rejectAllInlineChanges,
+} from './inlineChanges.js';
 import { applyPendingToData } from './changePreview.js';
 import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
@@ -562,6 +566,12 @@ export async function init() {
       store.update(listPath, next);
     },
     subscribeDocument: (cb) => store.subscribe(cb),
+    // AI change review, routed to the live session rather than a copy of it.
+    getPendingChanges,
+    applyInlineChange,
+    rejectInlineChange,
+    applyAllInlineChanges,
+    rejectAllInlineChanges,
   });
   
   // Check for first-time user onboarding

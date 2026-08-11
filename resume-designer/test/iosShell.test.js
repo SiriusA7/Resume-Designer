@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   buildDocumentOutline,
+  buildPendingChanges,
   buildSettings,
   buildSnapshot,
   createCommandDispatcher,
@@ -269,5 +270,54 @@ describe('buildDocumentOutline', () => {
     expect(buildDocumentOutline(null)).toEqual({ groups: [] });
     expect(buildDocumentOutline('nope')).toEqual({ groups: [] });
     expect(buildDocumentOutline({}).groups.map((g) => g.id)).toEqual(['header', 'summary']);
+  });
+});
+
+describe('buildPendingChanges', () => {
+  // Nothing applies on iOS without its before/after on screen, so this
+  // projection is the safety boundary, not a convenience.
+  const change = (over = {}) => ({
+    path: 'experience[0].bullets[1]', type: 'modify',
+    displayOld: 'Old text', displayNew: 'New text', ...over,
+  });
+
+  it('carries the diff strings the desktop review already computed', () => {
+    const [c] = buildPendingChanges([change()]);
+    expect(c).toEqual({
+      path: 'experience[0].bullets[1]',
+      label: 'experience[0].bullets[1]',
+      type: 'modify',
+      before: 'Old text',
+      after: 'New text',
+    });
+  });
+
+  it('keeps add and remove distinguishable from a modification', () => {
+    expect(buildPendingChanges([change({ type: 'add' })])[0].type).toBe('add');
+    expect(buildPendingChanges([change({ type: 'remove' })])[0].type).toBe('remove');
+    // Anything unrecognised reads as a modification rather than vanishing.
+    expect(buildPendingChanges([change({ type: 'wat' })])[0].type).toBe('modify');
+  });
+
+  it('truncates a proposal too large to read on a phone', () => {
+    const huge = 'x'.repeat(5000);
+    const [c] = buildPendingChanges([change({ displayNew: huge })]);
+    expect(c.after).toHaveLength(601);
+    expect(c.after.endsWith('…')).toBe(true);
+  });
+
+  it('never emits a non-string, which Swift could not decode', () => {
+    const [c] = buildPendingChanges([change({ displayOld: null, displayNew: 42 })]);
+    expect(c.before).toBe('');
+    expect(c.after).toBe('42');
+  });
+
+  it('drops entries with no path, which could not be applied', () => {
+    expect(buildPendingChanges([{ type: 'modify' }, null, change()])).toHaveLength(1);
+  });
+
+  it('survives a missing change set', () => {
+    expect(buildPendingChanges(undefined)).toEqual([]);
+    expect(buildPendingChanges(null)).toEqual([]);
   });
 });

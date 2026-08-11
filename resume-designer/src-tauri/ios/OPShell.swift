@@ -67,6 +67,19 @@ struct ShellSnapshot: Decodable, Equatable {
     }
     var threads: [Thread]
     var messages: [Message]
+    /// The AI's still-pending edits, from the LIVE review session — not a
+    /// message's frozen copy, so applying one removes it here.
+    var pendingChanges: [PendingChange]
+
+    struct PendingChange: Decodable, Equatable, Identifiable {
+      let path: String
+      let label: String
+      let type: String
+      let before: String
+      let after: String
+      var id: String { path }
+    }
+
     var loading: Bool
     var streaming: Bool
     var configured: Bool
@@ -1235,6 +1248,7 @@ private struct ChatSheet: View {
   @Environment(\.dismiss) private var dismiss
 
   @State private var draft = ""
+  @State private var showReview = false
 
   private var chat: ShellSnapshot.ChatView? { model.snapshot.chat }
 
@@ -1263,6 +1277,9 @@ private struct ChatSheet: View {
       .toolbar {
         ToolbarItem(placement: .topBarLeading) { threadMenu }
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }
+      .sheet(isPresented: $showReview) {
+        ChangeReviewSheet(model: model)
       }
     }
   }
@@ -1307,9 +1324,23 @@ private struct ChatSheet: View {
           .background(bubbleBackground(for: message.role), in: .rect(cornerRadius: 18))
           .foregroundStyle(isUser ? .white : .primary)
       }
-      if message.hasChanges {
-        Label("Suggested edits — open the assistant on desktop to review",
-              systemImage: "wand.and.stars")
+      if message.hasChanges, let pending = chat?.pendingChanges, !pending.isEmpty {
+        Button {
+          showReview = true
+        } label: {
+          Label(
+            pending.count == 1 ? "Review 1 suggested edit"
+                               : "Review \(pending.count) suggested edits",
+            systemImage: "wand.and.stars"
+          )
+          .font(.subheadline)
+        }
+        .buttonStyle(.bordered)
+      } else if message.hasChanges {
+        // The proposal was already decided — applied or rejected — so there is
+        // nothing left to review. Saying so beats a button that opens an empty
+        // sheet.
+        Label("Suggested edits reviewed", systemImage: "checkmark")
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -1354,5 +1385,100 @@ private struct ChatSheet: View {
     guard !text.isEmpty else { return }
     model.send("chatSend", ["text": text])
     draft = ""
+  }
+}
+
+// MARK: - Change review
+
+/// Review the AI's proposed edits before they land.
+///
+/// This exists because the alternative was worse in both directions: dropping
+/// the proposals silently made chat useless on the phone, and applying them
+/// from a button in the transcript would let someone accept an edit they never
+/// saw. So the rule is that nothing applies without its BEFORE and AFTER on
+/// screen first.
+///
+/// Every action routes to the same session `inlineChanges.js` drives on
+/// desktop. Apply-all in particular is NOT a loop over apply-one: leaf paths are
+/// indexed against the proposed array, so insertions and removals have to land
+/// before modifications or a write hits the wrong element. `applyChangesToStore`
+/// owns that ordering and this must not reimplement it.
+private struct ChangeReviewSheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  private var changes: [ShellSnapshot.ChatView.PendingChange] {
+    model.snapshot.chat?.pendingChanges ?? []
+  }
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if changes.isEmpty {
+          ContentUnavailableView(
+            "Nothing to review",
+            systemImage: "checkmark.circle",
+            description: Text("Every suggested edit has been applied or rejected.")
+          )
+        } else {
+          List {
+            ForEach(changes) { change in
+              Section {
+                if !change.before.isEmpty {
+                  diffRow(label: "Before", text: change.before, tint: .red)
+                }
+                if !change.after.isEmpty {
+                  diffRow(label: "After", text: change.after, tint: .green)
+                }
+                HStack {
+                  Button("Reject", role: .destructive) {
+                    model.send("rejectChange", ["path": change.path])
+                  }
+                  Spacer()
+                  Button("Apply") {
+                    model.send("applyChange", ["path": change.path])
+                  }
+                  .buttonStyle(.borderedProminent)
+                }
+                .buttonStyle(.bordered)
+              } header: {
+                Text(change.label).font(.footnote).textCase(nil)
+              }
+            }
+          }
+        }
+      }
+      .navigationTitle("Suggested edits")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        if !changes.isEmpty {
+          ToolbarItemGroup(placement: .bottomBar) {
+            Button("Reject all", role: .destructive) {
+              model.send("rejectAllChanges")
+              dismiss()
+            }
+            Spacer()
+            Button("Apply all") {
+              model.send("applyAllChanges")
+              dismiss()
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func diffRow(label: String, text: String, tint: Color) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(label)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(tint)
+      Text(text)
+        .font(.callout)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(.vertical, 2)
   }
 }

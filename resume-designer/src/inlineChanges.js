@@ -239,6 +239,28 @@ export function rejectInlineChange(path) {
   if (!session.hasPending()) hideInlineChanges(); else requestRerender();
 }
 
+/**
+ * Every change still awaiting a decision, in change-set order.
+ *
+ * Exported for the native iOS review sheet, which renders a LIST rather than
+ * the web's per-element hover menus and so needs the whole pending set at once.
+ * Reads the live session, not a message's frozen `pendingChanges`: applying or
+ * rejecting one has to remove it from the list.
+ */
+export function getPendingChanges() {
+  const changeSet = session.getChangeSet();
+  if (!changeSet) return [];
+  const pending = new Set(session.pendingPaths());
+  return changeSet.changes.filter((c) => pending.has(c.path));
+}
+
+/** Reject everything still pending, ending the review session. */
+export function rejectAllInlineChanges() {
+  if (!session.getChangeSet()) return;
+  session.setAllPending('rejected');
+  hideInlineChanges();
+}
+
 export function applyAllInlineChanges() {
   const changeSet = session.getChangeSet();
   if (!changeSet) return;

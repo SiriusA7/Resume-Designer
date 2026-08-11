@@ -253,6 +253,34 @@ export function buildDocumentOutline(data) {
 }
 
 /**
+ * Project the AI's still-pending changes for the native review sheet.
+ *
+ * `before`/`after` are the human-readable strings the web diff already computes
+ * (`displayOld`/`displayNew`), so the native list shows the same text the
+ * desktop review does — nothing about what a change MEANS is decided twice.
+ *
+ * Truncated, because a whole-section proposal serialises to JSON that no phone
+ * screen can show: a review that does not fit is a review nobody reads.
+ *
+ * Pure.
+ */
+export function buildPendingChanges(changes) {
+  const text = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v));
+  const clip = (v) => (v.length > 600 ? `${v.slice(0, 600)}…` : v);
+  return (Array.isArray(changes) ? changes : [])
+    .filter((c) => c && typeof c.path === 'string')
+    .map((c) => ({
+      path: c.path,
+      // The path is the only label the diff guarantees; it is also exactly what
+      // the user needs to know WHERE the edit lands.
+      label: c.path,
+      type: c.type === 'add' ? 'add' : c.type === 'remove' ? 'remove' : 'modify',
+      before: clip(text(c.displayOld)),
+      after: clip(text(c.displayNew)),
+    }));
+}
+
+/**
  * Project the chat engine's state for the native chat sheet.
  *
  * A SUBSET, and the boundary is deliberate. Threads, messages, streaming and
@@ -536,6 +564,14 @@ export function initIOSShell(deps) {
     chatStop: () => ask('rd:chat-stop'),
     chatNewThread: () => ask('rd:chat-new-thread'),
     chatSelectThread: ({ id }) => ask('rd:chat-select-thread', { id }),
+    // Reviewing the AI's proposed edits. Each routes to the same session the
+    // web review uses, so a change applied here goes through `applyChangeToStore`
+    // with the same ordering rules — leaf paths are indexed against the proposed
+    // array, and applying them out of order writes against the wrong element.
+    applyChange: ({ path }) => deps.applyInlineChange(String(path)),
+    rejectChange: ({ path }) => deps.rejectInlineChange(String(path)),
+    applyAllChanges: () => deps.applyAllInlineChanges(),
+    rejectAllChanges: () => deps.rejectAllInlineChanges(),
     setChatOpen: ({ value }) => {
       streamChat = value === 'true';
       // Ask the panel to re-push. Its first publish is normally LOST: React
@@ -614,7 +650,9 @@ export function initIOSShell(deps) {
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),
           document: streamDocument ? deps.getDocument() : null,
-          chat: streamChat ? chatView : null,
+          chat: streamChat
+            ? { ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()) }
+            : null,
         }),
       }
     );

@@ -103,6 +103,24 @@ class of bug as the 114pt one fixed earlier), and it is a plausible mechanism
 for a tap near the toolbar reaching neither the button nor the element the user
 aimed at. Fix the inset first, then re-test the chat button.
 
+## Chat is native, and proposals can be applied
+
+The chat sheet follows Olia's (`~/HyperBuild/Projects/HyperBite-iOS/Olia`): the
+morphing `GlassEffectContainer` composer and the dot-and-rule reasoning
+timeline, both ported rather than approximated. `reasoning` and `thinking` now
+cross the bridge.
+
+The AI's proposed edits get a native review sheet. **Nothing applies without its
+before/after on screen first** — that rule is why they were withheld
+originally, and it is what the sheet exists to satisfy. Apply-all routes to
+`applyAllInlineChanges`, NOT a loop over apply-one: leaf paths are indexed
+against the proposed array, so insertions and removals must land before
+modifications or a write hits the wrong element.
+
+**Unverified beyond the empty state.** Everything past "No API key" needs a real
+key, which no agent should enter. What is confirmed: the sheet opens, the
+snapshot arrives, and `configured: false` renders correctly.
+
 ## Also unverified
 
 - **iPad**, including Stage Manager and split view. The shell is written not to
