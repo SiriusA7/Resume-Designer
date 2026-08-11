@@ -374,6 +374,14 @@ private struct ShellView: View {
   var body: some View {
     NavigationStack {
       CanvasHost(taoController: taoController, webView: webView)
+        // WKWebView already does its own keyboard avoidance — it insets its
+        // scroll view and scrolls the focused element into view. Letting
+        // SwiftUI ALSO shrink the content for the keyboard applies the inset
+        // twice: the canvas collapsed to a ~90pt strip above a black void,
+        // scrolled somewhere unrelated to the caret. Opt out and leave the
+        // keyboard to the webview, which is the only side that knows where
+        // the caret is.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .navigationBarTitleDisplayMode(.inline)
         // The content is a webview, so SwiftUI cannot observe its scrolling and
         // will not decide to show a bar background on its own. Pin both visible
