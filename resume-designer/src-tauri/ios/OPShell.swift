@@ -42,6 +42,29 @@ struct ShellSnapshot: Decodable, Equatable {
   /// has to step aside or it covers the dialog's own buttons.
   var modalOpen: Bool
   var settings: Settings
+  /// `nil` means the panel is closed and the outline is not being streamed —
+  /// distinct from an empty outline, which would blank an open panel.
+  var document: DocumentOutline?
+
+  /// A flat, path-keyed projection of the résumé. Swift deliberately does NOT
+  /// know the document's schema: it renders labelled fields and echoes back the
+  /// paths it was given, so it cannot construct one and cannot become a second
+  /// implementation of a grammar whose drift has corrupted data before.
+  struct DocumentOutline: Decodable, Equatable {
+    struct Field: Decodable, Equatable, Identifiable {
+      let path: String
+      let label: String
+      let value: String
+      let multiline: Bool
+      var id: String { path }
+    }
+    struct Group: Decodable, Equatable, Identifiable {
+      let id: String
+      let title: String
+      let fields: [Field]
+    }
+    var groups: [Group]
+  }
 
   /// Mirrors `buildSettings()` in src/iosShell.js. A SUBSET of the web Settings
   /// dialog: the updater, the companion bridge and the legacy Electron import
@@ -63,7 +86,8 @@ struct ShellSnapshot: Decodable, Equatable {
   /// second at launch, but it must not render as blank or as "0%".
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
-    zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty
+    zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
+    document: nil
   )
 }
 
@@ -368,6 +392,7 @@ private struct ShellView: View {
   let taoController: UIViewController?
   let webView: UIView
   @State private var showSettings = false
+  @State private var showStructure = false
 
   private var snapshot: ShellSnapshot { model.snapshot }
 
@@ -412,6 +437,15 @@ private struct ShellView: View {
         }
         .sheet(isPresented: $showSettings) {
           SettingsSheet(model: model)
+        }
+        .sheet(isPresented: $showStructure) {
+          StructureSheet(model: model)
+        } 
+        .onChange(of: showStructure) { _, open in
+          // Stop streaming the outline the moment the panel closes: it is the
+          // largest thing on the wire and the canvas re-renders on every
+          // keystroke.
+          if !open { model.send("setStructureOpen", ["value": "false"]) }
         }
     }
     // The app's own theme setting, not the system's. Without this a user who
@@ -521,8 +555,13 @@ private struct ShellView: View {
     Button { model.send("toggleChat") } label: { Image(systemName: "bubble.left.and.text.bubble.right") }
       .accessibilityLabel("Assistant")
 
-    Button { model.send("toggleStructure") } label: { Image(systemName: "list.bullet.rectangle") }
-      .accessibilityLabel("Edit structure")
+    Button {
+      model.send("setStructureOpen", ["value": "true"])
+      showStructure = true
+    } label: {
+      Image(systemName: "list.bullet.rectangle")
+    }
+    .accessibilityLabel("Edit structure")
 
     formatMenu
 
@@ -680,6 +719,102 @@ private struct SettingsSheet: View {
     Binding(
       get: { settings.autoFallback },
       set: { model.send("setAutoFallback", ["value": $0 ? "true" : "false"]) }
+    )
+  }
+}
+
+// MARK: - Structure panel
+
+/// The native structure editor.
+///
+/// The only place the document crosses the bridge. It renders whatever
+/// `DocumentOutline` it is given — labelled, path-keyed fields — and writes
+/// back with `setField(path, value)`, which routes to the same `store.update`
+/// the web editor uses. Same path grammar, same undo history, same re-render.
+///
+/// **The focus rule is the load-bearing part.** Typing here writes to the
+/// store, the store re-renders and republishes, and the new snapshot arrives
+/// while the user is still mid-word. Rendering that value straight back into
+/// the field they are typing in resets the cursor to the end on every
+/// keystroke. So a FOCUSED field renders from its local draft and ignores
+/// inbound snapshots for its own path; every other field keeps updating live.
+private struct StructureSheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  @FocusState private var focusedPath: String?
+  @State private var drafts: [String: String] = [:]
+
+  private var groups: [ShellSnapshot.DocumentOutline.Group] {
+    model.snapshot.document?.groups ?? []
+  }
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if groups.isEmpty {
+          // The first outline lands a frame after the sheet opens; an empty
+          // form would read as "this résumé has no content".
+          ProgressView()
+        } else {
+          Form {
+            ForEach(groups) { group in
+              Section(group.title) {
+                ForEach(group.fields) { field in
+                  fieldRow(field)
+                }
+              }
+            }
+          }
+        }
+      }
+      .navigationTitle("Edit resume")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }
+        }
+      }
+    }
+    .onChange(of: focusedPath) { previous, _ in
+      // Drop the draft once focus leaves, so the field goes back to rendering
+      // the store's value — including any normalisation the store applied.
+      if let previous { drafts[previous] = nil }
+    }
+  }
+
+  @ViewBuilder
+  private func fieldRow(_ field: ShellSnapshot.DocumentOutline.Field) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(field.label)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      if field.multiline {
+        TextField(field.label, text: binding(for: field), axis: .vertical)
+          .lineLimit(2...8)
+          .focused($focusedPath, equals: field.path)
+      } else {
+        TextField(field.label, text: binding(for: field))
+          .focused($focusedPath, equals: field.path)
+      }
+    }
+    .padding(.vertical, 2)
+  }
+
+  private func binding(for field: ShellSnapshot.DocumentOutline.Field) -> Binding<String> {
+    Binding(
+      get: {
+        // The focus rule. While this field has focus its draft wins, so an
+        // inbound snapshot cannot move the cursor mid-word.
+        focusedPath == field.path ? (drafts[field.path] ?? field.value) : field.value
+      },
+      set: { newValue in
+        drafts[field.path] = newValue
+        // Write on every keystroke rather than on blur: the canvas behind the
+        // sheet is the point of the app, and it should track what is typed.
+        // `path` is echoed back exactly as received — never built here.
+        model.send("setField", ["path": field.path, "value": newValue])
+      }
     )
   }
 }

@@ -75,6 +75,7 @@ export function hasOpenModal(root = document) {
  */
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
+  document: outline = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -91,6 +92,9 @@ export function buildSnapshot({
     pdfBusy: !!pdfBusy,
     modalOpen: !!modalOpen,
     settings: buildSettings(settings),
+    // `null` means "the panel is closed, do not re-render it" — distinct from
+    // an empty outline, which would blank a panel that is open.
+    document: outline,
   };
 }
 
@@ -120,6 +124,107 @@ export function buildSettings({ theme, hasApiKey = false, autoFallback = false, 
     autoFallback: !!autoFallback,
     version: typeof version === 'string' ? version : '',
   };
+}
+
+/**
+ * Project the résumé into the flat, labelled, PATH-KEYED outline the native
+ * structure panel renders.
+ *
+ * This is the only place the document crosses the bridge, and the shape is
+ * chosen so that **Swift never learns the document's schema**. It receives
+ * groups of `{path, label, value}` and renders a generic form; it cannot know
+ * that `experience[0].bullets[1]` is a bullet, only that it is a multiline
+ * field with that path. So Swift can only ever echo back a path it was GIVEN —
+ * it has no way to construct one, which is what keeps the path grammar from
+ * getting a second implementation. Drift in that grammar has corrupted data
+ * here before.
+ *
+ * Pure — no DOM, no storage.
+ *
+ * @param {object|null} data the résumé document
+ */
+export function buildDocumentOutline(data) {
+  if (!data || typeof data !== 'object') return { groups: [] };
+  const groups = [];
+  const text = (v) => (typeof v === 'string' ? v : '');
+  const list = (v) => (Array.isArray(v) ? v : []);
+
+  // Keys read off EMPTY_RESUME in store.js, not guessed: the document has
+  // `name`/`tagline` at the top level and the rest under `contact`.
+  const contact = data.contact || {};
+  groups.push({
+    id: 'header',
+    title: 'Header',
+    fields: [
+      { path: 'name', label: 'Name', value: text(data.name), multiline: false },
+      { path: 'tagline', label: 'Professional title', value: text(data.tagline), multiline: false },
+      { path: 'contact.location', label: 'Location', value: text(contact.location), multiline: false },
+      { path: 'contact.email', label: 'Email', value: text(contact.email), multiline: false },
+      { path: 'contact.phone', label: 'Phone', value: text(contact.phone), multiline: false },
+      { path: 'contact.portfolio', label: 'Portfolio', value: text(contact.portfolio), multiline: false },
+    ],
+  });
+
+  groups.push({
+    id: 'summary',
+    title: 'Summary',
+    fields: [{ path: 'summary', label: 'Summary', value: text(data.summary), multiline: true }],
+  });
+
+  list(data.experience).forEach((role, i) => {
+    const fields = [
+      { path: `experience[${i}].title`, label: 'Role', value: text(role?.title), multiline: false },
+      { path: `experience[${i}].company`, label: 'Company', value: text(role?.company), multiline: false },
+      { path: `experience[${i}].dates`, label: 'Dates', value: text(role?.dates), multiline: false },
+    ];
+    list(role?.bullets).forEach((bullet, j) => {
+      fields.push({
+        path: `experience[${i}].bullets[${j}]`,
+        label: `Bullet ${j + 1}`,
+        value: text(bullet),
+        multiline: true,
+      });
+    });
+    groups.push({ id: `experience-${i}`, title: text(role?.title) || `Role ${i + 1}`, fields });
+  });
+
+  const education = list(data.education);
+  if (education.length) {
+    groups.push({
+      id: 'education',
+      title: 'Education',
+      fields: education.map((entry, i) => ({
+        path: `education[${i}]`, label: `Entry ${i + 1}`, value: text(entry), multiline: true,
+      })),
+    });
+  }
+
+  list(data.sections).forEach((section, i) => {
+    const fields = [
+      { path: `sections[${i}].title`, label: 'Heading', value: text(section?.title), multiline: false },
+    ];
+    if (Array.isArray(section?.content)) {
+      section.content.forEach((item, j) => {
+        fields.push({
+          path: `sections[${i}].content[${j}]`, label: `Item ${j + 1}`, value: text(item), multiline: false,
+        });
+      });
+    } else if (typeof section?.content === 'string') {
+      // Prose sections keep their content as one string, not a list.
+      fields.push({ path: `sections[${i}].content`, label: 'Text', value: section.content, multiline: true });
+    }
+    groups.push({ id: `section-${i}`, title: text(section?.title) || `Section ${i + 1}`, fields });
+  });
+
+  if (typeof data.tools === 'string' && data.tools) {
+    groups.push({
+      id: 'tools',
+      title: 'Tools',
+      fields: [{ path: 'tools', label: 'Tools', value: data.tools, multiline: true }],
+    });
+  }
+
+  return { groups };
 }
 
 /**
@@ -217,6 +322,7 @@ function pickBackupFile(onFile) {
 }
 
 let activated = false;
+let streamDocument = false;
 let publish = () => {};
 
 /**
@@ -286,6 +392,22 @@ export function initIOSShell(deps) {
 
     exportPdf: () => click('download-pdf'),
 
+    // The structure panel. `setField` is the ONLY way the document is written
+    // from Swift, and it routes to the same `store.update` the web editor uses
+    // — same path grammar, same undo history, same re-render.
+    setField: ({ path, value }) => {
+      if (typeof path !== 'string' || !path) throw new Error('setField needs a path');
+      deps.updateField(path, String(value ?? ''));
+    },
+    // The outline is only projected while the panel is open. It is by far the
+    // largest thing on the wire, and the canvas re-renders on every keystroke,
+    // so streaming it unconditionally would rebuild the whole document on each
+    // character typed into a résumé nobody is looking at through the panel.
+    setStructureOpen: ({ value }) => {
+      streamDocument = value === 'true';
+      publish();
+    },
+
     // Settings, for the native sheet. Each writes through the same service the
     // web dialog uses, then republishes so the sheet reflects what landed
     // rather than what it optimistically set.
@@ -344,6 +466,7 @@ export function initIOSShell(deps) {
         ...buildSnapshot({
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),
+          document: streamDocument ? deps.getDocument() : null,
         }),
       }
     );
@@ -357,6 +480,9 @@ export function initIOSShell(deps) {
   };
 
   subscribeVariants(publish);
+  // Edits made in the canvas have to reach an open panel, or the two views of
+  // one document silently disagree.
+  deps.subscribeDocument(() => { if (streamDocument) publish(); });
   window.addEventListener('rd:zoom', publish);
   // Dialogs open and close without any event this module could listen for —
   // Radix just portals a node into <body> and flips data-state. Watching the

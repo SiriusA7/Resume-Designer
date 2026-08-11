@@ -27,7 +27,7 @@ import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
 import { initZoomControls, getZoom, fitToView } from './zoomControls.js';
 import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
-import { initIOSShell } from './iosShell.js';
+import { initIOSShell, buildDocumentOutline } from './iosShell.js';
 import { initWindowDrag } from './tauriDrag.js';
 import {
   migrateBuiltInVariants,
@@ -543,6 +543,11 @@ export async function init() {
     // Settings sheet.
     getTheme, setTheme, getSettings, saveSettings, saveApiKey, getAppInfo,
     exportFullBackupWithFeedback, importBackupFromFile,
+    // Structure panel. The document only ever leaves through this projection,
+    // and only ever comes back as a path the projection handed out.
+    getDocument: () => buildDocumentOutline(store.getDataRef()),
+    updateField: (path, value) => store.update(path, value),
+    subscribeDocument: (cb) => store.subscribe(cb),
   });
   
   // Check for first-time user onboarding

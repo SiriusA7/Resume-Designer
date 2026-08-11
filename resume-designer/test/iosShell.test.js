@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  buildDocumentOutline,
   buildSettings,
   buildSnapshot,
   createCommandDispatcher,
@@ -65,6 +66,7 @@ describe('buildSnapshot', () => {
       pdfBusy: false,
       modalOpen: false,
       settings: { theme: 'system', hasApiKey: false, autoFallback: false, version: '' },
+      document: null,
     });
   });
 });
@@ -193,5 +195,78 @@ describe('buildSettings', () => {
     expect(buildSettings()).toEqual({
       theme: 'system', hasApiKey: false, autoFallback: false, version: '',
     });
+  });
+});
+
+describe('buildDocumentOutline', () => {
+  const doc = {
+    name: 'Ada Lovelace',
+    tagline: 'Engineer',
+    contact: { location: 'London', email: 'ada@example.com' },
+    summary: 'Builds engines.',
+    experience: [
+      { title: 'Principal Engineer', company: 'Analytical Engines', dates: '2021 – Now',
+        bullets: ['Led the move', 'Cut export time'] },
+    ],
+    education: ['BSc Mathematics'],
+    sections: [{ title: 'Skills', content: ['Rust', 'Swift'] }],
+  };
+
+  it('keys every field by the path the store already understands', () => {
+    // These exact strings go to store.update -> setByPath. A change here is a
+    // change to how edits land in the document.
+    const paths = buildDocumentOutline(doc).groups.flatMap((g) => g.fields.map((f) => f.path));
+    expect(paths).toContain('name');
+    expect(paths).toContain('contact.email');
+    expect(paths).toContain('summary');
+    expect(paths).toContain('experience[0].title');
+    expect(paths).toContain('experience[0].bullets[1]');
+    expect(paths).toContain('education[0]');
+    expect(paths).toContain('sections[0].content[1]');
+  });
+
+  it('titles a role group by the role, so the panel is navigable', () => {
+    const titles = buildDocumentOutline(doc).groups.map((g) => g.title);
+    expect(titles).toEqual(['Header', 'Summary', 'Principal Engineer', 'Education', 'Skills']);
+  });
+
+  it('falls back to a positional title when a role or section is unnamed', () => {
+    const groups = buildDocumentOutline({ experience: [{}], sections: [{}] }).groups;
+    expect(groups.map((g) => g.title)).toEqual(['Header', 'Summary', 'Role 1', 'Section 1']);
+  });
+
+  it('marks long-form fields multiline and short ones not', () => {
+    const byPath = Object.fromEntries(
+      buildDocumentOutline(doc).groups.flatMap((g) => g.fields).map((f) => [f.path, f])
+    );
+    expect(byPath['summary'].multiline).toBe(true);
+    expect(byPath['experience[0].bullets[0]'].multiline).toBe(true);
+    expect(byPath['name'].multiline).toBe(false);
+    expect(byPath['sections[0].content[0]'].multiline).toBe(false);
+  });
+
+  it('handles a prose section, whose content is a string not a list', () => {
+    const groups = buildDocumentOutline({ sections: [{ title: 'About', content: 'One paragraph.' }] }).groups;
+    const fields = groups.at(-1).fields;
+    expect(fields.map((f) => f.path)).toEqual(['sections[0].title', 'sections[0].content']);
+    expect(fields[1].value).toBe('One paragraph.');
+  });
+
+  it('never emits a non-string value, which Swift could not decode', () => {
+    const messy = { name: 42, contact: { email: {} }, summary: null, experience: [{ bullets: [null, 7] }] };
+    for (const f of buildDocumentOutline(messy).groups.flatMap((g) => g.fields)) {
+      expect(typeof f.value).toBe('string');
+    }
+  });
+
+  it('omits Education entirely when there is none, rather than an empty group', () => {
+    const titles = buildDocumentOutline({ education: [] }).groups.map((g) => g.title);
+    expect(titles).not.toContain('Education');
+  });
+
+  it('survives a missing or malformed document', () => {
+    expect(buildDocumentOutline(null)).toEqual({ groups: [] });
+    expect(buildDocumentOutline('nope')).toEqual({ groups: [] });
+    expect(buildDocumentOutline({}).groups.map((g) => g.id)).toEqual(['header', 'summary']);
   });
 });
