@@ -37,6 +37,45 @@ export default function ChatPanel() {
   const chatRef = useRef(chat);
   chatRef.current = chat;
 
+  // --- native iOS chat sheet -------------------------------------------------
+  //
+  // The engine lives in useChat(), a React hook, so src/iosShell.js cannot read
+  // it. The panel pushes instead, and the commands come back as events handled
+  // here — the same shape the Header uses for rename/delete/import. Nothing
+  // about the engine is reimplemented natively; the sheet is a second VIEW of
+  // this one.
+  useEffect(() => {
+    window.__opShell?.publishChat?.({
+      threads: chat.threads,
+      currentThreadId: chat.currentThreadId,
+      messages: chat.messages,
+      loading: chat.loading,
+      streamingMessage: chat.streamingMessage,
+      configured: chat.configured,
+    });
+  }, [
+    chat.threads, chat.currentThreadId, chat.messages, chat.loading,
+    chat.streamingMessage, chat.configured,
+  ]);
+
+  useEffect(() => {
+    const handlers = {
+      'rd:chat-send': (e) => {
+        const text = e.detail?.text?.trim();
+        if (text) chatRef.current.send(text);
+      },
+      'rd:chat-stop': () => chatRef.current.stop(),
+      'rd:chat-new-thread': () => chatRef.current.newThread(),
+      'rd:chat-select-thread': (e) => {
+        if (e.detail?.id) chatRef.current.switchThread(e.detail.id);
+      },
+    };
+    for (const [name, fn] of Object.entries(handlers)) window.addEventListener(name, fn);
+    return () => {
+      for (const [name, fn] of Object.entries(handlers)) window.removeEventListener(name, fn);
+    };
+  }, []);
+
   const focusInput = () => setTimeout(() => document.getElementById('chat-input')?.focus(), 300);
 
   // Pin the width var to a clamped, valid value up front so the panel never

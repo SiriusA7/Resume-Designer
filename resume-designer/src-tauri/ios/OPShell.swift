@@ -42,6 +42,33 @@ struct ShellSnapshot: Decodable, Equatable {
   /// has to step aside or it covers the dialog's own buttons.
   var modalOpen: Bool
   var settings: Settings
+  /// `nil` while the chat sheet is closed. Same reasoning as `document`.
+  var chat: ChatView?
+
+  /// Mirrors `buildChatView()` in src/iosShell.js. A subset: threads, messages,
+  /// streaming and sending. The model picker, context chips and the AI's
+  /// proposed CHANGES stay in the web panel — applying a change runs the diff
+  /// engine and a review session, and a partial native version of that is how
+  /// someone accepts an edit they never saw.
+  struct ChatView: Decodable, Equatable {
+    struct Thread: Decodable, Equatable, Identifiable {
+      let id: String
+      let title: String
+      let isCurrent: Bool
+    }
+    struct Message: Decodable, Equatable, Identifiable {
+      let id: String
+      let role: String
+      let text: String
+      let hasChanges: Bool
+    }
+    var threads: [Thread]
+    var messages: [Message]
+    var loading: Bool
+    var streaming: Bool
+    var configured: Bool
+  }
+
   /// `nil` means the panel is closed and the outline is not being streamed —
   /// distinct from an empty outline, which would blank an open panel.
   var document: DocumentOutline?
@@ -93,7 +120,7 @@ struct ShellSnapshot: Decodable, Equatable {
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
     zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
-    document: nil
+    chat: nil, document: nil
   )
 }
 
@@ -397,8 +424,16 @@ private struct ShellView: View {
   @ObservedObject var model: ShellModel
   let taoController: UIViewController?
   let webView: UIView
-  @State private var showSettings = false
-  @State private var showStructure = false
+  /// ONE sheet slot, not three `.sheet(isPresented:)` modifiers on the same
+  /// view — SwiftUI honours only one of those, and the symptom is a button that
+  /// silently does nothing. Measured: chat and structure both no-op'd while
+  /// settings worked.
+  @State private var sheet: Sheet?
+
+  private enum Sheet: String, Identifiable {
+    case settings, structure, chat
+    var id: String { rawValue }
+  }
 
   private var snapshot: ShellSnapshot { model.snapshot }
 
@@ -441,17 +476,22 @@ private struct ShellView: View {
             ToolbarItemGroup(placement: .bottomBar) { bottomBar }
           }
         }
-        .sheet(isPresented: $showSettings) {
-          SettingsSheet(model: model)
+        .sheet(item: $sheet) { which in
+          switch which {
+          case .settings: SettingsSheet(model: model)
+          case .structure: StructureSheet(model: model)
+          case .chat: ChatSheet(model: model)
+          }
         }
-        .sheet(isPresented: $showStructure) {
-          StructureSheet(model: model)
-        } 
-        .onChange(of: showStructure) { _, open in
-          // Stop streaming the outline the moment the panel closes: it is the
-          // largest thing on the wire and the canvas re-renders on every
-          // keystroke.
-          if !open { model.send("setStructureOpen", ["value": "false"]) }
+        .onChange(of: sheet) { previous, _ in
+          // Stop streaming whatever the closing sheet was subscribed to: both
+          // outlines are the largest things on the wire and the canvas
+          // re-renders on every keystroke.
+          switch previous {
+          case .structure: model.send("setStructureOpen", ["value": "false"])
+          case .chat: model.send("setChatOpen", ["value": "false"])
+          default: break
+          }
         }
     }
     // The app's own theme setting, not the system's. Without this a user who
@@ -534,7 +574,7 @@ private struct ShellView: View {
         Button { model.send("openHistory") } label: { Label("Version history", systemImage: "clock.arrow.circlepath") }
       }
       Section {
-        Button { showSettings = true } label: { Label("Settings", systemImage: "gearshape") }
+        Button { sheet = .settings } label: { Label("Settings", systemImage: "gearshape") }
       }
     } label: {
       Image(systemName: "ellipsis.circle")
@@ -558,12 +598,17 @@ private struct ShellView: View {
 
   @ViewBuilder
   private var bottomBar: some View {
-    Button { model.send("toggleChat") } label: { Image(systemName: "bubble.left.and.text.bubble.right") }
-      .accessibilityLabel("Assistant")
+    Button {
+      model.send("setChatOpen", ["value": "true"])
+      sheet = .chat
+    } label: {
+      Image(systemName: "bubble.left.and.text.bubble.right")
+    }
+    .accessibilityLabel("Assistant")
 
     Button {
       model.send("setStructureOpen", ["value": "true"])
-      showStructure = true
+      sheet = .structure
     } label: {
       Image(systemName: "list.bullet.rectangle")
     }
@@ -855,5 +900,157 @@ private struct StructureSheet: View {
         model.send("setField", ["path": field.path, "value": newValue])
       }
     )
+  }
+}
+
+// MARK: - Chat
+
+/// The native chat sheet.
+///
+/// A second VIEW of the engine in `src/components/chat/useChat.js`, not a
+/// second engine: every action here dispatches an event the React panel
+/// handles, so threading, streaming, aborting and persistence all stay in the
+/// one implementation that already works on desktop.
+///
+/// Scope is deliberately short of the web panel — no model picker, no context
+/// chips, and no applying the AI's proposed changes. That last one is why:
+/// applying a change runs the diff engine and opens a review session, and a
+/// partial native version of it would let someone accept an edit they never
+/// saw. Replies that carry proposals say so and point back to the web panel.
+private struct ChatSheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var draft = ""
+  @FocusState private var composerFocused: Bool
+
+  private var chat: ShellSnapshot.ChatView? { model.snapshot.chat }
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        if let chat, !chat.configured {
+          ContentUnavailableView(
+            "No API key",
+            systemImage: "key",
+            description: Text("Add an OpenRouter key in Settings to use the assistant.")
+          )
+        } else {
+          transcript
+          composer
+        }
+      }
+      .navigationTitle("Assistant")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) { threadMenu }
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }
+    }
+  }
+
+  private var transcript: some View {
+    ScrollViewReader { proxy in
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 12) {
+          ForEach(chat?.messages ?? []) { message in
+            bubble(message).id(message.id)
+          }
+          if chat?.loading == true && chat?.streaming != true {
+            ProgressView().frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+        .padding()
+      }
+      // Follow the stream. Keyed on the last message's text, not its id, so a
+      // reply that is still growing keeps the view pinned to its tail.
+      .onChange(of: chat?.messages.last?.text) { _, _ in
+        guard let last = chat?.messages.last else { return }
+        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func bubble(_ message: ShellSnapshot.ChatView.Message) -> some View {
+    let isUser = message.role == "user"
+    VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+      Text(message.text)
+        .textSelection(.enabled)
+        .padding(10)
+        .background(bubbleBackground(for: message.role), in: .rect(cornerRadius: 14))
+        .foregroundStyle(isUser ? .white : .primary)
+      if message.hasChanges {
+        // The reply proposed edits this sheet cannot apply. Saying so is the
+        // honest version of dropping them silently.
+        Label("Suggested edits — open the assistant on desktop to review",
+              systemImage: "wand.and.stars")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+  }
+
+  private func bubbleBackground(for role: String) -> Color {
+    switch role {
+    case "user": return .accentColor
+    case "error": return .red.opacity(0.15)
+    default: return Color(.secondarySystemBackground)
+    }
+  }
+
+  private var composer: some View {
+    HStack(spacing: 8) {
+      TextField("Ask about this resume", text: $draft, axis: .vertical)
+        .lineLimit(1...5)
+        .textFieldStyle(.roundedBorder)
+        .focused($composerFocused)
+      if chat?.loading == true {
+        Button { model.send("chatStop") } label: {
+          Image(systemName: "stop.circle.fill").font(.title2)
+        }
+        .accessibilityLabel("Stop")
+      } else {
+        Button { sendDraft() } label: {
+          Image(systemName: "arrow.up.circle.fill").font(.title2)
+        }
+        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityLabel("Send")
+      }
+    }
+    .padding()
+    .background(.bar)
+  }
+
+  private var threadMenu: some View {
+    Menu {
+      Section {
+        ForEach(chat?.threads ?? []) { thread in
+          Button {
+            model.send("chatSelectThread", ["id": thread.id])
+          } label: {
+            if thread.isCurrent {
+              Label(thread.title, systemImage: "checkmark")
+            } else {
+              Text(thread.title)
+            }
+          }
+        }
+      }
+      Section {
+        Button { model.send("chatNewThread") } label: { Label("New chat", systemImage: "plus") }
+      }
+    } label: {
+      Image(systemName: "bubble.left.and.bubble.right")
+    }
+    .accessibilityLabel("Chats")
+  }
+
+  private func sendDraft() {
+    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return }
+    model.send("chatSend", ["text": text])
+    draft = ""
   }
 }

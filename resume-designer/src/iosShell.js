@@ -75,7 +75,7 @@ export function hasOpenModal(root = document) {
  */
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
-  document: outline = null,
+  document: outline = null, chat = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -95,6 +95,7 @@ export function buildSnapshot({
     // `null` means "the panel is closed, do not re-render it" — distinct from
     // an empty outline, which would blank a panel that is open.
     document: outline,
+    chat,
   };
 }
 
@@ -252,6 +253,56 @@ export function buildDocumentOutline(data) {
 }
 
 /**
+ * Project the chat engine's state for the native chat sheet.
+ *
+ * A SUBSET, and the boundary is deliberate. Threads, messages, streaming and
+ * sending are here. The model picker, reasoning effort, web search, context
+ * chips and — most importantly — the AI's proposed CHANGES are not: applying a
+ * change runs the diff engine and a review session, and putting a second,
+ * partial version of that behind a native button is how a user accepts an edit
+ * they never actually saw. Those stay in the web panel until they get the same
+ * treatment the structure panel got.
+ *
+ * Pure — no DOM, no engine access.
+ */
+export function buildChatView({
+  threads = [], currentThreadId = null, messages = [], loading = false,
+  streamingMessage = null, configured = false,
+} = {}) {
+  const text = (v) => (typeof v === 'string' ? v : '');
+  const visible = (Array.isArray(messages) ? messages : [])
+    // `context` rows are chips the web panel renders inline; there is nothing
+    // for a native bubble to show and an empty one reads as a failed reply.
+    .filter((m) => m && m.role !== 'context')
+    .map((m, i) => ({
+      id: `${i}`,
+      role: m.role === 'user' ? 'user' : m.role === 'error' ? 'error' : 'assistant',
+      text: text(m.content),
+      // The engine hands proposals to the web panel; say so rather than
+      // silently dropping the part of the reply that matters.
+      hasChanges: Array.isArray(m.pendingChanges) && m.pendingChanges.length > 0,
+    }))
+    .filter((m) => m.text || m.hasChanges);
+
+  const streaming = text(streamingMessage?.content);
+  if (streaming) {
+    visible.push({ id: 'streaming', role: 'assistant', text: streaming, hasChanges: false });
+  }
+
+  return {
+    threads: (Array.isArray(threads) ? threads : []).map((t, i) => ({
+      id: text(t?.id) || `${i}`,
+      title: text(t?.title) || 'New chat',
+      isCurrent: t?.id === currentThreadId,
+    })),
+    messages: visible,
+    loading: !!loading,
+    streaming: !!streaming,
+    configured: !!configured,
+  };
+}
+
+/**
  * Build the command dispatcher from a map of `type → handler`.
  *
  * Returns a function that never throws: a handler that blows up must not take
@@ -347,6 +398,8 @@ function pickBackupFile(onFile) {
 
 let activated = false;
 let streamDocument = false;
+let streamChat = false;
+let chatView = null;
 let publish = () => {};
 
 /**
@@ -429,6 +482,16 @@ export function initIOSShell(deps) {
       if (typeof path !== 'string' || !path) throw new Error('moveItem needs a list path');
       deps.moveListItem(path, Number(from), Number(to));
     },
+    // Chat. Every one of these routes to the engine in useChat.js through the
+    // React panel — none of them reimplements any of it.
+    chatSend: ({ text }) => ask('rd:chat-send', { text: String(text ?? '') }),
+    chatStop: () => ask('rd:chat-stop'),
+    chatNewThread: () => ask('rd:chat-new-thread'),
+    chatSelectThread: ({ id }) => ask('rd:chat-select-thread', { id }),
+    setChatOpen: ({ value }) => {
+      streamChat = value === 'true';
+      publish();
+    },
     // The outline is only projected while the panel is open. It is by far the
     // largest thing on the wire, and the canvas re-renders on every keystroke,
     // so streaming it unconditionally would rebuild the whole document on each
@@ -497,6 +560,7 @@ export function initIOSShell(deps) {
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),
           document: streamDocument ? deps.getDocument() : null,
+          chat: streamChat ? chatView : null,
         }),
       }
     );
@@ -532,6 +596,17 @@ export function initIOSShell(deps) {
 
   window.__opShell = {
     command: dispatch,
+    /**
+     * Called by ChatPanel whenever the chat engine's state changes.
+     *
+     * The engine lives in a React hook, so this module cannot read it — the
+     * panel pushes instead. Stored either way, but only put on the wire while
+     * the native sheet is open.
+     */
+    publishChat: (state) => {
+      chatView = buildChatView(state);
+      if (streamChat) publish();
+    },
     /**
      * Called by Swift once the SwiftUI chrome is installed. Hides the web
      * chrome and starts publishing. Idempotent — Swift may retry if the page
