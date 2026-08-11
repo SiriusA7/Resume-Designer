@@ -987,13 +987,6 @@ private struct ShellView: View {
           ToolbarItem(placement: .topBarTrailing) {
             pdfButton.disabled(snapshot.modalOpen)
           }
-          // Withdrawn while a web dialog is up. The toolbar floats ABOVE the
-          // webview, so it covered the PDF preview's Save button — the dialog
-          // rendered fine and simply could not be completed. Its commands
-          // would act on the canvas behind the dialog anyway.
-          if !snapshot.modalOpen && !zoomExpanded {
-            ToolbarItemGroup(placement: .bottomBar) { bottomBar }
-          }
         }
         .sheet(item: $sheet) { which in
           switch which {
@@ -1042,15 +1035,16 @@ private struct ShellView: View {
         }
     }
     // On the NavigationStack rather than the canvas: the canvas ignores the
-    // safe area, so `.bottom` there is the screen edge, while here it is
-    // exactly where the bar this replaces sits — no inset to compute and
-    // nothing to keep in step with it.
+    // safe area, so `.bottom` there is the screen edge, while here it is where
+    // a bottom bar belongs — no inset to compute and nothing to keep in step
+    // with it.
+    //
+    // Withdrawn while a web dialog is up. The bar floats ABOVE the webview, so
+    // it covered the PDF preview's Save button — the dialog rendered fine and
+    // simply could not be completed. Its commands would act on the canvas
+    // behind the dialog anyway.
     .overlay(alignment: .bottom) {
-      if zoomExpanded {
-        zoomControl
-          .padding(.bottom, 4)
-          .transition(.opacity.combined(with: .scale(scale: 0.92)))
-      }
+      if !snapshot.modalOpen { bottomBar }
     }
     // The app's own theme setting, not the system's. Without this a user who
     // picks Dark gets a dark resume canvas inside light native chrome; the two
@@ -1174,38 +1168,71 @@ private struct ShellView: View {
     .accessibilityLabel(snapshot.pdfBusy ? "Generating PDF" : "Export PDF")
   }
 
-  @ViewBuilder
+  /// The bottom bar, ours rather than the system's.
+  ///
+  /// It was a `ToolbarItemGroup` until the zoom controls needed to take its
+  /// place, and a system toolbar item cannot morph — swapping the bar for an
+  /// overlay read as one thing vanishing and another appearing. Ours can: the
+  /// zoom capsule is never unmounted, so animating its frame carries its glass
+  /// with it, from the trailing readout to the centred control.
+  ///
+  /// Deliberately NOT a `GlassEffectContainer`. One around both capsules merges
+  /// them into a single hazy shape spanning the bar; the morph here comes from
+  /// the capsule staying put, not from matched effect ids.
+  ///
+  /// It keeps the system's own shape deliberately — 44pt glass capsules at the
+  /// bottom safe area, the same metrics the toolbar used — because the point is
+  /// that it still reads as the standard bottom bar.
   private var bottomBar: some View {
-    Button {
-      model.send("setChatOpen", ["value": "true"])
-      sheet = .chat
-    } label: {
-      Image(systemName: "bubble.left.and.text.bubble.right")
+    barRow
+      .padding(.horizontal, 12)
+      .padding(.bottom, 4)
+  }
+
+  private var barRow: some View {
+    HStack(spacing: 12) {
+      if !zoomExpanded {
+        HStack(spacing: 20) {
+          Button {
+            model.send("setChatOpen", ["value": "true"])
+            sheet = .chat
+          } label: {
+            Image(systemName: "bubble.left.and.text.bubble.right")
+          }
+          .accessibilityLabel("Assistant")
+
+          Button {
+            model.send("setStructureOpen", ["value": "true"])
+            sheet = .structure
+          } label: {
+            Image(systemName: "list.bullet.rectangle")
+          }
+          .accessibilityLabel("Edit structure")
+
+          Button {
+            model.send("setDesignOpen", ["value": "true"])
+            sheet = .design
+          } label: {
+            Image(systemName: "paintbrush")
+          }
+          .accessibilityLabel("Design")
+
+          formatMenu
+        }
+        .modifier(BarCapsule())
+        // Scale rather than slide: the zoom capsule is growing into the space
+        // this leaves, and two things travelling in different directions reads
+        // as a swap. Shrinking in place reads as making room.
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+
+        Spacer(minLength: 0)
+      }
+
+      zoomControl
     }
-    .accessibilityLabel("Assistant")
-
-    Button {
-      model.send("setStructureOpen", ["value": "true"])
-      sheet = .structure
-    } label: {
-      Image(systemName: "list.bullet.rectangle")
-    }
-    .accessibilityLabel("Edit structure")
-
-    Button {
-      model.send("setDesignOpen", ["value": "true"])
-      sheet = .design
-    } label: {
-      Image(systemName: "paintbrush")
-    }
-    .accessibilityLabel("Design")
-
-    formatMenu
-
-    Spacer()
-
-    Button { keepZoomOpen() } label: { zoomReadout }
-      .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent. Opens the zoom controls.")
+    .font(.system(size: 17))
+    .buttonStyle(.plain)
+    .foregroundStyle(.primary)
   }
 
   /// Three separate items (−, readout, +) is what ran the bar out of room once
@@ -1222,28 +1249,38 @@ private struct ShellView: View {
   /// SwiftUI — the first version of this flipped its state and never redrew —
   /// but ordinary view content inside one item diffs normally.
   private var zoomControl: some View {
-    HStack(spacing: 10) {
-      Button {
-        model.send("zoomOut")
-        keepZoomOpen()
-      } label: {
-        Image(systemName: "minus").frame(width: 34, height: 40)
+    HStack(spacing: 20) {
+      if zoomExpanded {
+        Button {
+          model.send("zoomOut")
+          keepZoomOpen()
+        } label: {
+          Image(systemName: "minus")
+        }
+        .accessibilityLabel("Zoom out")
+        .transition(.opacity)
       }
-      .accessibilityLabel("Zoom out")
 
       zoomMenu
 
-      Button {
-        model.send("zoomIn")
-        keepZoomOpen()
-      } label: {
-        Image(systemName: "plus").frame(width: 34, height: 40)
+      if zoomExpanded {
+        Button {
+          model.send("zoomIn")
+          keepZoomOpen()
+        } label: {
+          Image(systemName: "plus")
+        }
+        .accessibilityLabel("Zoom in")
+      .transition(.opacity)
       }
-      .accessibilityLabel("Zoom in")
     }
-    .buttonStyle(.plain)
-    .padding(.horizontal, 10)
-    .modifier(ZoomControlSurface())
+    // The SAME id in both states — that is the morph. The capsule grows from
+    // the corner readout into the centred control instead of one being
+    // replaced by the other.
+    .modifier(BarCapsule())
+    // Centred while open, trailing while not: with the tools gone the leading
+    // spacer goes with them, so this one is what balances it.
+    .frame(maxWidth: zoomExpanded ? .infinity : nil)
   }
 
   // shell hides. Routing them here is what keeps hiding it from being a
@@ -1288,26 +1325,35 @@ private struct ShellView: View {
   /// Collapsed it is the button that opens the controls. Expanded it carries
   /// the two commands that are not a step — Fit and Actual size — because by
   /// then there is a control to hang them off.
+  @ViewBuilder
   private var zoomMenu: some View {
-    Menu {
-      Button { model.send("zoomFit"); keepZoomOpen() } label: {
-        Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
+    if zoomExpanded {
+      Menu {
+        Button { model.send("zoomFit"); keepZoomOpen() } label: {
+          Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
+        }
+        Button { model.send("zoomReset"); keepZoomOpen() } label: {
+          Label("Actual size", systemImage: "1.magnifyingglass")
+        }
+      } label: {
+        zoomReadout
       }
-      Button { model.send("zoomReset"); keepZoomOpen() } label: {
-        Label("Actual size", systemImage: "1.magnifyingglass")
-      }
-    } label: {
-      zoomReadout
+      .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
+    } else {
+      // Collapsed, the readout OPENS the controls. It was a Menu in both
+      // states for a moment, and tapping the percentage offered Fit and Actual
+      // size instead of the −/+ the tap is asking for.
+      Button { keepZoomOpen() } label: { zoomReadout }
+        .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent. Opens the zoom controls.")
     }
-    .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
   }
 
   private var zoomReadout: some View {
     Text("\(snapshot.zoomPercent)%")
       .font(.subheadline)
       .monospacedDigit()
-      // Fixed, or the control resizes on 99% → 100%.
-      .frame(minWidth: 46, minHeight: 40)
+      // Fixed, or the capsule resizes on 99% → 100%.
+      .frame(minWidth: 46)
       // Text is only hit-testable where its glyphs are; without this the pill
       // has a live centre and dead corners.
       .contentShape(.rect)
@@ -2405,15 +2451,21 @@ private struct ComposerSurface: ViewModifier {
   }
 }
 
-/// The expanded zoom control's surface. Its own modifier rather than
-/// `ComposerSurface`'s: this one is a capsule floating over the résumé where
-/// the bottom bar was, and the composer's is a 26pt card in a sheet.
-private struct ZoomControlSurface: ViewModifier {
+/// One capsule of the bottom bar.
+///
+/// 44pt and `.regular.interactive()`, matching what the system bottom bar drew
+/// before this replaced it — the bar moved into our hands so the zoom control
+/// could morph, not so it could look different.
+private struct BarCapsule: ViewModifier {
   func body(content: Content) -> some View {
+    let sized = content
+      .padding(.horizontal, 20)
+      .frame(height: 44)
+
     if #available(iOS 26.0, *) {
-      content.glassEffect(.regular.interactive(), in: .capsule)
+      sized.glassEffect(.regular.interactive(), in: .capsule)
     } else {
-      content
+      sized
         .background(.regularMaterial, in: .capsule)
         .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
     }
