@@ -63,52 +63,91 @@ The lesson for next time: `simctl` taps are good enough to prove a control
 WORKS, and not good enough to prove one is broken. A negative result from them
 is not evidence.
 
-## Open: the chat button opens the web panel
+## Closed: the chat button was another contaminated test
 
-Tapping the native chat button opens the OLD web chat drawer. What is
-established, with evidence:
+The native chat button appeared to open the OLD web drawer, reproducibly,
+across several builds — with an `NSLog` in the button's action never firing.
+Every hypothesis chased from that (`.chat-panel-toggle` still hit-testable, the
+toolbar overlaying the webview) was measured and ruled out.
 
-- **The binary is current.** It contains `setChatOpen` and `chatSend`, and
-  contains no `toggleChat` — which the Swift source no longer sends anywhere.
-- **`ChatSheet` is compiled in** (its symbols and strings are in the binary).
-- **The sheet mechanism works.** The structure sheet opens from the adjacent
-  toolbar button using the identical `.sheet(item:)` path.
-- **The chat button's action never runs.** An `NSLog` as its first statement
-  never appeared, across several attempts, while the web panel opened anyway.
+**The button works.** On a simulator with nothing else competing for the
+foreground, tapping it opens the native sheet on the first try. The earlier
+result was the same contamination as the "post-export touch" bug — see below,
+because this time the culprit is named.
 
-So the tap is not reaching the button, and something else is opening the web
-drawer. Not yet explained.
+**The canvas running under the bottom toolbar is deliberate, not the bug.**
+`window.innerHeight` really is ~49pt taller than the visible area, and an inset
+"fix" was written and then reverted on request: the résumé showing behind the
+glass is wanted.
 
-**Read the simulator results with suspicion.** During this investigation an
-unrelated app repeatedly took the foreground on the same simulator, so some
-taps went to another app entirely — the same class of contamination that made
-the "post-export touch" bug look real. Before debugging the SwiftUI further,
-reproduce on a device, or at least confirm On Paper is frontmost immediately
-before and after each tap.
+### The contamination has a name
 
-**`.chat-panel-toggle` is NOT the culprit — measured.** A probe at handover
-reported `display: none` and a 0x0 rect for both floating toggles, so neither
-can receive a tap. That hypothesis is closed.
+`com.oliakitchen.ios.uitests.xctrunner` — a leftover UI-test runner from another
+project — was installed and running on the shared simulator, relaunching Olia
+and taking the foreground every few seconds. Any tap injected during one of its
+turns went to Olia.
 
-**The same probe found something else, and it is probably the real lead:**
-`window.innerHeight` is **724 with the bottom toolbar visible** — identical to
-the value measured with the toolbar hidden. 874 - 724 = 150, which is the
-navigation bar plus the bottom safe area and nothing else. **The toolbar
-overlays the webview rather than insetting it.**
+Check for it before trusting a negative result:
 
-That means the bottom ~49pt of the page sits underneath the toolbar, and every
-tap in that strip is resolved between two overlapping views. It is a layout bug
-in its own right (the canvas is taller than the visible area again, the same
-class of bug as the 114pt one fixed earlier), and it is a plausible mechanism
-for a tap near the toolbar reaching neither the button nor the element the user
-aimed at. Fix the inset first, then re-test the chat button.
+```
+xcrun simctl spawn booted launchctl list | grep UIKitApplication
+```
+
+Anything unexpected there means the device is not trustworthy. Terminating the
+runner is not enough — it respawns. Boot a different simulator and target it by
+UDID (`simctl install <udid>`, `simctl io <udid> screenshot`), because `booted`
+is ambiguous with two devices up.
 
 ## Chat is native, and proposals can be applied
 
-The chat sheet follows Olia's (`~/HyperBuild/Projects/HyperBite-iOS/Olia`): the
-morphing `GlassEffectContainer` composer and the dot-and-rule reasoning
-timeline, both ported rather than approximated. `reasoning` and `thinking` now
-cross the bridge.
+The chat sheet follows Olia's (`~/HyperBuild/Projects/HyperBite-iOS/Olia`),
+reworked after device testing:
+
+- **The reply has no bubble.** Only the user's turn is a shape. A box around the
+  answer cost it the full width its lists and headings need.
+- **Markdown renders** — headings, bullets, numbered lists, quotes, fenced code
+  — through `MarkdownText`, ported from Olia. SwiftUI's `Text` handles the
+  inline layer through `LocalizedStringKey`; the block layer is the port. Each
+  block fades and rises in as it completes, the way the reasoning timeline does
+  its rows.
+- **Reasoning is a one-line summary that opens a sheet.** The chevron appears
+  only once a summary line has arrived, and the row is inert until then, so it
+  is never a button onto an empty sheet.
+- **Thinking and answering never overlap.** The first content token settles the
+  summary to "Thought process" and stops the shimmer, and the phone taps once
+  (`.sensoryFeedback`) — models interleave, and showing both live read as two
+  answers being written at once.
+- **The reply is PACED, not dumped.** `ReplyStream` (ported from Olia's
+  `StreamingAnimationController`) holds a target and walks toward it a couple of
+  characters per tick, accelerating when behind, so a reply types itself in
+  instead of landing a paragraph at a time — the network clumps tokens and the
+  JS side coalesces them again, so rendering the snapshot directly is abrupt by
+  construction. Its timer runs in `RunLoop.Mode.common`, or the reply freezes
+  for exactly as long as the user is scrolling.
+- **The composer carries the model and reasoning-effort chips**, ChatGPT/Claude
+  style. The chips are 36pt capsules inside a 26pt card with 8pt of padding:
+  26 − 8 = 18, and a 36pt capsule's radius is 18, so the curves are concentric.
+  The capsule is part of the LABEL, not a button style's background — as a
+  `.bordered` Menu the pill and the text were sized on different passes, so a
+  label that changed ("Model" → "Claude Sonnet 4.6" when the catalogue lands)
+  briefly overflowed its own pill. Send is drawn at the same 36pt rather than
+  left to `.glassProminent`, which adds padding around whatever frame it is
+  given: that made it the tallest thing in the row, and since the row centres
+  its contents it lifted the chips off the card's bottom edge and broke the
+  concentricity they were sized for.
+- **The bar's left button is the chat list**, its centre is the current chat's
+  title with rename and delete. Navigating between chats and acting on the one
+  you are in are different jobs and were briefly merged into one menu.
+- **The composer's field is keyed on a generation counter** bumped on send. A
+  vertical-axis `TextField` is a `UITextView`, and clearing its binding does not
+  invalidate the intrinsic height it grew to, so after a multi-line message the
+  composer stayed tall until something unrelated forced a layout pass.
+- **The transcript scrolls under the composer** (`safeAreaInset`), and follows
+  new turns only — keying the auto-scroll on the streaming text took the scroll
+  away from anyone reading back through the answer.
+
+Rename is new engine surface (`renameThread` in `useChat.js`); everything else
+routes to what desktop already uses.
 
 The AI's proposed edits get a native review sheet. **Nothing applies without its
 before/after on screen first** — that rule is why they were withheld
@@ -117,9 +156,32 @@ originally, and it is what the sheet exists to satisfy. Apply-all routes to
 against the proposed array, so insertions and removals must land before
 modifications or a write hits the wrong element.
 
-**Unverified beyond the empty state.** Everything past "No API key" needs a real
-key, which no agent should enter. What is confirmed: the sheet opens, the
-snapshot arrives, and `configured: false` renders correctly.
+**How to see any of this without a key.** Everything past "No API key" needs a
+real one, which no agent should enter. Publish a canned snapshot instead: a
+temporary block in `setChatOpen` (src/iosShell.js) that calls `buildChatView`
+with fixture messages and publishes it renders the whole transcript, including
+streaming and reasoning states. That is how the rework above was checked —
+transcript, markdown, both reasoning states, the title menu and the reasoning
+sheet all confirmed on screen. Remove the block before committing.
+
+Still unverified on real traffic: streaming cadence, the haptic, the model and
+effort pickers writing through, and the review sheet end to end.
+
+## Fastest way past onboarding on a fresh install
+
+The wizard blocks the shell on every clean install, and the flag is
+profile-scoped:
+
+```
+xcrun simctl terminate <udid> com.resumedesigner.app
+printf 'true' > "<data-container>/Library/Application Support/com.resumedesigner.app/storage/resume-p--<profile-id>--resume-designer-onboarding-complete"
+```
+
+The container path comes from `simctl get_app_container <udid>
+com.resumedesigner.app data`, and the profile id from the
+`resume-designer-active-profile` file beside it. The unscoped key name does
+nothing — see `BACKUP_FIXED_KEYS` in `src/profileKeys.js` for which keys are
+shared and which are namespaced.
 
 ## Open: does the web Library dialog open by itself?
 
