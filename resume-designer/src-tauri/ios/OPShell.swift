@@ -966,9 +966,6 @@ private struct ShellView: View {
         // set includes it), which is what stops SwiftUI and WKWebView both
         // avoiding it and collapsing the canvas to a ~90pt strip.
         .ignoresSafeArea(edges: [.top, .bottom])
-        .overlay(alignment: .bottomTrailing) {
-          zoomControl.padding(.bottom, snapshot.modalOpen ? 0 : 4)
-        }
         .navigationBarTitleDisplayMode(.inline)
         // No bar backgrounds: the résumé runs edge to edge and shows THROUGH the
         // chrome, which is the whole point of glass controls floating over it.
@@ -994,7 +991,7 @@ private struct ShellView: View {
           // webview, so it covered the PDF preview's Save button — the dialog
           // rendered fine and simply could not be completed. Its commands
           // would act on the canvas behind the dialog anyway.
-          if !snapshot.modalOpen && !zoomExpanded {
+          if !snapshot.modalOpen {
             ToolbarItemGroup(placement: .bottomBar) { bottomBar }
           }
         }
@@ -1193,20 +1190,27 @@ private struct ShellView: View {
     .accessibilityLabel("Design")
 
     formatMenu
+
+    Spacer()
+
+    zoomControl
   }
 
-  /// Zoom, as its own floating control rather than three more items in the bar.
+  /// Zoom, as ONE bar item rather than three.
   ///
-  /// It was three (−, readout, +) and the bar ran out of room once Design
-  /// joined it — the last button was clipped off the screen edge. It is also
-  /// not a thing you use continuously, which is what Safari's zoom UI is built
-  /// around: a percentage sitting in the corner, and the controls only while
-  /// you are actually changing it.
+  /// Three separate items (−, readout, +) is what ran the bar out of room once
+  /// Design joined it: seven capsules on a 390pt screen, and the last was
+  /// clipped off the edge. As one item it is one capsule, and even expanded it
+  /// leaves the four tools their room.
   ///
-  /// An overlay rather than toolbar items on purpose. A `ToolbarItemGroup`
-  /// whose item COUNT changes is not reliably re-diffed by SwiftUI — the first
-  /// version of this simply never redrew — and an overlay also owns its own
-  /// animation, so the two states can morph rather than swap.
+  /// Zoom is also not a thing you use continuously, which is what Safari's zoom
+  /// UI is built around: a percentage at rest, and the controls only while you
+  /// are actually changing it. `keepZoomOpen` runs that clock.
+  ///
+  /// The branch lives INSIDE this view rather than in the toolbar builder. A
+  /// `ToolbarItemGroup` whose item COUNT changes is not reliably re-diffed by
+  /// SwiftUI — the first version of this flipped its state and never redrew —
+  /// but ordinary view content inside one item diffs normally.
   private var zoomControl: some View {
     HStack(spacing: 4) {
       if zoomExpanded {
@@ -1214,7 +1218,7 @@ private struct ShellView: View {
           model.send("zoomOut")
           keepZoomOpen()
         } label: {
-          Image(systemName: "minus").frame(width: 34, height: 34)
+          Image(systemName: "minus").frame(width: 30, height: 34)
         }
         .accessibilityLabel("Zoom out")
       }
@@ -1226,17 +1230,12 @@ private struct ShellView: View {
           model.send("zoomIn")
           keepZoomOpen()
         } label: {
-          Image(systemName: "plus").frame(width: 34, height: 34)
+          Image(systemName: "plus").frame(width: 30, height: 34)
         }
         .accessibilityLabel("Zoom in")
       }
     }
     .buttonStyle(.plain)
-    .padding(.horizontal, 8)
-    .frame(height: 44)
-    .modifier(ZoomControlSurface())
-    .padding(.trailing, 12)
-    .padding(.bottom, 10)
   }
 
   /// Open the zoom controls, and restart the clock on closing them again.
@@ -1306,8 +1305,10 @@ private struct ShellView: View {
     Text("\(snapshot.zoomPercent)%")
       .font(.subheadline)
       .monospacedDigit()
-      // Fixed, or the pill resizes on 99% → 100%.
-      .frame(minWidth: 46, minHeight: 34)
+      // Fixed, or the pill resizes on 99% → 100%. Kept tight: expanded, this
+      // control shares a 390pt bar with four tools, and every point here is one
+      // the narrower phones do not have.
+      .frame(minWidth: 42, minHeight: 34)
       // Text is only hit-testable where its glyphs are; without this the pill
       // has a live centre and dead corners.
       .contentShape(.rect)
@@ -2401,21 +2402,6 @@ private struct ComposerSurface: ViewModifier {
       content
         .background(.ultraThinMaterial, in: shape)
         .overlay(shape.stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-    }
-  }
-}
-
-/// The zoom control's own surface. Its own modifier rather than
-/// `ComposerSurface`'s: this one is a capsule and floats over the résumé, where
-/// the composer's is a 26pt card at the bottom of a sheet.
-private struct ZoomControlSurface: ViewModifier {
-  func body(content: Content) -> some View {
-    if #available(iOS 26.0, *) {
-      content.glassEffect(.regular.interactive(), in: .capsule)
-    } else {
-      content
-        .background(.regularMaterial, in: .capsule)
-        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
     }
   }
 }
