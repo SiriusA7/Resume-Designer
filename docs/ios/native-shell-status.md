@@ -63,6 +63,35 @@ The lesson for next time: `simctl` taps are good enough to prove a control
 WORKS, and not good enough to prove one is broken. A negative result from them
 is not evidence.
 
+## Open: the chat button opens the web panel
+
+Tapping the native chat button opens the OLD web chat drawer. What is
+established, with evidence:
+
+- **The binary is current.** It contains `setChatOpen` and `chatSend`, and
+  contains no `toggleChat` — which the Swift source no longer sends anywhere.
+- **`ChatSheet` is compiled in** (its symbols and strings are in the binary).
+- **The sheet mechanism works.** The structure sheet opens from the adjacent
+  toolbar button using the identical `.sheet(item:)` path.
+- **The chat button's action never runs.** An `NSLog` as its first statement
+  never appeared, across several attempts, while the web panel opened anyway.
+
+So the tap is not reaching the button, and something else is opening the web
+drawer. Not yet explained.
+
+**Read the simulator results with suspicion.** During this investigation an
+unrelated app repeatedly took the foreground on the same simulator, so some
+taps went to another app entirely — the same class of contamination that made
+the "post-export touch" bug look real. Before debugging the SwiftUI further,
+reproduce on a device, or at least confirm On Paper is frontmost immediately
+before and after each tap.
+
+The next concrete thing to check: whether `.chat-panel-toggle` is genuinely
+non-interactive under `html.op-native-shell`. `native-shell.css` sets
+`display: none` on it, which should also remove it from hit-testing — but a
+tap landing on the webview and reaching that button is the only mechanism that
+opens the drawer, so it is worth proving rather than assuming.
+
 ## Also unverified
 
 - **iPad**, including Stage Manager and split view. The shell is written not to
