@@ -599,7 +599,6 @@ private struct ShellView: View {
   @ViewBuilder
   private var bottomBar: some View {
     Button {
-      NSLog("[OPShell] chat button tapped; sheet was \(String(describing: sheet))")
       model.send("setChatOpen", ["value": "true"])
       sheet = .chat
     } label: {
