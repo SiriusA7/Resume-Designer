@@ -4,7 +4,7 @@
  */
 
 import { store } from './store.js';
-import { getByPath } from './diffEngine.js';
+import { getByPath, diffResumeData } from './diffEngine.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
 import {
@@ -19,7 +19,7 @@ import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from '
 import {
   initVariants, loadVariant, duplicateVariant, exportCurrentVariant,
   subscribeVariants, getVariantsSnapshot,
-  getVariantList,
+  getVariantList, getCurrentId,
 } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
@@ -33,7 +33,9 @@ import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
 import { initZoomControls, getZoom, fitToView, setZoomLevel } from './zoomControls.js';
 import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
-import { initIOSShell, buildDocumentOutline, buildLibrary, buildDesign } from './iosShell.js';
+import {
+  initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
+} from './iosShell.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
 } from './designController.js';
@@ -597,6 +599,31 @@ export async function init() {
     resetDesign,
     setDesignImage,
     clearDesignImage,
+    // Version history.
+    getHistory: (diff) => buildHistory(store.getHistoryEntries(), getCurrentId(), diff),
+    // Both of these re-check the timestamp the version was SHOWN with before
+    // acting on the index. History indices are positional and renumber: at
+    // MAX_HISTORY (100) pushHistory shifts the whole array down by one, so an
+    // index Swift captured a moment ago can address a different version by the
+    // time the user confirms — and a restore is a whole-document overwrite, not
+    // a merge. Refusing is the only safe answer; the sheet re-renders from the
+    // next snapshot and the user picks again.
+    restoreVersion: (index, timestamp) => {
+      const entries = store.getHistoryEntries();
+      if (entries[index]?.timestamp !== timestamp) return false;
+      return store.restoreToEntry(index);
+    },
+    compareVersion: (index, timestamp) => {
+      const entries = store.getHistoryEntries();
+      if (entries[index]?.timestamp !== timestamp) return null;
+      const past = store.getHistoryEntryData(index);
+      const current = store.getData();
+      if (!past || !current) return null;
+      // Same argument order the web dialog uses: the HISTORICAL version is the
+      // "before" and the live document is the "after", so the diff reads as
+      // "what has changed since then" rather than as a proposal to apply.
+      return diffResumeData(past, current);
+    },
   });
   
   // Check for first-time user onboarding

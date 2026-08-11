@@ -75,7 +75,7 @@ export function hasOpenModal(root = document) {
  */
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
-  document: outline = null, chat = null, library = null, design = null,
+  document: outline = null, chat = null, library = null, design = null, history = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -98,6 +98,7 @@ export function buildSnapshot({
     chat,
     library,
     design,
+    history,
   };
 }
 
@@ -280,6 +281,73 @@ export function buildPendingChanges(changes) {
       before: clip(text(c.displayOld)),
       after: clip(text(c.displayNew)),
     }));
+}
+
+/**
+ * Labels for the store's `changeType`, lifted out of HistoryDialog.jsx where
+ * they were module-private. Resolved HERE rather than in Swift so the two
+ * platforms cannot end up naming the same version differently.
+ */
+const HISTORY_LABELS = {
+  initial: 'Created',
+  edit: 'Edit',
+  ai: 'AI change',
+  import: 'Import',
+  reorder: 'Reordered',
+  add: 'Added',
+  remove: 'Removed',
+};
+
+/**
+ * Project the undo stack as a list of versions.
+ *
+ * Newest first, matching the web dialog — the useful end of a hundred-entry
+ * stack is the recent end.
+ *
+ * The timestamp crosses as the raw ISO string, not a formatted one: iOS has
+ * `RelativeDateTimeFormatter` and it speaks the user's language, which a
+ * hand-rolled "3h ago" in this file does not.
+ *
+ * `variantId` rides along because history is PER RÉSUMÉ and this sheet has no
+ * session identity of its own. A sheet left open across a résumé switch would
+ * otherwise be listing another document's versions under this one's name, and
+ * restoring one of them would overwrite the wrong résumé.
+ *
+ * The entry PAYLOADS never cross. `getHistoryEntries()` deliberately omits
+ * `entry.data`, and a hundred document snapshots on a wire that is re-posted on
+ * every canvas render would be absurd. A comparison is computed on demand
+ * instead — see `diff`.
+ *
+ * Pure.
+ *
+ * @param {Array} entries rows from `store.getHistoryEntries()`
+ * @param {string|null} variantId the résumé these versions belong to
+ * @param {object|null} diff the open comparison, if any
+ */
+export function buildHistory(entries, variantId = null, diff = null) {
+  const rows = (Array.isArray(entries) ? entries : [])
+    .map((entry, index) => ({
+      // The store's own index, kept even though the list is reversed: it is
+      // what `restoreToEntry` addresses, and Swift must never compute one.
+      index,
+      timestamp: typeof entry?.timestamp === 'string' ? entry.timestamp : '',
+      description: typeof entry?.description === 'string' ? entry.description : '',
+      changeType: typeof entry?.changeType === 'string' ? entry.changeType : 'edit',
+      label: HISTORY_LABELS[entry?.changeType] || HISTORY_LABELS.edit,
+      isCurrent: !!entry?.isCurrent,
+    }))
+    .reverse();
+
+  return {
+    variantId: typeof variantId === 'string' ? variantId : '',
+    entries: rows,
+    diff: diff && typeof diff === 'object'
+      ? {
+        label: typeof diff.label === 'string' ? diff.label : '',
+        changes: buildPendingChanges(diff.changes),
+      }
+      : null,
+  };
 }
 
 /**
@@ -729,6 +797,10 @@ let streamLibrary = false;
 let libraryQuery = '';
 let libraryDeep = false;
 let streamDesign = false;
+let streamHistory = false;
+// The comparison the history sheet has open, computed on demand because the
+// entry payloads never ride the snapshot. Cleared when the sheet closes.
+let historyDiff = null;
 let publish = () => {};
 
 /**
@@ -855,6 +927,31 @@ export function initIOSShell(deps) {
     },
     openVariant: ({ id }) => deps.loadVariant(String(id)),
 
+    // Version history. The stack is per-résumé and its indices renumber, so the
+    // two commands that address a version carry the timestamp they were shown
+    // with — see `restoreVersion` in main.js for what that check prevents.
+    setHistoryOpen: ({ value }) => {
+      streamHistory = value === 'true';
+      if (!streamHistory) historyDiff = null;
+      publish();
+    },
+    restoreVersion: ({ index, timestamp }) => {
+      const ok = deps.restoreVersion(Number(index), String(timestamp ?? ''));
+      historyDiff = null;
+      publish();
+      if (!ok) throw new Error('that version is no longer where it was');
+    },
+    compareVersion: ({ index, timestamp, label }) => {
+      const changes = deps.compareVersion(Number(index), String(timestamp ?? ''));
+      if (!changes) throw new Error('that version is no longer where it was');
+      historyDiff = { label: String(label ?? ''), changes };
+      publish();
+    },
+    closeCompare: () => {
+      historyDiff = null;
+      publish();
+    },
+
     setChatOpen: ({ value }) => {
       streamChat = value === 'true';
       // Ask the panel to re-push. Its first publish is normally LOST: React
@@ -946,6 +1043,27 @@ export function initIOSShell(deps) {
     };
   };
 
+  /**
+   * Run one sheet's projection, containing its failure to that sheet.
+   *
+   * The snapshot is one message: a throw anywhere in building it takes the
+   * WHOLE chrome down, not just the sheet that failed, and the symptom is a
+   * shell that silently stops updating — no title, no zoom readout, nothing.
+   * Measured: a projection dep that was never imported into main.js froze
+   * everything the moment its sheet opened.
+   *
+   * The sheet gets `null`, which it already renders as "not open yet", and the
+   * name goes to the log so the cause is one search away.
+   */
+  const project = (name, build) => {
+    try {
+      return build();
+    } catch (error) {
+      console.error(`[opShell] ${name} projection failed`, error);
+      return null;
+    }
+  };
+
   const send = () => {
     queued = false;
     if (!activated) return;
@@ -965,11 +1083,16 @@ export function initIOSShell(deps) {
         ...buildSnapshot({
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),
-          document: streamDocument ? deps.getDocument() : null,
-          library: streamLibrary ? deps.getLibrary(libraryQuery, libraryDeep) : null,
-          design: streamDesign ? deps.getDesign() : null,
+          document: streamDocument ? project('document', () => deps.getDocument()) : null,
+          library: streamLibrary
+            ? project('library', () => deps.getLibrary(libraryQuery, libraryDeep))
+            : null,
+          design: streamDesign ? project('design', () => deps.getDesign()) : null,
+          history: streamHistory ? project('history', () => deps.getHistory(historyDiff)) : null,
           chat: streamChat
-            ? { ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()) }
+            ? project('chat', () => ({
+              ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()),
+            }))
             : null,
         }),
       }

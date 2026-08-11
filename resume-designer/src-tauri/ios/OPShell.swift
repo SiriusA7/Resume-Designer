@@ -50,6 +50,38 @@ struct ShellSnapshot: Decodable, Equatable {
   /// `nil` while the library is closed.
   var library: [LibraryEntry]?
 
+  /// `nil` while the history sheet is closed. Mirrors `buildHistory()`.
+  var history: History?
+
+  struct History: Decodable, Equatable {
+    /// The résumé these versions belong to. History is per-résumé and the sheet
+    /// has no session identity, so a switch underneath it has to be noticed —
+    /// restoring a version from another document would overwrite this one.
+    let variantId: String
+    let entries: [Entry]
+    /// The open comparison, if any. Computed on demand: the version PAYLOADS
+    /// never ride the snapshot.
+    let diff: Diff?
+
+    struct Entry: Decodable, Equatable, Identifiable {
+      /// The store's own index — Swift echoes it back and never computes one.
+      let index: Int
+      let timestamp: String
+      let description: String
+      let changeType: String
+      let label: String
+      let isCurrent: Bool
+      /// Positional indices renumber, so they are not stable identity. The
+      /// timestamp is what makes a row itself.
+      var id: String { "\(index)-\(timestamp)" }
+    }
+
+    struct Diff: Decodable, Equatable {
+      let label: String
+      let changes: [ChatView.PendingChange]
+    }
+  }
+
   struct LibraryEntry: Decodable, Equatable, Identifiable {
     let id: String
     let name: String
@@ -319,7 +351,7 @@ struct ShellSnapshot: Decodable, Equatable {
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
     zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
-    chat: nil, library: nil, document: nil, design: nil
+    chat: nil, library: nil, history: nil, document: nil, design: nil
   )
 }
 
@@ -508,17 +540,28 @@ final class ShellModel: ObservableObject {
   ///
   /// The payload crosses as a JS *string literal* rather than an object
   /// literal, so nothing in it can be parsed as code however it was built.
-  func send(_ type: String, _ extra: [String: String] = [:]) {
+  /// `onResult` receives the dispatcher's own `ok` — false when the command ran
+  /// and REFUSED, which is different from the eval failing. Most callers do not
+  /// care, because the next snapshot shows whether the write landed; the ones
+  /// that address a version by index do, because a refusal there means the
+  /// history renumbered under the sheet and the user has to be told.
+  func send(
+    _ type: String, _ extra: [String: String] = [:], onResult: ((Bool) -> Void)? = nil
+  ) {
     var body: [String: String] = extra
     body["type"] = type
     guard let json = try? JSONSerialization.data(withJSONObject: body),
           let text = String(data: json, encoding: .utf8),
           let literal = Self.jsStringLiteral(text) else {
       NSLog("[OPShell] could not encode command: \(type)")
+      onResult?(false)
       return
     }
-    webView?.evaluateJavaScript("window.__opShell && window.__opShell.command(\(literal))") { _, error in
+    webView?.evaluateJavaScript("window.__opShell && window.__opShell.command(\(literal))") { value, error in
       if let error { NSLog("[OPShell] command \(type) failed: \(error)") }
+      guard let onResult else { return }
+      let ok = error == nil && ((value as? [String: Any])?["ok"] as? Bool ?? false)
+      Task { @MainActor in onResult(ok) }
     }
   }
 
@@ -875,7 +918,7 @@ private struct ShellView: View {
   @State private var zoomInteraction = 0
 
   private enum Sheet: String, Identifiable {
-    case settings, structure, design, chat, library, pdfPreview
+    case settings, structure, design, chat, library, history, pdfPreview
     var id: String { rawValue }
   }
 
@@ -951,6 +994,7 @@ private struct ShellView: View {
           case .design: DesignSheet(model: model)
           case .chat: ChatSheet(model: model)
           case .library: LibrarySheet(model: model)
+          case .history: HistorySheet(model: model)
           case .pdfPreview:
             if let request = model.pdfPreview {
               PdfPreviewSheet(model: model, request: request)
@@ -971,6 +1015,7 @@ private struct ShellView: View {
           case .design: model.send("setDesignOpen", ["value": "false"])
           case .chat: model.send("setChatOpen", ["value": "false"])
           case .library: model.send("setLibraryOpen", ["value": "false"])
+          case .history: model.send("setHistoryOpen", ["value": "false"])
           case .pdfPreview:
             // Swiped away rather than answered. The web side is still holding
             // the export guard and the temp PDF waiting to hear which it was,
@@ -1066,7 +1111,12 @@ private struct ShellView: View {
       Section("Tools") {
         Button { model.send("openProfile") } label: { Label("Profile", systemImage: "person.crop.circle") }
         Button { model.send("openJobs") } label: { Label("Jobs", systemImage: "briefcase") }
-        Button { model.send("openHistory") } label: { Label("Version history", systemImage: "clock.arrow.circlepath") }
+        Button {
+          model.send("setHistoryOpen", ["value": "true"])
+          sheet = .history
+        } label: {
+          Label("Version history", systemImage: "clock.arrow.circlepath")
+        }
       }
       Section {
         Button { sheet = .settings } label: { Label("Settings", systemImage: "gearshape") }
@@ -2645,6 +2695,206 @@ private struct ChatSheet: View {
   }
 }
 
+// MARK: - Version history
+
+/// Every saved version of this résumé, newest first.
+///
+/// The only surface that shows the undo stack as a list rather than one step at
+/// a time — the Actions menu's Undo and Redo walk the same stack, so a restore
+/// here changes what those two do next.
+private struct HistorySheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  /// The version a confirmation is pending on. Held whole rather than by index:
+  /// indices renumber, and this is what gets sent back for the check.
+  @State private var pendingRestore: ShellSnapshot.History.Entry?
+  @State private var staleWarning = false
+
+  private var history: ShellSnapshot.History? { model.snapshot.history }
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if let diff = history?.diff {
+          comparison(diff)
+        } else if let entries = history?.entries, !entries.isEmpty {
+          list(entries)
+        } else if history == nil {
+          ProgressView()
+        } else {
+          ContentUnavailableView(
+            "No versions yet",
+            systemImage: "clock.arrow.circlepath",
+            description: Text("Edits to this resume are saved here as you make them.")
+          )
+        }
+      }
+      .navigationTitle(history?.diff == nil ? "Version history" : "Changes since")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        if history?.diff != nil {
+          ToolbarItem(placement: .cancellationAction) {
+            Button("Back") { model.send("closeCompare") }
+          }
+        }
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }
+      .confirmationDialog(
+        "Restore this version?",
+        isPresented: .init(
+          get: { pendingRestore != nil },
+          set: { if !$0 { pendingRestore = nil } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button("Restore", role: .destructive) {
+          guard let entry = pendingRestore else { return }
+          pendingRestore = nil
+          model.send(
+            "restoreVersion", ["index": "\(entry.index)", "timestamp": entry.timestamp]
+          ) { ok in staleWarning = !ok }
+        }
+      } message: {
+        // Precise about what survives, because the web dialog's wording is not:
+        // restoreToEntry truncates nothing, so the newer versions stay in the
+        // stack as redo-able ones rather than being "saved in history".
+        Text("The whole resume goes back to this version. The newer versions stay in this list, so you can come forward again.")
+      }
+      .alert("That version moved", isPresented: $staleWarning) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("The history changed while this was open. Pick it again from the refreshed list.")
+      }
+    }
+  }
+
+  private func list(_ entries: [ShellSnapshot.History.Entry]) -> some View {
+    List {
+      ForEach(entries) { entry in
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(spacing: 8) {
+            Image(systemName: symbol(for: entry.changeType))
+              .font(.caption)
+              .foregroundStyle(entry.isCurrent ? Color.accentColor : .secondary)
+              .frame(width: 18)
+            Text(entry.label).font(.subheadline.weight(.medium))
+            Text(relative(entry.timestamp)).font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if entry.isCurrent {
+              Text("Current")
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.accentColor.opacity(0.15), in: .capsule)
+                .foregroundStyle(Color.accentColor)
+            }
+          }
+          if !entry.description.isEmpty {
+            Text(entry.description)
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+              .padding(.leading, 26)
+          }
+        }
+        .padding(.vertical, 2)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+          if !entry.isCurrent {
+            Button("Restore") { pendingRestore = entry }.tint(.orange)
+          }
+          Button("Compare") {
+            model.send("compareVersion", [
+              "index": "\(entry.index)",
+              "timestamp": entry.timestamp,
+              "label": "\(entry.label) · \(relative(entry.timestamp))",
+            ]) { ok in staleWarning = !ok }
+          }
+          .tint(.blue)
+        }
+        // The same two actions on a tap-and-hold, because a swipe on a row is
+        // discoverable only if you already know it is there.
+        .contextMenu {
+          if !entry.isCurrent {
+            Button("Restore this version", systemImage: "clock.arrow.circlepath") {
+              pendingRestore = entry
+            }
+          }
+          Button("Compare with current", systemImage: "arrow.left.arrow.right") {
+            model.send("compareVersion", [
+              "index": "\(entry.index)",
+              "timestamp": entry.timestamp,
+              "label": "\(entry.label) · \(relative(entry.timestamp))",
+            ]) { ok in staleWarning = !ok }
+          }
+        }
+      }
+    }
+  }
+
+  /// Read-only on purpose. It reads "what has changed since then", not a
+  /// proposal — the AI's review sheet is the only place changes get applied.
+  private func comparison(_ diff: ShellSnapshot.History.Diff) -> some View {
+    List {
+      Section {
+        if diff.changes.isEmpty {
+          Text("Nothing has changed since this version.")
+            .foregroundStyle(.secondary)
+        }
+        ForEach(diff.changes) { change in
+          VStack(alignment: .leading, spacing: 6) {
+            Text(change.label).font(.caption).foregroundStyle(.secondary)
+            if !change.before.isEmpty {
+              Text(change.before)
+                .font(.footnote)
+                .strikethrough(change.type == "remove")
+                .foregroundStyle(.secondary)
+            }
+            if !change.after.isEmpty {
+              Text(change.after).font(.footnote)
+            }
+          }
+          .padding(.vertical, 2)
+        }
+      } header: {
+        Text(diff.label.isEmpty ? "Compared version" : diff.label)
+      } footer: {
+        Text("Shown as it stands now against that version. Nothing here is applied.")
+      }
+    }
+  }
+
+  private func symbol(for changeType: String) -> String {
+    switch changeType {
+    case "initial": return "doc"
+    case "ai": return "sparkles"
+    case "import": return "square.and.arrow.down"
+    case "reorder": return "arrow.up.arrow.down"
+    case "add": return "plus"
+    case "remove": return "minus"
+    default: return "pencil"
+    }
+  }
+
+  /// The system's formatter, not a hand-rolled "3h ago": it speaks the user's
+  /// language, which is why the timestamp crosses the bridge unformatted.
+  private func relative(_ iso: String) -> String {
+    guard let date = ISO8601DateFormatter.historyParser.date(from: iso) else { return "" }
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .abbreviated
+    return formatter.localizedString(for: date, relativeTo: Date())
+  }
+}
+
+private extension ISO8601DateFormatter {
+  /// The store writes `new Date().toISOString()`, which always carries
+  /// milliseconds — the default parser rejects those.
+  static let historyParser: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
+}
+
 // MARK: - Change review
 
 /// Review the AI's proposed edits before they land.
@@ -2860,7 +3110,7 @@ private struct DesignSheet: View {
           List {
             Section {
               row("Page", "doc", pageSummary(design)) { PageScreen(model: model) }
-              row("Colour", "paintpalette", colorSummary(design)) { ColorScreen(model: model) }
+              row("Color", "paintpalette", colorSummary(design)) { ColorScreen(model: model) }
               row("Layout", "square.split.2x1", optionName(design.layout, in: design.layouts)) {
                 LayoutScreen(model: model)
               }
@@ -3339,7 +3589,7 @@ private struct ColorScreen: View {
 
   var body: some View {
     Form { content }
-      .navigationTitle("Colour")
+      .navigationTitle("Color")
       .navigationBarTitleDisplayMode(.inline)
   }
 
@@ -3368,7 +3618,7 @@ private struct ColorScreen: View {
 
       Section {
         ColorPicker(
-          "Custom colour",
+          "Custom color",
           selection: Binding(
             get: { designColor(model.snapshot.design?.color.customColor ?? "") ?? .accentColor },
             set: {
@@ -3385,7 +3635,7 @@ private struct ColorScreen: View {
           action: {
             model.send("setDesign", ["group": "color", "property": "palette", "value": "custom"])
           },
-          content: { Text("Use the custom colour") }
+          content: { Text("Use the custom color") }
         )
       } footer: {
         // Two controls rather than one, because that is what the model is: the
@@ -3393,8 +3643,8 @@ private struct ColorScreen: View {
         // one on the web does not switch the résumé to it either.
         Text(
           design.color.palette == "custom"
-            ? "The resume is using your custom colour."
-            : "Pick a colour, then use it — the palette above stays in charge until you do."
+            ? "The resume is using your custom color."
+            : "Pick a color, then use it — the palette above stays in charge until you do."
         )
       }
     }
@@ -3505,10 +3755,10 @@ private struct HeaderScreen: View {
         DesignChoiceRow(
           selected: design.header.type == "solid",
           action: { selectStyle(type: "solid", id: "solid") },
-          content: { Text("Solid colour") }
+          content: { Text("Solid color") }
         )
       } footer: {
-        Text("The header takes the palette's own colour, with nothing over it.")
+        Text("The header takes the palette's own color, with nothing over it.")
       }
 
       ForEach(styleGroups(design), id: \.self) { group in

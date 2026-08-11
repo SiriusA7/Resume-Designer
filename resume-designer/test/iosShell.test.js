@@ -3,6 +3,7 @@ import {
   buildChatView,
   buildDesign,
   buildDocumentOutline,
+  buildHistory,
   buildPendingChanges,
   buildSettings,
   buildSnapshot,
@@ -74,6 +75,7 @@ describe('buildSnapshot', () => {
       chat: null,
       library: null,
       design: null,
+      history: null,
     });
   });
 });
@@ -724,5 +726,74 @@ describe('openNativePdfPreview', () => {
     openNativePdfPreview({ ...request(), defaultFilename: undefined });
     expect(postMessage.mock.calls[0][0].filename).toBe('Resume');
     restore();
+  });
+});
+
+describe('buildHistory', () => {
+  const entry = (over = {}) => ({
+    timestamp: '2026-08-11T12:00:00.000Z',
+    description: 'Edited summary',
+    changeType: 'edit',
+    isCurrent: false,
+    ...over,
+  });
+
+  it('lists the newest version first, keeping the store’s own index', () => {
+    // The index is what `restoreToEntry` addresses. Reversing the ROWS without
+    // reversing the indices is the whole point: Swift echoes an index back and
+    // must never compute one.
+    const { entries } = buildHistory([
+      entry({ description: 'Created', changeType: 'initial' }),
+      entry({ description: 'Edited summary' }),
+      entry({ description: 'Rewrote it', changeType: 'ai', isCurrent: true }),
+    ]);
+    expect(entries.map((e) => e.index)).toEqual([2, 1, 0]);
+    expect(entries[0].description).toBe('Rewrote it');
+    expect(entries[0].isCurrent).toBe(true);
+  });
+
+  it('resolves the label so the two platforms cannot name a version differently', () => {
+    const labels = buildHistory([
+      entry({ changeType: 'initial' }), entry({ changeType: 'ai' }),
+      entry({ changeType: 'import' }), entry({ changeType: 'reorder' }),
+    ]).entries.map((e) => e.label);
+    expect(labels).toEqual(['Reordered', 'Import', 'AI change', 'Created']);
+  });
+
+  it('falls back to Edit for a changeType it has never seen', () => {
+    // The store can grow a type without this file knowing; an unlabelled row
+    // would read as a blank version.
+    const [row] = buildHistory([entry({ changeType: 'teleported' })]).entries;
+    expect(row.label).toBe('Edit');
+    expect(row.changeType).toBe('teleported');
+  });
+
+  it('carries the résumé the versions belong to', () => {
+    // History is per-résumé and the sheet has no session identity of its own.
+    expect(buildHistory([], 'variant-7').variantId).toBe('variant-7');
+    expect(buildHistory([]).variantId).toBe('');
+  });
+
+  it('never ships a version’s document, only its description', () => {
+    const { entries } = buildHistory([entry({ data: { name: 'Alex Rivera' } })]);
+    expect(JSON.stringify(entries)).not.toContain('Alex Rivera');
+  });
+
+  it('projects an open comparison through the same diff shape the review uses', () => {
+    const { diff } = buildHistory([entry()], 'v1', {
+      label: 'Edit · 8h ago',
+      changes: [{ path: 'summary', type: 'modify', displayOld: 'Old', displayNew: 'New' }],
+    });
+    expect(diff.label).toBe('Edit · 8h ago');
+    expect(diff.changes).toEqual([
+      { path: 'summary', label: 'summary', type: 'modify', before: 'Old', after: 'New' },
+    ]);
+  });
+
+  it('survives an empty stack and a malformed one', () => {
+    expect(buildHistory([]).entries).toEqual([]);
+    expect(buildHistory(undefined).entries).toEqual([]);
+    expect(buildHistory([null, 42]).entries).toHaveLength(2);
+    expect(buildHistory([null]).entries[0].label).toBe('Edit');
   });
 });
