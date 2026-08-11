@@ -1,4 +1,4 @@
-# Native iOS shell — where staging step 2 got to
+# Native iOS shell — status
 
 **Date:** 2026-08-10 · **Branch:** `feat/ios-phase-0` · Design of record:
 [`2026-08-10-ios-swiftui-shell-design.md`](../superpowers/specs/2026-08-10-ios-swiftui-shell-design.md)
@@ -39,6 +39,14 @@ follows the app's own theme now, not the system's.
 revert; the real work was that WKWebView and SwiftUI were both avoiding the
 keyboard, which collapsed the canvas to a ~90pt strip. The canvas now opts out
 with `.ignoresSafeArea(.keyboard)` and leaves it to the webview.
+
+**Step 5 — the structure panel is native.** `buildDocumentOutline()` flattens
+the résumé into groups of `{path, label, value, multiline}`; Swift renders a
+generic form and echoes back paths it was handed, so it never learns the
+schema and cannot construct a path. Writes go through `setField` to
+`store.update` — same `setByPath`, same undo history as the web editor. The
+focus rule holds: 16 characters typed into the middle of a value kept the
+caret in place. The outline only streams while the panel is open.
 
 ## Outstanding — the one real bug
 
@@ -81,7 +89,7 @@ coordinates — and therefore `elementFromPoint` — correct.
 
 ## Still to build
 
-Staging step 5, the last one and the only one that needs the document, via
-snapshot-in / path-writes-out over the existing `experience[3].bullets[1]`
-grammar, with the focus rule that stops an inbound snapshot moving the cursor
-mid-word.
+All five staging steps of the design are done. What is left is not new
+structure but polish and coverage: the outstanding bug above, an iPad layout,
+and reordering/adding/removing items in the structure panel (it edits values
+today; `moveItem`/`addItem`/`removeItem` from the design are not built).
