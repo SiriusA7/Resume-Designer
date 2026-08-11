@@ -39,6 +39,8 @@ import {
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
 } from './designController.js';
+import { buildJobs, getJobsState, applyJobs } from './jobsBridge.js';
+import { buildProfile, getProfileState, applyProfile } from './profileBridge.js';
 import { searchLibrary } from './librarySearch.js';
 import { getAllApplications } from './applications.js';
 import { initWindowDrag } from './tauriDrag.js';
@@ -624,6 +626,12 @@ export async function init() {
       // "what has changed since then" rather than as a proposal to apply.
       return diffResumeData(past, current);
     },
+    // Jobs and Profile. Same rule as the design sheet: the bridge modules hold
+    // the one implementation, and this only hands them over.
+    getJobs: () => buildJobs(getJobsState()),
+    jobsAction: (action) => applyJobs(action),
+    getProfile: () => buildProfile(getProfileState()),
+    profileAction: (action) => applyProfile(action),
   });
   
   // Check for first-time user onboarding

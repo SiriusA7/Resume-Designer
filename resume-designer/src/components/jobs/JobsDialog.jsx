@@ -24,15 +24,15 @@ import {
   parseJobDescriptionText, exportJobDescriptions, importJobDescriptions,
 } from '../../jobDescriptions.js';
 import {
-  analyzeAgainstJobs, generateResumeChanges, getConfiguredProviders,
-  getAllModels, isConfigured, validateModelId, getDefaultModelId,
+  getConfiguredProviders, getAllModels, isConfigured, validateModelId, getDefaultModelId,
 } from '../../aiService.js';
-import { getSettings, saveSettings, saveVariantAnalysis, getVariantAnalysis, getVariants } from '../../persistence.js';
-import { recordTailorDrafts } from '../../applications.js';
-import { createChangeSet } from '../../diffEngine.js';
+import { getSettings, getVariantAnalysis } from '../../persistence.js';
 import { showDiffView } from '../../diffView.js';
-import { store } from '../../store.js';
-import { getCurrentId, loadVariant } from '../../variantManager.js';
+import { getCurrentId } from '../../variantManager.js';
+// The two AI compositions live in the bridge module, not in these handlers, so
+// the native Jobs sheet runs the same ones — see the note there. This component
+// owns only what is React's: its own state and its own toasts.
+import { runJobAnalysis, runTailor } from '../../jobsBridge.js';
 import { applyRecommendationToStore } from '../../jobRecommendations.js';
 import { JobCard } from './JobCard.jsx';
 import { AnalysisResults } from './AnalysisResults.jsx';
@@ -240,20 +240,18 @@ export default function JobsDialog() {
   };
 
   const runAnalysis = async (selectedJobs, modelId, reasoningEffort) => {
-    const model = modelId || getSettings().defaultModel || getDefaultModelId();
-    saveSettings({ analysisModel: model, analysisReasoning: reasoningEffort || 'medium' });
     setGenOp('analyze');
     setGenReasoning('');
     setLastRun(null);
     setIsAnalyzing(true);
     setAppliedIndexes(new Set());
     try {
-      const results = await analyzeAgainstJobs(model, selectedJobs, {
-        reasoningEffort: reasoningEffort || 'medium',
+      const results = await runJobAnalysis({
+        jobs: selectedJobs,
+        modelId,
+        reasoning: reasoningEffort,
         hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
       });
-      const id = getCurrentId();
-      if (id && results) saveVariantAnalysis(id, results);
       setAnalysisResults(results);
     } catch (error) {
       toast.error(`Analysis failed: ${error.message}`);
@@ -264,62 +262,29 @@ export default function JobsDialog() {
   };
 
   const handleTailor = async (tailorModelId, tailorReasoningEffort) => {
-    if (activeJDs.length === 0) { toast.error('Please activate at least one job description'); return; }
-    const model = tailorModelId || getSettings().tailorModel || getSettings().defaultModel || getDefaultModelId();
-    const reasoningEffort = tailorReasoningEffort || 'medium';
-    saveSettings({ tailorModel: model, tailorReasoning: reasoningEffort });
     setGenOp('tailor');
     setGenReasoning('');
     setLastRun(null);
     setIsAnalyzing(true);
-    // Pin the tailor target BEFORE the await: a variant switch mid-generation
-    // must not attach the resulting drafts to the newly-selected variant.
-    const variantId = getCurrentId();
-    const variantName = variantId ? getVariants()[variantId]?.name || '' : '';
     try {
-      const result = await generateResumeChanges(
-        model,
-        'Tailor my entire resume for these target jobs. Optimize keywords, adjust the summary, and highlight relevant experience.',
-        null,
-        { jobDescriptions: activeJDs },
-        'tailor',
-        {
-          reasoningEffort,
-          hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
-        },
-      );
-      // The pinned variant may have been DELETED during the long generation
-      // await (the dialog can be dismissed and the resume deleted from the
-      // Library). Bail before recording drafts — otherwise recordTailorDrafts
-      // creates application records for a variant that no longer exists, leaving
-      // orphan timeline lanes that can't be opened. The loadVariant guard below
-      // is too late: it runs only after this, and only when the current variant
-      // differs.
-      if (variantId && !Object.hasOwn(getVariants(), variantId)) {
-        toast.error('The resume this tailoring was generated for no longer exists.');
-        return;
-      }
-      if (variantId) {
-        recordTailorDrafts(variantId, variantName, activeJDs);
-      }
-      if (result.changes && Object.keys(result.changes).length > 0) {
-        // The changes were generated for the pinned variant. If the user
-        // switched resumes mid-generation (the dialog can be dismissed while
-        // the request runs), switch back before diffing — otherwise the diff
-        // is computed and applied against the wrong resume. Same cross-resume
-        // guard as the chat apply flow.
-        if (variantId && getCurrentId() !== variantId) {
-          if (!loadVariant(variantId)) {
-            toast.error('The resume this tailoring was generated for no longer exists.');
-            return;
-          }
-          toast.info(`Switched back to "${variantName}" to review its tailored changes.`);
-        }
-        const changeSet = createChangeSet(store.getData(), result.changes);
+      // runTailor pins the target résumé, guards against it being deleted or
+      // switched mid-run, and records the drafts; the outcome carries the
+      // sentence for whichever way it went, so the copy is written once and
+      // the native sheet shows the same words.
+      const outcome = await runTailor({
+        modelId: tailorModelId,
+        reasoning: tailorReasoningEffort,
+        hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
+      });
+      if (outcome.status === 'changes') {
+        if (outcome.message) toast.info(outcome.message);
+        // Closed before the diff opens, so the two dialogs never stack.
         setOpen(false);
-        showDiffView(changeSet);
+        showDiffView(outcome.changeSet);
+      } else if (outcome.status === 'no-changes') {
+        toast.info(outcome.message);
       } else {
-        toast.info('No changes suggested. Your resume may already be well-tailored.');
+        toast.error(outcome.message);
       }
     } catch (error) {
       toast.error(`Failed to generate changes: ${error.message}`);

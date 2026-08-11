@@ -76,6 +76,8 @@ describe('buildSnapshot', () => {
       library: null,
       design: null,
       history: null,
+      jobs: null,
+      profile: null,
     });
   });
 });

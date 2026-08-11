@@ -13,7 +13,14 @@ import { confirmDestructive } from '@/components/ui/confirm';
 
 import { shouldSpellcheck, EDITABLE_TEXT_ATTRS } from '../../spellcheck.js';
 import { groupExperience, companyKey } from '../../experienceGroups.js';
-import { generateId } from '../../store.js';
+// The compositions these tabs used to hold inline. They live in profileBridge.js
+// so the native iOS sheet performs the SAME edit rather than a second one — see
+// that file's header for why a Swift reimplementation of the run rules is the
+// thing to avoid.
+import {
+  PROFICIENCY_OPTIONS, addProfileItem, addRoleAt, deleteProfileItem, detachRole,
+  linkAbove, removeEntries, setRunCompany, stripEmphasis,
+} from '../../profileBridge.js';
 import ExperienceDateField from '../experience/ExperienceDateField.jsx';
 
 // The profile editor's per-tab content, rebuilt on genuine shadcn primitives to
@@ -37,19 +44,6 @@ function BrandIcon({ children }) {
       {children}
     </svg>
   );
-}
-
-// Profile fields are plain-text inputs, but AI-extracted content can carry markdown
-// emphasis markers (**bold**, _italic_). Strip them on display so the Profile shows
-// clean text instead of raw symbols — emphasis belongs in the generated resume (the
-// renderer applies it there), not in this input surface. Mirrors the renderer's bold
-// + italic patterns so only genuine emphasis is removed (mid-word underscores like
-// my_var stay intact).
-function stripEmphasis(text) {
-  if (!text) return '';
-  return String(text)
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/(^|[\s([{"'`])_([^_\n]+)_(?=$|[\s)\]}"'`.,!?;:])/g, '$1$2');
 }
 
 // Section heading + optional muted description (mirrors SettingsDialog.SectionHeader).
@@ -480,79 +474,22 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
   // unmount the button being pressed before its click fired.
   const [, bumpGrouping] = useReducer((n) => n + 1, 0);
   const groups = groupExperience(items);
-  const rewrite = (next) => { items.splice(0, items.length, ...next); refresh(); };
+  const rewrite = (next) => { if (next) { items.splice(0, items.length, ...next); refresh(); } };
 
-  // Splice a new role after the run's LAST member, carrying the run's id and
-  // company. Walks `items` at click time — the company input is uncontrolled, so
-  // a render-time bound can point past a boundary just typed into existence.
-  const addRoleAt = (leadIndex) => {
-    const lead = items[leadIndex];
-    if (!lead) return;
-    const company = companyKey(lead.company);
-    if (!company) return;
-    const id = lead._groupId || generateId('grp');
-    let last = leadIndex;
-    if (lead._groupId) {
-      while (last + 1 < items.length) {
-        const entry = items[last + 1];
-        if (!entry || entry._groupId !== lead._groupId || companyKey(entry.company) !== company) break;
-        last += 1;
-      }
-    }
-    const next = [...items];
-    if (!next[leadIndex]._groupId) next[leadIndex] = { ...next[leadIndex], _groupId: id };
-    next.splice(last + 1, 0, {
-      id: generateId('exp'), title: '', company: lead.company, dates: '', details: '', _groupId: id,
-    });
-    rewrite(next);
-  };
+  // The four run edits. Each returns the next array (or null when the edit does
+  // not apply), so committing it is this component's job and the rules stay in
+  // profileBridge.js, which the native sheet calls with the same arguments.
+  const addRole = (leadIndex) => rewrite(addRoleAt(items, leadIndex));
+  const detach = (index) => rewrite(detachRole(items, index));
+  const link = (index) => rewrite(linkAbove(items, index));
 
-  // Detach a role into its own employer. Trailing members of the SAME run follow
-  // it, so detaching the middle role of a 3-role block yields [A] + [B,C] rather
-  // than orphaning C.
-  const detachRole = (index) => {
-    const cur = items[index];
-    if (!cur) return;
-    const oldId = cur._groupId;
-    const freshId = generateId('grp');
-    const next = [...items];
-    next[index] = { ...next[index], _groupId: freshId };
-    for (let k = index + 1; k < next.length; k += 1) {
-      const entry = next[k];
-      if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
-      next[k] = { ...entry, _groupId: freshId };
-    }
-    rewrite(next);
-  };
-
-  // Merge this entry into the employer above. Never writes `company` — copying a
-  // neighbour's name is how a role gets filed under an employer the user never
-  // worked for. The clicked entry's trailing run members come with it.
-  const linkAbove = (index) => {
-    const cur = items[index];
-    const above = items[index - 1];
-    if (!cur || !above || !companyKey(above.company) || companyKey(above.company) !== companyKey(cur.company)) return;
-    const id = above._groupId || generateId('grp');
-    const oldId = cur._groupId;
-    const next = [...items];
-    next[index - 1] = { ...above, _groupId: id };
-    next[index] = { ...cur, _groupId: id };
-    for (let k = index + 1; k < next.length; k += 1) {
-      const entry = next[k];
-      if (!oldId || entry._groupId !== oldId || companyKey(entry.company) !== companyKey(cur.company)) break;
-      next[k] = { ...entry, _groupId: id };
-    }
-    rewrite(next);
-  };
-
-  const deleteEntry = (index) => { items.splice(index, 1); refresh(); };
+  const deleteEntry = (index) => { deleteProfileItem(profile, 'workExperience', index); refresh(); };
 
   // The block shows ONE company field for the whole employer, so an edit applies
-  // to every role in it. Mutates in place like `set` does — the inputs are
-  // uncontrolled, so no re-render is needed per keystroke, and the run rule stays
-  // satisfied because every member changes together.
+  // to every role in it. The indices come from the RENDER-TIME group and are
+  // deliberately not re-derived per keystroke — see setRunCompany.
   const setGroupCompany = (group, value) => {
-    for (const role of group.roles) items[role.index].company = value;
+    setRunCompany(items, group.roles.map((role) => role.index), value);
     scheduleSave();
   };
 
@@ -571,10 +508,7 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
       actionLabel: 'Delete',
     });
     if (!ok) return;
-    const next = [...items];
-    const indices = group.roles.map((r) => r.index).sort((a, b) => b - a);
-    for (const idx of indices) next.splice(idx, 1);
-    rewrite(next);
+    rewrite(removeEntries(items, group.roles.map((r) => r.index)));
   };
 
   return (
@@ -603,11 +537,11 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                   setDates={setDates}
                   onCompanyChange={setGroupCompany}
                   onCompanyBlur={bumpGrouping}
-                  onAddRole={(g) => addRoleAt(g.roles[0].index)}
+                  onAddRole={(g) => addRole(g.roles[0].index)}
                   onDeleteRole={deleteEntry}
-                  onDetachRole={detachRole}
+                  onDetachRole={detach}
                   onDeleteEmployer={deleteEmployer}
-                  onLinkAbove={linkAbove}
+                  onLinkAbove={link}
                   canLinkAbove={canLinkAbove}
                   showLinkAbove={i > 0}
                 />
@@ -621,34 +555,22 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
                 set={set}
                 setDates={setDates}
                 onCompanyBlur={bumpGrouping}
-                onAddRole={addRoleAt}
+                onAddRole={addRole}
                 onDelete={() => deleteEntry(i)}
-                onLinkAbove={linkAbove}
+                onLinkAbove={link}
                 canLinkAbove={canLinkAbove}
                 showLinkAbove={i > 0}
               />
             );
           })
         )}
-        <AddButton
-          onClick={() => {
-            items.push({ id: generateId('exp'), title: '', company: '', dates: '', details: '' });
-            refresh();
-          }}
-        >
+        <AddButton onClick={() => { addProfileItem(profile, 'workExperience'); refresh(); }}>
           Add experience entry
         </AddButton>
       </div>
     </section>
   );
 }
-
-const PROFICIENCY_OPTIONS = [
-  { value: 'beginner', label: 'Beginner' },
-  { value: 'intermediate', label: 'Intermediate' },
-  { value: 'advanced', label: 'Advanced' },
-  { value: 'expert', label: 'Expert' },
-];
 
 function SkillsTab({ profile, scheduleSave, refresh }) {
   const skills = profile.skills;
@@ -685,14 +607,14 @@ function SkillsTab({ profile, scheduleSave, refresh }) {
                   title="Delete"
                   aria-label="Delete"
                   className="shrink-0 text-muted-foreground hover:text-destructive"
-                  onClick={() => { skills.splice(i, 1); refresh(); }}
+                  onClick={() => { deleteProfileItem(profile, 'skills', i); refresh(); }}
                 >
                   <X className="h-4 w-4" />
                 </Button>
               </div>
             ))
           )}
-          <AddButton onClick={() => { skills.push({ name: '', proficiency: '', years: '' }); refresh(); }}>Add skill</AddButton>
+          <AddButton onClick={() => { addProfileItem(profile, 'skills'); refresh(); }}>Add skill</AddButton>
         </div>
       </section>
 
@@ -722,8 +644,8 @@ function EducationTab({ profile, scheduleSave, refresh }) {
         emptyTitle="No education entries yet"
         emptySubtitle="Add detailed information about your education"
         addLabel="Add education entry"
-        onAdd={() => { items.push({ degree: '', institution: '', dates: '', details: '' }); refresh(); }}
-        onDelete={(i) => { items.splice(i, 1); refresh(); }}
+        onAdd={() => { addProfileItem(profile, 'education'); refresh(); }}
+        onDelete={(i) => { deleteProfileItem(profile, 'education', i); refresh(); }}
         renderTitle={(edu, i) => (
           <Input className="font-medium" placeholder="Degree / program" defaultValue={edu.degree || ''} onChange={(e) => set(i, 'degree')(e.target.value)} {...EDITABLE_TEXT_ATTRS} />
         )}
@@ -759,8 +681,8 @@ function ProjectsTab({ profile, scheduleSave, refresh }) {
         emptyTitle="No projects added yet"
         emptySubtitle="Add projects that showcase your work"
         addLabel="Add project"
-        onAdd={() => { items.push({ name: '', url: '', description: '' }); refresh(); }}
-        onDelete={(i) => { items.splice(i, 1); refresh(); }}
+        onAdd={() => { addProfileItem(profile, 'projects'); refresh(); }}
+        onDelete={(i) => { deleteProfileItem(profile, 'projects', i); refresh(); }}
         renderTitle={(proj, i) => (
           <Input className="font-medium" placeholder="Project name" defaultValue={proj.name || ''} onChange={(e) => set(i, 'name')(e.target.value)} {...EDITABLE_TEXT_ATTRS} />
         )}
@@ -813,12 +735,12 @@ function MoreTab({ profile, scheduleSave, refresh }) {
           {certs.length === 0 ? (
             <Empty title="No certifications added" />
           ) : certs.map((cert, i) => (
-            <CompactRow key={i} onDelete={() => { certs.splice(i, 1); refresh(); }}>
+            <CompactRow key={i} onDelete={() => { deleteProfileItem(profile, 'certifications', i); refresh(); }}>
               <Input className="flex-1" placeholder="Certification name" defaultValue={cert.name || ''} onChange={(e) => { certs[i].name = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />
               <Input className="w-24" placeholder="Year" defaultValue={cert.year || ''} onChange={(e) => { certs[i].year = e.target.value; scheduleSave(); }} />
             </CompactRow>
           ))}
-          <AddButton onClick={() => { certs.push({ name: '', year: '' }); refresh(); }}>Add certification</AddButton>
+          <AddButton onClick={() => { addProfileItem(profile, 'certifications'); refresh(); }}>Add certification</AddButton>
         </div>
       </section>
 
@@ -828,11 +750,11 @@ function MoreTab({ profile, scheduleSave, refresh }) {
           {achs.length === 0 ? (
             <Empty title="No achievements added" />
           ) : achs.map((ach, i) => (
-            <CompactRow key={i} onDelete={() => { achs.splice(i, 1); refresh(); }}>
+            <CompactRow key={i} onDelete={() => { deleteProfileItem(profile, 'achievements', i); refresh(); }}>
               <Input className="flex-1" placeholder="Achievement description" defaultValue={ach.description || ''} onChange={(e) => { achs[i].description = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />
             </CompactRow>
           ))}
-          <AddButton onClick={() => { achs.push({ description: '' }); refresh(); }}>Add achievement</AddButton>
+          <AddButton onClick={() => { addProfileItem(profile, 'achievements'); refresh(); }}>Add achievement</AddButton>
         </div>
       </section>
 
@@ -845,12 +767,12 @@ function MoreTab({ profile, scheduleSave, refresh }) {
             <EntryCard
               key={i}
               titleInput={<Input className="font-medium" placeholder="Section title" defaultValue={sec.title || ''} onChange={(e) => { customs[i].title = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />}
-              onDelete={() => { customs.splice(i, 1); refresh(); }}
+              onDelete={() => { deleteProfileItem(profile, 'customSections', i); refresh(); }}
             >
               <Textarea rows={3} placeholder="Content..." defaultValue={stripEmphasis(sec.content)} onChange={(e) => { customs[i].content = e.target.value; scheduleSave(); }} {...EDITABLE_TEXT_ATTRS} />
             </EntryCard>
           ))}
-          <AddButton onClick={() => { customs.push({ title: '', content: '' }); refresh(); }}>Add custom section</AddButton>
+          <AddButton onClick={() => { addProfileItem(profile, 'customSections'); refresh(); }}>Add custom section</AddButton>
         </div>
       </section>
     </div>

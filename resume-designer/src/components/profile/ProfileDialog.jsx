@@ -12,8 +12,8 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { getUserProfile, saveUserProfile } from '../../persistence.js';
-import { DEFAULT_PROFILE, profileToMarkdown, markdownToProfile } from '../../profileMarkdown.js';
-import { assignGroupIds, groupExperience } from '../../experienceGroups.js';
+import { profileToMarkdown } from '../../profileMarkdown.js';
+import { completeProfile, parseProfileImport } from '../../profileBridge.js';
 import { ProfileTabContent } from './ProfileTabs.jsx';
 
 const SAVE_DELAY = 500;
@@ -32,14 +32,10 @@ const PROFILE_TABS = [
 
 // A deep, shape-complete clone of the stored profile to edit against (so edits
 // never mutate the persisted object until saved, and every key/array exists).
+// `completeProfile` lives in profileBridge.js because the native sheet builds
+// the same shape from the same stored blob.
 function buildWorkingCopy() {
-  const stored = getUserProfile() || {};
-  const cloned = JSON.parse(JSON.stringify(stored));
-  return {
-    ...DEFAULT_PROFILE,
-    ...cloned,
-    contactInfo: { ...DEFAULT_PROFILE.contactInfo, ...(cloned.contactInfo || {}) },
-  };
+  return completeProfile(getUserProfile());
 }
 
 /**
@@ -141,10 +137,7 @@ export default function ProfileDialog() {
 
   const handleImport = (file) => {
     file.text().then(async (text) => {
-      const imported = markdownToProfile(text);
-      const entries = Array.isArray(imported?.workExperience) ? imported.workExperience : [];
-      const grouped = assignGroupIds(entries);
-      const runCount = groupExperience(grouped).filter((g) => g.roles.length > 1).length;
+      const { imported, grouped, runCount } = parseProfileImport(text);
       if (runCount > 0) {
         const ok = await confirmDestructive({
           title: runCount === 1
@@ -157,11 +150,7 @@ export default function ProfileDialog() {
         });
         if (ok) imported.workExperience = grouped;
       }
-      profileRef.current = {
-        ...DEFAULT_PROFILE,
-        ...imported,
-        contactInfo: { ...DEFAULT_PROFILE.contactInfo, ...(imported.contactInfo || {}) },
-      };
+      profileRef.current = completeProfile(imported);
       // Record the write result on the SAME tracked-save flag the debounce
       // uses. A direct save that fails (passthrough quota) must not look
       // durable: without this, closing the dialog leaves no pending timer and

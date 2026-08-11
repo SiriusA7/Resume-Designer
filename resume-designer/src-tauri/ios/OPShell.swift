@@ -53,6 +53,12 @@ struct ShellSnapshot: Decodable, Equatable {
   /// `nil` while the history sheet is closed. Mirrors `buildHistory()`.
   var history: History?
 
+  /// `nil` while their sheets are closed. Both screens live in their own files
+  /// — OPJobs.swift and OPProfile.swift — because this one is the shell, and
+  /// two more full editors in it would make it unreadable.
+  var jobs: JobsView?
+  var profile: ProfileView?
+
   struct History: Decodable, Equatable {
     /// The résumé these versions belong to. History is per-résumé and the sheet
     /// has no session identity, so a switch underneath it has to be noticed —
@@ -351,7 +357,8 @@ struct ShellSnapshot: Decodable, Equatable {
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
     zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
-    chat: nil, library: nil, history: nil, document: nil, design: nil
+    chat: nil, library: nil, history: nil, jobs: nil, profile: nil,
+    document: nil, design: nil
   )
 }
 
@@ -918,7 +925,7 @@ private struct ShellView: View {
   @State private var zoomInteraction = 0
 
   private enum Sheet: String, Identifiable {
-    case settings, structure, design, chat, library, history, pdfPreview
+    case settings, structure, design, chat, library, history, jobs, profile, pdfPreview
     var id: String { rawValue }
   }
 
@@ -995,6 +1002,8 @@ private struct ShellView: View {
           case .chat: ChatSheet(model: model)
           case .library: LibrarySheet(model: model)
           case .history: HistorySheet(model: model)
+          case .jobs: JobsSheet(model: model)
+          case .profile: ProfileSheet(model: model)
           case .pdfPreview:
             if let request = model.pdfPreview {
               PdfPreviewSheet(model: model, request: request)
@@ -1016,6 +1025,8 @@ private struct ShellView: View {
           case .chat: model.send("setChatOpen", ["value": "false"])
           case .library: model.send("setLibraryOpen", ["value": "false"])
           case .history: model.send("setHistoryOpen", ["value": "false"])
+          case .jobs: model.send("setJobsOpen", ["value": "false"])
+          case .profile: model.send("setProfileOpen", ["value": "false"])
           case .pdfPreview:
             // Swiped away rather than answered. The web side is still holding
             // the export guard and the temp PDF waiting to hear which it was,
@@ -1109,8 +1120,18 @@ private struct ShellView: View {
         Button { model.send("exportVariant", ["format": "md"]) } label: { Label("Export as Markdown", systemImage: "text.alignleft") }
       }
       Section("Tools") {
-        Button { model.send("openProfile") } label: { Label("Profile", systemImage: "person.crop.circle") }
-        Button { model.send("openJobs") } label: { Label("Jobs", systemImage: "briefcase") }
+        Button {
+          model.send("setProfileOpen", ["value": "true"])
+          sheet = .profile
+        } label: {
+          Label("Profile", systemImage: "person.crop.circle")
+        }
+        Button {
+          model.send("setJobsOpen", ["value": "true"])
+          sheet = .jobs
+        } label: {
+          Label("Jobs", systemImage: "briefcase")
+        }
         Button {
           model.send("setHistoryOpen", ["value": "true"])
           sheet = .history

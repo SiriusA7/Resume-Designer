@@ -76,6 +76,7 @@ export function hasOpenModal(root = document) {
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
   document: outline = null, chat = null, library = null, design = null, history = null,
+  jobs = null, profile = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -99,6 +100,8 @@ export function buildSnapshot({
     library,
     design,
     history,
+    jobs,
+    profile,
   };
 }
 
@@ -798,6 +801,8 @@ let libraryQuery = '';
 let libraryDeep = false;
 let streamDesign = false;
 let streamHistory = false;
+let streamJobs = false;
+let streamProfile = false;
 // The comparison the history sheet has open, computed on demand because the
 // entry payloads never ride the snapshot. Cleared when the sheet closes.
 let historyDiff = null;
@@ -952,6 +957,33 @@ export function initIOSShell(deps) {
       publish();
     },
 
+    // Jobs and Profile. Both are whole editors, so rather than a command per
+    // control they take ONE action each — same shape the design sheet's
+    // `setDesign` uses, and the same rule: every action routes to the function
+    // the web dialog calls, and the sheet re-renders from the next projection
+    // rather than from what it optimistically set.
+    setJobsOpen: ({ value }) => {
+      streamJobs = value === 'true';
+      publish();
+    },
+    jobsAction: (command) => {
+      const result = deps.jobsAction(command);
+      // The action can be async (analysis, tailoring). Publish on the way out
+      // AND when it settles: the first shows the busy state, the second the
+      // result. `jobDescriptions.js` has no change notification of its own.
+      publish();
+      if (result && typeof result.then === 'function') result.then(publish, publish);
+    },
+    setProfileOpen: ({ value }) => {
+      streamProfile = value === 'true';
+      publish();
+    },
+    profileAction: (command) => {
+      const result = deps.profileAction(command);
+      publish();
+      if (result && typeof result.then === 'function') result.then(publish, publish);
+    },
+
     setChatOpen: ({ value }) => {
       streamChat = value === 'true';
       // Ask the panel to re-push. Its first publish is normally LOST: React
@@ -1089,6 +1121,8 @@ export function initIOSShell(deps) {
             : null,
           design: streamDesign ? project('design', () => deps.getDesign()) : null,
           history: streamHistory ? project('history', () => deps.getHistory(historyDiff)) : null,
+          jobs: streamJobs ? project('jobs', () => deps.getJobs()) : null,
+          profile: streamProfile ? project('profile', () => deps.getProfile()) : null,
           chat: streamChat
             ? project('chat', () => ({
               ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()),
