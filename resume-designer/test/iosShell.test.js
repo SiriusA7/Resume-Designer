@@ -67,6 +67,7 @@ describe('buildSnapshot', () => {
       modalOpen: false,
       settings: { theme: 'system', hasApiKey: false, autoFallback: false, version: '' },
       document: null,
+      chat: null,
     });
   });
 });
