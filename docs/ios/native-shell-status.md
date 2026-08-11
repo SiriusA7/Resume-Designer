@@ -167,6 +167,49 @@ sheet all confirmed on screen. Remove the block before committing.
 Still unverified on real traffic: streaming cadence, the haptic, the model and
 effort pickers writing through, and the review sheet end to end.
 
+## PDF export is native
+
+The web export dialog rasterises the generated PDF with pdf.js into stacked
+`<canvas>` sheets, because a page has nothing better — WKWebView will not render
+a PDF in a frame and the CSP forbids one anyway. iOS uses `PDFView` over the
+temp file instead: sharper, scrollable and zoomable for free, and no megabyte of
+base64 crossing the bridge. `pdf_preview_path` (Rust) hands over the path.
+
+**Exactly one of onConfirm/onCancel must run.** The export guard is held from
+generation until the preview is answered and the temp file is only cleaned up by
+that answer, so a swipe-to-dismiss counts as Cancel. Verified end to end on the
+simulator, including a second export starting cleanly after a cancel.
+
+## All five remaining screens are native
+
+PDF export, the design tools, version history, jobs and profile. Four of the
+five needed the same move first, and it is the pattern for anything left:
+
+**The composition lives in a React handler with no exported entry point.** The
+services export the primitives (`applyX`, `saveX`) but never the apply +
+save + repaginate sequence that a button actually performs, and routing through
+the component the way chat routes through ChatPanel does not work — StructurePanel
+and the dialogs only mount when open, which on iOS is never. So the composition
+moves to a framework-free module (`designController.js`, `jobsBridge.js`,
+`profileBridge.js`), the web calls the extracted version, and the bridge calls
+the same one. One implementation, never two.
+
+Three rules that cost real time to learn:
+
+- **Never call `confirmDestructive()` from a bridge action.** It opens a Radix
+  alert dialog inside the WEBVIEW, which is behind the native sheet: the user
+  sees nothing and the promise never settles. Confirm natively first.
+- **`ShellModel.send` writes the command name into `type`** after copying the
+  payload, so a nested `type` never survives. Screens with one action command
+  name it `action`.
+- **`buildSnapshot` declares the wire shape.** A projection can be built,
+  published, wired and decoded correctly at every other layer and still never
+  arrive, because the key is not in that function. It has happened twice.
+
+Regenerating the Xcode project is no longer pure churn either — `OPJobs.swift`
+and `OPProfile.swift` have to be in the target, and only `scripts/ios-sim.sh`
+runs `xcodegen generate` for you.
+
 ## Fastest way past onboarding on a fresh install
 
 The wizard blocks the shell on every clean install, and the flag is
