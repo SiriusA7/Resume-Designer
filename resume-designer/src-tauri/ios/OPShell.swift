@@ -19,6 +19,7 @@
 // is unit-tested there (test/iosShell.test.js).
 
 import Observation
+import PDFKit
 import SwiftUI
 import UIKit
 import WebKit
@@ -285,6 +286,16 @@ final class ReplyStream {
   }
 }
 
+/// A generated PDF waiting to be reviewed and saved.
+struct PdfPreviewRequest: Equatable, Identifiable {
+  /// The temp file this process just wrote. Rendered directly by PDFKit.
+  let path: String
+  /// The name to offer, without the extension.
+  let filename: String
+  var id: String { path }
+  var url: URL { URL(fileURLWithPath: path) }
+}
+
 // MARK: - Model
 
 /// The single piece of state the chrome renders from. Deliberately not durable:
@@ -299,6 +310,11 @@ final class ShellModel: ObservableObject {
   /// Paces the live reply's text. Lives here rather than in the chat sheet so
   /// closing and reopening the sheet mid-reply does not retype it from the top.
   let reply = ReplyStream()
+
+  /// Set when the web side has generated a PDF and wants it reviewed. Unlike
+  /// every other sheet this one is opened by the PAGE, not by a toolbar tap —
+  /// export runs for a second or two first.
+  @Published var pdfPreview: PdfPreviewRequest?
 
   private static func liveReplyText(in snapshot: ShellSnapshot) -> String {
     snapshot.chat?.messages.first { $0.id == "streaming" }?.text ?? ""
@@ -390,6 +406,15 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
       }
       NSLog("[OPShell] share requested: \(path)")
       Task { @MainActor in OPShell.presentShareSheet(path: path) }
+    case "pdfPreview":
+      guard let path = body["path"] as? String else {
+        NSLog("[OPShell] pdfPreview message with no path: \(body)")
+        return
+      }
+      let filename = body["filename"] as? String ?? "Resume"
+      Task { @MainActor in
+        self.model?.pdfPreview = PdfPreviewRequest(path: path, filename: filename)
+      }
     case "activated":
       // A document just came up — the first one, or a reload after WebKit
       // reclaimed the content process of a backgrounded app. Either way the
@@ -693,7 +718,7 @@ private struct ShellView: View {
   @State private var zoomInteraction = 0
 
   private enum Sheet: String, Identifiable {
-    case settings, structure, chat, library
+    case settings, structure, chat, library, pdfPreview
     var id: String { rawValue }
   }
 
@@ -768,7 +793,16 @@ private struct ShellView: View {
           case .structure: StructureSheet(model: model)
           case .chat: ChatSheet(model: model)
           case .library: LibrarySheet(model: model)
+          case .pdfPreview:
+            if let request = model.pdfPreview {
+              PdfPreviewSheet(model: model, request: request)
+            }
           }
+        }
+        // The one sheet the PAGE opens: export generates for a second or two
+        // first, and the result arrives as a message rather than a tap.
+        .onChange(of: model.pdfPreview) { _, request in
+          if request != nil { sheet = .pdfPreview }
         }
         .onChange(of: sheet) { previous, _ in
           // Stop streaming whatever the closing sheet was subscribed to: both
@@ -778,6 +812,15 @@ private struct ShellView: View {
           case .structure: model.send("setStructureOpen", ["value": "false"])
           case .chat: model.send("setChatOpen", ["value": "false"])
           case .library: model.send("setLibraryOpen", ["value": "false"])
+          case .pdfPreview:
+            // Swiped away rather than answered. The web side is still holding
+            // the export guard and the temp PDF waiting to hear which it was,
+            // so an unanswered dismissal has to count as Cancel or the next
+            // export cannot start and the file is never cleaned up.
+            if model.pdfPreview != nil {
+              model.pdfPreview = nil
+              model.send("pdfCancel")
+            }
           default: break
           }
         }
@@ -992,6 +1035,100 @@ private struct ShellView: View {
       }
     }
     .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
+  }
+}
+
+// MARK: - PDF export
+
+/// The generated PDF, before it is saved.
+///
+/// Replaces the web export dialog on iOS. That one rasterises the PDF with
+/// pdf.js into stacked `<canvas>` sheets because a page has nothing better —
+/// WKWebView will not render a PDF in a frame and the app's CSP forbids one
+/// anyway. On iOS the system's own PDF view is right there: it renders text
+/// sharply at any scale, scrolls and zooms for free, and needs no megabyte of
+/// base64 through the bridge to do it.
+///
+/// The two outcomes route to the SAME callbacks pdf.js hands its own dialog, and
+/// exactly one of them must run: the export guard is held from generation until
+/// one does, and the temp file is only cleaned up by them. Hence the cancel on
+/// an unanswered dismissal in ShellView.
+private struct PdfPreviewSheet: View {
+  @ObservedObject var model: ShellModel
+  let request: PdfPreviewRequest
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var filename = ""
+
+  var body: some View {
+    NavigationStack {
+      PDFDocumentView(url: request.url)
+        .safeAreaInset(edge: .bottom) { filenameField }
+        .navigationTitle("Export PDF")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel", role: .cancel) { settle(save: false) }
+          }
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Save") { settle(save: true) }
+              .fontWeight(.semibold)
+              .disabled(trimmed.isEmpty)
+          }
+        }
+    }
+    .onAppear { filename = request.filename }
+  }
+
+  private var trimmed: String { filename.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+  private var filenameField: some View {
+    HStack(spacing: 6) {
+      TextField("Resume", text: $filename)
+        .textFieldStyle(.plain)
+        .textInputAutocapitalization(.words)
+        .autocorrectionDisabled()
+        .submitLabel(.done)
+        .onSubmit { if !trimmed.isEmpty { settle(save: true) } }
+      Text(".pdf").foregroundStyle(.secondary)
+    }
+    .padding(.horizontal, 16)
+    .frame(height: 48)
+    .modifier(ComposerSurface())
+    .padding(.horizontal, 12)
+  }
+
+  /// Answer the web side once, and only once.
+  private func settle(save: Bool) {
+    guard model.pdfPreview != nil else { return }
+    model.pdfPreview = nil
+    // Saving is a SHARE on iOS: `save_file`'s document picker never appears once
+    // tao's view controller is nested, and the share sheet's own "Save to
+    // Files" is the same destination the desktop picker writes to.
+    model.send(save ? "pdfSave" : "pdfCancel", save ? ["filename": trimmed] : [:])
+    dismiss()
+  }
+}
+
+/// PDFKit, as a SwiftUI view.
+private struct PDFDocumentView: UIViewRepresentable {
+  let url: URL
+
+  func makeUIView(context: Context) -> PDFView {
+    let view = PDFView()
+    // autoScales fits the page to the width and still allows pinching past it,
+    // which is what makes a phone-sized preview of a letter page readable.
+    view.autoScales = true
+    view.displayDirection = .vertical
+    view.displayMode = .singlePageContinuous
+    view.backgroundColor = .secondarySystemBackground
+    view.document = PDFDocument(url: url)
+    return view
+  }
+
+  func updateUIView(_ view: PDFView, context: Context) {
+    guard view.document?.documentURL != url else { return }
+    view.document = PDFDocument(url: url)
   }
 }
 

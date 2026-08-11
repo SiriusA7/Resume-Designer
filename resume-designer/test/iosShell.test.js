@@ -8,6 +8,7 @@ import {
   createCommandDispatcher,
   hasOpenModal,
   isNativeShellAvailable,
+  openNativePdfPreview,
   SHELL_HANDLER,
 } from '../src/iosShell.js';
 
@@ -367,5 +368,55 @@ describe('buildChatView', () => {
   it('says nothing is in flight when nothing is', () => {
     expect(view().messages).toEqual([]);
     expect(view().thinking).toBe('');
+  });
+});
+
+describe('openNativePdfPreview', () => {
+  // The export guard is held from generation until the preview is answered, and
+  // the temp PDF is only cleaned up by that answer — so the contract here is
+  // that the native sheet either takes the job or declines it cleanly.
+  const withHandler = (postMessage) => {
+    globalThis.webkit = { messageHandlers: { [SHELL_HANDLER]: { postMessage } } };
+    return () => { delete globalThis.webkit; };
+  };
+
+  const request = () => ({
+    path: '/tmp/preview-1.pdf',
+    defaultFilename: 'Alex Rivera',
+    onConfirm: vi.fn(),
+    onCancel: vi.fn(),
+  });
+
+  it('declines when there is no native shell, so the web dialog still opens', () => {
+    const req = request();
+    expect(openNativePdfPreview(req)).toBe(false);
+    expect(req.onConfirm).not.toHaveBeenCalled();
+    expect(req.onCancel).not.toHaveBeenCalled();
+  });
+
+  it('declines without a path rather than opening an empty preview', () => {
+    const restore = withHandler(vi.fn());
+    expect(openNativePdfPreview({ ...request(), path: '' })).toBe(false);
+    restore();
+  });
+
+  it('hands Swift the file and the name to offer', () => {
+    const postMessage = vi.fn();
+    const restore = withHandler(postMessage);
+    expect(openNativePdfPreview(request())).toBe(true);
+    expect(postMessage).toHaveBeenCalledWith({
+      kind: 'pdfPreview',
+      path: '/tmp/preview-1.pdf',
+      filename: 'Alex Rivera',
+    });
+    restore();
+  });
+
+  it('falls back to a usable name when none was given', () => {
+    const postMessage = vi.fn();
+    const restore = withHandler(postMessage);
+    openNativePdfPreview({ ...request(), defaultFilename: undefined });
+    expect(postMessage.mock.calls[0][0].filename).toBe('Resume');
+    restore();
   });
 });

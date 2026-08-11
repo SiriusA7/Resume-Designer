@@ -90,6 +90,7 @@ pub fn run() {
             commands::pick_pdf_save_path,
             commands::capture_pdf_from_window,
             commands::read_pdf_preview,
+            commands::pdf_preview_path,
             commands::save_pdf_preview,
             commands::stage_pdf_for_share,
             commands::discard_pdf_preview,

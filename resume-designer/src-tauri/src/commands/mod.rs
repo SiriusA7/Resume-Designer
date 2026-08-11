@@ -265,6 +265,26 @@ pub async fn capture_pdf_from_window(
     Ok(result)
 }
 
+/// The path of the just-generated preview PDF.
+///
+/// For iOS, where the preview is a native `PDFView` over the file itself rather
+/// than a pdf.js rasterisation in the page. Reading the same bytes as base64,
+/// shipping them through the JS bridge and re-encoding them into a message just
+/// to hand them back to the same process is several megabytes of round trip for
+/// a file that is already on disk.
+///
+/// Returns only a path this process wrote itself, in its own temp directory.
+#[tauri::command]
+pub async fn pdf_preview_path(preview: State<'_, PreviewPdfPath>) -> Result<String, String> {
+    let slot = preview
+        .0
+        .lock()
+        .map_err(|_| "preview slot lock poisoned".to_string())?;
+    slot.clone()
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| "No preview PDF available".to_string())
+}
+
 /// Read the just-generated preview PDF as base64 so the renderer can show it in
 /// an `<iframe>` before the user saves. Read-only — never writes.
 #[tauri::command]

@@ -9,8 +9,8 @@
  * Browser fallback: html2pdf.js produces image-based PDFs (not ATS-friendly).
  */
 
-import { isElectron, isIOSPlatform, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, stagePdfForShare, discardPdfPreview, notify } from './native.js';
-import { sharePdf } from './iosShell.js';
+import { isElectron, isIOSPlatform, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, pdfPreviewPath, savePdfPreview, stagePdfForShare, discardPdfPreview, notify } from './native.js';
+import { openNativePdfPreview, sharePdf } from './iosShell.js';
 import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
@@ -500,10 +500,17 @@ async function runNativeExportWithPreview(defaultFilename) {
   }
   setExportBusy(true);
   let previewBase64 = null;
+  let previewPath = null;
   try {
     await generatePdfNative(resumeEl, defaultFilename); // captures to the temp slot
-    previewBase64 = await readPdfPreview();
-    if (!previewBase64) throw new Error('Could not read the generated PDF for preview.');
+    // iOS previews the FILE natively and never needs its bytes in the page.
+    if (isIOSPlatform()) {
+      previewPath = await pdfPreviewPath();
+      if (!previewPath) throw new Error('Could not find the generated PDF to preview.');
+    } else {
+      previewBase64 = await readPdfPreview();
+      if (!previewBase64) throw new Error('Could not read the generated PDF for preview.');
+    }
   } catch (error) {
     console.error('PDF generation failed:', error);
     await notify({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message || 'Unknown error'}.` });
@@ -516,13 +523,19 @@ async function runNativeExportWithPreview(defaultFilename) {
   }
   setExportBusy(false);
 
+  const onConfirm = (filename) => savePreviewedPdf(filename);
+  const onCancel = () => cancelPreviewedPdf();
+
+  // The native sheet gets the same two callbacks the web dialog would, so the
+  // export guard and the temp file have one lifecycle whichever presented it.
+  // Falls through when there is no native shell, which is every other platform.
+  if (previewPath
+    && openNativePdfPreview({ path: previewPath, defaultFilename, onConfirm, onCancel })) {
+    return;
+  }
+
   window.dispatchEvent(new CustomEvent('rd:open-pdf-dialog', {
-    detail: {
-      defaultFilename,
-      previewBase64,
-      onConfirm: (filename) => savePreviewedPdf(filename),
-      onCancel: () => cancelPreviewedPdf(),
-    },
+    detail: { defaultFilename, previewBase64, onConfirm, onCancel },
   }));
 }
 

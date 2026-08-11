@@ -456,6 +456,46 @@ export function sharePdf(path) {
   return true;
 }
 
+// The PDF preview's callbacks, held while the native sheet is up. Same pair the
+// web dialog receives in its event detail, so both routes end in the same
+// functions in pdf.js — the export guard's lifecycle depends on exactly one of
+// them running.
+let pdfPreviewCallbacks = null;
+
+/**
+ * Show the export preview in the NATIVE sheet instead of the web dialog.
+ *
+ * Returns false when there is no native shell, which is the caller's signal to
+ * fall back to the web dialog — so this is safe to call unconditionally.
+ *
+ * Swift renders the file itself with PDFKit. The web dialog rasterises the same
+ * PDF with pdf.js into stacked canvases because it has nothing better; on iOS
+ * the system's own PDF view is right there, and it scrolls, zooms and renders
+ * text sharply at any scale without moving a megabyte of base64 through the
+ * bridge first.
+ *
+ * @param {{path: string, defaultFilename: string, onConfirm: (name: string) => void, onCancel: () => void}} request
+ */
+export function openNativePdfPreview({ path, defaultFilename, onConfirm, onCancel }) {
+  if (!isNativeShellAvailable() || typeof path !== 'string' || !path) return false;
+  pdfPreviewCallbacks = { onConfirm, onCancel };
+  window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
+    kind: 'pdfPreview',
+    path,
+    filename: typeof defaultFilename === 'string' ? defaultFilename : 'Resume',
+  });
+  return true;
+}
+
+/** Resolve the native preview exactly once, whichever way it ended. */
+function settlePdfPreview(confirmed, filename) {
+  const callbacks = pdfPreviewCallbacks;
+  pdfPreviewCallbacks = null;
+  if (!callbacks) return;
+  if (confirmed) callbacks.onConfirm?.(filename);
+  else callbacks.onCancel?.();
+}
+
 /** True when Swift has registered its message handler on this webview. */
 export function isNativeShellAvailable(win = globalThis) {
   return typeof win?.webkit?.messageHandlers?.[SHELL_HANDLER]?.postMessage === 'function';
@@ -615,6 +655,12 @@ export function initIOSShell(deps) {
     textSizeDecrease: () => click('text-size-decrease'),
 
     exportPdf: () => click('download-pdf'),
+    // The native export preview's two outcomes. They land in the same
+    // onConfirm/onCancel pdf.js hands the web dialog, and exactly one of them
+    // must run: the export guard is held from generation until one does, and
+    // the temp PDF is only cleaned up by them.
+    pdfSave: ({ filename }) => settlePdfPreview(true, String(filename ?? '').trim() || 'Resume'),
+    pdfCancel: () => settlePdfPreview(false),
 
     // The structure panel. `setField` is the ONLY way the document is written
     // from Swift, and it routes to the same `store.update` the web editor uses

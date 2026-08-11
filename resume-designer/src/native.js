@@ -588,6 +588,16 @@ export async function readPdfPreview() {
 }
 
 /**
+ * The preview PDF's path on disk. iOS previews the file natively (PDFKit) and
+ * never needs the bytes in the page — see `openNativePdfPreview` in iosShell.js.
+ */
+export async function pdfPreviewPath() {
+  if (!isTauri) return null;
+  const { core } = await tauri();
+  return await core.invoke('pdf_preview_path');
+}
+
+/**
  * Copy the previewed temp PDF to the path the user just confirmed via
  * pickPdfSavePath. Returns a PdfResult ({ success, filePath?, error?, canceled? }).
  */
