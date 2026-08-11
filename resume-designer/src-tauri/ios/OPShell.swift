@@ -41,12 +41,29 @@ struct ShellSnapshot: Decodable, Equatable {
   /// A web dialog owns the screen. The chrome floats above the webview, so it
   /// has to step aside or it covers the dialog's own buttons.
   var modalOpen: Bool
+  var settings: Settings
+
+  /// Mirrors `buildSettings()` in src/iosShell.js. A SUBSET of the web Settings
+  /// dialog: the updater, the companion bridge and the legacy Electron import
+  /// are all desktop-only, and showing controls that cannot work is worse than
+  /// not showing them.
+  ///
+  /// `hasApiKey`, not the key. The key lives in the OS keychain; the sheet can
+  /// write a new one but nothing needs to read it back, so nothing does.
+  struct Settings: Decodable, Equatable {
+    var theme: String
+    var hasApiKey: Bool
+    var autoFallback: Bool
+    var version: String
+
+    static let empty = Settings(theme: "system", hasApiKey: false, autoFallback: false, version: "")
+  }
 
   /// What the chrome shows before the first snapshot arrives — a fraction of a
   /// second at launch, but it must not render as blank or as "0%".
   static let empty = ShellSnapshot(
     variantId: nil, variantName: "On Paper", variants: [],
-    zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false
+    zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty
   )
 }
 
@@ -350,6 +367,7 @@ private struct ShellView: View {
   @ObservedObject var model: ShellModel
   let taoController: UIViewController?
   let webView: UIView
+  @State private var showSettings = false
 
   private var snapshot: ShellSnapshot { model.snapshot }
 
@@ -384,6 +402,22 @@ private struct ShellView: View {
             ToolbarItemGroup(placement: .bottomBar) { bottomBar }
           }
         }
+        .sheet(isPresented: $showSettings) {
+          SettingsSheet(model: model)
+        }
+    }
+    // The app's own theme setting, not the system's. Without this a user who
+    // picks Dark gets a dark resume canvas inside light native chrome; the two
+    // halves of one screen disagreeing is worse than either choice.
+    // `nil` means "System", which is exactly SwiftUI's default behaviour.
+    .preferredColorScheme(preferredColorScheme)
+  }
+
+  private var preferredColorScheme: ColorScheme? {
+    switch snapshot.settings.theme {
+    case "light": return .light
+    case "dark": return .dark
+    default: return nil
     }
   }
 
@@ -452,7 +486,7 @@ private struct ShellView: View {
         Button { model.send("openHistory") } label: { Label("Version history", systemImage: "clock.arrow.circlepath") }
       }
       Section {
-        Button { model.send("openSettings") } label: { Label("Settings", systemImage: "gearshape") }
+        Button { showSettings = true } label: { Label("Settings", systemImage: "gearshape") }
       }
     } label: {
       Image(systemName: "ellipsis.circle")
@@ -530,5 +564,114 @@ private struct ShellView: View {
         .frame(minWidth: 48)
     }
     .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
+  }
+}
+
+// MARK: - Settings
+
+/// The native Settings sheet.
+///
+/// A pure form with no document access — deliberately the first thing built on
+/// the bridge, because it exercises reads (the snapshot's `settings`) and
+/// writes (four commands) without touching the résumé.
+///
+/// It renders from the SNAPSHOT, not from local state, so every control shows
+/// what actually landed in the store rather than what it optimistically set.
+/// The one exception is the API-key field, which has no snapshot to render
+/// from: only whether a key exists comes back.
+private struct SettingsSheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var apiKeyDraft = ""
+  @State private var apiKeyFocused = false
+
+  private var settings: ShellSnapshot.Settings { model.snapshot.settings }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section("Appearance") {
+          Picker("Theme", selection: themeBinding) {
+            Text("System").tag("system")
+            Text("Light").tag("light")
+            Text("Dark").tag("dark")
+          }
+          .pickerStyle(.segmented)
+        }
+
+        Section {
+          SecureField(
+            settings.hasApiKey ? "Replace the saved key" : "sk-or-v1-…",
+            text: $apiKeyDraft
+          )
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          Button("Save key") {
+            model.send("setApiKey", ["value": apiKeyDraft])
+            apiKeyDraft = ""
+          }
+          .disabled(apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+
+          Toggle("Automatic fallback", isOn: fallbackBinding)
+        } header: {
+          Text("AI")
+        } footer: {
+          // Says what the app does with the key, in the place the key is
+          // entered — the same promise the web onboarding makes.
+          Text(
+            (settings.hasApiKey ? "A key is saved. " : "")
+            + "Your key is stored in the iOS keychain and sent only to OpenRouter. "
+            + "Automatic fallback retries an alternate model when the chosen one "
+            + "is unavailable."
+          )
+        }
+
+        Section("Data") {
+          Button("Export backup…") { model.send("exportBackup") }
+          Button("Import backup…") { model.send("importBackup") }
+        }
+
+        Section {
+          Button("Replay welcome guide") {
+            model.send("replayOnboarding")
+            // The wizard is web and renders in the canvas underneath, so the
+            // sheet has to get out of its way.
+            dismiss()
+          }
+        } footer: {
+          Text("Your resumes and settings are kept.")
+        }
+
+        Section("About") {
+          LabeledContent("On Paper", value: settings.version.isEmpty ? "—" : settings.version)
+        }
+      }
+      .navigationTitle("Settings")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }
+        }
+      }
+    }
+    .presentationDetents([.large])
+  }
+
+  // Bindings that WRITE through the bridge and READ from the snapshot, so the
+  // control cannot drift from the store: a rejected write simply never comes
+  // back and the control springs back to the truth.
+  private var themeBinding: Binding<String> {
+    Binding(
+      get: { settings.theme },
+      set: { model.send("setTheme", ["value": $0]) }
+    )
+  }
+
+  private var fallbackBinding: Binding<Bool> {
+    Binding(
+      get: { settings.autoFallback },
+      set: { model.send("setAutoFallback", ["value": $0 ? "true" : "false"]) }
+    )
   }
 }

@@ -74,7 +74,7 @@ export function hasOpenModal(root = document) {
  * @returns {{variantId: string|null, variantName: string, variants: Array<{id: string, name: string}>, zoom: number, zoomPercent: number, pdfBusy: boolean, modalOpen: boolean}}
  */
 export function buildSnapshot({
-  currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false,
+  currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -90,6 +90,35 @@ export function buildSnapshot({
     zoomPercent: Math.round(safeZoom * 100),
     pdfBusy: !!pdfBusy,
     modalOpen: !!modalOpen,
+    settings: buildSettings(settings),
+  };
+}
+
+/**
+ * Project the settings the native sheet renders. Pure.
+ *
+ * Deliberately a SUBSET of the web Settings dialog. Left out on purpose:
+ * updates (`check_update_on_channel` is a `#[cfg(desktop)]` command and App
+ * Store builds must not self-update), the companion bridge (a loopback HTTP
+ * server), and the legacy Electron import (desktop paths). Showing controls
+ * that cannot work is worse than not showing them.
+ *
+ * **The API key never crosses back.** Only whether one is set. The key lives in
+ * the OS keychain; a native field can write a new one, but nothing needs to
+ * read it out, so nothing does.
+ *
+ * @param {object} state
+ * @param {string} [state.theme] 'system' | 'light' | 'dark'
+ * @param {boolean} [state.hasApiKey]
+ * @param {boolean} [state.autoFallback]
+ * @param {string} [state.version]
+ */
+export function buildSettings({ theme, hasApiKey = false, autoFallback = false, version = '' } = {}) {
+  return {
+    theme: theme === 'light' || theme === 'dark' ? theme : 'system',
+    hasApiKey: !!hasApiKey,
+    autoFallback: !!autoFallback,
+    version: typeof version === 'string' ? version : '',
   };
 }
 
@@ -164,6 +193,29 @@ function ask(name, detail) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
+/**
+ * Open a file picker for a backup and hand the file to `onFile`.
+ *
+ * A transient input rather than a hidden one in the markup: the web Settings
+ * dialog's input only exists while that dialog is open, and the native sheet
+ * replaces it. The destructive confirmation still lives in backupFlow.js —
+ * importing a backup replaces the whole store, and that gate must not be
+ * duplicated or bypassed here.
+ */
+function pickBackupFile(onFile) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.style.display = 'none';
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (file) onFile(file);
+  }, { once: true });
+  document.body.appendChild(input);
+  input.click();
+}
+
 let activated = false;
 let publish = () => {};
 
@@ -233,11 +285,45 @@ export function initIOSShell(deps) {
     textSizeDecrease: () => click('text-size-decrease'),
 
     exportPdf: () => click('download-pdf'),
+
+    // Settings, for the native sheet. Each writes through the same service the
+    // web dialog uses, then republishes so the sheet reflects what landed
+    // rather than what it optimistically set.
+    setTheme: ({ value }) => { deps.setTheme(value); publish(); },
+    setAutoFallback: ({ value }) => {
+      deps.saveSettings({ autoFallback: value === 'true' });
+      publish();
+    },
+    setApiKey: ({ value }) => {
+      // Fire-and-forget by design: the keychain write is async and the sheet
+      // learns the outcome from the next snapshot's `hasApiKey`, not from a
+      // return value the bridge has no way to deliver.
+      deps.saveApiKey(String(value ?? ''))
+        .then(publish)
+        .catch((err) => console.error('[iosShell] saving the API key failed:', err));
+    },
+    replayOnboarding: () => window.showOnboardingWizard?.(),
+    exportBackup: () => deps.exportFullBackupWithFeedback(),
+    importBackup: () => pickBackupFile(deps.importBackupFromFile),
   });
 
   let pdfBusy = false;
   let queued = false;
   let waits = 0;
+  // The version is a one-shot async read, so it is fetched once and folded into
+  // every later snapshot rather than making the projection async.
+  let version = '';
+  deps.getAppInfo().then((info) => { version = info?.version ?? ''; publish(); }).catch(() => {});
+
+  const readSettings = () => {
+    const s = deps.getSettings();
+    return {
+      theme: deps.getTheme(),
+      hasApiKey: !!s.openrouterKey,
+      autoFallback: !!s.autoFallback,
+      version,
+    };
+  };
 
   const send = () => {
     queued = false;
@@ -253,7 +339,13 @@ export function initIOSShell(deps) {
     waits = 0;
     const { currentId, list } = getVariantsSnapshot();
     window.webkit.messageHandlers[SHELL_HANDLER].postMessage(
-      { kind: 'snapshot', ...buildSnapshot({ currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal() }) }
+      {
+        kind: 'snapshot',
+        ...buildSnapshot({
+          currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
+          settings: readSettings(),
+        }),
+      }
     );
   };
   // Coalesce: loading a variant fires the variant subscription AND a zoom

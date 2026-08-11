@@ -26,6 +26,7 @@ import { applyPendingToData } from './changePreview.js';
 import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
 import { initZoomControls, getZoom, fitToView } from './zoomControls.js';
+import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
 import { initIOSShell } from './iosShell.js';
 import { initWindowDrag } from './tauriDrag.js';
 import {
@@ -36,17 +37,19 @@ import {
   getCurrentVariantId,
   getVariants,
   importFullBackupDurably,
+  saveApiKey,
 } from './persistence.js';
 import {
   isTauri,
   getPlatform,
   openExternal,
   startupUpdateCheck,
+  getAppInfo,
   onMenuOpenSettings,
   probeLegacyElectronData,
   importLegacyElectronData,
 } from './native.js';
-import { initTheme } from './theme.js';
+import { initTheme, getTheme, setTheme } from './theme.js';
 import { openJobDescriptionPanel, onJobPanelVariantChange } from './jobDescriptionPanel.js';
 import { initJobDescriptions } from './jobDescriptions.js';
 import { initApplications } from './applications.js';
@@ -537,6 +540,9 @@ export async function init() {
   initIOSShell({
     subscribeVariants, getVariantsSnapshot, loadVariant, duplicateVariant,
     exportCurrentVariant, getZoom, fitToView, openSettings,
+    // Settings sheet.
+    getTheme, setTheme, getSettings, saveSettings, saveApiKey, getAppInfo,
+    exportFullBackupWithFeedback, importBackupFromFile,
   });
   
   // Check for first-time user onboarding

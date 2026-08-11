@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  buildSettings,
   buildSnapshot,
   createCommandDispatcher,
   hasOpenModal,
@@ -63,6 +64,7 @@ describe('buildSnapshot', () => {
       zoomPercent: 100,
       pdfBusy: false,
       modalOpen: false,
+      settings: { theme: 'system', hasApiKey: false, autoFallback: false, version: '' },
     });
   });
 });
@@ -163,5 +165,33 @@ describe('hasOpenModal', () => {
   it('is false for an empty document and a missing root', () => {
     expect(hasOpenModal(root(''))).toBe(false);
     expect(hasOpenModal(null)).toBe(false);
+  });
+});
+
+describe('buildSettings', () => {
+  it('normalises an unknown theme to system rather than passing it through', () => {
+    // Swift switches on this string; an unrecognised value must land on the
+    // default arm, not leave the segmented control with nothing selected.
+    expect(buildSettings({ theme: 'solarized' }).theme).toBe('system');
+    expect(buildSettings({}).theme).toBe('system');
+    expect(buildSettings({ theme: 'dark' }).theme).toBe('dark');
+    expect(buildSettings({ theme: 'light' }).theme).toBe('light');
+  });
+
+  it('reports only WHETHER a key is set', () => {
+    // The key lives in the OS keychain. Nothing in the native sheet needs to
+    // read it back, so the projection must not be able to leak it.
+    const projected = buildSettings({ hasApiKey: true });
+    expect(projected.hasApiKey).toBe(true);
+    expect(JSON.stringify(projected)).not.toContain('sk-or');
+    expect(Object.keys(projected).sort()).toEqual(
+      ['autoFallback', 'hasApiKey', 'theme', 'version']
+    );
+  });
+
+  it('defaults to a shape Swift can decode when given nothing', () => {
+    expect(buildSettings()).toEqual({
+      theme: 'system', hasApiKey: false, autoFallback: false, version: '',
+    });
   });
 });
