@@ -43,6 +43,22 @@ describe('mergeTokenUsage', () => {
     expect(merged.events.map((e) => e.id)).toEqual(['early', 'late']);
   });
 
+  it('resolves same-id events with different content the same way regardless of argument order', () => {
+    // If the dedupe just did `events.set(id, event)` while iterating [a, b],
+    // whichever document was iterated last would win. Two devices each call
+    // this as `merge(mine, theirs)`, so with opposite argument orders they
+    // would each keep their own copy and never converge on the same document.
+    const mineFirst = mergeTokenUsage(
+      usage([event('x', { inputTokens: 1 })]),
+      usage([event('x', { inputTokens: 999 })]),
+    );
+    const theirsFirst = mergeTokenUsage(
+      usage([event('x', { inputTokens: 999 })]),
+      usage([event('x', { inputTokens: 1 })]),
+    );
+    expect(mineFirst).toEqual(theirsFirst);
+  });
+
   it('survives a side with no events', () => {
     expect(mergeTokenUsage(usage([]), usage([event('a')])).events).toHaveLength(1);
     expect(mergeTokenUsage(null, usage([event('a')])).events).toHaveLength(1);

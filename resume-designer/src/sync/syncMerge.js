@@ -17,7 +17,19 @@ export function mergeTokenUsage(a, b) {
   const events = new Map();
   for (const doc of [a, b]) {
     for (const event of Array.isArray(doc?.events) ? doc.events : []) {
-      if (event && typeof event.id === 'string') events.set(event.id, event);
+      if (!event || typeof event.id !== 'string') continue;
+      const existing = events.get(event.id);
+      // Two events can share an id but differ in content (e.g. a record that
+      // was edited on one device after being synced). Which one survives
+      // must be a pure function of the two events, not of which document
+      // happened to be iterated last — otherwise `merge(mine, theirs)` and
+      // `merge(theirs, mine)` keep different winners and the devices never
+      // converge, the same failure `resolveConflict`'s tie-break exists to
+      // avoid. `canonicalJSON` (below) is order-independent, so both devices
+      // compute the same winner; which one wins is otherwise arbitrary.
+      if (!existing || canonicalJSON(event) > canonicalJSON(existing)) {
+        events.set(event.id, event);
+      }
     }
   }
   // Tie-break on `id` too, not just `timestamp`: two events written in the
@@ -30,6 +42,25 @@ export function mergeTokenUsage(a, b) {
       || String(x.id).localeCompare(String(y.id)),
   );
   return { events: merged, summary: summarize(merged) };
+}
+
+/**
+ * `JSON.stringify` serialises object keys in property-insertion order, so
+ * the same event assembled by two different code paths (or round-tripped
+ * through storage) can serialise differently even though its fields are
+ * identical. That would make it unfit as a merge discriminator — two
+ * devices building "the same" event in a different order would disagree on
+ * which one wins. Sorting keys at every object level removes that
+ * dependency; array order is left alone since it's meaningful data, not an
+ * artifact of construction.
+ */
+function canonicalJSON(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJSON).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJSON(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /**
