@@ -7,18 +7,32 @@
  * newer-wins (resolveConflict, below); logs need a merge.
  */
 
+// The history bound, from a leaf that imports nothing — see historyLimits.js
+// for why neither this module nor store.js may own it. This is the only import
+// this file has, and it must stay that way: everything else in the sync layer
+// is allowed to touch storage, and this module is not.
+import { MAX_HISTORY } from '../historyLimits.js';
+
 /**
- * The bound on one variant's version history.
+ * Total, deterministic string order.
  *
- * store.js's `pushHistory` enforces the same number and is its natural owner,
- * but the constant is declared HERE and imported there rather than the other
- * way round: this module is pure, and importing store.js for a number would
- * drag appStorage — and everything under it — into it. Two literal `100`s with
- * nothing keeping them equal is the failure mode being avoided; a merge that
- * kept more than the store's bound would just be trimmed on the next edit
- * anyway, one entry per edit, silently.
+ * NOT `localeCompare`, which returns 0 for two DISTINCT strings the locale
+ * considers equivalent: `café` written as NFC and the same name written as NFD
+ * — one typed on a phone, one on a Mac, entirely ordinary for a résumé. Two
+ * entries with different identities then compared equal, the sort fell through
+ * to Map insertion order, and Map insertion order is ARGUMENT order. So
+ * `merge(mine, theirs)` and `merge(theirs, mine)` came out in opposite orders,
+ * each device stored a different payload for the same content, and they
+ * re-diverged every round — the exact "resync forever" the tie-breaks below
+ * exist to prevent.
+ *
+ * `<` and `>` compare UTF-16 code units: total, and computed identically on
+ * both devices without consulting a locale.
  */
-export const MAX_HISTORY = 100;
+function byCodeUnit(x, y) {
+  if (x < y) return -1;
+  return x > y ? 1 : 0;
+}
 
 /**
  * Union two token-usage documents.
@@ -56,8 +70,8 @@ export function mergeTokenUsage(a, b) {
   // between `merge(x, y)` and `merge(y, x)` and breaks the order-independence
   // this function promises.
   const merged = [...events.values()].sort(
-    (x, y) => String(x.timestamp).localeCompare(String(y.timestamp))
-      || String(x.id).localeCompare(String(y.id)),
+    (x, y) => byCodeUnit(String(x.timestamp), String(y.timestamp))
+      || byCodeUnit(String(x.id), String(y.id)),
   );
   return { events: merged, summary: summarize(merged) };
 }
@@ -79,6 +93,18 @@ function canonicalJSON(value) {
     return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJSON(value[k])}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+/**
+ * A history entry's identity: what `mergeHistory` unions on.
+ *
+ * Exported because store.js has to find the entry its live document is on
+ * inside a merged array, and reference equality will not do it — the union
+ * keeps ONE object per identity, so an entry both devices hold comes back as
+ * the remote's deserialised twin, equal in content and a different object.
+ */
+export function entryIdentity(entry) {
+  return canonicalJSON(entry);
 }
 
 /**
@@ -112,7 +138,7 @@ export function mergeHistory(a, b) {
       // Non-objects are not entries; store.js would render one as a blank row
       // in HistoryDialog and throw on restoring it.
       if (!entry || typeof entry !== 'object') continue;
-      entries.set(canonicalJSON(entry), entry);
+      entries.set(entryIdentity(entry), entry);
     }
   }
 
@@ -120,9 +146,10 @@ export function mergeHistory(a, b) {
     // Chronological, matching the order pushHistory appends in. Ties break on
     // the identity string — arbitrary but computed identically on both devices,
     // where "whichever Map insertion came first" would depend on argument
-    // order and break the order-independence above.
-    .sort(([keyX, x], [keyY, y]) => String(x.timestamp).localeCompare(String(y.timestamp))
-      || keyX.localeCompare(keyY))
+    // order and break the order-independence above. Both comparisons are by
+    // code unit, not by locale: see byCodeUnit.
+    .sort(([keyX, x], [keyY, y]) => byCodeUnit(String(x.timestamp), String(y.timestamp))
+      || byCodeUnit(keyX, keyY))
     .map(([, entry]) => entry)
     // Over the bound, the OLDEST entries go — `slice(-MAX_HISTORY)` keeps the
     // tail. That matches pushHistory's `history.shift()`, and it is the only

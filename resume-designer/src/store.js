@@ -11,12 +11,14 @@ import { appStorage } from './appStorage.js';
 // from this module (only the npm `diff` package), so sharing creates no cycle.
 import { setByPath } from './diffEngine.js';
 import { BACKUP_HISTORY_PREFIX } from './profileKeys.js';
-// The history bound and the union rule, both of which the sync layer and this
-// store have to agree on to the letter. syncMerge.js is pure — no storage, no
-// DOM — so importing it here adds nothing to this module's dependencies, while
-// the reverse import (its number coming from here) would drag appStorage into
-// a module the sync design keeps pure. See adoptHistory below.
-import { mergeHistory, MAX_HISTORY } from './sync/syncMerge.js';
+// The history bound, from a leaf module both this store and the sync layer can
+// import — see historyLimits.js for why neither of them may own it.
+import { MAX_HISTORY } from './historyLimits.js';
+// The union rule, which this store and the sync layer have to agree on to the
+// letter. syncMerge.js is pure — no storage, no DOM, no app imports — so
+// importing it here cannot close a cycle with syncModel.js's import of this
+// file. See adoptHistory below.
+import { mergeHistory, entryIdentity } from './sync/syncMerge.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -96,7 +98,12 @@ export const CHANGE_TYPES = {
   IMPORT: 'import',
   REORDER: 'reorder',
   ADD: 'add',
-  REMOVE: 'remove'
+  REMOVE: 'remove',
+  // Not a change this user made: the LOSING side of a sync conflict, parked in
+  // history by src/sync/syncModel.js so "newer wins" destroys nothing. Named
+  // here because two places have to agree on the string — the park that writes
+  // it and the undo/redo traversal that steps over it.
+  SYNC_CONFLICT: 'sync-conflict'
 };
 
 // Sections gained an `area` in 2026-07. Every pre-existing section is a sidebar
@@ -142,6 +149,35 @@ function createStore() {
   let pendingChangeDescription = null;
   let pendingChangeType = CHANGE_TYPES.EDIT;
 
+  // A parked sync conflict is another device's REJECTED résumé — the losing
+  // side of "newer wins", archived by src/sync/syncModel.js so nothing is
+  // destroyed. It is not a step this user took, and the undo timeline is a
+  // record of steps this user took, so the whole traversal below steps over it:
+  // no Cmd+Z, and no Cmd+Shift+Z, ever lands on one.
+  //
+  // It stays exactly where it is in the array — getHistoryEntries still lists
+  // it and restoreToEntry still restores it, which is the entire point of
+  // parking. Only the traversal skips it.
+  //
+  // Doing it here rather than at each place a park can be inserted is what
+  // makes the rule hold everywhere at once: at historyIndex 0 there is no slot
+  // below the current entry for adoptHistoryEntry to use, a variant this device
+  // has never opened can load with a park as its only entry, and a history
+  // merge can leave one at the end. Each of those put a rejected version one
+  // Cmd+Z away, and all three are the same mistake.
+  const isParked = (entry) => entry?.changeType === CHANGE_TYPES.SYNC_CONFLICT;
+  // The index undo/redo would move to from `from`, or -1 when there is none.
+  const undoTarget = (from) => {
+    let i = from - 1;
+    while (i >= 0 && isParked(history[i])) i -= 1;
+    return i;
+  };
+  const redoTarget = (from) => {
+    let i = from + 1;
+    while (i < history.length && isParked(history[i])) i += 1;
+    return i < history.length ? i : -1;
+  };
+
   return {
     // Get current data (returns a clone to prevent direct mutation)
     getData() {
@@ -165,15 +201,25 @@ function createStore() {
         this.loadHistory(variantId);
       }
       
-      // If no history was loaded, initialize with current state
-      if (history.length === 0) {
+      // If no history was loaded, initialize with current state.
+      //
+      // Or if the entry the loaded history calls current is a parked sync
+      // conflict, which the document is by definition NOT on: a variant this
+      // device has never opened has no history for parkLoser to insert into, so
+      // syncModel.js's storage path writes `{ history: [loser], historyIndex: 0
+      // }`, and loadHistory takes its success path on that — no 'Initial state'
+      // was pushed and the rejected version was marked current, permanently.
+      // Recording the state actually on screen restores the invariant every
+      // other method here assumes: history[historyIndex] is the entry the
+      // document is on.
+      if (history.length === 0 || isParked(history[historyIndex])) {
         history.push({
           data: deepClone(data),
           timestamp: new Date().toISOString(),
           description: 'Initial state',
           changeType: CHANGE_TYPES.INITIAL
         });
-        historyIndex = 0;
+        historyIndex = history.length - 1;
       }
       
       this.emit('dataLoaded', data);
@@ -272,24 +318,19 @@ function createStore() {
     // - At or below historyIndex, never after it. Everything after the index is
     //   the redo future, and pushHistory() splices the future away on the next
     //   edit — precisely how a parked entry used to vanish.
-    // - Below it, not AT it. Landing at historyIndex made the entry the
-    //   immediate undo target: the index moves up to keep pointing at the same
-    //   entry, so the parked slot became index - 1, and one Cmd+Z after a sync
-    //   put another device's REJECTED résumé on screen. Parking is an archive,
-    //   not a pending change.
+    // - Below it, not AT it, so historyIndex — which moves up with the
+    //   insertion — still points at the same ENTRY it pointed at before.
+    //   Parking changes what history holds, never what the document shows.
     //
-    // Hence historyIndex - 1: the entry is out of the splice's reach, the undo
-    // target is the same entry it was a moment ago, and historyIndex still
-    // points at the entry the live document is on — parking changes what
-    // history holds, never what the document shows. It is one slot below the
-    // current entry rather than at index 0 because pushHistory() evicts from
-    // the FRONT when history passes MAX_HISTORY, and a park at the front would
-    // be the first thing a full history dropped.
+    // It is one slot below the current entry rather than at index 0 because
+    // pushHistory() evicts from the FRONT when history passes MAX_HISTORY, and
+    // a park at the front would be the first thing a full history dropped.
     //
     // With historyIndex 0 there is no slot below the current entry, so the
-    // entry goes to 0 and undo — which was unavailable a moment ago, there
-    // being nothing before the current entry — reaches it. That is forced by
-    // the first constraint, not a choice.
+    // entry goes to 0 and the index to 1 — the arrangement in which a park sits
+    // exactly one undo away. Undo keeping away from it is NOT this function's
+    // doing and cannot be: see isParked above, where the traversal skips parked
+    // entries wherever they ended up.
     adoptHistoryEntry(variantId, entry) {
       if (!variantId || variantId !== currentVariantId || !entry) return false;
 
@@ -312,17 +353,36 @@ function createStore() {
     // not a re-read of the key, because setData() pushes an 'Initial state'
     // entry that no save has reached yet.
     //
-    // historyIndex follows the merged document to the newest entry rather than
-    // trailing the entry it was on: any mid-array index leaves the entries just
-    // merged in sitting in the redo future, where pushHistory() splices them
-    // away on the next edit. `data` is untouched — a merge changes what history
-    // holds, not what the document shows.
+    // `data` is untouched — a merge changes what history holds, not what the
+    // document shows — so historyIndex has to keep pointing at the entry the
+    // document IS on, or the store-wide invariant `history[historyIndex].data
+    // === data` breaks and undo hands the user a state they were never in.
+    // Taking mergeHistory's own index (the newest entry) broke exactly that:
+    // the union interleaves by timestamp, so the newest entry is routinely the
+    // other device's — or a loser IT parked.
+    //
+    // The entry is MOVED to the end rather than pointed at where it sorted,
+    // because everything after historyIndex is the redo future and
+    // pushHistory() splices the future away on the next edit: a mid-array index
+    // would delete the entries this merge just brought in — parked losers
+    // included — one keystroke later. At the end, both hold: the index is on
+    // the document's own entry AND there is no future to splice.
     adoptHistory(variantId, remote) {
       if (!variantId || variantId !== currentVariantId || !remote) return false;
 
-      const merged = mergeHistory({ history, historyIndex }, remote);
-      history = merged.history;
-      historyIndex = merged.historyIndex;
+      const current = history[historyIndex] ?? null;
+      const merged = mergeHistory({ history, historyIndex }, remote).history;
+      if (current) {
+        // By identity, not by reference: the union keeps one object per
+        // identity, so an entry both devices hold comes back as the remote's
+        // deserialised twin. A current entry the cap dropped is re-appended —
+        // whatever else history holds, it has to hold the live document.
+        const at = merged.findIndex((e) => entryIdentity(e) === entryIdentity(current));
+        if (at >= 0) merged.push(merged.splice(at, 1)[0]);
+        else merged.push(current);
+      }
+      history = merged;
+      historyIndex = merged.length - 1;
       this.saveHistory();
       this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
       return true;
@@ -369,22 +429,24 @@ function createStore() {
       return false;
     },
     
-    // Check if undo is available
+    // Check if undo is available (parked sync conflicts are not undo steps —
+    // see isParked)
     canUndo() {
-      return historyIndex > 0;
+      return undoTarget(historyIndex) >= 0;
     },
-    
+
     // Check if redo is available
     canRedo() {
-      return historyIndex < history.length - 1;
+      return redoTarget(historyIndex) >= 0;
     },
-    
+
     // Undo last change
     undo() {
-      if (!this.canUndo()) return false;
-      
+      const target = undoTarget(historyIndex);
+      if (target < 0) return false;
+
       isUndoRedoAction = true;
-      historyIndex--;
+      historyIndex = target;
       data = deepClone(history[historyIndex].data);
       isDirty = true;
       this.saveHistory(); // Persist after undo
@@ -398,10 +460,11 @@ function createStore() {
     
     // Redo last undone change
     redo() {
-      if (!this.canRedo()) return false;
-      
+      const target = redoTarget(historyIndex);
+      if (target < 0) return false;
+
       isUndoRedoAction = true;
-      historyIndex++;
+      historyIndex = target;
       data = deepClone(history[historyIndex].data);
       isDirty = true;
       this.saveHistory(); // Persist after redo

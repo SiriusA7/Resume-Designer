@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mapKey } from '../src/profileKeys.js';
+// The history bound, from the leaf that owns it. store.js and syncMerge.js both
+// enforce it and neither may own it — see src/historyLimits.js.
+import { MAX_HISTORY } from '../src/historyLimits.js';
 
 // appStorage is the only dependency, and it is mocked so these tests stay
 // pure: the real one is an async coalescing writer over a disk backend.
@@ -221,6 +224,51 @@ describe('applyUnits', () => {
     expect(stored.historyIndex).toBe(stored.history.length - 1);
   });
 
+  it('leaves the index on the document’s own entry after a history merge, so one Cmd+Z is still the user’s own last state', () => {
+    // The union interleaves by timestamp, so the newest merged entry is
+    // routinely the other device's — or a loser IT parked. Taking mergeHistory's
+    // index (the newest entry) therefore pointed historyIndex at an entry the
+    // document had never been on, breaking the invariant every method here
+    // assumes: history[historyIndex].data IS data.
+    resumeStore.setData({ name: 'Mine1' }, true, 'v-merge');
+    resumeStore.update('name', 'Mine2');
+
+    // Dated ahead of the entries the store just stamped with `new Date()`, so
+    // the union sorts it LAST — the position that used to take the index.
+    applyUnits([{
+      id: 'key:resume-designer-history-v-merge',
+      kind: 'plain',
+      payload: JSON.stringify({
+        history: [{
+          data: { name: 'Their rejected version' },
+          timestamp: '2126-08-08T00:00:00.000Z',
+          description: 'Conflicting edit synced from another device',
+          changeType: 'sync-conflict',
+        }],
+        historyIndex: 0,
+      }),
+      modifiedAt: AT,
+    }]);
+
+    const current = resumeStore.getHistoryEntries().find((e) => e.isCurrent);
+    expect(current.changeType).not.toBe('sync-conflict');
+    expect(resumeStore.getHistoryEntryData(current.index)).toEqual(resumeStore.getData());
+    // Nothing sits after the index, so the next edit splices nothing away.
+    expect(resumeStore.canRedo()).toBe(false);
+
+    // One Cmd+Z is the user's own previous state, not the version another
+    // device rejected.
+    expect(resumeStore.undo()).toBe(true);
+    expect(resumeStore.getData().name).toBe('Mine1');
+
+    // And the merged entry survived the trip, redo included.
+    expect(resumeStore.redo()).toBe(true);
+    expect(resumeStore.getData().name).toBe('Mine2');
+    resumeStore.update('name', 'Mine3');
+    const stored = JSON.parse(disk.get(physical('resume-designer-history-v-merge')));
+    expect(stored.history.filter((e) => e.changeType === 'sync-conflict')).toHaveLength(1);
+  });
+
   it('lands the blob’s settings and userProfile units, which used to be dropped in silence', () => {
     // splitData emits them and mergeData reassembles them, but applyUnits
     // matched only `resume:` and `key:` — so settings and the user profile
@@ -237,6 +285,20 @@ describe('applyUnits', () => {
     // Reassembly leaves the rest of the blob alone, device-local field included.
     expect(blob.currentVariantId).toBe('v-1');
     expect(Object.keys(blob.variants)).toEqual(['v-1']);
+  });
+
+  it('refuses a data unit whose payload is null, rather than blanking settings and calling it applied', () => {
+    // `'null'` parses fine, so it cleared the whole `settings` object off one
+    // malformed remote unit AND counted as landed — the count being the only
+    // thing that tells a caller a no-op from a failure.
+    const { applied } = applyUnits([
+      { id: 'data:settings', kind: 'plain', payload: 'null', modifiedAt: AT },
+      { id: 'data:userProfile', kind: 'plain', payload: 'null', modifiedAt: AT },
+    ]);
+    expect(applied).toBe(0);
+    const blob = JSON.parse(disk.get(physical(DATA)));
+    expect(blob.settings).toEqual({ pageSize: 'letter' });
+    expect('userProfile' in blob).toBe(false);
   });
 
   it('refuses a data unit for a field that never travels, and does not count it', () => {
@@ -369,9 +431,75 @@ describe('parkLoser', () => {
     expect(parked[0].data).toEqual({ name: 'The version that lost' });
   });
 
+  it('does not put a park in undo’s reach on a freshly loaded résumé, where there is no slot below the index', () => {
+    // historyIndex 0 is the state of EVERY freshly loaded résumé, and the
+    // likeliest moment for a first sync conflict. There is no slot below the
+    // current entry, so the park lands at 0 and the index moves to 1 — one
+    // Cmd+Z away. Undo was unavailable a moment earlier and parking must not
+    // make it available: a rejected version is not a step the user took.
+    resumeStore.setData({ name: 'Fresh' }, true, 'v-fresh');
+    expect(resumeStore.canUndo()).toBe(false);
+
+    expect(parkLoser('resume:v-fresh', JSON.stringify({ name: 'The version that lost' }))).toBe(true);
+
+    expect(resumeStore.canUndo()).toBe(false);
+    expect(resumeStore.undo()).toBe(false);
+    expect(resumeStore.getData().name).toBe('Fresh');
+    // Not merely unchanged on screen: undo marked the document dirty and
+    // scheduled a save of the rejected version.
+    expect(resumeStore.isDirty()).toBe(false);
+
+    // Skipped by the traversal, NOT hidden: still listed and still restorable
+    // from the history dialog, which is the whole point of parking it.
+    const parked = resumeStore.getHistoryEntries().filter((e) => e.changeType === 'sync-conflict');
+    expect(parked).toHaveLength(1);
+    expect(resumeStore.getHistoryEntryData(parked[0].index)).toEqual({ name: 'The version that lost' });
+    expect(resumeStore.restoreToEntry(parked[0].index)).toBe(true);
+    expect(resumeStore.getData().name).toBe('The version that lost');
+  });
+
+  it('opens a résumé whose only history is a park without treating the rejected version as current', () => {
+    // A variant this device has never opened has no history for parkLoser to
+    // insert into, so the storage path writes `{ history: [loser],
+    // historyIndex: 0 }`. loadHistory then takes its SUCCESS path — no
+    // 'Initial state' is pushed — and the rejected version is what the store
+    // calls current, so one edit and one Cmd+Z put it on screen.
+    expect(parkLoser('resume:v-cold', JSON.stringify({ name: 'The version that lost' }))).toBe(true);
+    expect(JSON.parse(disk.get(physical('resume-designer-history-v-cold'))).historyIndex).toBe(0);
+
+    resumeStore.setData({ name: 'The version that won' }, true, 'v-cold');
+    expect(resumeStore.getHistoryEntries().find((e) => e.isCurrent).changeType).not.toBe('sync-conflict');
+
+    resumeStore.update('name', 'Edited after opening');
+    expect(resumeStore.undo()).toBe(true);
+    expect(resumeStore.getData().name).toBe('The version that won');
+    expect(resumeStore.undo()).toBe(false);
+
+    const parked = resumeStore.getHistoryEntries().filter((e) => e.changeType === 'sync-conflict');
+    expect(parked).toHaveLength(1);
+  });
+
   it('refuses a unit that is not a résumé, which has no history to park in', () => {
     expect(parkLoser('key:resume-designer-applications', '[]')).toBe(false);
     expect(parkLoser('key:resume-designer-history-v-1', '{}')).toBe(false);
+  });
+});
+
+describe('the history bound', () => {
+  it('is the store’s bound too, taken from the leaf module rather than from the sync layer', () => {
+    // store.js's pushHistory and syncMerge.js's mergeHistory both enforce this
+    // number, and a merge that kept more than the store's bound would just be
+    // trimmed on the next edit, one entry per edit, silently. It is declared in
+    // a leaf both sides can import: declaring it in syncMerge.js made the core
+    // store import the sync layer, and syncModel.js already imports store.js —
+    // no cycle today, one the moment the store calls into sync.
+    resumeStore.setData({ name: 'e0' }, true, 'v-cap');
+    for (let i = 1; i <= MAX_HISTORY + 5; i += 1) resumeStore.update('name', `e${i}`);
+
+    expect(resumeStore.getHistoryLength()).toBe(MAX_HISTORY);
+    const stored = JSON.parse(disk.get(physical('resume-designer-history-v-cap')));
+    expect(stored.history).toHaveLength(MAX_HISTORY);
+    expect(stored.history.at(-1).data.name).toBe(`e${MAX_HISTORY + 5}`);
   });
 });
 

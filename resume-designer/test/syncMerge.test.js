@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { mergeTokenUsage, mergeHistory, resolveConflict, MAX_HISTORY } from '../src/sync/syncMerge.js';
+import { mergeTokenUsage, mergeHistory, resolveConflict } from '../src/sync/syncMerge.js';
+// From the neutral leaf, not from syncMerge.js: the constant lives outside both
+// the store and the sync layer so neither has to import the other for it.
+import { MAX_HISTORY } from '../src/historyLimits.js';
+
+// The same name in the two normalisations a resume really meets: composed
+// (é as one code point) and decomposed (e + a combining acute). Both are
+// DERIVED from one literal rather than typed, so no editor, formatter or
+// clipboard on the way into this file can quietly normalise one into the
+// other and retire the test without failing it.
+const NFC = 'café'.normalize('NFC');
+const NFD = 'café'.normalize('NFD');
 
 const event = (id, over = {}) => ({
   id, timestamp: '2026-08-01T00:00:00.000Z', provider: 'openrouter',
@@ -59,6 +70,21 @@ describe('mergeTokenUsage', () => {
     expect(mineFirst).toEqual(theirsFirst);
   });
 
+  it('breaks a same-millisecond tie by code unit, which two Unicode-equivalent ids do not survive', () => {
+    // `localeCompare` returns 0 for these two DISTINCT ids, so the tie-break
+    // decided nothing and the sort fell back to Map insertion order — argument
+    // order. Ids are ASCII today, so this was a trap rather than a live bug;
+    // it is closed the same way mergeHistory's is, and this is the test that
+    // says so.
+    expect(NFC).not.toBe(NFD);
+    expect(NFC.localeCompare(NFD)).toBe(0);
+
+    const at = '2026-08-04T00:00:00.000Z';
+    const mine = usage([event(NFC, { timestamp: at })]);
+    const theirs = usage([event(NFD, { timestamp: at })]);
+    expect(mergeTokenUsage(mine, theirs)).toEqual(mergeTokenUsage(theirs, mine));
+  });
+
   it('survives a side with no events', () => {
     expect(mergeTokenUsage(usage([]), usage([event('a')])).events).toHaveLength(1);
     expect(mergeTokenUsage(null, usage([event('a')])).events).toHaveLength(1);
@@ -101,6 +127,28 @@ describe('mergeHistory', () => {
     expect(mergeHistory(x, y)).toEqual(mergeHistory(y, x));
     expect(mergeHistory(mergeHistory(x, y), y)).toEqual(mergeHistory(x, y));
     expect(mergeHistory(mergeHistory(x, y), mergeHistory(x, y))).toEqual(mergeHistory(x, y));
+  });
+
+  it('breaks the tie by code unit, so two Unicode-equivalent entries cannot order by argument order', () => {
+    // The one property this function promises, and `localeCompare` broke it:
+    // it returns 0 for two DISTINCT strings the locale calls equivalent — a
+    // name composed on a Mac and decomposed on a phone, entirely ordinary for a
+    // résumé. The two entries got different identities and compared EQUAL, so
+    // the sort fell through to Map insertion order, which is argument order.
+    // `merge(mine, theirs)` and `merge(theirs, mine)` then came out in opposite
+    // orders, each device stored a different payload for the same content, and
+    // they re-diverged every round — the resync-forever this tie-break exists
+    // to prevent.
+    expect(NFC).not.toBe(NFD);
+    expect(NFC.localeCompare(NFD)).toBe(0);
+
+    // Same timestamp, so only the tie-break can order them; and the entries
+    // differ in nothing else, so no ASCII byte can order them for it.
+    const at = '2026-08-04T00:00:00.000Z';
+    const mineFirst = mergeHistory(doc([entry(NFC, at)]), doc([entry(NFD, at)]));
+    const theirsFirst = mergeHistory(doc([entry(NFD, at)]), doc([entry(NFC, at)]));
+    expect(mineFirst.history.map((e) => e.data.name)).toEqual(theirsFirst.history.map((e) => e.data.name));
+    expect(mineFirst).toEqual(theirsFirst);
   });
 
   it('identifies an entry by its content, not by the order its keys were written', () => {

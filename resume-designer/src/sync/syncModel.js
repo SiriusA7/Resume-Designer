@@ -11,7 +11,7 @@ import { getActiveProfileId } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
 // key from it on every edit, so parking a loser for that variant has to go
 // through it — see parkLoser.
-import { store } from '../store.js';
+import { store, CHANGE_TYPES } from '../store.js';
 import { classifyKey } from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
 import { mergeTokenUsage, mergeHistory, resolveConflict } from './syncMerge.js';
@@ -87,9 +87,16 @@ function parsesAsJSON(payload) {
  * stale copy that let it through would land another device's open document AND
  * count it as applied. So mergeData is asked instead: merging a unit into an
  * empty blob touches nothing but `variants` unless the field is one it knows.
+ *
+ * The VALUE has to land too, not just the field: `null` parses fine and
+ * mergeData writes it, so the payload `'null'` blanked `settings` or
+ * `userProfile` wholesale off one malformed remote unit — and counted as
+ * applied. Both are objects in every shape the app writes, so a null there is a
+ * broken record, not a value.
  */
 function landsAsDataField(unit) {
-  return Object.keys(mergeData({}, [unit])).some((field) => field !== 'variants');
+  const landed = mergeData({}, [unit]);
+  return Object.keys(landed).some((field) => field !== 'variants' && landed[field] !== null);
 }
 
 /**
@@ -269,10 +276,15 @@ export function applyUnits(units) {
  *   the same ENTRY it pointed at before, so the live document's notion of
  *   "current" is unchanged. Only its numeric position moved.
  * - Below the index rather than AT it, because the index moves up with it: an
- *   entry at `historyIndex` becomes the entry one undo away, which would hand
- *   the user the résumé their newer edit had just beaten. See
- *   store.js's adoptHistoryEntry, which the loaded-variant path shares this
- *   rule with, for why it is not index 0 either.
+ *   entry at `historyIndex` would make the LOSER what `historyIndex` points at,
+ *   and that has to stay the entry the document is on. See store.js's
+ *   adoptHistoryEntry, which the loaded-variant path shares this rule with, for
+ *   why it is not index 0 either.
+ *
+ * Undo staying away from the parked entry is store.js's job, not this rule's:
+ * it skips `sync-conflict` entries wherever they ended up, which is the only
+ * thing that covers the arrangements no placement here can (a history whose
+ * index is already 0, and a variant with no history at all — below).
  *
  * That is necessary but not sufficient for the variant the app currently has
  * open: store.js holds that variant's history in memory and saveHistory rewrites
@@ -295,7 +307,9 @@ export function parkLoser(unitId, payload) {
     data,
     timestamp: new Date().toISOString(),
     description: 'Conflicting edit synced from another device',
-    changeType: 'sync-conflict',
+    // The string store.js's undo/redo traversal steps over, taken from there
+    // rather than written twice.
+    changeType: CHANGE_TYPES.SYNC_CONFLICT,
   };
 
   // The loaded variant: only the store can make this stick (see above). It
@@ -313,6 +327,14 @@ export function parkLoser(unitId, payload) {
   // Mirrors store.js's own loadHistory() fallback (`historyData.historyIndex
   // ?? history.length - 1`) so a variant with no recorded index yet — or none
   // at all — comes out exactly as store.js would compute it on load.
+  //
+  // A variant this device has never opened has NO history, so `current` is -1
+  // and the park becomes the whole document, `{ history: [loser],
+  // historyIndex: 0 }` — the loser marked current, there being nothing else to
+  // mark. There is no better number to write here: an explicit -1 would make
+  // pushHistory() splice the entry away on the first edit, which is the one
+  // thing parking must survive. store.js's setData() corrects it on load, by
+  // recording the state actually on screen.
   const current = Number.isInteger(raw?.historyIndex) ? raw.historyIndex : existingHistory.length - 1;
   const at = Math.max(0, current - 1);
 
