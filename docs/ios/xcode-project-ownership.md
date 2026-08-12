@@ -84,3 +84,30 @@ directory from it, so changing it factory-resets every user), the Cargo package
 name `resume-designer`, and every `resume-designer-*` / `resume-*` storage key.
 The Xcode project name and target name are `resume-designer` for the same
 reason; only `PRODUCT_NAME` is branded **On Paper**.
+
+## Reverting pbxproj churn: the test that is NOT sufficient
+
+`xcodegen generate` rewrites `TEMP_<uuid>` group names on every run, so most
+`project.pbxproj` diffs are pure churn and get reverted. **That habit dropped
+three Swift files out of the committed target** — `OPOnboarding.swift`,
+`OPOnboardingSteps.swift` and `OPSync.swift` — because the same builds that
+churned the UUIDs had also ADDED those files.
+
+Nothing failed. `npm run ios:sim` regenerates the project before building, so
+the committed project being wrong is invisible right up until someone opens it
+in Xcode or builds by a path that skips xcodegen.
+
+So "is this diff only `TEMP_` UUID churn?" is necessary but not sufficient.
+Before reverting, also check:
+
+```bash
+git diff -U0 src-tauri/gen/apple/resume-designer.xcodeproj/project.pbxproj \
+  | grep -E "^[+-]" | grep -v "^[+-][+-]" \
+  | grep -vE "TEMP_|path = (arm64|x86_64);"
+```
+
+If that prints nothing, the diff is churn and may be reverted. If it prints a
+`PBXFileReference` or `PBXBuildFile` line, a source file's target membership is
+in there — **commit it**. The same applies to `IPHONEOS_DEPLOYMENT_TARGET` and
+`PRODUCT_BUNDLE_IDENTIFIER` lines, which are regenerated output but are also
+the only committed record of a real config change.
