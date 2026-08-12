@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { classifyKey, DEVICE_LOCAL_KEYS } from '../src/sync/syncKeys.js';
-import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX, isSharedKey } from '../src/profileKeys.js';
+import {
+  BACKUP_FIXED_KEYS,
+  BACKUP_HISTORY_PREFIX,
+  isSharedKey,
+  PROFILES_KEY,
+  ACTIVE_PROFILE_KEY,
+  OPENROUTER_KEY_KEY,
+} from '../src/profileKeys.js';
 
 describe('classifyKey', () => {
   it('classifies every key the backup knows about', () => {
@@ -8,6 +15,25 @@ describe('classifyKey', () => {
     // decision fails here rather than silently defaulting to synced (which
     // would leak device state) or local (which would lose content).
     for (const key of BACKUP_FIXED_KEYS) {
+      expect(classifyKey(key), key).not.toBe('unknown');
+    }
+  });
+
+  it('classifies every SHARED_KEYS key too, not only BACKUP_FIXED_KEYS', () => {
+    // profileKeys.js does not export SHARED_KEYS itself, so build the set
+    // from what it does export (PROFILES_KEY, ACTIVE_PROFILE_KEY,
+    // OPENROUTER_KEY_KEY) plus the literal shared key names DEVICE_LOCAL_KEYS
+    // already names. A SHARED_KEYS member is NOT reached by the
+    // BACKUP_FIXED_KEYS check in classifyKey, so without this test a shared
+    // key left off both DEVICE_LOCAL_KEYS and SYNCED_SHARED_KEYS would come
+    // back 'unknown' and nothing here would catch it.
+    const sharedKeys = new Set([
+      PROFILES_KEY,
+      ACTIVE_PROFILE_KEY,
+      OPENROUTER_KEY_KEY,
+      ...DEVICE_LOCAL_KEYS.filter(isSharedKey),
+    ]);
+    for (const key of sharedKeys) {
       expect(classifyKey(key), key).not.toBe('unknown');
     }
   });
@@ -24,11 +50,24 @@ describe('classifyKey', () => {
     expect(classifyKey('resume-designer-model-catalog')).toBe('local');
   });
 
+  it('keeps the OpenRouter credential off CloudKit', () => {
+    // A credential must never reach CloudKit, so this must stay 'local' even
+    // though it is a SHARED_KEYS member like the synced profile registry.
+    expect(classifyKey('resume-designer-openrouter-key')).toBe('local');
+  });
+
   it('syncs content', () => {
     expect(classifyKey('resume-designer-data')).toBe('synced');
     expect(classifyKey('resume-designer-applications')).toBe('synced');
     expect(classifyKey('resume-designer-job-descriptions')).toBe('synced');
     expect(classifyKey('resume-designer-chat-threads')).toBe('synced');
+  });
+
+  it('syncs the profile registry, which CloudKit zone reconciliation depends on', () => {
+    // Each profile lives in its own CloudKit record zone; the zone list is
+    // reconciled against this registry, so a device that never receives it
+    // cannot discover another device's profiles.
+    expect(classifyKey('resume-designer-profiles')).toBe('synced');
   });
 
   it('reports an unrecognised key rather than guessing', () => {
