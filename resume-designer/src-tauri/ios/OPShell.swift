@@ -184,8 +184,29 @@ struct ShellSnapshot: Decodable, Equatable {
       /// How many non-list rows precede the list (a section's heading, a role's
       /// title/company/dates), so a row index maps to an array index.
       let listOffset: Int
+      /// The Add button's label, or "" when this group's list cannot grow — a
+      /// prose section is one string, not a list of rows.
+      let addLabel: String
+      /// The array this whole group is an element of, and where in it, for
+      /// groups that can be deleted outright (a role, a section). `nil` for
+      /// groups that are not array members, like the header.
+      let removePath: String?
+      let removeIndex: Int
+      /// What the confirmation names, so it says "Delete Designer?" rather than
+      /// "Delete this?".
+      let removeTitle: String
     }
     var groups: [Group]
+    /// Adding the FIRST of something. A group only exists once its array is
+    /// non-empty, so a résumé with no education has no education group — and
+    /// without these could never gain one.
+    var additions: [Addition]
+
+    struct Addition: Decodable, Equatable, Identifiable {
+      let path: String
+      let label: String
+      var id: String { path }
+    }
   }
 
   /// `nil` while the design sheet is closed. Same reasoning as `document`, and
@@ -1674,6 +1695,18 @@ private struct StructureSheet: View {
 
   @FocusState private var focusedPath: String?
   @State private var drafts: [String: String] = [:]
+  /// A whole role or section awaiting confirmation. Asked NATIVELY and before
+  /// the command is sent — the web's `confirmDestructive()` renders a Radix
+  /// dialog inside the webview, behind this sheet, where nobody would see it
+  /// and its promise would never settle.
+  @State private var pendingRemoval: Removal?
+
+  private struct Removal: Identifiable {
+    let path: String
+    let index: Int
+    let title: String
+    var id: String { "\(path)[\(index)]" }
+  }
 
   private var groups: [ShellSnapshot.DocumentOutline.Group] {
     model.snapshot.document?.groups ?? []
@@ -1708,6 +1741,55 @@ private struct StructureSheet: View {
                         "to": String(destination),
                       ])
                     }
+                    .onDelete { offsets in
+                      // Same property as the move: list-relative, so the offset
+                      // arithmetic that maps a ROW to an array element never
+                      // happens here.
+                      guard let at = offsets.first else { return }
+                      model.send("removeItem", [
+                        "path": listPath, "index": String(at),
+                      ])
+                    }
+                }
+                if !group.addLabel.isEmpty, let listPath = group.listPath {
+                  Button {
+                    model.send("addItem", ["path": listPath])
+                  } label: {
+                    Label(group.addLabel, systemImage: "plus.circle.fill")
+                  }
+                  // Otherwise edit mode offers to reorder and delete the Add
+                  // button along with the rows it adds.
+                  .deleteDisabled(true)
+                  .moveDisabled(true)
+                }
+                if let removePath = group.removePath {
+                  Button(role: .destructive) {
+                    pendingRemoval = Removal(
+                      path: removePath, index: group.removeIndex, title: group.removeTitle
+                    )
+                  } label: {
+                    // `.destructive` reddens the TITLE and leaves the symbol on
+                    // the accent colour, so a red label sits beside a blue
+                    // trash can. Tint the whole label instead.
+                    Label("Delete \(group.removeTitle)", systemImage: "trash")
+                      .foregroundStyle(.red)
+                  }
+                  .deleteDisabled(true)
+                  .moveDisabled(true)
+                }
+              }
+            }
+
+            if let additions = model.snapshot.document?.additions, !additions.isEmpty {
+              Section {
+                ForEach(additions) { addition in
+                  Button {
+                    model.send("addItem", ["path": addition.path])
+                  } label: {
+                    Label(addition.label, systemImage: "plus")
+                  }
+                  .deleteDisabled(true)
+                  .moveDisabled(true)
                 }
               }
             }
@@ -1727,6 +1809,28 @@ private struct StructureSheet: View {
       // Drop the draft once focus leaves, so the field goes back to rendering
       // the store's value — including any normalisation the store applied.
       if let previous { drafts[previous] = nil }
+    }
+    // An alert rather than a `confirmationDialog`: iOS 26 renders the compact
+    // dialog with NO visible Cancel and relies on a tap outside, which is a
+    // poor bargain when the other button deletes a section of the résumé.
+    .alert(
+      "Delete \(pendingRemoval?.title ?? "")?",
+      isPresented: .init(
+        get: { pendingRemoval != nil },
+        set: { if !$0 { pendingRemoval = nil } }
+      )
+    ) {
+      Button("Delete", role: .destructive) {
+        if let removal = pendingRemoval {
+          model.send("removeItem", [
+            "path": removal.path, "index": String(removal.index),
+          ])
+        }
+        pendingRemoval = nil
+      }
+      Button("Cancel", role: .cancel) { pendingRemoval = nil }
+    } message: {
+      Text("This cannot be undone from here.")
     }
   }
 

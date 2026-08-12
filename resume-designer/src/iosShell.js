@@ -277,6 +277,49 @@ export function buildSettings({ theme, hasApiKey = false, autoFallback = false, 
  *
  * @param {object|null} data the résumé document
  */
+/**
+ * What a new row in each list looks like. Pure, and exported for its tests.
+ *
+ * **This is the only place the shapes live**, because Swift must not learn
+ * them: a new bullet is a bare string, a new role is a six-key object, and a
+ * new section needs an id and an area. Every other command on this bridge
+ * echoes back a path it was handed, and `addItem` keeps that property by
+ * carrying only the path and resolving the shape here — the same values the
+ * web's own Add buttons pass to `store.addToArray`.
+ *
+ * Keyed by the path with its indices normalised, so `experience[3].bullets`
+ * and `experience[0].bullets` resolve to the one entry.
+ *
+ * Returns `undefined` for a path with no template, which is how `addItem`
+ * refuses a list it was never meant to grow.
+ */
+export function newListItem(path, makeId = () => `id-${Math.random().toString(36).slice(2, 10)}`) {
+  switch (String(path ?? '').replace(/\[\d+\]/g, '[]')) {
+    case 'experience[].bullets': return 'New bullet point';
+    case 'sections[].content': return 'New item';
+    case 'education': return 'Degree — Institution — Dates';
+    case 'experience': return {
+      id: makeId('exp'),
+      title: 'New Position',
+      company: 'Company Name',
+      dates: 'Start – End',
+      bullets: ['Describe your accomplishments'],
+      // The web's Add expands the new role so it can be typed into
+      // immediately. Harmless here — the native sheet does not read it — but
+      // dropping it would mean the same résumé opens differently on desktop.
+      _expanded: true,
+    };
+    case 'sections': return {
+      id: makeId('section'),
+      title: 'New section',
+      type: 'list',
+      area: 'sidebar',
+      content: ['Item 1'],
+    };
+    default: return undefined;
+  }
+}
+
 export function buildDocumentOutline(data) {
   if (!data || typeof data !== 'object') return { groups: [] };
   const groups = [];
@@ -331,6 +374,13 @@ export function buildDocumentOutline(data) {
       // title/company/dates are fields of one object.
       listPath: `experience[${i}].bullets`,
       listOffset: 3,
+      addLabel: 'Add bullet',
+      // The whole role, not a row of it. The array and the index are carried
+      // rather than a "delete me" flag so removal goes through the same
+      // `removeItem(path, index)` every row deletion uses.
+      removePath: 'experience',
+      removeIndex: i,
+      removeTitle: text(role?.title) || `Role ${i + 1}`,
     });
   });
 
@@ -344,6 +394,7 @@ export function buildDocumentOutline(data) {
       })),
       listPath: 'education',
       listOffset: 0,
+      addLabel: 'Add entry',
     });
   }
 
@@ -369,6 +420,11 @@ export function buildDocumentOutline(data) {
       // (prose) section is not a list and gets no listPath.
       listPath: Array.isArray(section?.content) ? `sections[${i}].content` : null,
       listOffset: 1,
+      // A prose section is one string, not a list — there is no row to add.
+      addLabel: Array.isArray(section?.content) ? 'Add item' : '',
+      removePath: 'sections',
+      removeIndex: i,
+      removeTitle: text(section?.title) || `Section ${i + 1}`,
     });
   });
 
@@ -382,7 +438,23 @@ export function buildDocumentOutline(data) {
     });
   }
 
-  return { groups };
+  // Defaults applied once rather than at six push sites, so every group
+  // decodes into the same Swift struct whether or not it has list actions.
+  const withActions = (group) => ({
+    addLabel: '', removePath: null, removeIndex: -1, removeTitle: '', ...group,
+  });
+
+  return {
+    groups: groups.map(withActions),
+    // Adding the FIRST of something has nowhere to live on a group, because a
+    // group only exists once its array is non-empty — a résumé with no
+    // education has no education group, and so had no way to ever gain one.
+    additions: [
+      { path: 'experience', label: 'Add role' },
+      { path: 'education', label: 'Add education' },
+      { path: 'sections', label: 'Add section' },
+    ],
+  };
 }
 
 /**
@@ -1122,6 +1194,28 @@ export function initIOSShell(deps) {
     moveItem: ({ path, from, to }) => {
       if (typeof path !== 'string' || !path) throw new Error('moveItem needs a list path');
       deps.moveListItem(path, Number(from), Number(to));
+    },
+    // Adding and removing rows. Same path-echo contract as moveItem: the path
+    // came from the outline Swift was handed and goes back verbatim.
+    //
+    // What a new row IS resolves here, in `newListItem`, never in Swift — a
+    // bullet is a bare string and a role is a six-key object, and putting that
+    // in the native side would be the second place the document's schema is
+    // known. A path with no template is refused rather than appending
+    // something the renderer cannot draw.
+    addItem: ({ path }) => {
+      if (typeof path !== 'string' || !path) throw new Error('addItem needs a list path');
+      const item = newListItem(path, deps.generateId);
+      if (item === undefined) throw new Error(`addItem has no template for ${path}`);
+      deps.addListItem(path, item);
+    },
+    removeItem: ({ path, index }) => {
+      if (typeof path !== 'string' || !path) throw new Error('removeItem needs a list path');
+      const at = Number(index);
+      // `removeFromArray` silently ignores an out-of-range index, so a stale
+      // row tapped after the list shrank underneath would look like it worked.
+      if (!Number.isInteger(at) || at < 0) throw new Error(`removeItem index ${index}`);
+      deps.removeListItem(path, at);
     },
     // Chat. Every one of these routes to the engine in useChat.js through the
     // React panel — none of them reimplements any of it.

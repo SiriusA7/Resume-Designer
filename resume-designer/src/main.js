@@ -3,7 +3,7 @@
  * Integrates all components: store, header bar, chat panel, inline editor, structure panel
  */
 
-import { store } from './store.js';
+import { store, generateId } from './store.js';
 import { getByPath, diffResumeData } from './diffEngine.js';
 import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
@@ -575,6 +575,13 @@ export async function init() {
       next.splice(to > from ? to - 1 : to, 0, moved);
       store.update(listPath, next);
     },
+    // Add and remove go through the store's own array mutators rather than
+    // rewriting the whole array: both emit `arrayItemAdded`/`arrayItemRemoved`,
+    // which is what the renderer and the inline editor listen for. The WHAT of
+    // a new item is decided in iosShell.js — this only carries it.
+    addListItem: (listPath, item) => store.addToArray(listPath, item),
+    removeListItem: (listPath, index) => store.removeFromArray(listPath, index),
+    generateId,
     subscribeDocument: (cb) => store.subscribe(cb),
     // AI change review, routed to the live session rather than a copy of it.
     // Library search, against the same searchLibrary the desktop dialog uses.

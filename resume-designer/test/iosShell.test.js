@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   buildChatView,
+  newListItem,
   buildDesign,
   buildDocumentOutline,
   buildHistory,
@@ -80,6 +81,94 @@ describe('buildSnapshot', () => {
       profile: null,
       onboarding: null,
     });
+  });
+});
+
+describe('newListItem', () => {
+  // The ONLY place a new row's shape lives. Swift carries the path and nothing
+  // else, so if these drift the native Add button appends something the
+  // renderer cannot draw.
+  it('normalises indices so every role and section shares one template', () => {
+    expect(newListItem('experience[0].bullets')).toBe('New bullet point');
+    expect(newListItem('experience[7].bullets')).toBe('New bullet point');
+    expect(newListItem('sections[3].content')).toBe('New item');
+  });
+
+  it('matches what the web Add buttons pass to store.addToArray', () => {
+    expect(newListItem('education')).toBe('Degree — Institution — Dates');
+    expect(newListItem('experience', () => 'exp-1')).toEqual({
+      id: 'exp-1',
+      title: 'New Position',
+      company: 'Company Name',
+      dates: 'Start – End',
+      bullets: ['Describe your accomplishments'],
+      _expanded: true,
+    });
+    expect(newListItem('sections', () => 'section-1')).toEqual({
+      id: 'section-1',
+      title: 'New section',
+      type: 'list',
+      area: 'sidebar',
+      content: ['Item 1'],
+    });
+  });
+
+  it('has no template for a path that is not a list, rather than a default', () => {
+    // `name` and `summary` are strings; appending to them is meaningless and
+    // must be refused, not guessed at.
+    expect(newListItem('name')).toBeUndefined();
+    expect(newListItem('contact.email')).toBeUndefined();
+    expect(newListItem('')).toBeUndefined();
+    expect(newListItem(null)).toBeUndefined();
+  });
+});
+
+describe('buildDocumentOutline list actions', () => {
+  const doc = {
+    name: 'Ash',
+    experience: [{ title: 'Designer', bullets: ['Did a thing'] }],
+    education: ['A degree'],
+    sections: [
+      { title: 'Skills', content: ['One'] },
+      { title: 'About', content: 'Prose, not a list.' },
+    ],
+  };
+
+  it('lets a role add bullets and be deleted whole', () => {
+    const role = buildDocumentOutline(doc).groups.find((g) => g.id === 'experience-0');
+    expect(role.addLabel).toBe('Add bullet');
+    // The array and index, not a "delete me" flag — removal goes through the
+    // same removeItem(path, index) every row deletion uses.
+    expect([role.removePath, role.removeIndex]).toEqual(['experience', 0]);
+    expect(role.removeTitle).toBe('Designer');
+  });
+
+  it('offers no row-add on a prose section, which is one string', () => {
+    const [list, prose] = buildDocumentOutline(doc).groups.filter((g) => g.id.startsWith('section-'));
+    expect(list.addLabel).toBe('Add item');
+    expect(prose.addLabel).toBe('');
+    expect(prose.listPath).toBe(null);
+    // Still deletable as a whole, though.
+    expect([prose.removePath, prose.removeIndex]).toEqual(['sections', 1]);
+  });
+
+  it('does not offer to delete groups that are not array members', () => {
+    const header = buildDocumentOutline(doc).groups.find((g) => g.id === 'header');
+    expect(header.removePath).toBe(null);
+    expect(header.addLabel).toBe('');
+  });
+
+  it('always offers the document-level adds, even with nothing to group', () => {
+    // A group only exists once its array is non-empty, so a résumé with no
+    // education has no education group — and without these could never gain
+    // one.
+    const empty = buildDocumentOutline({ name: 'Ash' });
+    expect(empty.groups.some((g) => g.id === 'education')).toBe(false);
+    expect(empty.additions.map((a) => a.path)).toEqual(['experience', 'education', 'sections']);
+    // And every one of them resolves to a real template.
+    for (const addition of empty.additions) {
+      expect(newListItem(addition.path)).toBeDefined();
+    }
   });
 });
 
@@ -584,6 +673,52 @@ describe('the Design sheet commands', () => {
     postMessage.mock.calls.map(([m]) => m).filter((m) => m.kind === 'snapshot').at(-1);
 
   afterEach(() => { delete globalThis.webkit; });
+
+  it('resolves a new row\'s shape on this side, from the path alone', async () => {
+    const addListItem = vi.fn();
+    const { send } = await mount({ addListItem, generateId: () => 'exp-9' });
+
+    // Swift sends a path and nothing else. What lands in the document is
+    // decided here, which is what keeps the schema out of the native side.
+    send({ type: 'addItem', path: 'experience[2].bullets' });
+    expect(addListItem).toHaveBeenCalledWith('experience[2].bullets', 'New bullet point');
+
+    send({ type: 'addItem', path: 'experience' });
+    expect(addListItem).toHaveBeenLastCalledWith('experience', expect.objectContaining({
+      id: 'exp-9', title: 'New Position',
+    }));
+  });
+
+  it('refuses to append to something that has no template', async () => {
+    const addListItem = vi.fn();
+    const { send } = await mount({ addListItem });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(send({ type: 'addItem', path: 'name' })).toEqual({
+      ok: false, error: 'addItem has no template for name',
+    });
+    expect(send({ type: 'addItem' })).toEqual({
+      ok: false, error: 'addItem needs a list path',
+    });
+    expect(addListItem).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('refuses a removal whose index cannot be real', async () => {
+    // `store.removeFromArray` ignores an out-of-range index silently, so a row
+    // tapped after the list shrank underneath would look like it worked.
+    const removeListItem = vi.fn();
+    const { send } = await mount({ removeListItem });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    send({ type: 'removeItem', path: 'education', index: '2' });
+    expect(removeListItem).toHaveBeenCalledWith('education', 2);
+
+    expect(send({ type: 'removeItem', path: 'education', index: '-1' }).ok).toBe(false);
+    expect(send({ type: 'removeItem', path: 'education', index: 'x' }).ok).toBe(false);
+    expect(removeListItem).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
 
   it('puts the wizard on the wire as soon as it pushes, with no sheet to open', async () => {
     // Unlike every other screen there is no `setOnboardingOpen` command: the
