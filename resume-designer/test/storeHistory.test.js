@@ -247,7 +247,7 @@ describe('adoptHistory', () => {
 });
 
 describe('setData', () => {
-  it('re-points a loaded history whose current entry is not the document', () => {
+  it('re-points a loaded history whose current entry is another device’s', () => {
     // A history unit for a variant that is NOT open is merged straight into its
     // key with mergeHistory's index — the newest entry, which the union
     // routinely takes from the other device. Nothing there is a park, so the
@@ -285,6 +285,39 @@ describe('setData', () => {
     store.setData({ name: 'B' }, true, 'v-reload');
     expect(store.getHistoryLength()).toBe(2);
     expect(disk.get(historyKey('v-reload'))).toBe(before);
+  });
+
+  it('does not re-point after a silent UI-only write, so one Cmd+Z still reaches the user’s own last state', () => {
+    // The drift this exercises is LEGITIMATE and every user produces it:
+    // store.updateSilent writes UI-only state — an experience accordion's
+    // `_expanded` (StructurePanel's toggle) and `experienceSortMode` — into the
+    // document and persists it with the next debounced save, deliberately
+    // WITHOUT a history entry. So `data` and history[historyIndex].data differ
+    // by design, and a load that treats that difference as a broken invariant
+    // appends an 'Initial state' on every reopen: version history grows a bogus
+    // 'Created' per session, and Cmd+Z spends its first press collapsing the
+    // accordion instead of undoing the edit. Keep this condition on isOwnStep —
+    // a parked loser or another device's entry — never on data equality.
+    store.setData({ name: 'A', experience: [{ id: 'e1', title: 'Engineer' }] }, true, 'v-silent');
+    store.update('name', 'B');
+    store.updateSilent('experience[0]._expanded', true);
+    expect(store.getHistoryLength()).toBe(2);
+
+    // Quit and reopen: the document that was persisted carries the silent
+    // write, the history key on disk is the two real entries.
+    const persisted = store.getData();
+    store.setData(persisted, true, 'v-silent');
+
+    expect(store.getHistoryLength()).toBe(2);
+    expect(names()).toEqual(['A', 'B']);
+    expect(store.getHistoryEntries()[store.getHistoryIndex()].changeType).toBe('edit');
+    expect(store.getData().experience[0]._expanded).toBe(true);
+
+    // One press, and it lands on the user's own previous state — not on a
+    // freshly minted 'Initial state' holding the document they can already see.
+    expect(store.undo()).toBe(true);
+    expect(store.getData().name).toBe('A');
+    expect(store.canUndo()).toBe(false);
   });
 
   it('compares by content, so a document rebuilt in another key order is the same document', () => {

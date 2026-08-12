@@ -18,7 +18,7 @@ import { MAX_HISTORY } from './historyLimits.js';
 // letter. syncMerge.js is pure — no storage, no DOM, no app imports — so
 // importing it here cannot close a cycle with syncModel.js's import of this
 // file. See adoptHistory below.
-import { mergeHistory, entryIdentity, canonicalJSON } from './sync/syncMerge.js';
+import { mergeHistory, entryIdentity } from './sync/syncMerge.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -244,18 +244,6 @@ function createStore() {
     while (i < history.length && !isOwnStep(history[i])) i += 1;
     return i < history.length ? i : -1;
   };
-  // Whether an entry holds the document the store is currently showing — the
-  // store-wide invariant `history[historyIndex].data === data`, checked rather
-  // than assumed on load (see setData).
-  //
-  // Canonically, so key order cannot make the same résumé compare different: a
-  // stored entry and a document just rebuilt by migrateSectionAreas serialise
-  // in different key orders, and a false "different" costs the user a duplicate
-  // entry on every load. Through migrateSectionAreas for the same reason — an
-  // entry written before sections gained an `area` is that document, seen
-  // through the older schema.
-  const holdsDocument = (entry) => !!entry
-    && canonicalJSON(migrateSectionAreas(entry.data)) === canonicalJSON(data);
 
   return {
     // Get current data (returns a clone to prevent direct mutation)
@@ -282,11 +270,11 @@ function createStore() {
       
       // If no history was loaded, initialize with current state.
       //
-      // Or whenever the entry the loaded history calls current is not the
-      // document that just loaded — the invariant every other method here
-      // assumes, `history[historyIndex].data === data`, checked instead of
-      // trusted. Sync breaks it in two ways, and asking about the PARK alone
-      // caught only the first:
+      // Or whenever the entry the loaded history calls current is NOT one of
+      // this user's own steps (isOwnStep) — a parked conflict loser, or an
+      // entry another device wrote. Both leave the timeline claiming a version
+      // the user never chose is the one on screen, and sync produces them two
+      // ways:
       //
       // - A variant this device has never opened has no history for parkLoser
       //   to insert into, so syncModel.js's storage path writes `{ history:
@@ -296,13 +284,25 @@ function createStore() {
       // - A history unit for a variant that is not loaded is merged straight
       //   into its key, with mergeHistory's index — the NEWEST entry, which the
       //   union routinely takes from the other device. Nothing there is a park,
-      //   so the check passed, the dialog marked a remote entry current, and
-      //   one edit plus one Cmd+Z put that device's résumé on screen.
+      //   so a park-only check passed, the dialog marked a remote entry
+      //   current, and one edit plus one Cmd+Z put that device's résumé on
+      //   screen.
       //
-      // Recording the state actually on screen restores the invariant in both:
-      // it lands at the end, so there is no redo future for pushHistory to
-      // splice away either, and the merged entries survive.
-      if (history.length === 0 || isParked(history[historyIndex]) || !holdsDocument(history[historyIndex])) {
+      // Recording the state actually on screen fixes both: it lands at the end,
+      // so there is no redo future for pushHistory to splice away either, and
+      // the merged entries survive. A missing entry (an empty history, or a
+      // stored index that points past the array) is repaired the same way.
+      //
+      // What this must NOT ask is whether the current entry's data still EQUALS
+      // the document. updateSilent writes UI-only state (an accordion's
+      // `_expanded`, `experienceSortMode`) into `data` and persists it without
+      // a history entry, by design — so that drift is ordinary and expected,
+      // not a broken invariant. Re-pointing on it appended an 'Initial state'
+      // every time a résumé was reopened after an accordion toggle, which
+      // doubled the length of version history and made Cmd+Z take two presses
+      // per real edit. See the regression test in test/storeHistory.test.js.
+      const current = history[historyIndex];
+      if (!current || !isOwnStep(current)) {
         history.push({
           data: deepClone(data),
           timestamp: new Date().toISOString(),
