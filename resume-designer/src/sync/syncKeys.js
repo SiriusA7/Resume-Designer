@@ -22,17 +22,6 @@ export const DEVICE_LOCAL_KEYS = [
   'resume-designer-auto-update-check',
   // The loopback companion bridge is machine-specific.
   'resume-designer-bridge-token',
-];
-
-/**
- * Also device-local, for the reasons in the CloudKit sync design doc, but
- * these are `SHARED_KEYS` in profileKeys.js, not `BACKUP_FIXED_KEYS` — the
- * backup/restore system never touches them, so they cannot be added to
- * DEVICE_LOCAL_KEYS above without failing the "every device-local key is a
- * real backup key" test. classifyKey still has to answer for them, since a
- * future sync pass may see these keys directly.
- */
-const OTHER_LOCAL_KEYS = [
   // Which profile you are in is a property of a device.
   'resume-designer-active-profile',
   // A regenerable cache.
@@ -41,7 +30,7 @@ const OTHER_LOCAL_KEYS = [
   'resume-designer-electron-migration-attempted',
 ];
 
-const LOCAL = new Set([...DEVICE_LOCAL_KEYS, ...OTHER_LOCAL_KEYS]);
+const LOCAL = new Set(DEVICE_LOCAL_KEYS);
 
 export function classifyKey(logicalKey) {
   if (typeof logicalKey !== 'string' || !logicalKey) return 'unknown';

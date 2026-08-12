@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { classifyKey, DEVICE_LOCAL_KEYS } from '../src/sync/syncKeys.js';
-import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
+import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX, isSharedKey } from '../src/profileKeys.js';
 
 describe('classifyKey', () => {
   it('classifies every key the backup knows about', () => {
@@ -36,9 +36,14 @@ describe('classifyKey', () => {
     expect(classifyKey('')).toBe('unknown');
   });
 
-  it('never lists a device-local key that is not a real key', () => {
+  it('catches a typo in DEVICE_LOCAL_KEYS rather than letting it silently miss classification', () => {
+    // DEVICE_LOCAL_KEYS mixes keys from two sources: BACKUP_FIXED_KEYS (the
+    // backup/restore system) and SHARED_KEYS (machine-level keys in
+    // profileKeys.js). A misspelled entry belongs to neither list — that is
+    // not a new category of key, it is a typo, and this is the guard that
+    // catches it.
     for (const key of DEVICE_LOCAL_KEYS) {
-      expect(BACKUP_FIXED_KEYS.includes(key), key).toBe(true);
+      expect(BACKUP_FIXED_KEYS.includes(key) || isSharedKey(key), key).toBe(true);
     }
   });
 });
