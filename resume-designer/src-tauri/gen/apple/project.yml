@@ -2,7 +2,7 @@ name: resume-designer
 options:
   bundleIdPrefix: com.onpaper.app
   deploymentTarget:
-    iOS: 17.4
+    iOS: 26.0
 fileGroups: [../../src]
 configs:
   debug: debug

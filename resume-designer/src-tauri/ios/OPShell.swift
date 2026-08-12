@@ -2727,13 +2727,7 @@ private struct ChatComposer: View {
 private struct ComposerSurface: ViewModifier {
   func body(content: Content) -> some View {
     let shape = RoundedRectangle(cornerRadius: ChatComposer.surfaceRadius, style: .continuous)
-    if #available(iOS 26.0, *) {
-      content.glassEffect(.regular.interactive(), in: shape)
-    } else {
-      content
-        .background(.ultraThinMaterial, in: shape)
-        .overlay(shape.stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-    }
+    content.glassEffect(.regular.interactive(), in: shape)
   }
 }
 
@@ -2748,13 +2742,7 @@ private struct BarCapsule: ViewModifier {
       .padding(.horizontal, 20)
       .frame(height: 44)
 
-    if #available(iOS 26.0, *) {
-      sized.glassEffect(.regular.interactive(), in: .capsule)
-    } else {
-      sized
-        .background(.regularMaterial, in: .capsule)
-        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-    }
+    sized.glassEffect(.regular.interactive(), in: .capsule)
   }
 }
 
@@ -2774,13 +2762,7 @@ private struct ComposerChip: ViewModifier {
       .padding(.horizontal, 12)
       .frame(height: ChatComposer.controlHeight)
 
-    if #available(iOS 26.0, *) {
-      base.glassEffect(.regular.interactive(), in: .capsule)
-    } else {
-      base
-        .background(.quaternary, in: .capsule)
-        .contentShape(.capsule)
-    }
+    base.glassEffect(.regular.interactive(), in: .capsule)
   }
 }
 
@@ -2800,7 +2782,7 @@ private struct ComposerSendStyle: ViewModifier {
       .foregroundStyle(enabled ? Color.white : Color.secondary)
       .frame(width: ChatComposer.controlHeight, height: ChatComposer.controlHeight)
 
-    if #available(iOS 26.0, *), enabled {
+    if enabled {
       sized.glassEffect(.regular.tint(.accentColor).interactive(), in: .circle)
     } else {
       sized.background(enabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary), in: .circle)

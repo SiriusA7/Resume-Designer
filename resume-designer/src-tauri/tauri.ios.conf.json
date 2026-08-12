@@ -17,7 +17,7 @@
     ],
     "createUpdaterArtifacts": false,
     "iOS": {
-      "minimumSystemVersion": "17.4"
+      "minimumSystemVersion": "26.0"
     }
   },
   "plugins": {
