@@ -44,6 +44,20 @@ html.op-native-shell .zoom-controls {
   display: none;
 }
 
+/* The onboarding / new-résumé wizard is drawn natively (OPOnboarding.swift).
+   The component still RUNS — it owns the step machine and pushes its state
+   across the bridge — but its own overlay must not paint, or the desktop card
+   shows through behind the native sheet during and after the presentation.
+
+   `display: none` rather than unmounting, for the reason at the top of this
+   file: the component is load-bearing, only its chrome is redundant. It also
+   keeps `hasOpenModal()` matching `.onboarding-overlay.show`, which is what
+   withdraws the native bars while the wizard is up — that check reads the DOM,
+   not visibility, so hiding the overlay does not quietly re-show them. */
+html.op-native-shell .onboarding-overlay {
+  display: none;
+}
+
 /* The two floating panel toggles become buttons in the native bottom toolbar.
    These are the round buttons that sat on top of the résumé's name. */
 html.op-native-shell .chat-panel-toggle,
