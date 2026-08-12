@@ -1,4 +1,5 @@
 {
+  "identifier": "com.onpaper.app",
   "app": {
     "windows": [
       {
@@ -11,7 +12,9 @@
     }
   },
   "bundle": {
-    "targets": ["app"],
+    "targets": [
+      "app"
+    ],
     "createUpdaterArtifacts": false,
     "iOS": {
       "minimumSystemVersion": "17.4"

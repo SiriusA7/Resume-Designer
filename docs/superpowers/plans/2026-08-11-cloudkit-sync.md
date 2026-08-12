@@ -1057,13 +1057,17 @@ In `resume-designer/src-tauri/gen/apple/project.yml`, under the iOS target's `en
 
 ```yaml
         com.apple.developer.icloud-container-identifiers:
-          - iCloud.com.resumedesigner.app
+          - iCloud.com.onpaper.app
         com.apple.developer.icloud-services:
           - CloudKit
         com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
 ```
 
-The container identifier is `iCloud.com.resumedesigner.app` — derived from the frozen bundle identifier, which must not change.
+The container identifier is `iCloud.com.onpaper.app`, and the iOS bundle
+identifier is `com.onpaper.app`. Neither is derived from the desktop
+identifier `com.resumedesigner.app`, which stays frozen: it is the on-disk
+address of every shipped desktop user's résumés. iOS and the container had
+never shipped when these were chosen, so the brand name was still free there.
 
 - [ ] **Step 2: Write the transport skeleton**
 
@@ -1100,7 +1104,7 @@ let opSyncAssetThreshold = 700 * 1024
 
 @MainActor
 final class OPSyncEngine {
-  private let container = CKContainer(identifier: "iCloud.com.resumedesigner.app")
+  private let container = CKContainer(identifier: "iCloud.com.onpaper.app")
   private var database: CKDatabase { container.privateCloudDatabase }
   private var zones: [String: CKRecordZone] = [:]
 
@@ -1152,7 +1156,7 @@ cd resume-designer && rm -rf src-tauri/gen/apple/build/arm64 \
   && (cd src-tauri/gen/apple && xcodegen generate >/dev/null) \
   && npx tauri ios build --debug --target aarch64 \
   && xcrun devicectl device install app --device <device-udid> "src-tauri/gen/apple/build/arm64/On Paper.ipa" \
-  && xcrun devicectl device process launch --device <device-udid> com.resumedesigner.app
+  && xcrun devicectl device process launch --device <device-udid> com.onpaper.app
 ```
 
 Expected in Console.app filtered to "OPSync": `account available: true` then `zone ok: probe-zone`.

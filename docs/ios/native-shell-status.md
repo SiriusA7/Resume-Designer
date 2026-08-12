@@ -259,6 +259,15 @@ frames and read the odd ones out:
 for i in $(seq 1 20); do xcrun simctl io <udid> screenshot .../burst$i.png; sleep 0.4; done
 ```
 
+## The iOS bundle identifier is `com.onpaper.app`
+
+NOT the desktop one. Set by `identifier` in `src-tauri/tauri.ios.conf.json`;
+`project.yml`'s `PRODUCT_BUNDLE_IDENTIFIER` is inert because the Tauri CLI
+overwrites it from the merged config on every build. Every `simctl` /
+`devicectl` command below therefore takes `com.onpaper.app`, and the app-data
+container path uses it too. Desktop stays `com.resumedesigner.app` — see the
+naming rules in CLAUDE.md.
+
 ## Seeding a résumé to test with
 
 The app's own creation path is the AI wizard, so tests need storage seeded
@@ -276,12 +285,12 @@ The wizard blocks the shell on every clean install, and the flag is
 profile-scoped:
 
 ```
-xcrun simctl terminate <udid> com.resumedesigner.app
-printf 'true' > "<data-container>/Library/Application Support/com.resumedesigner.app/storage/resume-p--<profile-id>--resume-designer-onboarding-complete"
+xcrun simctl terminate <udid> com.onpaper.app
+printf 'true' > "<data-container>/Library/Application Support/com.onpaper.app/storage/resume-p--<profile-id>--resume-designer-onboarding-complete"
 ```
 
 The container path comes from `simctl get_app_container <udid>
-com.resumedesigner.app data`, and the profile id from the
+com.onpaper.app data`, and the profile id from the
 `resume-designer-active-profile` file beside it. The unscoped key name does
 nothing — see `BACKUP_FIXED_KEYS` in `src/profileKeys.js` for which keys are
 shared and which are namespaced.

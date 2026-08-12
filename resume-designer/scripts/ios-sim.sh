@@ -31,7 +31,8 @@
 
 set -euo pipefail
 
-APP_ID="com.resumedesigner.app"
+# iOS only. Desktop is still com.resumedesigner.app — see project.yml.
+APP_ID="com.onpaper.app"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APPLE="$ROOT/src-tauri/gen/apple"
 APP="$APPLE/build/arm64-sim/On Paper.app"

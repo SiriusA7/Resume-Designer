@@ -1,6 +1,6 @@
 name: resume-designer
 options:
-  bundleIdPrefix: com.resumedesigner.app
+  bundleIdPrefix: com.onpaper.app
   deploymentTarget:
     iOS: 17.4
 fileGroups: [../../src]
@@ -11,7 +11,20 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: On Paper
-      PRODUCT_BUNDLE_IDENTIFIER: com.resumedesigner.app
+      # INERT — kept in step only so this file does not read as a lie.
+      #
+      # The Tauri CLI exports PRODUCT_BUNDLE_IDENTIFIER from its MERGED config
+      # on every build, overwriting whatever is here. Proven: with this set to
+      # com.onpaper.app and tauri.conf.json still saying com.resumedesigner.app,
+      # the build exported the latter and the launch failed. The authoritative
+      # value is `identifier` in src-tauri/tauri.ios.conf.json.
+      #
+      # iOS is deliberately NOT the desktop identifier. Desktop is frozen at
+      # com.resumedesigner.app — Tauri derives the app-data directory from it,
+      # so changing it there factory-resets every shipped user through the
+      # updater. iOS had never shipped when this was chosen, so nothing was
+      # addressed by it yet. Frozen from the first iOS release onward.
+      PRODUCT_BUNDLE_IDENTIFIER: com.onpaper.app
       # HAND-MAINTAINED. `tauri ios init` writes DEVELOPMENT_TEAM straight into
       # the pbxproj and never records it here, so `xcodegen generate` silently
       # drops it and device builds stop signing. Keeping it in project.yml makes
