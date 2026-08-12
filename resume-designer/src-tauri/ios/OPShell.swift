@@ -59,6 +59,14 @@ struct ShellSnapshot: Decodable, Equatable {
   var jobs: JobsView?
   var profile: ProfileView?
 
+  /// The onboarding / new-résumé wizard, or `nil` while it is closed.
+  ///
+  /// Unlike every other screen there is no command that opens it: the WEB
+  /// wizard's own `open` is the gate, because one component serves both a first
+  /// run and the header's "New resume" and it decides which. So this arriving
+  /// non-nil IS the instruction to present. Lives in OPOnboarding.swift.
+  var onboarding: OnboardingView?
+
   struct History: Decodable, Equatable {
     /// The résumé these versions belong to. History is per-résumé and the sheet
     /// has no session identity, so a switch underneath it has to be noticed —
@@ -1062,6 +1070,18 @@ private struct ShellView: View {
             if let request = model.pdfPreview {
               PdfPreviewSheet(model: model, request: request)
             }
+          }
+        }
+        // The wizard, which is not in `sheet` at all. It has no open command —
+        // the WEB component decides when it runs, because one component serves
+        // both a first launch and the "New resume" menu item — so its presence
+        // in the snapshot IS the instruction to present. A `fullScreenCover`
+        // rather than a sheet: a first run has to be finished or explicitly
+        // cancelled, and a card that can be swiped away leaves the app with no
+        // résumé and no explanation of why.
+        .fullScreenCover(isPresented: .constant(snapshot.onboarding?.open == true)) {
+          if let wizard = snapshot.onboarding {
+            OnboardingSheet(model: model, view: wizard)
           }
         }
         // The one sheet the PAGE opens: export generates for a second or two

@@ -30,6 +30,7 @@ import {
 } from '../../aiService.js';
 import { getSettings, saveSettings, saveApiKey, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { refreshChatPanel } from '../../chatPanel.js';
+import { publishOnboarding } from '../../iosShell.js';
 import { initWindowDrag } from '../../tauriDrag.js';
 import {
   ApiKeyStep,
@@ -336,6 +337,197 @@ export default function OnboardingWizard() {
     doClose();
     window.openUserProfilePanel?.();
   }, [doClose]);
+
+  // --- native shell -------------------------------------------------------
+  //
+  // On iOS this wizard is drawn by SwiftUI (OPOnboarding.swift), so the step
+  // machine below stays the only one: the component pushes its state and the
+  // native buttons call these handlers. Nothing here changes the web path.
+  //
+  // Reachable at all because App.jsx mounts this component from app start and
+  // it merely renders null while closed — the reason the other screens needed
+  // their composition extracted into framework-free modules first.
+
+  // What the web keeps inside JobInputStep's own state. The native step has no
+  // component to hold it, so it lives here and rides the projection.
+  const [nativeGen, setNativeGen] = useState(null);
+  const [improved, setImproved] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [notice, setNotice] = useState(null);
+  const genAbortRef = useRef(null);
+  const improveTokenRef = useRef(0);
+
+  const nativeImprove = useCallback(async (value) => {
+    const q = INTERVIEW_QUESTIONS[question];
+    if (!q?.aiAssist) return;
+    setBusy('improve');
+    setNotice(null);
+    try {
+      // A NEW token every time, even for identical text: the native field
+      // applies the result on token change, and a re-improve that happened to
+      // return the same words would otherwise look like nothing happened.
+      const text = await improveText(q.question, value);
+      improveTokenRef.current += 1;
+      setImproved({ token: improveTokenRef.current, text });
+    } catch (err) {
+      setNotice({ kind: 'error', text: err?.message || 'Could not improve that answer.' });
+    } finally {
+      setBusy('');
+    }
+  }, [question, improveText]);
+
+  const nativeGenerate = useCallback(async (opts) => {
+    const controller = new AbortController();
+    genAbortRef.current = controller;
+    setNotice(null);
+    setNativeGen({ phase: 'generating', reasoning: '', done: false });
+    try {
+      await generateForJob({
+        ...opts,
+        signal: controller.signal,
+        hooks: {
+          onReasoning: (_delta, full) => setNativeGen(
+            (g) => ({ ...g, phase: 'generating', reasoning: full, done: false }),
+          ),
+        },
+      });
+      // Settle into the done screen rather than advancing, which is what the
+      // web does too — the user reads the reasoning and clicks through.
+      setNativeGen((g) => ({ phase: 'done', reasoning: g?.reasoning || '', done: true }));
+    } catch (err) {
+      setNativeGen(null);
+      // A user Cancel aborts the request; returning to the form silently is the
+      // whole feedback, the same as on the web.
+      if (!controller.signal.aborted) {
+        setNotice({ kind: 'error', text: `Failed to generate resume: ${err.message}` });
+      }
+    } finally {
+      genAbortRef.current = null;
+    }
+  }, [generateForJob]);
+
+  // Long AI calls that the web runs behind a step's own spinner. Named in
+  // `busy` so the native side can say which one is running.
+  const nativeParseImport = useCallback(async (text) => {
+    setBusy('parse');
+    setNotice(null);
+    try {
+      await parseImport(text);
+    } catch (err) {
+      setNotice({ kind: 'error', text: err?.message || 'Could not read that résumé.' });
+    } finally {
+      setBusy('');
+    }
+  }, [parseImport]);
+
+  // A file chosen in the native document picker. It arrives as base64 because
+  // the command channel is a JS string literal — there is no way to hand a
+  // Blob across it — and `parseResumeFile` branches on the FILENAME's
+  // extension, so the name has to survive the trip too.
+  const nativePickedFile = useCallback(async (name, base64) => {
+    setBusy('read');
+    setNotice(null);
+    try {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      await handleFile(new File([bytes], name));
+    } catch (err) {
+      setNotice({ kind: 'error', text: err?.message || 'Could not read that file.' });
+    } finally {
+      setBusy('');
+    }
+  }, [handleFile]);
+
+  const nativeNext = useCallback(async () => {
+    // The web's ApiKeyStep advances itself once its own validate resolves; the
+    // native one has no such closure, so Next is what leaves the key step.
+    if (step === 0) { goTo(1); return; }
+    // The job path skips the step-3 collector: it gathered its job description
+    // on the way in, and asking again is the bug that reads as a loop.
+    if (step === 2 && mode === 'job') { goTo(4); return; }
+    if (step !== 3) return;
+    setBusy('tailor');
+    try {
+      await commitJobsAndTailor();
+    } finally {
+      setBusy('');
+    }
+  }, [step, mode, goTo, commitJobsAndTailor]);
+
+  const nativeBack = useCallback((draft) => {
+    switch (step) {
+      case 1:
+        // Nothing behind it in new-résumé mode — the key step is not just
+        // skipped, it is not part of that flow.
+        if (!isNewResumeMode) goTo(0);
+        return;
+      case 2:
+        if (mode === 'import') {
+          if (filePreview != null) setFilePreview(null);
+          else goTo(1);
+        } else if (mode === 'job') {
+          // Carry the half-typed job back, or a Back-then-forward silently
+          // discards what was written.
+          if (draft) setTargetJob(draft);
+          goTo(1);
+        } else {
+          interviewBack();
+        }
+        return;
+      case 3: jdBack(); return;
+      case 4: reviewBack(); return;
+      default:
+    }
+  }, [step, mode, isNewResumeMode, filePreview, interviewBack, jdBack, reviewBack, goTo]);
+
+  useEffect(() => {
+    publishOnboarding(
+      open
+        ? {
+          open, step, mode, isNewResumeMode, canDismiss,
+          hasProviders: getConfiguredProviders().length > 0,
+          hasKey: !!getSettings().openrouterKey,
+          importText,
+          filePreview,
+          questions: INTERVIEW_QUESTIONS,
+          question,
+          answers,
+          improved,
+          jobDescriptions,
+          targetJob,
+          jobGaps,
+          models: getAvailableModelsForSelector(),
+          model: jobGenModelRef.current || getSettings().defaultModel || getDefaultModelId(),
+          reasoning: jobGenReasoningRef.current,
+          generating: nativeGen,
+          resume: parsedResume,
+          busy,
+          notice,
+        }
+        : null,
+      {
+        validateKey,
+        chooseMode,
+        parseImport: nativeParseImport,
+        pickedFile: nativePickedFile,
+        clearFilePreview: () => setFilePreview(null),
+        interviewNext,
+        interviewBack,
+        improve: nativeImprove,
+        generateForJob: nativeGenerate,
+        cancelGenerate: () => genAbortRef.current?.abort(),
+        addJob,
+        removeJob,
+        next: nativeNext,
+        back: nativeBack,
+        saveResume,
+        finish,
+        openProfile,
+        dismiss,
+      },
+    );
+  });
 
   if (!open) return null;
 

@@ -78,6 +78,7 @@ describe('buildSnapshot', () => {
       history: null,
       jobs: null,
       profile: null,
+      onboarding: null,
     });
   });
 });
@@ -583,6 +584,79 @@ describe('the Design sheet commands', () => {
     postMessage.mock.calls.map(([m]) => m).filter((m) => m.kind === 'snapshot').at(-1);
 
   afterEach(() => { delete globalThis.webkit; });
+
+  it('puts the wizard on the wire as soon as it pushes, with no sheet to open', async () => {
+    // Unlike every other screen there is no `setOnboardingOpen` command: the
+    // wizard IS the screen when it is up, so its own `open` is the only gate.
+    // And the push comes from the component, so this is also the check that the
+    // key reaches buildSnapshot at all — the failure that has silently broken
+    // this bridge twice.
+    const { postMessage } = await mount();
+    const { publishOnboarding } = await import('../src/iosShell.js');
+    await settled();
+    expect(lastSnapshot(postMessage).onboarding).toBe(null);
+
+    publishOnboarding({ open: true, step: 1, mode: 'import', isNewResumeMode: true });
+    await settled();
+    expect(lastSnapshot(postMessage).onboarding).toMatchObject({
+      open: true, step: 1, mode: 'import', totalSteps: 5,
+    });
+
+    publishOnboarding(null);
+    await settled();
+    expect(lastSnapshot(postMessage).onboarding).toBe(null);
+  });
+
+  it('routes every wizard command to the handler the component registered', async () => {
+    const { send } = await mount();
+    const { publishOnboarding } = await import('../src/iosShell.js');
+    const handlers = {
+      validateKey: vi.fn(), chooseMode: vi.fn(), parseImport: vi.fn(),
+      interviewNext: vi.fn(), improve: vi.fn(), generateForJob: vi.fn(),
+      cancelGenerate: vi.fn(), addJob: vi.fn(), removeJob: vi.fn(),
+      next: vi.fn(), back: vi.fn(), saveResume: vi.fn(), finish: vi.fn(),
+      dismiss: vi.fn(),
+    };
+    publishOnboarding({ open: true }, handlers);
+
+    send({ type: 'onboardingChoose', mode: 'job' });
+    expect(handlers.chooseMode).toHaveBeenCalledWith('job');
+
+    send({ type: 'onboardingRemoveJob', index: '2' });
+    expect(handlers.removeJob).toHaveBeenCalledWith(2);
+
+    send({ type: 'onboardingGenerate', title: 'Designer', description: 'JD', reasoning: 'high' });
+    expect(handlers.generateForJob).toHaveBeenCalledWith({
+      title: 'Designer', company: '', description: 'JD', model: '', reasoning: 'high',
+    });
+
+    send({ type: 'onboardingCancelGenerate' });
+    expect(handlers.cancelGenerate).toHaveBeenCalled();
+  });
+
+  it('passes a job draft back only when Back actually carries one', async () => {
+    const { send } = await mount();
+    const { publishOnboarding } = await import('../src/iosShell.js');
+    const back = vi.fn();
+    publishOnboarding({ open: true }, { back });
+
+    // Every other step's Back has no draft, and handing it an empty one would
+    // overwrite the job the user typed with blanks.
+    send({ type: 'onboardingBack' });
+    expect(back).toHaveBeenLastCalledWith(null);
+
+    send({ type: 'onboardingBack', title: 'Designer', company: 'Acme', description: 'JD' });
+    expect(back).toHaveBeenLastCalledWith({
+      title: 'Designer', company: 'Acme', description: 'JD',
+    });
+  });
+
+  it('ignores a wizard command that arrives before the component has rendered', async () => {
+    // The dispatcher catches throws, but a throw here would still be reported
+    // as a failed command for something that is merely early.
+    const { send } = await mount();
+    expect(send({ type: 'onboardingFinish' })).toEqual({ ok: true });
+  });
 
   it('projects the catalogs only while the sheet is open', async () => {
     // They are the largest payload the bridge carries and they never change;

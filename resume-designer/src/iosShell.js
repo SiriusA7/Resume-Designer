@@ -76,7 +76,7 @@ export function hasOpenModal(root = document) {
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
   document: outline = null, chat = null, library = null, design = null, history = null,
-  jobs = null, profile = null,
+  jobs = null, profile = null, onboarding = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -102,6 +102,133 @@ export function buildSnapshot({
     history,
     jobs,
     profile,
+    onboarding,
+  };
+}
+
+/**
+ * Project the onboarding / new-résumé wizard. Pure.
+ *
+ * ONE component serves both: `newVariant` opens it with `skipApiKeyStep`, and a
+ * genuine first run opens it without. So this projection carries the step
+ * machine rather than a flow per entry point, and `isNewResumeMode` is the only
+ * thing that differs.
+ *
+ * The step numbering is the wizard's own, not a native re-invention, because
+ * every back/next handler in `OnboardingWizard.jsx` is written against it:
+ *
+ *   0 API key · 1 choose path · 2 import | interview | job input ·
+ *   3 job descriptions · 4 review · 5 done
+ *
+ * Step 2 is three different screens picked by `mode`, and in `job` mode it
+ * advances straight to 4 — the job flow gathers its own job description, so the
+ * step-3 collector would be asking twice.
+ *
+ * **The API key never crosses back**, the same rule the settings projection
+ * follows. `hasKey` says whether one is configured; the native field writes a
+ * new one and never displays the old.
+ */
+export function buildOnboarding({
+  open = false, step = 0, mode = null, isNewResumeMode = false, canDismiss = false,
+  hasProviders = false, hasKey = false, importText = '', filePreview = null,
+  question = 0, questions = [], answers = {}, improved = null,
+  jobDescriptions = [], targetJob = null,
+  jobGaps = [], models = [], model = '', reasoning = 'medium', generating = null,
+  resume = null, busy = '', notice = null,
+} = {}) {
+  const text = (v) => (typeof v === 'string' ? v : '');
+  const list = (v) => (Array.isArray(v) ? v : []);
+  // The wizard shows "Step N of M" and a bar; new-résumé mode has one fewer
+  // because it never shows the key step. Computed here so the two renderers
+  // cannot drift — getting this wrong shows "Step 6 of 5".
+  const totalSteps = isNewResumeMode ? 5 : 6;
+  const displayStep = isNewResumeMode ? step : step + 1;
+
+  const qs = list(questions).map((q, i) => ({
+    id: text(q?.id) || `q${i}`,
+    question: text(q?.question),
+    // `textarea` gets a multi-line field natively; `aiAssist` is what puts the
+    // Improve button there, and it is only on two of the six.
+    multiline: q?.type === 'textarea',
+    aiAssist: !!q?.aiAssist,
+  }));
+  const index = Math.min(Math.max(Number(question) || 0, 0), Math.max(qs.length - 1, 0));
+
+  return {
+    open: !!open,
+    step: Number(step) || 0,
+    mode: mode === 'new' || mode === 'import' || mode === 'job' ? mode : '',
+    isNewResumeMode: !!isNewResumeMode,
+    canDismiss: !!canDismiss,
+    hasProviders: !!hasProviders,
+    hasKey: !!hasKey,
+    displayStep,
+    totalSteps,
+
+    // Step 2, import. `filePreview` is the extracted text of a picked file
+    // awaiting confirmation; null means the picker has not produced one, which
+    // is what selects between ImportStep and FilePreviewStep.
+    importText: text(importText),
+    filePreview: filePreview == null ? null : text(filePreview),
+
+    // Step 2, interview.
+    questions: qs,
+    question: index,
+    answer: text(answers?.[qs[index]?.id]),
+    // The Improve button's result, as a one-shot. The native field owns its own
+    // text while the user types — projecting every keystroke back would fight
+    // the cursor — so a rewritten answer cannot simply arrive as `answer`.
+    // Swift remembers the last token it applied and overwrites the field only
+    // when a NEW one shows up, which also makes a re-improve of identical text
+    // land instead of being swallowed as "no change".
+    improved: improved && improved.token
+      ? { token: Number(improved.token) || 0, text: text(improved.text) }
+      : null,
+
+    // Step 2, job.
+    targetJob: targetJob
+      ? {
+        title: text(targetJob.title),
+        company: text(targetJob.company),
+        description: text(targetJob.description),
+      }
+      : null,
+    jobGaps: list(jobGaps).map((g) => text(typeof g === 'string' ? g : g?.text)),
+    models: list(models).map((m) => ({
+      id: text(m?.id), label: text(m?.label) || text(m?.id), group: text(m?.group),
+    })).filter((m) => m.id),
+    model: text(model),
+    reasoning: text(reasoning) || 'medium',
+    // Non-null only while a generation is running or has just settled, so the
+    // native side can show the same progress screen the web does rather than a
+    // spinner over a blank card.
+    generating: generating
+      ? {
+        phase: text(generating.phase),
+        reasoning: text(generating.reasoning),
+        elapsed: Number(generating.elapsed) || 0,
+        done: !!generating.done,
+      }
+      : null,
+
+    // Step 3.
+    jobDescriptions: list(jobDescriptions).map((j) => ({
+      title: text(j?.title) || 'Untitled Position',
+      company: text(j?.company) || 'Unknown Company',
+      description: text(j?.description),
+    })),
+
+    // Step 4. Read-only, and crossing as the SAME outline the structure panel
+    // already decodes rather than a second document projection — the review
+    // screen would otherwise be a second place that knows the résumé's schema,
+    // which is the one thing this bridge does not do anywhere else.
+    resume: resume ? buildDocumentOutline(resume) : null,
+    isTailored: list(jobDescriptions).length > 0,
+
+    // A long AI call — parse, tailor, improve — with nothing else to show for
+    // it. Named rather than boolean so the native side can say which.
+    busy: text(busy),
+    notice: notice ? { kind: text(notice.kind) || 'info', text: text(notice.text) } : null,
   };
 }
 
@@ -808,6 +935,40 @@ let streamProfile = false;
 let historyDiff = null;
 let publish = () => {};
 
+// The wizard's last projection, or null while it is closed. Unlike every other
+// screen there is no `streamOnboarding` flag: the wizard IS the whole screen
+// when it is up, so `open` is the only gate there is to have.
+let onboardingView = null;
+// The wizard's own handlers, re-registered on each of its renders. Commands go
+// through these rather than through an extracted controller because — unlike
+// StructurePanel and the dialogs — OnboardingWizard is mounted from app start
+// (App.jsx renders it once storage is ready) and merely renders null while
+// closed, so its handlers are always reachable.
+let onboardingHandlers = {};
+
+/**
+ * Push the wizard's state to the native shell.
+ *
+ * Imported DIRECTLY by OnboardingWizard rather than reached through
+ * `window.__opShell`, which is what ChatPanel does — and the reason its first
+ * push is famously lost, because React mounts it before `init()` defines that
+ * global. Here the state is retained in module scope and `publish` is a no-op
+ * until `initIOSShell` replaces it, so an early push costs nothing and needs no
+ * re-push handshake.
+ *
+ * No-op on every platform but iOS: `publish` stays the no-op unless the native
+ * shell activated, so the web pays one projection build per wizard render and
+ * nothing else.
+ *
+ * @param {object|null} state the wizard's state, or null once it has closed
+ * @param {object} [handlers] its flow handlers, for `command()` to call back into
+ */
+export function publishOnboarding(state, handlers) {
+  onboardingView = state ? buildOnboarding(state) : null;
+  onboardingHandlers = handlers || {};
+  publish();
+}
+
 /**
  * Wire the bridge. Safe to call on every platform: it only installs
  * `window.__opShell` and some listeners, and does nothing visible until Swift
@@ -833,6 +994,59 @@ export function initIOSShell(deps) {
     // is how a delete quietly loses threads.
     selectVariant: ({ id }) => deps.loadVariant(id),
     newVariant: () => window.showOnboardingWizard?.({ skipApiKeyStep: true }),
+
+    // The wizard. Every one of these is the SAME handler the web card's button
+    // calls — the component owns the step machine, and a second copy of "which
+    // step comes after import" in Swift is how the two drift into disagreeing
+    // about what the user already answered.
+    //
+    // `onboardingHandlers` is empty until the wizard's first render, so each
+    // call is optional: a command arriving before then is a no-op rather than
+    // a throw that takes the whole snapshot down with it.
+    onboardingSaveKey: ({ key }) => onboardingHandlers.validateKey?.(String(key ?? '')),
+    onboardingChoose: ({ mode }) => onboardingHandlers.chooseMode?.(String(mode ?? '')),
+    onboardingParseImport: ({ text }) => onboardingHandlers.parseImport?.(String(text ?? '')),
+    // A file from the native document picker. Base64 because the command
+    // channel is a JS string literal, and the NAME matters as much as the
+    // bytes: `parseResumeFile` picks its extractor off the extension.
+    onboardingPickedFile: ({ name, data }) => onboardingHandlers.pickedFile?.(
+      String(name ?? ''), String(data ?? ''),
+    ),
+    onboardingClearFile: () => onboardingHandlers.clearFilePreview?.(),
+    onboardingInterviewNext: ({ value }) => onboardingHandlers.interviewNext?.(String(value ?? '')),
+    onboardingInterviewBack: () => onboardingHandlers.interviewBack?.(),
+    onboardingImprove: ({ value }) => onboardingHandlers.improve?.(String(value ?? '')),
+    onboardingGenerate: ({ title, company, description, model, reasoning }) =>
+      onboardingHandlers.generateForJob?.({
+        title: String(title ?? ''),
+        company: String(company ?? ''),
+        description: String(description ?? ''),
+        model: String(model ?? ''),
+        reasoning: String(reasoning ?? 'medium'),
+      }),
+    onboardingAddJob: ({ title, company, description }) => onboardingHandlers.addJob?.({
+      title: String(title ?? ''),
+      company: String(company ?? ''),
+      description: String(description ?? ''),
+    }),
+    onboardingRemoveJob: ({ index }) => onboardingHandlers.removeJob?.(Number(index)),
+    onboardingCancelGenerate: () => onboardingHandlers.cancelGenerate?.(),
+    onboardingNext: () => onboardingHandlers.next?.(),
+    // The job step carries its half-typed draft back with it. Absent from every
+    // other step, and harmless there — `back()` only reads it in job mode.
+    onboardingBack: ({ title, company, description }) => onboardingHandlers.back?.(
+      title === undefined && company === undefined && description === undefined
+        ? null
+        : {
+          title: String(title ?? ''),
+          company: String(company ?? ''),
+          description: String(description ?? ''),
+        },
+    ),
+    onboardingCreate: () => onboardingHandlers.saveResume?.(),
+    onboardingFinish: () => onboardingHandlers.finish?.(),
+    onboardingOpenProfile: () => onboardingHandlers.openProfile?.(),
+    onboardingDismiss: () => onboardingHandlers.dismiss?.(),
     renameVariant: () => ask('rd:variant-rename'),
     duplicateVariant: () => duplicateVariant(),
     deleteVariant: () => ask('rd:variant-delete'),
@@ -1132,6 +1346,10 @@ export function initIOSShell(deps) {
           history: streamHistory ? project('history', () => deps.getHistory(historyDiff)) : null,
           jobs: streamJobs ? project('jobs', () => deps.getJobs()) : null,
           profile: streamProfile ? project('profile', () => deps.getProfile()) : null,
+          // Already a built projection — the wizard pushes it rather than
+          // being polled, so there is nothing to build here and nothing that
+          // can throw. Null while it is closed.
+          onboarding: onboardingView,
           chat: streamChat
             ? project('chat', () => ({
               ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()),
