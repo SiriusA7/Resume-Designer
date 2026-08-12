@@ -269,6 +269,99 @@ describe('applyUnits', () => {
     expect(stored.history.filter((e) => e.changeType === 'sync-conflict')).toHaveLength(1);
   });
 
+  it('keeps one Cmd+Z on this user’s own last state when the merge brings in another device’s edits', () => {
+    // The union puts states in the timeline that this user was never in. Edit
+    // on the phone, open the Mac, press Cmd+Z, and undo handed back the
+    // phone's document rather than the user's own last state — nothing lost,
+    // but it reads as loss. The undo timeline is a record of steps taken HERE,
+    // so the traversal steps over an entry another device wrote, exactly as it
+    // already steps over a parked loser.
+    resumeStore.setData({ name: 'Mine1' }, true, 'v-foreign');
+    resumeStore.update('name', 'Mine2');
+
+    applyUnits([{
+      id: 'key:resume-designer-history-v-foreign',
+      kind: 'plain',
+      // Dated ahead of the entries the store just stamped, so the union sorts
+      // it into the slot one Cmd+Z lands on. An ORDINARY edit, not a park:
+      // nothing about it is a conflict, it simply happened on another device.
+      payload: JSON.stringify({
+        history: [{
+          data: { name: 'Edited on the iPhone' },
+          timestamp: '2126-08-08T00:00:00.000Z',
+          description: 'Edit',
+          changeType: 'edit',
+          origin: 'device-iphone',
+        }],
+        historyIndex: 0,
+      }),
+      modifiedAt: AT,
+    }]);
+
+    expect(resumeStore.undo()).toBe(true);
+    expect(resumeStore.getData().name).toBe('Mine1');
+    expect(resumeStore.canUndo()).toBe(false);
+    // Redo steps over it too, on the way back up.
+    expect(resumeStore.redo()).toBe(true);
+    expect(resumeStore.getData().name).toBe('Mine2');
+    expect(resumeStore.canRedo()).toBe(false);
+
+    // Skipped by the traversal, NOT hidden: the dialog still lists the phone's
+    // version and can still restore it.
+    const listed = resumeStore.getHistoryEntries();
+    const theirs = listed.find((e) => resumeStore.getHistoryEntryData(e.index).name === 'Edited on the iPhone');
+    expect(theirs).toBeTruthy();
+    expect(resumeStore.restoreToEntry(theirs.index)).toBe(true);
+    expect(resumeStore.getData().name).toBe('Edited on the iPhone');
+  });
+
+  it('opens a variant whose history was merged while it was closed without marking the remote entry current', () => {
+    // The loaded variant's index is fixed by the store (adoptHistory). The COLD
+    // variant's is not: this path writes mergeHistory's own index, the NEWEST
+    // entry, which the union routinely takes from the other device. Nothing
+    // there is a park, so setData's guard — which asked only about parks —
+    // passed it: the dialog marked the remote entry current, the store-wide
+    // invariant history[historyIndex].data === data was broken, and one edit
+    // plus one Cmd+Z put the remote version on screen.
+    disk.set(physical('resume-designer-history-v-closed'), JSON.stringify({
+      history: [{ data: { name: 'Mine' }, timestamp: '2026-08-01T00:00:00.000Z', description: 'Edit', changeType: 'edit' }],
+      historyIndex: 0,
+    }));
+    applyUnits([{
+      id: 'key:resume-designer-history-v-closed',
+      kind: 'plain',
+      payload: JSON.stringify({
+        history: [{
+          data: { name: 'Theirs' },
+          timestamp: '2026-08-02T00:00:00.000Z',
+          description: 'Edit',
+          changeType: 'edit',
+          origin: 'device-iphone',
+        }],
+        historyIndex: 0,
+      }),
+      modifiedAt: AT,
+    }]);
+    // The merged key really does call the remote entry current — the state the
+    // store then has to open safely.
+    const merged = JSON.parse(disk.get(physical('resume-designer-history-v-closed')));
+    expect(merged.history[merged.historyIndex].data).toEqual({ name: 'Theirs' });
+
+    resumeStore.setData({ name: 'Mine' }, true, 'v-closed');
+
+    const current = resumeStore.getHistoryEntries().find((e) => e.isCurrent);
+    expect(resumeStore.getHistoryEntryData(current.index)).toEqual(resumeStore.getData());
+    expect(resumeStore.canRedo()).toBe(false);
+
+    resumeStore.update('name', 'Edited after opening');
+    expect(resumeStore.undo()).toBe(true);
+    expect(resumeStore.getData().name).toBe('Mine');
+    // And the merge survived being opened: the remote entry is still there to
+    // restore from the dialog.
+    const listed = resumeStore.getHistoryEntries();
+    expect(listed.some((e) => resumeStore.getHistoryEntryData(e.index).name === 'Theirs')).toBe(true);
+  });
+
   it('lands the blob’s settings and userProfile units, which used to be dropped in silence', () => {
     // splitData emits them and mergeData reassembles them, but applyUnits
     // matched only `resume:` and `key:` — so settings and the user profile

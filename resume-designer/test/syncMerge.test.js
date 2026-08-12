@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { mergeTokenUsage, mergeHistory, resolveConflict } from '../src/sync/syncMerge.js';
+import {
+  mergeTokenUsage, mergeHistory, resolveConflict, canonicalJSON,
+} from '../src/sync/syncMerge.js';
 // From the neutral leaf, not from syncMerge.js: the constant lives outside both
 // the store and the sync layer so neither has to import the other for it.
 import { MAX_HISTORY } from '../src/historyLimits.js';
@@ -215,6 +217,22 @@ describe('mergeHistory', () => {
     // A non-object in `history` is not an entry: HistoryDialog would render it
     // as a blank row and restoring it would throw.
     expect(mergeHistory({ history: [null, 'x', mine] }, { history: 'nope' }).history).toEqual([mine]);
+  });
+});
+
+describe('canonicalJSON', () => {
+  it('calls two résumés the same when only their key order differs', () => {
+    // store.js compares the document it holds against the one a history entry
+    // carries to decide whether the loaded index still points at the document.
+    // `JSON.stringify` serialises in key-insertion order, so the same résumé
+    // stored earlier and rebuilt now would compare DIFFERENT and cost the user
+    // a duplicate history entry on every load.
+    const a = { name: 'Ash', sections: [{ id: 's1', title: 'Skills', content: ['a', 'b'] }] };
+    const b = { sections: [{ content: ['a', 'b'], title: 'Skills', id: 's1' }], name: 'Ash' };
+    expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
+    expect(canonicalJSON(a)).toBe(canonicalJSON(b));
+    // Array order is data, not an artifact of construction, and is preserved.
+    expect(canonicalJSON({ x: ['a', 'b'] })).not.toBe(canonicalJSON({ x: ['b', 'a'] }));
   });
 });
 

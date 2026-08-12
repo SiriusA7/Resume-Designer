@@ -6,7 +6,7 @@
  * crosses as `{ id, kind, payload, modifiedAt }` with an opaque payload.
  */
 import { appStorage } from '../appStorage.js';
-import { splitPhysicalKey, BACKUP_HISTORY_PREFIX } from '../profileKeys.js';
+import { splitPhysicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY } from '../profileKeys.js';
 import { getActiveProfileId } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
 // key from it on every edit, so parking a loser for that variant has to go
@@ -18,7 +18,11 @@ import { mergeTokenUsage, mergeHistory, resolveConflict } from './syncMerge.js';
 
 const DATA_KEY = 'resume-designer-data';
 const TOKEN_KEY = 'resume-designer-token-usage';
-const STATE_KEY = 'resume-designer-sync-state';
+// This device's sync bookkeeping — per-unit modification times here, and the
+// device id store.js stamps on history entries. One constant from profileKeys.js
+// rather than a literal at each end, because store.js cannot import this file
+// (this one imports it) and two spellings of a key are two keys.
+const STATE_KEY = SYNC_STATE_KEY;
 const KEY_UNIT_PREFIX = 'key:';
 // The blob's non-résumé fields — `settings` and `userProfile` — as splitData
 // emits them. Kept in step with syncUnits.js's own literal by construction:

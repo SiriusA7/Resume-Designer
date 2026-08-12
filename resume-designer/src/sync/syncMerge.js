@@ -85,8 +85,15 @@ export function mergeTokenUsage(a, b) {
  * which one wins. Sorting keys at every object level removes that
  * dependency; array order is left alone since it's meaningful data, not an
  * artifact of construction.
+ *
+ * Exported for the same reason `entryIdentity` is: store.js has to compare two
+ * RÉSUMÉS — the document it holds against the one a history entry carries — and
+ * `JSON.stringify` would call the same résumé different because its keys were
+ * inserted in a different order (a stored entry versus one just rebuilt by
+ * migrateSectionAreas). A false "different" there costs the user a duplicate
+ * history entry on every load.
  */
-function canonicalJSON(value) {
+export function canonicalJSON(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJSON).join(',')}]`;
   if (value && typeof value === 'object') {
     const keys = Object.keys(value).sort();

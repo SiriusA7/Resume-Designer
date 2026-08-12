@@ -18,6 +18,13 @@
 export const PROFILES_KEY = 'resume-designer-profiles';
 export const ACTIVE_PROFILE_KEY = 'resume-designer-active-profile';
 export const OPENROUTER_KEY_KEY = 'resume-designer-openrouter-key';
+// This device's sync bookkeeping: per-unit modification times, and the device
+// id store.js stamps on the history entries it writes. Named here because two
+// modules that cannot import each other both need the exact string —
+// src/sync/syncModel.js writes the timestamps and src/store.js the id, and
+// syncModel.js already imports store.js, so the constant has to come from below
+// both. A second literal is how the two would drift apart into two keys.
+export const SYNC_STATE_KEY = 'resume-designer-sync-state';
 export const PHYSICAL_PREFIX = 'resume-p--';
 const PHYSICAL_SEPARATOR = '--';
 
@@ -49,7 +56,7 @@ export const BACKUP_FIXED_KEYS = [
   // Per-unit modification times for CloudKit sync. Device-local (see
   // src/sync/syncKeys.js) but namespaced and round-tripped like every other
   // key, because it is per-profile.
-  'resume-designer-sync-state',
+  SYNC_STATE_KEY,
   'resume-designer-learned-answers',       // per-person Q&A the extension learns
   // UI / personalization
   'resume-designer-theme',

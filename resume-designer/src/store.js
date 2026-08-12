@@ -10,7 +10,7 @@ import { appStorage } from './appStorage.js';
 // too — not only in createChangeSet's pre-filter. diffEngine imports nothing
 // from this module (only the npm `diff` package), so sharing creates no cycle.
 import { setByPath } from './diffEngine.js';
-import { BACKUP_HISTORY_PREFIX } from './profileKeys.js';
+import { BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY } from './profileKeys.js';
 // The history bound, from a leaf module both this store and the sync layer can
 // import — see historyLimits.js for why neither of them may own it.
 import { MAX_HISTORY } from './historyLimits.js';
@@ -18,7 +18,7 @@ import { MAX_HISTORY } from './historyLimits.js';
 // letter. syncMerge.js is pure — no storage, no DOM, no app imports — so
 // importing it here cannot close a cycle with syncModel.js's import of this
 // file. See adoptHistory below.
-import { mergeHistory, entryIdentity } from './sync/syncMerge.js';
+import { mergeHistory, entryIdentity, canonicalJSON } from './sync/syncMerge.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -32,6 +32,56 @@ export function randomSuffix() {
 // Generate unique IDs for new items
 export function generateId(prefix = 'item') {
   return `${prefix}-${Date.now()}-${randomSuffix()}`;
+}
+
+// This device's identity, stamped as `origin` on every history entry this store
+// writes.
+//
+// Version history syncs, so a merged timeline holds entries this user never
+// stepped through on this machine. Undo is a record of steps taken HERE (see
+// isOwnStep below), and telling the two apart needs a name for "here".
+//
+// It lives in `resume-designer-sync-state`, the device-local key the sync layer
+// already keeps its bookkeeping in — classified `local` in src/sync/syncKeys.js,
+// so it never leaves the machine — rather than in a key of its own: a new key is
+// a new file in the disk store and a new section in every backup, for one
+// string. It sits ALONGSIDE that key's `{ unitId: { modifiedAt } }` entries and
+// cannot collide with one, because every unit id carries a prefix (`resume:`,
+// `key:`, `data:`), and touchUnit's read-modify-write preserves it.
+//
+// Generated once and then reused, because it has to be STABLE: an id that
+// changed between sessions would make this user's own earlier entries look
+// foreign and strand their whole history behind their own undo. Memoised for
+// the process, which is enough — switching profiles reloads the window, so the
+// cached id can never outlive the profile whose key it came from.
+let originId = null;
+function deviceOrigin() {
+  if (originId) return originId;
+
+  let recorded = {};
+  try {
+    const raw = appStorage.getItem(SYNC_STATE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === 'object') recorded = parsed;
+  } catch {
+    // Unreadable bookkeeping. A fresh id is written over it below; the
+    // timestamps in it were this device's own view of sync and are recoverable.
+  }
+
+  if (typeof recorded.deviceId === 'string' && recorded.deviceId) {
+    originId = recorded.deviceId;
+    return originId;
+  }
+
+  originId = `device-${randomSuffix()}`;
+  try {
+    appStorage.setItem(SYNC_STATE_KEY, JSON.stringify({ ...recorded, deviceId: originId }));
+  } catch (e) {
+    // Quota, or a browser passthrough refusing the write. The id still holds
+    // for this session, so undo behaves; the next boot generates another one.
+    console.warn('Failed to record this device id:', e);
+  }
+  return originId;
 }
 
 // Comparable sort key for an experience entry: higher = more recent. Drives the
@@ -149,34 +199,63 @@ function createStore() {
   let pendingChangeDescription = null;
   let pendingChangeType = CHANGE_TYPES.EDIT;
 
-  // A parked sync conflict is another device's REJECTED résumé — the losing
-  // side of "newer wins", archived by src/sync/syncModel.js so nothing is
-  // destroyed. It is not a step this user took, and the undo timeline is a
-  // record of steps this user took, so the whole traversal below steps over it:
-  // no Cmd+Z, and no Cmd+Shift+Z, ever lands on one.
+  // The undo timeline is a record of the steps THIS USER TOOK ON THIS DEVICE,
+  // and since version history syncs, a merged timeline holds entries that are
+  // neither. The traversal below steps over every one of them: no Cmd+Z, and no
+  // Cmd+Shift+Z, ever lands on an entry the user did not make here.
   //
-  // It stays exactly where it is in the array — getHistoryEntries still lists
-  // it and restoreToEntry still restores it, which is the entire point of
-  // parking. Only the traversal skips it.
+  // Two kinds reach the array, and they are ONE rule, not two:
   //
-  // Doing it here rather than at each place a park can be inserted is what
-  // makes the rule hold everywhere at once: at historyIndex 0 there is no slot
-  // below the current entry for adoptHistoryEntry to use, a variant this device
-  // has never opened can load with a park as its only entry, and a history
-  // merge can leave one at the end. Each of those put a rejected version one
-  // Cmd+Z away, and all three are the same mistake.
+  // - A parked sync conflict — another device's REJECTED résumé, the losing
+  //   side of "newer wins", archived by src/sync/syncModel.js so nothing is
+  //   destroyed. Never a step anyone took here.
+  // - An ordinary entry another device wrote, brought in by the union merge
+  //   (adoptHistory). Edit on the phone, open the Mac, press Cmd+Z, and undo
+  //   would hand back the phone's document rather than your own last state.
+  //   Nothing is lost, but it reads as loss.
+  //
+  // An entry with NO `origin` is this device's. History was device-local before
+  // sync existed, so every entry written before the field really was written
+  // here — and reading absence the other way would strand a user's entire
+  // existing history behind their own undo.
+  //
+  // Skipped entries stay exactly where they are in the array —
+  // getHistoryEntries still lists them and restoreToEntry still restores them,
+  // which is the entire point of keeping them. Only the traversal narrows.
+  //
+  // Doing it here rather than at each place such an entry can be inserted is
+  // what makes the rule hold everywhere at once: at historyIndex 0 there is no
+  // slot below the current entry for adoptHistoryEntry to use, a variant this
+  // device has never opened can load with a park as its only entry, and a
+  // history merge can leave either kind at the end. Each of those puts a
+  // version the user never chose one Cmd+Z away, and they are all the same
+  // mistake.
   const isParked = (entry) => entry?.changeType === CHANGE_TYPES.SYNC_CONFLICT;
+  const isForeign = (entry) => entry?.origin != null && entry.origin !== deviceOrigin();
+  const isOwnStep = (entry) => !isParked(entry) && !isForeign(entry);
   // The index undo/redo would move to from `from`, or -1 when there is none.
   const undoTarget = (from) => {
     let i = from - 1;
-    while (i >= 0 && isParked(history[i])) i -= 1;
+    while (i >= 0 && !isOwnStep(history[i])) i -= 1;
     return i;
   };
   const redoTarget = (from) => {
     let i = from + 1;
-    while (i < history.length && isParked(history[i])) i += 1;
+    while (i < history.length && !isOwnStep(history[i])) i += 1;
     return i < history.length ? i : -1;
   };
+  // Whether an entry holds the document the store is currently showing — the
+  // store-wide invariant `history[historyIndex].data === data`, checked rather
+  // than assumed on load (see setData).
+  //
+  // Canonically, so key order cannot make the same résumé compare different: a
+  // stored entry and a document just rebuilt by migrateSectionAreas serialise
+  // in different key orders, and a false "different" costs the user a duplicate
+  // entry on every load. Through migrateSectionAreas for the same reason — an
+  // entry written before sections gained an `area` is that document, seen
+  // through the older schema.
+  const holdsDocument = (entry) => !!entry
+    && canonicalJSON(migrateSectionAreas(entry.data)) === canonicalJSON(data);
 
   return {
     // Get current data (returns a clone to prevent direct mutation)
@@ -203,21 +282,33 @@ function createStore() {
       
       // If no history was loaded, initialize with current state.
       //
-      // Or if the entry the loaded history calls current is a parked sync
-      // conflict, which the document is by definition NOT on: a variant this
-      // device has never opened has no history for parkLoser to insert into, so
-      // syncModel.js's storage path writes `{ history: [loser], historyIndex: 0
-      // }`, and loadHistory takes its success path on that — no 'Initial state'
-      // was pushed and the rejected version was marked current, permanently.
-      // Recording the state actually on screen restores the invariant every
-      // other method here assumes: history[historyIndex] is the entry the
-      // document is on.
-      if (history.length === 0 || isParked(history[historyIndex])) {
+      // Or whenever the entry the loaded history calls current is not the
+      // document that just loaded — the invariant every other method here
+      // assumes, `history[historyIndex].data === data`, checked instead of
+      // trusted. Sync breaks it in two ways, and asking about the PARK alone
+      // caught only the first:
+      //
+      // - A variant this device has never opened has no history for parkLoser
+      //   to insert into, so syncModel.js's storage path writes `{ history:
+      //   [loser], historyIndex: 0 }`. loadHistory takes its success path on
+      //   that, so no 'Initial state' was pushed and the rejected version was
+      //   marked current, permanently.
+      // - A history unit for a variant that is not loaded is merged straight
+      //   into its key, with mergeHistory's index — the NEWEST entry, which the
+      //   union routinely takes from the other device. Nothing there is a park,
+      //   so the check passed, the dialog marked a remote entry current, and
+      //   one edit plus one Cmd+Z put that device's résumé on screen.
+      //
+      // Recording the state actually on screen restores the invariant in both:
+      // it lands at the end, so there is no redo future for pushHistory to
+      // splice away either, and the merged entries survive.
+      if (history.length === 0 || isParked(history[historyIndex]) || !holdsDocument(history[historyIndex])) {
         history.push({
           data: deepClone(data),
           timestamp: new Date().toISOString(),
           description: 'Initial state',
-          changeType: CHANGE_TYPES.INITIAL
+          changeType: CHANGE_TYPES.INITIAL,
+          origin: deviceOrigin()
         });
         historyIndex = history.length - 1;
       }
@@ -275,12 +366,15 @@ function createStore() {
         history.splice(historyIndex + 1);
       }
       
-      // Create history entry with metadata
+      // Create history entry with metadata. `origin` says the step was taken on
+      // THIS device, which is what keeps another device's undo out of it once
+      // this entry syncs — see isOwnStep.
       const entry = {
         data: deepClone(data),
         timestamp: new Date().toISOString(),
         description: description || pendingChangeDescription || 'Edit',
-        changeType: changeType || pendingChangeType || CHANGE_TYPES.EDIT
+        changeType: changeType || pendingChangeType || CHANGE_TYPES.EDIT,
+        origin: deviceOrigin()
       };
       
       // Add the NEW current state
@@ -377,9 +471,22 @@ function createStore() {
         // identity, so an entry both devices hold comes back as the remote's
         // deserialised twin. A current entry the cap dropped is re-appended —
         // whatever else history holds, it has to hold the live document.
-        const at = merged.findIndex((e) => entryIdentity(e) === entryIdentity(current));
-        if (at >= 0) merged.push(merged.splice(at, 1)[0]);
-        else merged.push(current);
+        //
+        // The current entry's identity is computed ONCE. Inside the callback it
+        // canonical-serialised a whole résumé up to MAX_HISTORY times per merge,
+        // for a value that cannot change.
+        const identity = entryIdentity(current);
+        const at = merged.findIndex((e) => entryIdentity(e) === identity);
+        if (at >= 0) {
+          merged.push(merged.splice(at, 1)[0]);
+        } else {
+          merged.push(current);
+          // mergeHistory returns an array already at the bound, so re-appending
+          // puts it one over. The oldest goes — the same end pushHistory's
+          // shift() and mergeHistory's slice(-MAX_HISTORY) drop, and the only
+          // one that can be dropped safely.
+          if (merged.length > MAX_HISTORY) merged.shift();
+        }
       }
       history = merged;
       historyIndex = merged.length - 1;
