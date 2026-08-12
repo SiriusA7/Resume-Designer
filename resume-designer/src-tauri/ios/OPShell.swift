@@ -1150,6 +1150,21 @@ private struct ShellView: View {
           Label("All resumes…", systemImage: "books.vertical")
         }
       }
+      // Managing the résumé belongs to the control that NAMES it, not to the
+      // catch-all menu on the other side of the bar — same split the chat
+      // sheet already uses, where the title menu owns the current thread.
+      // Headed, because everything above this line is about some OTHER résumé:
+      // without it "Rename…" reads as applying to whichever row you last
+      // looked at rather than to the one on screen.
+      Section("This resume") {
+        Button { model.send("renameVariant") } label: { Label("Rename…", systemImage: "pencil") }
+        Button { model.send("duplicateVariant") } label: {
+          Label("Duplicate", systemImage: "plus.square.on.square")
+        }
+        Button(role: .destructive) { model.send("deleteVariant") } label: {
+          Label("Delete", systemImage: "trash")
+        }
+      }
     } label: {
       HStack(spacing: 4) {
         Text(snapshot.variantName.isEmpty ? "On Paper" : snapshot.variantName)
@@ -1164,18 +1179,13 @@ private struct ShellView: View {
       // letting a long résumé name push either off the bar.
       .frame(maxWidth: 200)
     }
-    .accessibilityLabel("Switch resume")
+    .accessibilityLabel("Switch or manage resume")
   }
 
+  /// Everything that is NOT about which résumé is open — that lives on the
+  /// title menu, which is the control that names it.
   private var actionsMenu: some View {
     Menu {
-      Section("Resume") {
-        Button { model.send("renameVariant") } label: { Label("Rename…", systemImage: "pencil") }
-        Button { model.send("duplicateVariant") } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
-        Button(role: .destructive) { model.send("deleteVariant") } label: {
-          Label("Delete", systemImage: "trash")
-        }
-      }
       Section("Edit") {
         Button { model.send("undo") } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
         Button { model.send("redo") } label: { Label("Redo", systemImage: "arrow.uturn.forward") }
@@ -1211,7 +1221,7 @@ private struct ShellView: View {
     } label: {
       Image(systemName: "ellipsis.circle")
     }
-    .accessibilityLabel("Resume and app actions")
+    .accessibilityLabel("More actions")
   }
 
   private var pdfButton: some View {
