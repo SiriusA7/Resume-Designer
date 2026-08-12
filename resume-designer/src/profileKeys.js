@@ -46,6 +46,10 @@ export const BACKUP_FIXED_KEYS = [
   'resume-designer-chat-threads',
   'resume-designer-chat-history',          // legacy, harmless to round-trip
   'resume-designer-token-usage',
+  // Per-unit modification times for CloudKit sync. Device-local (see
+  // src/sync/syncKeys.js) but namespaced and round-tripped like every other
+  // key, because it is per-profile.
+  'resume-designer-sync-state',
   'resume-designer-learned-answers',       // per-person Q&A the extension learns
   // UI / personalization
   'resume-designer-theme',

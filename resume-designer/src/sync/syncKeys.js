@@ -36,6 +36,8 @@ export const DEVICE_LOCAL_KEYS = [
   // A credential. It must NEVER be sent to CloudKit — this is a deliberate
   // refusal, not an accident of leaving it unclassified.
   'resume-designer-openrouter-key',
+  // This device's view of what it has synced.
+  'resume-designer-sync-state',
 ];
 
 // SHARED_KEYS members that DO sync — the exception to DEVICE_LOCAL_KEYS
