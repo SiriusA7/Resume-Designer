@@ -36,7 +36,9 @@ import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow
 import {
   initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
 } from './iosShell.js';
-import { collectUnits, applyUnits, parkLoser, touchUnit } from './sync/syncModel.js';
+import {
+  collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler, touchUnit,
+} from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
 } from './designController.js';
@@ -54,6 +56,8 @@ import {
   getVariants,
   importFullBackupDurably,
   saveApiKey,
+  setPersistedSaveHandler,
+  setSyncDirtyNotifier,
 } from './persistence.js';
 import {
   isTauri,
@@ -77,6 +81,10 @@ import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from
 import { initSpacingService, applySpacingSettings, getSpacingSettings, saveSpacingSettings } from './spacingService.js';
 import { initAccentService } from './accentService.js';
 import { initPhotoService } from './photoService.js';
+
+// Keep persistence below the sync model in the import graph: main owns the
+// callback wiring between them, so neither feature module imports the other.
+registerPersistedSaveHandler(setPersistedSaveHandler);
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -583,7 +591,7 @@ export async function init() {
     addListItem: (listPath, item) => store.addToArray(listPath, item),
     removeListItem: (listPath, index) => store.removeFromArray(listPath, index),
     // CloudKit sync. The model owns what a unit is; the shell only carries it.
-    collectUnits, applyUnits, parkLoser, touchUnit,
+    collectUnit, collectUnits, applyUnits, parkLoser, touchUnit, setSyncDirtyNotifier,
     generateId,
     subscribeDocument: (cb) => store.subscribe(cb),
     // AI change review, routed to the live session rather than a copy of it.

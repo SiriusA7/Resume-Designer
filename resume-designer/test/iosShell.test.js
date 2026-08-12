@@ -182,6 +182,26 @@ describe('createCommandDispatcher', () => {
     expect(selectVariant).toHaveBeenCalledWith({ type: 'selectVariant', id: 'b' });
   });
 
+  it('carries a handler return value in the reply', () => {
+    const dispatch = createCommandDispatcher({
+      syncUnit: () => ({ id: 'resume:v-1', payload: '{"name":"Ash"}' }),
+    });
+
+    expect(dispatch({ type: 'syncUnit', unitId: 'resume:v-1' })).toEqual({
+      ok: true,
+      result: { id: 'resume:v-1', payload: '{"name":"Ash"}' },
+    });
+  });
+
+  it('omits result when a handler returns undefined', () => {
+    const dispatch = createCommandDispatcher({ zoomIn: () => undefined });
+
+    const reply = dispatch({ type: 'zoomIn' });
+
+    expect(reply).toEqual({ ok: true });
+    expect('result' in reply).toBe(false);
+  });
+
   it('accepts the JSON string Swift actually sends', () => {
     const zoomIn = vi.fn();
     const dispatch = createCommandDispatcher({ zoomIn });
@@ -212,10 +232,12 @@ describe('createCommandDispatcher', () => {
       exportPdf: () => { throw new Error('control not found: #download-pdf'); },
     });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect(dispatch({ type: 'exportPdf' })).toEqual({
+    const reply = dispatch({ type: 'exportPdf' });
+    expect(reply).toEqual({
       ok: false,
       error: 'control not found: #download-pdf',
     });
+    expect('result' in reply).toBe(false);
     spy.mockRestore();
   });
 });
@@ -898,6 +920,52 @@ describe('the Design sheet commands', () => {
     const { send } = await mount({ collectUnits });
     expect(send({ type: 'syncCollect' })).toEqual({ ok: true });
     expect(collectUnits).toHaveBeenCalled();
+  });
+
+  it('returns one opaque unit to Swift through the command reply', async () => {
+    const unit = {
+      id: 'resume:v-1',
+      kind: 'resume',
+      payload: '{"name":"A"}',
+      modifiedAt: '2026-08-09T00:00:00.000Z',
+    };
+    const collectUnit = vi.fn(() => unit);
+    const { send } = await mount({ collectUnit });
+
+    expect(send({ type: 'syncUnit', unitId: 'resume:v-1' })).toEqual({
+      ok: true,
+      result: unit,
+    });
+    expect(collectUnit).toHaveBeenCalledWith('resume:v-1');
+  });
+
+  it('posts the dirty unit ids to the native sync engine', async () => {
+    let notifyDirty;
+    const setSyncDirtyNotifier = vi.fn((notify) => { notifyDirty = notify; });
+    const { postMessage } = await mount({ setSyncDirtyNotifier });
+
+    notifyDirty(['resume:v-1', 'key:resume-designer-history-v-1']);
+
+    expect(postMessage).toHaveBeenCalledWith({
+      kind: 'syncDirty',
+      unitIds: ['resume:v-1', 'key:resume-designer-history-v-1'],
+    });
+  });
+
+  it('keeps single-unit lookup and dirty notification safe without a native shell', async () => {
+    const unit = {
+      id: 'resume:v-1', kind: 'resume', payload: '{}', modifiedAt: null,
+    };
+    let notifyDirty;
+    const { send } = await mount({
+      collectUnit: () => unit,
+      setSyncDirtyNotifier: (notify) => { notifyDirty = notify; },
+    });
+    delete globalThis.webkit;
+
+    expect(() => send({ type: 'syncUnit', unitId: 'resume:v-1' })).not.toThrow();
+    expect(send({ type: 'syncUnit', unitId: 'resume:v-1' })).toEqual({ ok: true, result: unit });
+    expect(() => notifyDirty(['resume:v-1'])).not.toThrow();
   });
 
   it('applies units and parks a conflict loser', async () => {

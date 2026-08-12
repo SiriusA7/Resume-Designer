@@ -918,7 +918,7 @@ export function buildDesign(state) {
  * Pure — the impurity is entirely in the `actions` the caller supplies.
  *
  * @param {Record<string, (payload: object) => unknown>} actions
- * @returns {(command: unknown) => {ok: boolean, error?: string}}
+ * @returns {(command: unknown) => {ok: boolean, result?: unknown, error?: string}}
  */
 export function createCommandDispatcher(actions) {
   return function dispatch(command) {
@@ -938,8 +938,8 @@ export function createCommandDispatcher(actions) {
       return { ok: false, error: `unknown-command:${parsed.type}` };
     }
     try {
-      action(parsed);
-      return { ok: true };
+      const result = action(parsed);
+      return result === undefined ? { ok: true } : { ok: true, result };
     } catch (err) {
       console.error('[iosShell] command failed:', parsed.type, err);
       return { ok: false, error: String(err?.message ?? err) };
@@ -1161,6 +1161,15 @@ export function initIOSShell(deps) {
     duplicateVariant,
     exportCurrentVariant,
   } = deps;
+
+  // Persistence names the units whose bytes landed. The shell only carries
+  // those ids to CKSyncEngine, and stays silent on desktop/browser builds.
+  deps.setSyncDirtyNotifier?.((unitIds) => {
+    if (!isNativeShellAvailable()) return;
+    window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
+      kind: 'syncDirty', unitIds,
+    });
+  });
 
   const dispatch = createCommandDispatcher({
     // Résumé selection and CRUD. Rename, delete and import route back through
@@ -1497,6 +1506,7 @@ export function initIOSShell(deps) {
         kind: 'syncUnits', units: deps.collectUnits(),
       });
     },
+    syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
     syncApply: ({ units }) => {
       const parsed = JSON.parse(String(units ?? '[]'));
       if (!Array.isArray(parsed)) throw new Error('syncApply needs an array of units');

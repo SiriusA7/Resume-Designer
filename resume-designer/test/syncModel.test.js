@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mapKey } from '../src/profileKeys.js';
+import { mapKey, BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
 // The history bound, from the leaf that owns it. store.js and syncMerge.js both
 // enforce it and neither may own it — see src/historyLimits.js.
 import { MAX_HISTORY } from '../src/historyLimits.js';
@@ -20,13 +20,19 @@ import { MAX_HISTORY } from '../src/historyLimits.js';
 // `collectUnits`' `?? physical` fallback exists for.
 const PROFILE = 'ptest';
 const disk = new Map();
+let failDataWrites = false;
 const physical = (k) => mapKey(PROFILE, k);
 vi.mock('../src/appStorage.js', () => ({
   appStorage: {
     getItem: (k) => (disk.has(physical(k)) ? disk.get(physical(k)) : null),
     // `String(value)` mirrors the real setItem — the reason applyUnits has to
     // refuse a payload that is not a string (it would store "undefined").
-    setItem: (k, v) => { disk.set(physical(k), String(v)); },
+    setItem: (k, v) => {
+      if (failDataWrites && k === 'resume-designer-data') {
+        throw new DOMException('quota exceeded', 'QuotaExceededError');
+      }
+      disk.set(physical(k), String(v));
+    },
     keys: () => [...disk.keys()],
   },
   // profiles.js imports this beside appStorage; syncModel reaches profiles.js
@@ -35,16 +41,23 @@ vi.mock('../src/appStorage.js', () => ({
   setProfileMapping: () => {},
 }));
 
-const { collectUnits, applyUnits, parkLoser, touchUnit, resolveConflict } = await import('../src/sync/syncModel.js');
+const {
+  collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler,
+  touchUnit, resolveConflict,
+} = await import('../src/sync/syncModel.js');
 // The résumé store, not the storage map above: parking into the LOADED
 // variant's history has to go through it.
 const { store: resumeStore } = await import('../src/store.js');
+const {
+  initPersistence, setPersistedSaveHandler, setSyncDirtyNotifier,
+} = await import('../src/persistence.js');
 
 const DATA = 'resume-designer-data';
 const AT = '2026-08-09T00:00:00.000Z';
 
 beforeEach(() => {
   disk.clear();
+  failDataWrites = false;
   disk.set(physical('resume-designer-active-profile'), PROFILE);
   disk.set(physical(DATA), JSON.stringify({
     variants: { 'v-1': { name: 'Design Engineer' } },
@@ -126,6 +139,40 @@ describe('collectUnits', () => {
     // on JSON.parse('') and reset that variant's history.
     disk.set('resume-designer-chat-threads', JSON.stringify([{ id: 't-1' }]));
     expect(collectUnits().map((u) => u.id)).not.toContain('key:resume-designer-chat-threads');
+  });
+});
+
+describe('collectUnit', () => {
+  it('returns the same stamped résumé unit as a full collection', () => {
+    touchUnit('resume:v-1');
+
+    expect(collectUnit('resume:v-1'))
+      .toEqual(collectUnits().find((unit) => unit.id === 'resume:v-1'));
+  });
+
+  it('returns the same stamped key unit as a full collection', () => {
+    touchUnit('key:resume-designer-applications');
+
+    expect(collectUnit('key:resume-designer-applications'))
+      .toEqual(collectUnits().find((unit) => unit.id === 'key:resume-designer-applications'));
+  });
+
+  it('refuses a device-local key', () => {
+    expect(collectUnit('key:resume-zoom')).toBe(null);
+  });
+
+  it('returns null for an id no unit matches', () => {
+    expect(collectUnit('unknown:v-1')).toBe(null);
+  });
+
+  it('returns null for a synced key absent from storage', () => {
+    expect(collectUnit('key:resume-designer-chat-threads')).toBe(null);
+  });
+
+  it('deep-equals individual lookup for every unit in a full collection', () => {
+    for (const unit of collectUnits()) {
+      expect(collectUnit(unit.id), unit.id).toEqual(unit);
+    }
   });
 });
 
@@ -602,5 +649,48 @@ describe('touchUnit', () => {
     const unit = collectUnits().find((u) => u.id === 'resume:v-1');
     const state = JSON.parse(disk.get(physical('resume-designer-sync-state')));
     expect(unit.modifiedAt).toBe(state['resume:v-1'].modifiedAt);
+  });
+});
+
+describe('persisted save stamping', () => {
+  it('stamps the résumé and history units after a successful save', () => {
+    const notifyDirty = vi.fn();
+    registerPersistedSaveHandler(setPersistedSaveHandler);
+    setSyncDirtyNotifier(notifyDirty);
+    resumeStore.setData({ name: 'Edited' }, true, 'v-1');
+    initPersistence('v-1');
+
+    expect(resumeStore.saveNow()).toBe(true);
+
+    const recorded = JSON.parse(disk.get(physical('resume-designer-sync-state')) ?? '{}');
+    const stamps = [
+      recorded['resume:v-1'],
+      recorded[`key:${BACKUP_HISTORY_PREFIX}v-1`],
+    ];
+    for (const { modifiedAt } of stamps) {
+      expect(new Date(modifiedAt).toISOString()).toBe(modifiedAt);
+    }
+    expect(notifyDirty).toHaveBeenCalledWith([
+      'resume:v-1',
+      `key:${BACKUP_HISTORY_PREFIX}v-1`,
+    ]);
+  });
+
+  it('stamps neither unit when the save fails', () => {
+    const notifyDirty = vi.fn();
+    registerPersistedSaveHandler(setPersistedSaveHandler);
+    setSyncDirtyNotifier(notifyDirty);
+    resumeStore.setData({ name: 'Edited' }, true, 'v-1');
+    initPersistence('v-1');
+    failDataWrites = true;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(resumeStore.saveNow()).toBe(false);
+    const recorded = JSON.parse(disk.get(physical('resume-designer-sync-state')) ?? '{}');
+    expect(recorded['resume:v-1']).toBeUndefined();
+    expect(recorded[`key:${BACKUP_HISTORY_PREFIX}v-1`]).toBeUndefined();
+    expect(notifyDirty).not.toHaveBeenCalled();
+
+    error.mockRestore();
   });
 });

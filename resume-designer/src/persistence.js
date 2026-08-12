@@ -15,6 +15,18 @@ import {
 
 const STORAGE_KEY = 'resume-designer-data';
 export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
+let persistedSaveHandler = null;
+let syncDirtyNotifier = null;
+
+/** Wired by syncModel.js through main.js to keep the module graph acyclic. */
+export function setPersistedSaveHandler(handler) {
+  persistedSaveHandler = typeof handler === 'function' ? handler : null;
+}
+
+/** Wired by main.js so persistence does not import the native shell. */
+export function setSyncDirtyNotifier(notify) {
+  syncDirtyNotifier = typeof notify === 'function' ? notify : null;
+}
 
 // Storage structure
 const DEFAULT_STORAGE = {
@@ -366,7 +378,10 @@ export function initPersistence(variantId) {
         // user must hear about it once — otherwise everything typed from now
         // on silently evaporates on quit/reload.
         const ok = saveVariant(variantId, variant.name, data);
-        if (!ok) {
+        if (ok) {
+          const unitIds = persistedSaveHandler?.(variantId) ?? [];
+          if (unitIds.length > 0) syncDirtyNotifier?.(unitIds);
+        } else {
           storageErrorToast(
             'Storage is full — your recent edits are NOT being saved. Free up '
             + 'space (delete resumes you no longer need) or export a backup now '

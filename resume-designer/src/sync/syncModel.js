@@ -115,6 +115,48 @@ export function touchUnit(unitId) {
 }
 
 /**
+ * Install the successful-save callback without importing persistence here or
+ * importing this module from persistence. main.js owns that graph edge.
+ */
+export function registerPersistedSaveHandler(register) {
+  register((variantId) => {
+    const unitIds = [
+      `${RESUME_UNIT_PREFIX}${variantId}`,
+      `${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`,
+    ];
+    for (const unitId of unitIds) touchUnit(unitId);
+    return unitIds;
+  });
+}
+
+function withModifiedAt(unit, recorded) {
+  return { ...unit, modifiedAt: modifiedAtFor(unit.id, recorded) };
+}
+
+function collectDataUnits(recorded) {
+  return splitData(readJSON(DATA_KEY, null))
+    .map((unit) => withModifiedAt(unit, recorded));
+}
+
+function collectKeyUnit(key, recorded) {
+  // The data blob is represented by its `resume:` / `data:` units, never by
+  // one key snapshot, and every other key must pass the shared sync policy.
+  if (key === DATA_KEY || classifyKey(key) !== 'synced') return null;
+
+  // Absent is not empty. An empty payload CLEARS the key on every receiving
+  // device; a key this device cannot read is one it has nothing to say about.
+  const payload = appStorage.getItem(key);
+  if (payload == null) return null;
+
+  const id = `${KEY_UNIT_PREFIX}${key}`;
+  return withModifiedAt({
+    id,
+    kind: key === TOKEN_KEY ? 'tokenUsage' : 'plain',
+    payload,
+  }, recorded);
+}
+
+/**
  * Everything this device would push.
  *
  * The data blob is decomposed rather than sent whole — see syncUnits.js.
@@ -123,11 +165,7 @@ export function touchUnit(unitId) {
  */
 export function collectUnits() {
   const recorded = state();
-  const units = [];
-
-  for (const unit of splitData(readJSON(DATA_KEY, null))) {
-    units.push({ ...unit, modifiedAt: modifiedAtFor(unit.id, recorded) });
-  }
+  const units = collectDataUnits(recorded);
 
   // `appStorage.keys()` returns PHYSICAL keys — profile-namespaced
   // (`resume-p--<id>--<logical>`) — while `getItem`/`setItem` take LOGICAL ones
@@ -148,25 +186,34 @@ export function collectUnits() {
     const split = splitPhysicalKey(physical);
     if (split && split.profileId !== activeProfile) continue;
     const key = split?.logicalKey ?? physical;
-    if (key === DATA_KEY) continue; // decomposed above
-    if (classifyKey(key) !== 'synced') continue;
-    // Absent is not empty. `?? ''` here emits a unit whose payload CLEARS the
-    // key on every receiving device — and an empty history payload makes
-    // store.js's loadHistory throw on `JSON.parse('')` and reset that variant's
-    // history. A key `getItem` cannot read is a key this device has nothing to
-    // say about, so it sends nothing.
-    const payload = appStorage.getItem(key);
-    if (payload == null) continue;
-    const id = `${KEY_UNIT_PREFIX}${key}`;
-    units.push({
-      id,
-      kind: key === TOKEN_KEY ? 'tokenUsage' : 'plain',
-      payload,
-      modifiedAt: modifiedAtFor(id, recorded),
-    });
+    const unit = collectKeyUnit(key, recorded);
+    if (unit) units.push(unit);
   }
 
   return units;
+}
+
+/**
+ * The one unit this device would push for `unitId`, or `null` when it has no
+ * matching syncable value. Uses the same constructors and skip rules as the
+ * full collection above so the two entry points cannot classify differently.
+ */
+export function collectUnit(unitId) {
+  if (typeof unitId !== 'string') return null;
+  const recorded = state();
+
+  if (unitId.startsWith(RESUME_UNIT_PREFIX) || unitId.startsWith(DATA_UNIT_PREFIX)) {
+    // One splitData pass over the blob is intentional: it keeps the exact same
+    // decomposition rules as collectUnits without introducing a second parser.
+    return collectDataUnits(recorded).find((unit) => unit.id === unitId) ?? null;
+  }
+
+  if (unitId.startsWith(KEY_UNIT_PREFIX)) {
+    // Direct logical-key read; single-unit lookup never enumerates storage.
+    return collectKeyUnit(unitId.slice(KEY_UNIT_PREFIX.length), recorded);
+  }
+
+  return null;
 }
 
 /**
