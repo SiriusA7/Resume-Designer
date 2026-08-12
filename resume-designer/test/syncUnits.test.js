@@ -23,16 +23,28 @@ describe('splitData', () => {
     expect(ids).toContain('data:userProfile');
   });
 
-  it('never emits currentVariantId', () => {
+  it('never leaks currentVariantId into a unit id or payload', () => {
     // Which résumé is open is device-local. Syncing it makes one device change
     // documents because another did.
-    const serialized = JSON.stringify(splitData(BLOB));
-    expect(serialized).not.toContain('currentVariantId');
-    // Not as a bare value anywhere: matched with both quotes so a variant id
-    // that is legitimately a *suffix* of a unit id (e.g. `resume:v-1`) isn't
-    // mistaken for the bare value `"v-1"`. See task-2-report.md for why the
-    // brief's original `'v-1"'` (trailing quote only) over-matches here.
-    expect(serialized).not.toContain('"v-1"');
+    //
+    // A string search on JSON.stringify(splitData(BLOB)) cannot catch the
+    // realistic leak shape: every unit carries its data via JSON.stringify
+    // (see payload: JSON.stringify(...) in syncUnits.js), so if
+    // currentVariantId were ever folded into a unit's payload, the outer
+    // serialisation double-escapes its quotes (`payload":"...\"v-1\"..."`).
+    // Neither `v-1"` nor `"v-1"` then appears anywhere in the string being
+    // searched, so a string-matching guard passes while the requirement is
+    // violated. Parse each unit's payload back out and check it structurally
+    // instead — that is the only check that actually holds.
+    for (const unit of splitData(BLOB)) {
+      expect(unit.id).not.toBe('data:currentVariantId');
+
+      const payload = JSON.parse(unit.payload);
+      expect(payload).not.toBe(BLOB.currentVariantId);
+      if (payload && typeof payload === 'object') {
+        expect(Object.prototype.hasOwnProperty.call(payload, 'currentVariantId')).toBe(false);
+      }
+    }
   });
 
   it('survives a blob with nothing in it', () => {
