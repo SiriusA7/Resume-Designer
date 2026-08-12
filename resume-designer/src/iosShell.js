@@ -939,7 +939,12 @@ export function createCommandDispatcher(actions) {
     }
     try {
       const result = action(parsed);
-      return result === undefined ? { ok: true } : { ok: true, result };
+      const isThenable = result !== null
+        && (typeof result === 'object' || typeof result === 'function')
+        && typeof result.then === 'function';
+      // evaluateJavaScript cannot serialize a Promise. Drop it rather than
+      // await it: this dispatcher is synchronous by contract and must never throw.
+      return result === undefined || isThenable ? { ok: true } : { ok: true, result };
     } catch (err) {
       console.error('[iosShell] command failed:', parsed.type, err);
       return { ok: false, error: String(err?.message ?? err) };

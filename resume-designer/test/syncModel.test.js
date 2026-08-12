@@ -21,6 +21,7 @@ import { MAX_HISTORY } from '../src/historyLimits.js';
 const PROFILE = 'ptest';
 const disk = new Map();
 let failDataWrites = false;
+let failSyncStateWrites = false;
 const physical = (k) => mapKey(PROFILE, k);
 vi.mock('../src/appStorage.js', () => ({
   appStorage: {
@@ -29,6 +30,9 @@ vi.mock('../src/appStorage.js', () => ({
     // refuse a payload that is not a string (it would store "undefined").
     setItem: (k, v) => {
       if (failDataWrites && k === 'resume-designer-data') {
+        throw new DOMException('quota exceeded', 'QuotaExceededError');
+      }
+      if (failSyncStateWrites && k === 'resume-designer-sync-state') {
         throw new DOMException('quota exceeded', 'QuotaExceededError');
       }
       disk.set(physical(k), String(v));
@@ -58,6 +62,7 @@ const AT = '2026-08-09T00:00:00.000Z';
 beforeEach(() => {
   disk.clear();
   failDataWrites = false;
+  failSyncStateWrites = false;
   disk.set(physical('resume-designer-active-profile'), PROFILE);
   disk.set(physical(DATA), JSON.stringify({
     variants: { 'v-1': { name: 'Design Engineer' } },
@@ -692,5 +697,22 @@ describe('persisted save stamping', () => {
     expect(notifyDirty).not.toHaveBeenCalled();
 
     error.mockRestore();
+  });
+
+  it('still reports a successful save when sync-state stamping throws', () => {
+    const notifyDirty = vi.fn();
+    registerPersistedSaveHandler(setPersistedSaveHandler);
+    setSyncDirtyNotifier(notifyDirty);
+    resumeStore.setData({ name: 'Edited' }, true, 'v-1');
+    initPersistence('v-1');
+    failSyncStateWrites = true;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      expect(resumeStore.saveNow()).toBe(true);
+      expect(notifyDirty).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
   });
 });

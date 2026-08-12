@@ -379,8 +379,12 @@ export function initPersistence(variantId) {
         // on silently evaporates on quit/reload.
         const ok = saveVariant(variantId, variant.name, data);
         if (ok) {
-          const unitIds = persistedSaveHandler?.(variantId) ?? [];
-          if (unitIds.length > 0) syncDirtyNotifier?.(unitIds);
+          try {
+            const unitIds = persistedSaveHandler?.(variantId) ?? [];
+            if (unitIds.length > 0) syncDirtyNotifier?.(unitIds);
+          } catch (err) {
+            console.error('[Persistence] sync bookkeeping failed after successful save:', err);
+          }
         } else {
           storageErrorToast(
             'Storage is full — your recent edits are NOT being saved. Free up '

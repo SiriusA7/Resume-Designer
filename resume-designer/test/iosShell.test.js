@@ -182,7 +182,7 @@ describe('createCommandDispatcher', () => {
     expect(selectVariant).toHaveBeenCalledWith({ type: 'selectVariant', id: 'b' });
   });
 
-  it('carries a handler return value in the reply', () => {
+  it('carries a plain-object handler return value in the reply', () => {
     const dispatch = createCommandDispatcher({
       syncUnit: () => ({ id: 'resume:v-1', payload: '{"name":"Ash"}' }),
     });
@@ -191,6 +191,15 @@ describe('createCommandDispatcher', () => {
       ok: true,
       result: { id: 'resume:v-1', payload: '{"name":"Ash"}' },
     });
+  });
+
+  it('omits result when a handler returns a Promise', () => {
+    const dispatch = createCommandDispatcher({ save: () => Promise.resolve(true) });
+
+    const reply = dispatch({ type: 'save' });
+
+    expect(reply).toEqual({ ok: true });
+    expect('result' in reply).toBe(false);
   });
 
   it('omits result when a handler returns undefined', () => {
@@ -793,6 +802,19 @@ describe('the Design sheet commands', () => {
     expect(handlers.cancelGenerate).toHaveBeenCalled();
   });
 
+  it('omits the async onboardingSaveKey result from the command reply', async () => {
+    const { send } = await mount();
+    const { publishOnboarding } = await import('../src/iosShell.js');
+    const validateKey = vi.fn(async () => true);
+    publishOnboarding({ open: true }, { validateKey });
+
+    const reply = send({ type: 'onboardingSaveKey', key: 'sk-test' });
+
+    expect(validateKey).toHaveBeenCalledWith('sk-test');
+    expect(reply).toEqual({ ok: true });
+    expect('result' in reply).toBe(false);
+  });
+
   it('passes a job draft back only when Back actually carries one', async () => {
     const { send } = await mount();
     const { publishOnboarding } = await import('../src/iosShell.js');
@@ -937,6 +959,17 @@ describe('the Design sheet commands', () => {
       result: unit,
     });
     expect(collectUnit).toHaveBeenCalledWith('resume:v-1');
+  });
+
+  it('returns null through the command reply for an unknown unit id', async () => {
+    const collectUnit = vi.fn(() => null);
+    const { send } = await mount({ collectUnit });
+
+    expect(send({ type: 'syncUnit', unitId: 'resume:unknown' })).toEqual({
+      ok: true,
+      result: null,
+    });
+    expect(collectUnit).toHaveBeenCalledWith('resume:unknown');
   });
 
   it('posts the dirty unit ids to the native sync engine', async () => {
