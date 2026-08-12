@@ -36,6 +36,7 @@ import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow
 import {
   initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
 } from './iosShell.js';
+import { collectUnits, applyUnits, parkLoser, touchUnit } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
 } from './designController.js';
@@ -581,6 +582,8 @@ export async function init() {
     // a new item is decided in iosShell.js — this only carries it.
     addListItem: (listPath, item) => store.addToArray(listPath, item),
     removeListItem: (listPath, index) => store.removeFromArray(listPath, index),
+    // CloudKit sync. The model owns what a unit is; the shell only carries it.
+    collectUnits, applyUnits, parkLoser, touchUnit,
     generateId,
     subscribeDocument: (cb) => store.subscribe(cb),
     // AI change review, routed to the live session rather than a copy of it.

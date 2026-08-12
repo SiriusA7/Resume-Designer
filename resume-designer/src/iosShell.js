@@ -1494,6 +1494,27 @@ export function initIOSShell(deps) {
     replayOnboarding: () => window.showOnboardingWizard?.(),
     exportBackup: () => deps.exportFullBackupWithFeedback(),
     importBackup: () => pickBackupFile(deps.importBackupFromFile),
+
+    // CloudKit sync. Swift calls these and never parses a payload: a unit is
+    // `{ id, kind, payload, modifiedAt }` and the payload is an opaque string.
+    // Units cross Swift -> JS as a JSON STRING because the command channel is
+    // a JS string literal — the same reason a picked file crosses as base64.
+    syncCollect: () => {
+      // Same guard `sharePdf`/`openNativePdfPreview` use before posting
+      // directly to the handler, rather than optional-chaining through it —
+      // one idiom for "tell Swift something" on this bridge.
+      if (!isNativeShellAvailable()) return;
+      window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
+        kind: 'syncUnits', units: deps.collectUnits(),
+      });
+    },
+    syncApply: ({ units }) => {
+      const parsed = JSON.parse(String(units ?? '[]'));
+      if (!Array.isArray(parsed)) throw new Error('syncApply needs an array of units');
+      deps.applyUnits(parsed);
+    },
+    syncParkLoser: ({ unitId, payload }) =>
+      deps.parkLoser(String(unitId ?? ''), String(payload ?? '')),
   });
 
   let pdfBusy = false;

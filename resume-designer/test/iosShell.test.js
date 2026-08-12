@@ -889,6 +889,38 @@ describe('the Design sheet commands', () => {
     expect(send({ type: 'clearDesignImage', target: 'header' })).toEqual({ ok: true });
     expect(deps.clearDesignImage).toHaveBeenCalledWith('header');
   });
+
+  it('hands Swift units it never has to understand', async () => {
+    const collectUnits = vi.fn(() => ([
+      { id: 'resume:v-1', kind: 'resume', payload: '{"name":"A"}', modifiedAt: '2026-08-09T00:00:00.000Z' },
+    ]));
+    const { send } = await mount({ collectUnits });
+    expect(send({ type: 'syncCollect' })).toEqual({ ok: true });
+    expect(collectUnits).toHaveBeenCalled();
+  });
+
+  it('applies units and parks a conflict loser', async () => {
+    const applyUnits = vi.fn(() => ({ applied: 1 }));
+    const parkLoser = vi.fn(() => true);
+    const { send } = await mount({ applyUnits, parkLoser });
+
+    send({ type: 'syncApply', units: '[{"id":"resume:v-1","kind":"resume","payload":"{}","modifiedAt":"2026-08-09T00:00:00.000Z"}]' });
+    expect(applyUnits).toHaveBeenCalledWith([
+      { id: 'resume:v-1', kind: 'resume', payload: '{}', modifiedAt: '2026-08-09T00:00:00.000Z' },
+    ]);
+
+    send({ type: 'syncParkLoser', unitId: 'resume:v-1', payload: '{"name":"lost"}' });
+    expect(parkLoser).toHaveBeenCalledWith('resume:v-1', '{"name":"lost"}');
+  });
+
+  it('reports malformed units as data rather than throwing', async () => {
+    const applyUnits = vi.fn();
+    const { send } = await mount({ applyUnits });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(send({ type: 'syncApply', units: 'not json' }).ok).toBe(false);
+    expect(applyUnits).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
 });
 
 describe('openNativePdfPreview', () => {
