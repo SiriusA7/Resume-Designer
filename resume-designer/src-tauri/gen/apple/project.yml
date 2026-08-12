@@ -103,6 +103,18 @@ targets:
         ITSAppUsesNonExemptEncryption: false
     entitlements:
       path: resume-designer_iOS/resume-designer_iOS.entitlements
+      # HAND-MAINTAINED. xcodegen writes the .entitlements file itself from
+      # this block whenever `properties` is present alongside `path` — never
+      # hand-edit the .entitlements file, `xcodegen generate` overwrites it.
+      # Container is iCloud.com.onpaper.app, NOT the desktop identifier
+      # com.resumedesigner.app: iOS and the container never shipped when that
+      # one was frozen, so the brand name was still free here.
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.onpaper.app
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
