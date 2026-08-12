@@ -23,6 +23,13 @@
  */
 
 /** Name of the `WKScriptMessageHandler` Swift registers. Must match OPShell.swift. */
+// The library's stats and timeline are the ONLY things this module imports.
+// `applicationStats.js` has no imports of its own — it is pure arithmetic over
+// a list of applications, tested standalone — so pulling it in keeps this
+// module free of anything with a side effect, which is the property that lets
+// every projection here be unit-tested without a DOM.
+import { computeStats, timelinePoints } from './applicationStats.js';
+
 export const SHELL_HANDLER = 'opShell';
 
 /** Class placed on `<html>` once the native shell owns the chrome. */
@@ -76,7 +83,7 @@ export function hasOpenModal(root = document) {
 export function buildSnapshot({
   currentId = null, list = [], zoom = 1, pdfBusy = false, modalOpen = false, settings,
   document: outline = null, chat = null, library = null, design = null, history = null,
-  jobs = null, profile = null, onboarding = null,
+  jobs = null, profile = null, onboarding = null, diff = null,
 } = {}) {
   const variants = (Array.isArray(list) ? list : [])
     .filter((v) => v && typeof v.id === 'string')
@@ -103,6 +110,58 @@ export function buildSnapshot({
     jobs,
     profile,
     onboarding,
+    diff,
+  };
+}
+
+/**
+ * Project the change-review dialog for the native shell. Pure.
+ *
+ * ONE projection for every entry point that opens it — chat's "Review changes",
+ * jobs tailoring, history compare, the inline "Full review" banner — because
+ * they all go through `showDiffView` into the same always-mounted DiffDialog.
+ *
+ * **Nothing here applies anything.** The native buttons call back into that
+ * dialog's own handlers, which is the whole point: tailoring goes through
+ * diffEngine and `applyChangesToStore`, NOT the inline-changes session, and its
+ * Apply All must batch through the ordered helper rather than loop — leaf paths
+ * are indexed against the PROPOSED array, so applying in the diff engine's
+ * emitted order corrupts them (`[A,B] -> [A,X,B']` writes `experience[2]`
+ * before the insert creates it). A second apply route here is exactly how
+ * someone accepts an edit that was never applied.
+ *
+ * `displayOld`/`displayNew` are the strings the engine already rendered for
+ * display, so Swift never sees a résumé value it would have to format.
+ */
+export function buildDiffReview({
+  open = false, title = '', changes = [], applied = [], rejected = [], busy = false,
+} = {}) {
+  const text = (v) => (typeof v === 'string' ? v : '');
+  const appliedSet = new Set(Array.isArray(applied) ? applied : []);
+  const rejectedSet = new Set(Array.isArray(rejected) ? rejected : []);
+
+  const rows = (Array.isArray(changes) ? changes : [])
+    .filter((c) => c && typeof c.path === 'string')
+    .map((c) => ({
+      path: c.path,
+      label: text(c.label) || c.path,
+      // "add" | "remove" | "modify", straight from DIFF_TYPES.
+      kind: text(c.type) || 'modify',
+      before: text(c.displayOld),
+      after: text(c.displayNew),
+      applied: appliedSet.has(c.path),
+      rejected: rejectedSet.has(c.path),
+    }));
+
+  return {
+    open: !!open,
+    title: text(title) || 'Suggested changes',
+    changes: rows,
+    // What Apply All would actually write. The native button says so, because
+    // "Apply all (3)" beside eleven cards is the only way to tell that eight
+    // were already decided.
+    pending: rows.filter((r) => !r.applied && !r.rejected).length,
+    busy: !!busy,
   };
 }
 
@@ -572,7 +631,8 @@ export function buildLibrary(results, variants, applications) {
   const byId = new Map((Array.isArray(variants) ? variants : []).map((v) => [v?.id, v]));
   const apps = Array.isArray(applications) ? applications : [];
 
-  return (Array.isArray(results) ? results : [])
+  const stats = computeStats(apps);
+  const entries = (Array.isArray(results) ? results : [])
     .filter((r) => r && typeof r.variantId === 'string')
     .map((r) => {
       const variant = byId.get(r.variantId) || {};
@@ -591,6 +651,44 @@ export function buildLibrary(results, variants, applications) {
         snippetSource: text(r.deepHits?.[0]?.source),
       };
     });
+
+  return {
+    entries,
+    // Raw numbers, not formatted strings: "2 days" and "43%" are locale
+    // decisions, and Swift is the side that knows the locale. `null` where
+    // there is nothing to divide by, which the native side renders as "—"
+    // rather than 0% — no responses yet is not a 0% response rate.
+    stats: {
+      sent: stats.sent,
+      responded: stats.responded,
+      responseRate: stats.responseRate,
+      interviewRate: stats.interviewRate,
+      medianDaysToResponse: stats.medianDaysToResponse,
+      perVariant: (stats.perVariant || []).map((row) => ({
+        variantId: text(row.variantId),
+        variantName: text(row.variantName) || 'Untitled resume',
+        sent: row.sent,
+        responded: row.responded,
+        interviewed: row.interviewed,
+      })),
+    },
+    // NEWEST first, the reverse of `timelinePoints`. The web draws a horizontal
+    // axis where left-to-right is oldest-to-newest; the native tab is a
+    // scrolling list, and a list you read top-down should open on what just
+    // happened rather than on your first-ever application.
+    //
+    // Flat, with the month grouping left to Swift: which month a date falls in
+    // — and what that month is called — is a locale question.
+    timeline: timelinePoints(apps).reverse().map((p) => ({
+      id: text(p.id),
+      variantId: text(p.variantId),
+      variantName: text(p.variantName) || 'Untitled resume',
+      at: text(p.at),
+      status: text(p.status),
+      title: text(p.title),
+      company: text(p.company),
+    })),
+  };
 }
 
 /**
@@ -1018,6 +1116,22 @@ let onboardingView = null;
 // closed, so its handlers are always reachable.
 let onboardingHandlers = {};
 
+// The change-review dialog's last projection, and its handlers. Same
+// arrangement as the wizard, and available for the same reason: DiffDialog is
+// mounted from app start and merely renders nothing while closed.
+let diffView = null;
+let diffHandlers = {};
+
+/**
+ * Push the change-review dialog's state to the native shell. Same contract as
+ * `publishOnboarding` below.
+ */
+export function publishDiffReview(state, handlers) {
+  diffView = state ? buildDiffReview(state) : null;
+  diffHandlers = handlers || {};
+  publish();
+}
+
 /**
  * Push the wizard's state to the native shell.
  *
@@ -1119,6 +1233,14 @@ export function initIOSShell(deps) {
     onboardingFinish: () => onboardingHandlers.finish?.(),
     onboardingOpenProfile: () => onboardingHandlers.openProfile?.(),
     onboardingDismiss: () => onboardingHandlers.dismiss?.(),
+
+    // Reviewing proposed changes. Every one calls DiffDialog's OWN handler, so
+    // the apply route stays single — see buildDiffReview.
+    diffApply: ({ path }) => diffHandlers.applyChange?.(String(path ?? '')),
+    diffReject: ({ path }) => diffHandlers.rejectChange?.(String(path ?? '')),
+    diffApplyAll: () => diffHandlers.applyAll?.(),
+    diffRejectAll: () => diffHandlers.rejectAll?.(),
+    diffClose: () => diffHandlers.close?.(),
     renameVariant: () => ask('rd:variant-rename'),
     duplicateVariant: () => duplicateVariant(),
     deleteVariant: () => ask('rd:variant-delete'),
@@ -1444,6 +1566,8 @@ export function initIOSShell(deps) {
           // being polled, so there is nothing to build here and nothing that
           // can throw. Null while it is closed.
           onboarding: onboardingView,
+          // Already built — pushed by DiffDialog rather than polled.
+          diff: diffView,
           chat: streamChat
             ? project('chat', () => ({
               ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()),

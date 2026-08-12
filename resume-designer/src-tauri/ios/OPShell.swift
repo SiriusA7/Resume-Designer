@@ -48,7 +48,12 @@ struct ShellSnapshot: Decodable, Equatable {
   /// `nil` while the chat sheet is closed. Same reasoning as `document`.
   var chat: ChatView?
   /// `nil` while the library is closed.
-  var library: [LibraryEntry]?
+  /// `nil` while the library is closed. An object rather than a bare list of
+  /// entries: the sheet has three tabs, and the stats and timeline are derived
+  /// from the SAME applications the entries are, so splitting them across
+  /// sibling keys would let them disagree about a résumé that changed
+  /// underneath.
+  var library: LibraryView?
 
   /// `nil` while the history sheet is closed. Mirrors `buildHistory()`.
   var history: History?
@@ -66,6 +71,43 @@ struct ShellSnapshot: Decodable, Equatable {
   /// run and the header's "New resume" and it decides which. So this arriving
   /// non-nil IS the instruction to present. Lives in OPOnboarding.swift.
   var onboarding: OnboardingView?
+
+  /// The change-review dialog, or `nil` while it is closed. Like the wizard it
+  /// has no open command: the WEB dialog decides, because every entry point
+  /// (chat's Review changes, jobs tailoring, history compare, the inline
+  /// banner) opens the same one.
+  var diff: DiffReview?
+
+  /// Mirrors `buildDiffReview()` in src/iosShell.js.
+  ///
+  /// **Nothing here applies anything.** The buttons call back into the web
+  /// dialog's own handlers: tailoring goes through diffEngine and
+  /// `applyChangesToStore`, and Apply All must batch through the ordered
+  /// helper rather than loop, because leaf paths are indexed against the
+  /// PROPOSED array. That sequence exists once, over there.
+  struct DiffReview: Decodable, Equatable {
+    let open: Bool
+    let title: String
+    let changes: [Change]
+    /// What Apply All would actually write — not `changes.count`, which
+    /// includes everything already decided.
+    let pending: Int
+    let busy: Bool
+
+    struct Change: Decodable, Equatable, Identifiable {
+      let path: String
+      let label: String
+      /// "add" | "remove" | "modify"
+      let kind: String
+      /// Already rendered for display by the diff engine, so nothing here
+      /// formats a résumé value.
+      let before: String
+      let after: String
+      let applied: Bool
+      let rejected: Bool
+      var id: String { path }
+    }
+  }
 
   struct History: Decodable, Equatable {
     /// The résumé these versions belong to. History is per-résumé and the sheet
@@ -93,6 +135,47 @@ struct ShellSnapshot: Decodable, Equatable {
     struct Diff: Decodable, Equatable {
       let label: String
       let changes: [ChatView.PendingChange]
+    }
+  }
+
+  /// Mirrors `buildLibrary()` in src/iosShell.js.
+  struct LibraryView: Decodable, Equatable {
+    let entries: [LibraryEntry]
+    let stats: Stats
+    /// NEWEST first, the reverse of the web's left-to-right axis. Flat: which
+    /// month a date falls in, and what that month is called, is a locale
+    /// question and belongs on this side.
+    let timeline: [TimelinePoint]
+
+    struct Stats: Decodable, Equatable {
+      let sent: Int
+      let responded: Int
+      /// `nil` where there is nothing to divide by. Rendered as "—", not 0% —
+      /// no replies yet is not a 0% response rate.
+      let responseRate: Double?
+      let interviewRate: Double?
+      let medianDaysToResponse: Double?
+      let perVariant: [PerVariant]
+
+      struct PerVariant: Decodable, Equatable, Identifiable {
+        let variantId: String
+        let variantName: String
+        let sent: Int
+        let responded: Int
+        let interviewed: Int
+        var id: String { variantId }
+      }
+    }
+
+    struct TimelinePoint: Decodable, Equatable, Identifiable {
+      let id: String
+      let variantId: String
+      let variantName: String
+      /// ISO 8601. Parsed here so the grouping and the formatting agree.
+      let at: String
+      let status: String
+      let title: String
+      let company: String
     }
   }
 
@@ -1103,6 +1186,15 @@ private struct ShellView: View {
         .fullScreenCover(isPresented: .constant(snapshot.onboarding?.open == true)) {
           if let wizard = snapshot.onboarding {
             OnboardingSheet(model: model, view: wizard)
+          }
+        }
+        // The change review, opened by the PAGE the same way — every entry
+        // point routes through one always-mounted web dialog, so its own
+        // `open` is the signal. A sheet rather than a cover: unlike a first
+        // run this is dismissible, and closing it decides nothing.
+        .sheet(isPresented: .constant(snapshot.diff?.open == true)) {
+          if let review = snapshot.diff {
+            DiffReviewSheet(model: model, review: review)
           }
         }
         // The one sheet the PAGE opens: export generates for a second or two
@@ -3322,51 +3414,437 @@ private struct ChangeReviewSheet: View {
 /// Deep search is a toggle because it is materially slower: it flattens every
 /// résumé's text and every attached job description, and on a phone that is
 /// worth asking for rather than doing on every keystroke.
+/// The application timeline.
+///
+/// The web draws a Gantt: one lane per résumé, dots on a shared horizontal
+/// axis. That does not survive a 402pt screen — its lane-label column alone is
+/// 148px, leaving a couple of hundred points for what can be a year of range,
+/// and the dots land on top of each other. Same data, read top-down instead:
+/// newest first, grouped by month, one row per application. The résumé each
+/// one used is the secondary label rather than the axis.
+private struct LibraryTimeline: View {
+  @ObservedObject var model: ShellModel
+  let points: [ShellSnapshot.LibraryView.TimelinePoint]
+  let onOpen: () -> Void
+
+  var body: some View {
+    if points.isEmpty {
+      ContentUnavailableView(
+        "No applications yet",
+        systemImage: "clock",
+        description: Text(
+          "Tailor a résumé against a job, or add an application from a "
+          + "résumé, and it shows up here."
+        )
+      )
+    } else {
+      List {
+        ForEach(months, id: \.key) { month in
+          Section(month.title) {
+            ForEach(month.points) { point in
+              Button {
+                model.send("openVariant", ["id": point.variantId])
+                onOpen()
+              } label: {
+                row(point)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func row(_ point: ShellSnapshot.LibraryView.TimelinePoint) -> some View {
+    HStack(alignment: .top, spacing: 12) {
+      Circle()
+        .fill(color(for: point.status))
+        .frame(width: 9, height: 9)
+        .padding(.top, 5)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(point.title.isEmpty ? "Untitled role" : point.title)
+          .font(.subheadline.weight(.medium))
+        if !point.company.isEmpty {
+          Text(point.company).font(.footnote).foregroundStyle(.secondary)
+        }
+        HStack(spacing: 6) {
+          Text(point.variantName)
+          if !point.status.isEmpty {
+            Text("·")
+            Text(Self.label(for: point.status))
+          }
+        }
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+      }
+      Spacer(minLength: 0)
+      Text(dayLabel(point.at))
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+    }
+    .contentShape(.rect)
+  }
+
+  /// Muted for a draft that was never sent, so a prepared application does not
+  /// read as an outcome — the same distinction the web makes by dimming it.
+  ///
+  /// The status set is closed and lives in `APPLICATION_STATUSES`
+  /// (src/applications.js). It is matched here rather than sent as a colour
+  /// because a colour is a rendering decision, and rather than imported
+  /// because `applications.js` pulls in the store and its side effects, which
+  /// would cost `iosShell.js` the purity its projections are tested on.
+  private func color(for status: String) -> Color {
+    switch status {
+    case "prepared": return .secondary
+    case "interview", "offer": return .green
+    case "rejected", "no_response": return .red
+    case "applied", "heard_back": return .blue
+    default: return .secondary
+    }
+  }
+
+  /// Mirrors `STATUS_LABELS` in src/applications.js. Not `.capitalized`, which
+  /// renders `heard_back` as "Heard_back".
+  private static func label(for status: String) -> String {
+    switch status {
+    case "prepared": return "Prepared"
+    case "applied": return "Applied"
+    case "heard_back": return "Heard back"
+    case "interview": return "Interview"
+    case "offer": return "Offer"
+    case "rejected": return "Rejected"
+    case "no_response": return "No response"
+    default: return status
+    }
+  }
+
+  private struct Month: Identifiable {
+    let key: String
+    let title: String
+    let points: [ShellSnapshot.LibraryView.TimelinePoint]
+    var id: String { key }
+  }
+
+  /// Grouped here rather than in the projection: which month a timestamp falls
+  /// in depends on the device's calendar and time zone, and what that month is
+  /// called depends on its locale.
+  private var months: [Month] {
+    var order: [String] = []
+    var grouped: [String: [ShellSnapshot.LibraryView.TimelinePoint]] = [:]
+    var titles: [String: String] = [:]
+    for point in points {
+      guard let date = Self.parse(point.at) else { continue }
+      let key = Self.keyFormatter.string(from: date)
+      if grouped[key] == nil {
+        order.append(key)
+        titles[key] = Self.monthFormatter.string(from: date)
+      }
+      grouped[key, default: []].append(point)
+    }
+    return order.map { Month(key: $0, title: titles[$0] ?? $0, points: grouped[$0] ?? []) }
+  }
+
+  private func dayLabel(_ iso: String) -> String {
+    guard let date = Self.parse(iso) else { return "" }
+    return Self.dayFormatter.string(from: date)
+  }
+
+  /// Two parsers: `appliedAt` carries fractional seconds and `createdAt` does
+  /// not, and ISO8601DateFormatter fails outright on the option it was not
+  /// given rather than ignoring it.
+  private static func parse(_ iso: String) -> Date? {
+    isoWithFraction.date(from: iso) ?? isoPlain.date(from: iso)
+  }
+
+  private static let isoWithFraction: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+  }()
+  private static let isoPlain = ISO8601DateFormatter()
+  private static let keyFormatter: DateFormatter = {
+    let f = DateFormatter()
+    // Fixed, because this one is a grouping KEY and must not change with the
+    // locale — only the title the user reads does.
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM"
+    return f
+  }()
+  private static let monthFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.setLocalizedDateFormatFromTemplate("MMMM yyyy")
+    return f
+  }()
+  private static let dayFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.setLocalizedDateFormatFromTemplate("MMM d")
+    return f
+  }()
+}
+
+/// Four outcome tiles and a per-résumé comparison. A strip, not a dashboard —
+/// the same scope the web keeps.
+private struct LibraryStats: View {
+  let stats: ShellSnapshot.LibraryView.Stats?
+
+  var body: some View {
+    if let stats, stats.sent > 0 {
+      List {
+        Section {
+          LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            tile("Applications sent", "\(stats.sent)")
+            tile("Response rate", percent(stats.responseRate))
+            tile("Interview rate", percent(stats.interviewRate))
+            tile("Median time to response", days(stats.medianDaysToResponse))
+          }
+          .padding(.vertical, 4)
+        }
+        .listRowBackground(Color.clear)
+
+        if !stats.perVariant.isEmpty {
+          Section("By résumé") {
+            ForEach(stats.perVariant) { row in
+              HStack(alignment: .firstTextBaseline) {
+                Text(row.variantName).lineLimit(1)
+                Spacer(minLength: 12)
+                Text("\(row.responded)/\(row.sent) responses · \(row.interviewed) interview\(row.interviewed == 1 ? "" : "s")")
+                  .font(.caption.monospacedDigit())
+                  .foregroundStyle(.secondary)
+              }
+            }
+          }
+        }
+      }
+    } else {
+      ContentUnavailableView(
+        "Nothing to measure yet",
+        systemImage: "chart.bar",
+        description: Text("Send an application and its outcome shows up here.")
+      )
+    }
+  }
+
+  private func tile(_ label: String, _ value: String) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(value).font(.title2.weight(.semibold).monospacedDigit())
+      Text(label).font(.caption2).foregroundStyle(.secondary)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(12)
+    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+  }
+
+  /// "—" rather than 0%: no replies yet is not a 0% response rate, and the
+  /// projection sends null precisely so the two stay distinguishable.
+  private func percent(_ value: Double?) -> String {
+    guard let value else { return "—" }
+    return "\(Int((value * 100).rounded()))%"
+  }
+
+  private func days(_ value: Double?) -> String {
+    guard let value else { return "—" }
+    if value < 1 { return "<1 day" }
+    let n = Int(value.rounded())
+    return "\(n) day\(n == 1 ? "" : "s")"
+  }
+}
+
+/// Reviewing the AI's proposed changes.
+///
+/// **Nothing applies here.** Every button sends a command that calls the web
+/// dialog's own handler — which is the whole design: tailoring goes through
+/// diffEngine and `applyChangesToStore` rather than the inline-changes
+/// session, and Apply All has to batch through the ordered helper rather than
+/// loop, because leaf paths are indexed against the PROPOSED array. Rebuilding
+/// any of that here is how someone accepts an edit that was never applied.
+///
+/// A decided change stays on screen, dimmed, rather than vanishing: a card
+/// that disappears on Apply leaves no way to see what you just agreed to.
+private struct DiffReviewSheet: View {
+  @ObservedObject var model: ShellModel
+  let review: ShellSnapshot.DiffReview
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if review.changes.isEmpty {
+          ContentUnavailableView(
+            "No changes to review",
+            systemImage: "checkmark.circle",
+            description: Text("Nothing was proposed for this résumé.")
+          )
+        } else {
+          List {
+            ForEach(review.changes) { change in
+              Section {
+                card(change)
+              } header: {
+                HStack(spacing: 6) {
+                  Image(systemName: icon(for: change.kind))
+                    .foregroundStyle(tint(for: change.kind))
+                  Text(change.label)
+                  Spacer(minLength: 0)
+                  if change.applied {
+                    Text("Applied").foregroundStyle(.green)
+                  } else if change.rejected {
+                    Text("Rejected").foregroundStyle(.secondary)
+                  }
+                }
+                .font(.caption)
+                .textCase(nil)
+              }
+            }
+          }
+        }
+      }
+      .navigationTitle(review.title)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { model.send("diffClose") }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          // Counted, because "Apply all" beside eleven cards gives no way to
+          // tell that eight of them were already decided.
+          Button("Apply all (\(review.pending))") { model.send("diffApplyAll") }
+            .disabled(review.pending == 0)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func card(_ change: ShellSnapshot.DiffReview.Change) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      // The old value is always struck: whether it is being replaced or
+      // removed outright, it is what will no longer be there.
+      if !change.before.isEmpty {
+        value(change.before, tint: .red, strikethrough: true)
+      }
+      if !change.after.isEmpty {
+        value(change.after, tint: .green, strikethrough: false)
+      }
+      if change.before.isEmpty && change.after.isEmpty {
+        Text("(empty)").font(.footnote).italic().foregroundStyle(.secondary)
+      }
+
+      if !change.applied && !change.rejected {
+        HStack(spacing: 10) {
+          Button("Reject") { model.send("diffReject", ["path": change.path]) }
+            .buttonStyle(.bordered)
+          Button("Apply") { model.send("diffApply", ["path": change.path]) }
+            .buttonStyle(.borderedProminent)
+          Spacer(minLength: 0)
+        }
+        .controlSize(.small)
+      }
+    }
+    .padding(.vertical, 4)
+    .opacity(change.applied || change.rejected ? 0.5 : 1)
+  }
+
+  private func value(_ text: String, tint: Color, strikethrough: Bool) -> some View {
+    Text(text)
+      .font(.footnote)
+      .strikethrough(strikethrough, color: tint)
+      .foregroundStyle(strikethrough ? Color.secondary : Color.primary)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(8)
+      .background(tint.opacity(0.12), in: .rect(cornerRadius: 8))
+  }
+
+  private func icon(for kind: String) -> String {
+    switch kind {
+    case "add": return "plus.circle.fill"
+    case "remove": return "minus.circle.fill"
+    default: return "pencil.circle.fill"
+    }
+  }
+
+  private func tint(for kind: String) -> Color {
+    switch kind {
+    case "add": return .green
+    case "remove": return .red
+    default: return .blue
+    }
+  }
+}
+
 private struct LibrarySheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
 
   @State private var query = ""
   @State private var deep = false
+  @State private var tab = Tab.resumes
 
-  private var entries: [ShellSnapshot.LibraryEntry] { model.snapshot.library ?? [] }
+  private enum Tab: String, CaseIterable, Identifiable {
+    case resumes = "Resumes"
+    case timeline = "Timeline"
+    case stats = "Stats"
+    var id: String { rawValue }
+  }
+
+  private var library: ShellSnapshot.LibraryView? { model.snapshot.library }
+  private var entries: [ShellSnapshot.LibraryEntry] { library?.entries ?? [] }
 
   var body: some View {
     NavigationStack {
-      List {
-        Section {
-          Toggle("Search inside résumés and job descriptions", isOn: $deep)
-            .font(.subheadline)
-            .onChange(of: deep) { _, _ in search() }
-        }
-        Section {
-          if entries.isEmpty {
-            Text(query.isEmpty ? "No resumes yet." : "No matches.")
-              .foregroundStyle(.secondary)
-          } else {
-            ForEach(entries) { entry in
-              Button {
-                model.send("openVariant", ["id": entry.id])
-                dismiss()
-              } label: {
-                row(entry)
-              }
-              .buttonStyle(.plain)
-            }
-          }
-        } header: {
-          Text(entries.count == 1 ? "1 resume" : "\(entries.count) resumes")
+      Group {
+        switch tab {
+        case .resumes: resumeList
+        case .timeline: LibraryTimeline(model: model, points: library?.timeline ?? []) { dismiss() }
+        case .stats: LibraryStats(stats: library?.stats)
         }
       }
-      .searchable(text: $query, prompt: "Search resumes")
-      .onChange(of: query) { _, _ in search() }
       .navigationTitle("All resumes")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        ToolbarItem(placement: .principal) {
+          Picker("View", selection: $tab) {
+            ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+          }
+          .pickerStyle(.segmented)
+          .frame(width: 260)
+        }
       }
       .onAppear { search() }
     }
+  }
+
+  private var resumeList: some View {
+    List {
+      Section {
+        Toggle("Search inside résumés and job descriptions", isOn: $deep)
+          .font(.subheadline)
+          .onChange(of: deep) { _, _ in search() }
+      }
+      Section {
+        if entries.isEmpty {
+          Text(query.isEmpty ? "No resumes yet." : "No matches.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(entries) { entry in
+            Button {
+              model.send("openVariant", ["id": entry.id])
+              dismiss()
+            } label: {
+              row(entry)
+            }
+            .buttonStyle(.plain)
+          }
+        }
+      } header: {
+        Text(entries.count == 1 ? "1 resume" : "\(entries.count) resumes")
+      }
+    }
+    // Only the résumé list is searchable — the search filters ENTRIES, and
+    // leaving the field up on a tab it does not affect reads as a broken
+    // search rather than an inapplicable one.
+    .searchable(text: $query, prompt: "Search resumes")
+    .onChange(of: query) { _, _ in search() }
   }
 
   private func row(_ entry: ShellSnapshot.LibraryEntry) -> some View {
