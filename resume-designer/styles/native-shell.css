@@ -58,6 +58,17 @@ html.op-native-shell .onboarding-overlay {
   display: none;
 }
 
+/* The change-review dialog, for the same reason and by the same arrangement:
+   drawn natively, but the component keeps running because it owns the apply
+   sequence every entry point depends on.
+
+   Scoped to this dialog by its own id rather than to `[role="dialog"]` — the
+   other web dialogs are still the real UI on iOS, and hiding them all would
+   leave taps landing on nothing. */
+html.op-native-shell #diff-dialog-content {
+  display: none;
+}
+
 /* The two floating panel toggles become buttons in the native bottom toolbar.
    These are the round buttons that sat on top of the résumé's name. */
 html.op-native-shell .chat-panel-toggle,

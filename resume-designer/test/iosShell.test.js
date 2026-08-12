@@ -80,6 +80,7 @@ describe('buildSnapshot', () => {
       jobs: null,
       profile: null,
       onboarding: null,
+      diff: null,
     });
   });
 });
