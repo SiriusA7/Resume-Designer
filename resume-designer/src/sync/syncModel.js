@@ -14,12 +14,17 @@ import { getActiveProfileId } from '../profiles.js';
 import { store } from '../store.js';
 import { classifyKey } from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
-import { mergeTokenUsage, resolveConflict } from './syncMerge.js';
+import { mergeTokenUsage, mergeHistory, resolveConflict } from './syncMerge.js';
 
 const DATA_KEY = 'resume-designer-data';
 const TOKEN_KEY = 'resume-designer-token-usage';
 const STATE_KEY = 'resume-designer-sync-state';
 const KEY_UNIT_PREFIX = 'key:';
+// The blob's non-résumé fields — `settings` and `userProfile` — as splitData
+// emits them. Kept in step with syncUnits.js's own literal by construction:
+// `landsAsDataField` asks mergeData what it accepts rather than repeating the
+// list of fields.
+const DATA_UNIT_PREFIX = 'data:';
 // Undo/redo history key prefix. Re-exported from profileKeys.js rather than
 // re-declared, same as store.js's own HISTORY_KEY_PREFIX: it has to stay
 // byte-identical to what store.js reads (HISTORY_KEY_PREFIX + variantId), or
@@ -71,6 +76,20 @@ function parsesAsJSON(payload) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether `mergeData` will actually take a `data:` unit.
+ *
+ * The set of top-level fields it accepts is private to syncUnits.js, and a copy
+ * of that list here is how the two drift: `data:currentVariantId` is refused
+ * there ON PURPOSE — which résumé is open is a property of a device — and a
+ * stale copy that let it through would land another device's open document AND
+ * count it as applied. So mergeData is asked instead: merging a unit into an
+ * empty blob touches nothing but `variants` unless the field is one it knows.
+ */
+function landsAsDataField(unit) {
+  return Object.keys(mergeData({}, [unit])).some((field) => field !== 'variants');
 }
 
 /**
@@ -142,22 +161,33 @@ export function collectUnits() {
 /**
  * Land units that arrived from another device.
  *
- * Résumé units are merged into the blob so `currentVariantId` — which never
- * travelled — is left alone. Token usage takes the union rule. A unit naming a
- * device-local key is refused: nothing should have sent it, and honouring it
- * would let one device's zoom overwrite another's.
+ * Résumé and `data:` units are merged into the blob so `currentVariantId` —
+ * which never travelled — is left alone. Token usage and version history, the
+ * two units that accumulate, take the union rule; everything else is a
+ * snapshot and is written as it arrived. A unit naming a device-local key is
+ * refused: nothing should have sent it, and honouring it would let one device's
+ * zoom overwrite another's.
  */
 export function applyUnits(units) {
   const incoming = Array.isArray(units) ? units : [];
-  const resumeUnits = incoming.filter((u) => u?.id?.startsWith(RESUME_UNIT_PREFIX));
   let applied = 0;
 
+  // Both halves of the blob, not just the résumés: `data:settings` and
+  // `data:userProfile` are emitted by splitData and reassembled by mergeData,
+  // but matching only `resume:` here dropped them silently — settings synced
+  // out of this device and never into it.
+  //
   // `mergeData` silently skips a payload that is not a string or will not parse
-  // (syncUnits.js), so `resumeUnits.length` reports records that never landed —
-  // and this count is how a caller tells a no-op from a failure. Filtering by
-  // the same rule makes the number the truth, and leaves the blob untouched
-  // when nothing at all can land.
-  const landing = resumeUnits.filter((unit) => parsesAsJSON(unit.payload));
+  // (syncUnits.js), and skips a `data:` field it does not know, so the offered
+  // count reports records that never landed — and this count is how a caller
+  // tells a no-op from a failure. Filtering by the same rules makes the number
+  // the truth, and leaves the blob untouched when nothing at all can land.
+  const landing = incoming.filter((unit) => {
+    const id = typeof unit?.id === 'string' ? unit.id : '';
+    if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) return false;
+    if (!parsesAsJSON(unit.payload)) return false;
+    return id.startsWith(RESUME_UNIT_PREFIX) || landsAsDataField(unit);
+  });
   if (landing.length > 0) {
     const blob = readJSON(DATA_KEY, {});
     appStorage.setItem(DATA_KEY, JSON.stringify(mergeData(blob, landing)));
@@ -183,6 +213,26 @@ export function applyUnits(units) {
       }
       const merged = mergeTokenUsage(readJSON(TOKEN_KEY, null), remote);
       appStorage.setItem(TOKEN_KEY, JSON.stringify(merged));
+    } else if (key.startsWith(HISTORY_PREFIX)) {
+      // Version history accumulates, so it merges rather than replaces — and
+      // it is the one unit where replacing was self-defeating: a `setItem`
+      // here overwrote local history wholesale, destroying a loser parkLoser
+      // had just parked to make newer-wins safe.
+      let remote;
+      try {
+        remote = JSON.parse(unit.payload);
+      } catch {
+        continue;
+      }
+      const variantId = key.slice(HISTORY_PREFIX.length);
+      // The loaded variant's history lives in store.js's in-memory array and
+      // saveHistory rewrites the whole key from it, so a merge written to
+      // storage here is undone by the next edit — the same trap parkLoser
+      // documents, and the same answer: hand it to the store, which is the
+      // only thing that can tell (currentVariantId is private to it).
+      if (!store.adoptHistory(variantId, remote)) {
+        appStorage.setItem(key, JSON.stringify(mergeHistory(readJSON(key, null), remote)));
+      }
     } else {
       appStorage.setItem(key, unit.payload);
     }
@@ -209,7 +259,7 @@ export function applyUnits(units) {
  *
  * WHERE in that array the entry goes decides whether it survives at all, and
  * both halves of this function are written to the same rule — the entry goes in
- * just BEFORE `historyIndex`, never after it:
+ * BELOW `historyIndex`, at `historyIndex - 1`:
  *
  * - Everything after `historyIndex` is store.js's redo future, and pushHistory
  *   (store.js) splices the future away on the very next local edit. Appending
@@ -218,6 +268,11 @@ export function applyUnits(units) {
  * - In the past it is out of that splice's reach, and the index still points at
  *   the same ENTRY it pointed at before, so the live document's notion of
  *   "current" is unchanged. Only its numeric position moved.
+ * - Below the index rather than AT it, because the index moves up with it: an
+ *   entry at `historyIndex` becomes the entry one undo away, which would hand
+ *   the user the résumé their newer edit had just beaten. See
+ *   store.js's adoptHistoryEntry, which the loaded-variant path shares this
+ *   rule with, for why it is not index 0 either.
  *
  * That is necessary but not sufficient for the variant the app currently has
  * open: store.js holds that variant's history in memory and saveHistory rewrites
@@ -259,7 +314,7 @@ export function parkLoser(unitId, payload) {
   // ?? history.length - 1`) so a variant with no recorded index yet — or none
   // at all — comes out exactly as store.js would compute it on load.
   const current = Number.isInteger(raw?.historyIndex) ? raw.historyIndex : existingHistory.length - 1;
-  const at = Math.max(0, current);
+  const at = Math.max(0, current - 1);
 
   const history = [...existingHistory.slice(0, at), entry, ...existingHistory.slice(at)];
   appStorage.setItem(key, JSON.stringify({ history, historyIndex: Math.max(0, current + 1) }));

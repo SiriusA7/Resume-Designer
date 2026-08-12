@@ -174,15 +174,78 @@ describe('applyUnits', () => {
     }
   });
 
-  it('lands a version-history unit, the key a parked loser reaches another device through', () => {
+  it('unions a version-history unit into local history instead of overwriting the loser parked in it', () => {
     // Version history syncs precisely so a conflict's losing edit is not
-    // stranded on the device that received it (syncKeys.js).
+    // stranded on the device that received it (syncKeys.js) — and it is
+    // append-shaped, so a whole-key setItem here destroyed exactly that: the
+    // loser parkLoser had just written, gone the moment the other device's
+    // history landed.
+    disk.set(physical('resume-designer-history-v-9'), JSON.stringify({
+      history: [{ data: { name: 'The version that lost' }, timestamp: '2026-08-09T00:00:00.000Z', description: 'Conflicting edit synced from another device', changeType: 'sync-conflict' }],
+      historyIndex: 0,
+    }));
     const payload = JSON.stringify({
-      history: [{ data: { name: 'The version that lost' }, timestamp: AT, description: 'Conflicting edit synced from another device', changeType: 'sync-conflict' }],
+      history: [{ data: { name: 'Edited on the iPhone' }, timestamp: '2026-08-08T00:00:00.000Z', description: 'Edit', changeType: 'edit' }],
       historyIndex: 0,
     });
     expect(applyUnits([{ id: 'key:resume-designer-history-v-9', kind: 'plain', payload, modifiedAt: AT }]).applied).toBe(1);
-    expect(disk.get(physical('resume-designer-history-v-9'))).toBe(payload);
+
+    const stored = JSON.parse(disk.get(physical('resume-designer-history-v-9')));
+    expect(stored.history.map((e) => e.changeType)).toEqual(['edit', 'sync-conflict']);
+    expect(stored.historyIndex).toBe(1);
+  });
+
+  it('lands a history unit for the LOADED variant through the store, so the next edit does not undo the merge', () => {
+    // store.js holds the loaded variant's history in memory and saveHistory
+    // rewrites the whole key from that array — which never saw a merge written
+    // straight to storage. So a storage-only merge survives exactly until the
+    // next keystroke, which is the same trap parkLoser documents.
+    resumeStore.setData({ name: 'Loaded' }, true, 'v-loaded');
+    applyUnits([{
+      id: 'key:resume-designer-history-v-loaded',
+      kind: 'plain',
+      payload: JSON.stringify({
+        history: [{ data: { name: 'From the other device' }, timestamp: '2026-08-08T00:00:00.000Z', description: 'Edit on iPhone', changeType: 'edit' }],
+        historyIndex: 0,
+      }),
+      modifiedAt: AT,
+    }]);
+
+    resumeStore.update('name', 'Edited after the sync');
+
+    const stored = JSON.parse(disk.get(physical('resume-designer-history-v-loaded')));
+    expect(stored.history.map((e) => e.description)).toContain('Edit on iPhone');
+    // The merge archives; it does not restore. The document is still the local
+    // one, and the redo future is empty so the edit above spliced nothing away.
+    expect(resumeStore.getData().name).toBe('Edited after the sync');
+    expect(stored.historyIndex).toBe(stored.history.length - 1);
+  });
+
+  it('lands the blob’s settings and userProfile units, which used to be dropped in silence', () => {
+    // splitData emits them and mergeData reassembles them, but applyUnits
+    // matched only `resume:` and `key:` — so settings and the user profile
+    // synced OUT of a device and never back into it.
+    const { applied } = applyUnits([
+      { id: 'data:settings', kind: 'plain', payload: JSON.stringify({ pageSize: 'a4' }), modifiedAt: AT },
+      { id: 'data:userProfile', kind: 'plain', payload: JSON.stringify({ name: 'Ash' }), modifiedAt: AT },
+    ]);
+
+    expect(applied).toBe(2);
+    const blob = JSON.parse(disk.get(physical(DATA)));
+    expect(blob.settings).toEqual({ pageSize: 'a4' });
+    expect(blob.userProfile).toEqual({ name: 'Ash' });
+    // Reassembly leaves the rest of the blob alone, device-local field included.
+    expect(blob.currentVariantId).toBe('v-1');
+    expect(Object.keys(blob.variants)).toEqual(['v-1']);
+  });
+
+  it('refuses a data unit for a field that never travels, and does not count it', () => {
+    // `currentVariantId` is absent from splitData's list on purpose: which
+    // résumé is open is a property of a device. mergeData refuses it, so the
+    // count here has to refuse it too rather than report a phantom apply.
+    const { applied } = applyUnits([{ id: 'data:currentVariantId', kind: 'plain', payload: '"v-2"', modifiedAt: AT }]);
+    expect(applied).toBe(0);
+    expect(JSON.parse(disk.get(physical(DATA))).currentVariantId).toBe('v-1');
   });
 
   it('lands the units around a corrupt payload, and counts only the ones that landed', () => {
@@ -258,6 +321,10 @@ describe('parkLoser', () => {
     // store.js's pushHistory splices away on the next edit.
     const parkedAt = historyData.history.findIndex((e) => e.changeType === 'sync-conflict');
     expect(parkedAt).toBeLessThan(historyData.historyIndex);
+    // Not the entry one undo away either — the index moves up with the park, so
+    // parking AT the index makes the loser what the next Cmd+Z restores. Same
+    // rule as store.js's adoptHistoryEntry, which the loaded variant takes.
+    expect(historyData.history[historyData.historyIndex - 1].description).toBe('Older');
   });
 
   it('keeps a parked loser through the next local edit, which is the entire point of parking it', () => {
@@ -280,6 +347,26 @@ describe('parkLoser', () => {
     // The winner is still what the document shows — parking archives, it does
     // not restore.
     expect(resumeStore.getData().name).toBe('Edited after the park');
+  });
+
+  it('parks out of undo’s way, so one Cmd+Z does not restore another device’s rejected résumé', () => {
+    // Landing the entry AT historyIndex put it one slot below the index once
+    // the index moved up to keep pointing at the same entry — which is the undo
+    // target. A park would then hand the user the version their newer edit had
+    // just beaten, on the next Cmd+Z. Splice-safety only needs a position at or
+    // below the index, so the entry goes BELOW it and undo is untouched.
+    resumeStore.setData({ name: 'First' }, true, 'v-undo');
+    resumeStore.update('name', 'Second');
+    expect(parkLoser('resume:v-undo', JSON.stringify({ name: 'The version that lost' }))).toBe(true);
+
+    expect(resumeStore.undo()).toBe(true);
+    expect(resumeStore.getData().name).toBe('First');
+
+    // And it is still parked — out of undo's way, not out of history.
+    const stored = JSON.parse(disk.get(physical('resume-designer-history-v-undo')));
+    const parked = stored.history.filter((e) => e.changeType === 'sync-conflict');
+    expect(parked).toHaveLength(1);
+    expect(parked[0].data).toEqual({ name: 'The version that lost' });
   });
 
   it('refuses a unit that is not a résumé, which has no history to park in', () => {

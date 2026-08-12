@@ -11,6 +11,12 @@ import { appStorage } from './appStorage.js';
 // from this module (only the npm `diff` package), so sharing creates no cycle.
 import { setByPath } from './diffEngine.js';
 import { BACKUP_HISTORY_PREFIX } from './profileKeys.js';
+// The history bound and the union rule, both of which the sync layer and this
+// store have to agree on to the letter. syncMerge.js is pure — no storage, no
+// DOM — so importing it here adds nothing to this module's dependencies, while
+// the reverse import (its number coming from here) would drag appStorage into
+// a module the sync design keeps pure. See adoptHistory below.
+import { mergeHistory, MAX_HISTORY } from './sync/syncMerge.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -131,7 +137,6 @@ function createStore() {
   // Each entry: { data, timestamp, description, changeType, path? }
   let history = [];
   let historyIndex = -1;
-  const MAX_HISTORY = 100; // Increased for version history
   let isUndoRedoAction = false;
   let currentVariantId = null;
   let pendingChangeDescription = null;
@@ -261,17 +266,63 @@ function createStore() {
     // key from THIS array, so an entry written straight to storage for the
     // loaded variant is erased by the next edit's save.
     //
-    // The entry lands BEFORE historyIndex, not after it. Everything after the
-    // index is the redo future, and pushHistory() splices the future away on the
-    // next edit — precisely how a parked entry used to vanish. In the past it is
-    // out of that splice's reach, and historyIndex still points at the entry the
-    // live document is on, so parking changes what history holds and never what
-    // the document shows.
+    // WHERE the entry lands answers to two constraints, and only positions
+    // strictly below historyIndex satisfy both:
+    //
+    // - At or below historyIndex, never after it. Everything after the index is
+    //   the redo future, and pushHistory() splices the future away on the next
+    //   edit — precisely how a parked entry used to vanish.
+    // - Below it, not AT it. Landing at historyIndex made the entry the
+    //   immediate undo target: the index moves up to keep pointing at the same
+    //   entry, so the parked slot became index - 1, and one Cmd+Z after a sync
+    //   put another device's REJECTED résumé on screen. Parking is an archive,
+    //   not a pending change.
+    //
+    // Hence historyIndex - 1: the entry is out of the splice's reach, the undo
+    // target is the same entry it was a moment ago, and historyIndex still
+    // points at the entry the live document is on — parking changes what
+    // history holds, never what the document shows. It is one slot below the
+    // current entry rather than at index 0 because pushHistory() evicts from
+    // the FRONT when history passes MAX_HISTORY, and a park at the front would
+    // be the first thing a full history dropped.
+    //
+    // With historyIndex 0 there is no slot below the current entry, so the
+    // entry goes to 0 and undo — which was unavailable a moment ago, there
+    // being nothing before the current entry — reaches it. That is forced by
+    // the first constraint, not a choice.
     adoptHistoryEntry(variantId, entry) {
       if (!variantId || variantId !== currentVariantId || !entry) return false;
 
-      history.splice(Math.max(0, historyIndex), 0, entry);
+      history.splice(Math.max(0, historyIndex - 1), 0, entry);
       historyIndex = Math.max(0, historyIndex + 1);
+      this.saveHistory();
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+      return true;
+    },
+
+    // Union another device's history for this variant into the loaded one,
+    // called by src/sync/syncModel.js when a history unit arrives. Returns
+    // false when `variantId` is not the loaded variant, which tells the caller
+    // to merge into that variant's key directly.
+    //
+    // It exists for the same reason adoptHistoryEntry does: saveHistory()
+    // rewrites the whole key from THIS array, so a merge written straight to
+    // storage for the loaded variant is erased by the next edit. The merge
+    // itself is mergeHistory's — the local side has to be the in-memory array,
+    // not a re-read of the key, because setData() pushes an 'Initial state'
+    // entry that no save has reached yet.
+    //
+    // historyIndex follows the merged document to the newest entry rather than
+    // trailing the entry it was on: any mid-array index leaves the entries just
+    // merged in sitting in the redo future, where pushHistory() splices them
+    // away on the next edit. `data` is untouched — a merge changes what history
+    // holds, not what the document shows.
+    adoptHistory(variantId, remote) {
+      if (!variantId || variantId !== currentVariantId || !remote) return false;
+
+      const merged = mergeHistory({ history, historyIndex }, remote);
+      history = merged.history;
+      historyIndex = merged.historyIndex;
       this.saveHistory();
       this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
       return true;
