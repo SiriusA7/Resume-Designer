@@ -185,6 +185,25 @@ key-sorted serialisation the token-usage tie-break already relies on. Two
 devices must compute the same identity for the same entry, which insertion-order
 -dependent `JSON.stringify` would not guarantee.
 
+### Undo traverses only this user's own steps
+
+Unioning two histories has a consequence worth stating outright: a merged
+timeline contains states this user was never in. Edit on the phone, open the
+Mac, press Cmd+Z, and undo would reach the phone's document rather than your
+own last state. Nothing is lost, but it reads as loss.
+
+So the undo timeline is **a record of steps taken on this device**, and
+`undo`/`redo` skip entries that are not — both parked conflict losers and
+entries whose origin is another device. Version history's dialog still shows
+the whole merged union and can restore anything in it; only the traversal is
+narrowed. This is one principle, not two: the rule that already excludes a
+parked loser excludes a foreign entry for the same reason.
+
+Entries therefore carry an `origin` — a device identifier held in the
+device-local sync-state key, never synced. An entry with no `origin` predates
+this field and is treated as local, which is correct: history was device-local
+before sync existed, so every such entry was in fact written here.
+
 **The general rule, stated once so the next append-shaped unit does not repeat
 this:** a unit whose payload GROWS by accumulation cannot take newer-wins. Ask
 of every synced unit whether it is a snapshot or a log. Snapshots take
