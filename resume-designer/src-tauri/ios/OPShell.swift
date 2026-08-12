@@ -631,6 +631,42 @@ final class ShellModel: ObservableObject {
   /// Weak: the webview belongs to wry and is retained by the view hierarchy.
   weak var webView: WKWebView?
 
+  /// The CloudKit transport, held STRONGLY and held nowhere else.
+  ///
+  /// `OPSyncEngine` holds its host weakly (OPSync.swift) so that CKSyncEngine's
+  /// own strong hold on its delegate cannot close a cycle around the whole
+  /// transport. That makes this the only strong reference in the app: a weak
+  /// one here would let the engine deallocate the moment `start` returned, and
+  /// the delegate would go with it — no callbacks, no error, no sign anything
+  /// had stopped.
+  ///
+  /// `lazy` because `OPSyncEngine.init` takes `self`, which a stored property's
+  /// initializer cannot reach. Assigning it in an `init` would work equally
+  /// well; lazy keeps the reason next to the property instead of in a
+  /// constructor this class does not otherwise need.
+  private lazy var sync = OPSyncEngine(host: self)
+
+  /// What the transport last said about the iCloud account, for the status line
+  /// Task 9 draws. Nothing reads it yet, and nothing here draws it: signed out
+  /// is a normal state, not an error, and it gets no alert.
+  @Published private(set) var syncAccountState: OPSyncAccountState?
+
+  /// The most recent failure this device is NOT already acting on — see
+  /// `syncDidFail`. Also Task 9's, also undrawn here.
+  @Published private(set) var syncFailure: OPSyncFailure?
+
+  /// The profile the engine is running for, so a switch (which reloads the
+  /// window) can be told apart from the same document coming back after WebKit
+  /// reclaimed its content process.
+  private var syncProfileId: String?
+
+  /// Unit ids `syncDidFail` has already re-queued once. The bound on the
+  /// recovery loop; see `syncDidFail` for why there has to be one.
+  private var syncRecovered: Set<String> = []
+
+  /// Unit ids named while the transport was down. See `sendSync`.
+  private var syncDeferred: Set<String> = []
+
   /// What the last `setZoom` said, so a finger resting still does not fire a
   /// command per touch event. Everything a frame carries is in here, because
   /// dropping a frame whose SCALE was unchanged would also drop the pan a
@@ -693,20 +729,84 @@ final class ShellModel: ObservableObject {
   func send(
     _ type: String, _ extra: [String: String] = [:], onResult: ((Bool) -> Void)? = nil
   ) {
+    evaluate(type, extra) { reply in
+      guard let onResult else { return }
+      onResult((reply?["ok"] as? Bool) == true)
+    }
+  }
+
+  /// `send`, but with the JS handler's own RETURN VALUE.
+  ///
+  /// The dispatcher replies `{ ok, result }` and `send` collapses that to `ok`,
+  /// which is all any command needed until sync: `syncUnit` asks the page for a
+  /// unit and the unit is the point. `nil` covers every way of not getting one
+  /// — the command did not run, it refused, or it returned nothing — because
+  /// the single caller treats all three the same way: there is nothing to send.
+  ///
+  /// Never a Promise. The dispatcher drops thenables before replying, since
+  /// `evaluateJavaScript` cannot serialize one.
+  func sendForResult(_ type: String, _ extra: [String: String] = [:]) async -> Any? {
+    await withCheckedContinuation { continuation in
+      // Resumed exactly once, from whichever of the two paths below arrives
+      // first. Both land on the main thread — WKWebView calls its completion
+      // handlers there, and the timer is on the main queue — so the flag needs
+      // no lock.
+      var settled = false
+      let finish: @MainActor (Any?) -> Void = { value in
+        guard !settled else { return }
+        settled = true
+        continuation.resume(returning: value)
+      }
+
+      evaluate(type, extra) { reply in
+        finish((reply?["ok"] as? Bool) == true ? reply?["result"] : nil)
+      }
+
+      // BOUNDED, because `evaluateJavaScript` against a webview that is still
+      // loading never calls back at all — measured, see `activateWeb`. That is
+      // a live state here and not a hypothetical: WebKit reclaims the content
+      // process of a backgrounded app and reloads on return, while the sync
+      // engine sends on a schedule of its own. A continuation that never
+      // resumes would suspend the engine's batch builder and with it every
+      // later send for the life of the process, silently. Ten seconds is far
+      // longer than a reply to a live page takes and short enough that the
+      // engine is not left waiting on a page that is gone.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+        MainActor.assumeIsolated {
+          if !settled { NSLog("[OPShell] command \(type) never answered") }
+          finish(nil)
+        }
+      }
+    }
+  }
+
+  /// One command out, one reply back. The encode-and-escape block lives here
+  /// and only here; `send` and `sendForResult` differ only in what they keep
+  /// from the reply.
+  ///
+  /// `handle` is called exactly once, including when there is no webview to ask
+  /// — a caller awaiting an answer has to get one.
+  private func evaluate(
+    _ type: String, _ extra: [String: String], _ handle: @escaping @MainActor ([String: Any]?) -> Void
+  ) {
     var body: [String: String] = extra
     body["type"] = type
     guard let json = try? JSONSerialization.data(withJSONObject: body),
           let text = String(data: json, encoding: .utf8),
           let literal = Self.jsStringLiteral(text) else {
       NSLog("[OPShell] could not encode command: \(type)")
-      onResult?(false)
+      handle(nil)
       return
     }
-    webView?.evaluateJavaScript("window.__opShell && window.__opShell.command(\(literal))") { value, error in
+    guard let webView else {
+      NSLog("[OPShell] no webview for command: \(type)")
+      handle(nil)
+      return
+    }
+    webView.evaluateJavaScript("window.__opShell && window.__opShell.command(\(literal))") { value, error in
       if let error { NSLog("[OPShell] command \(type) failed: \(error)") }
-      guard let onResult else { return }
-      let ok = error == nil && ((value as? [String: Any])?["ok"] as? Bool ?? false)
-      Task { @MainActor in onResult(ok) }
+      let reply = error == nil ? value as? [String: Any] : nil
+      Task { @MainActor in handle(reply) }
     }
   }
 
@@ -721,6 +821,203 @@ final class ShellModel: ObservableObject {
     return quoted
       .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
       .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+  }
+}
+
+// MARK: - Sync
+
+/// Driving the transport. Three lifecycle moments — a document coming up, a
+/// save landing, a return to the foreground — and nothing else: sync is
+/// background reconciliation, so nothing in the UI waits on any of it and no
+/// failure becomes a dialog.
+extension ShellModel {
+  /// Bring sync up for the profile the webview just loaded, and pull once.
+  ///
+  /// Called from the `activated` message, which is posted once per document —
+  /// a first load, a profile switch (which reloads the window), or WebKit
+  /// reclaiming a backgrounded content process and reloading. `start` is
+  /// idempotent for the profile already running, so the repeats cost nothing
+  /// and, importantly, do not tear down the engine's in-memory queue.
+  func startSync(profileId: String) async {
+    guard !profileId.isEmpty else {
+      // Before the workspace has an active profile there is no zone to sync
+      // to. The app works; sync waits for the next activation.
+      NSLog("[OPShell] no active profile in the activation — sync stays down")
+      return
+    }
+    if syncProfileId != profileId {
+      // A different profile is a different zone and a different engine session,
+      // so neither the previous session's recovery attempts nor its unsent ids
+      // carry over — the latter name units in a zone this engine will not open.
+      syncRecovered.removeAll()
+      syncDeferred.removeAll()
+      syncProfileId = profileId
+    }
+
+    let state = await sync.start(profileId: profileId)
+    syncAccountState = state
+    guard state == .available else {
+      // Signed out, restricted, or iCloud not reachable. All normal, none an
+      // error, and NOTHING local changes because of them — an empty server is
+      // not what this means.
+      NSLog("[OPShell] sync is not running: \(state)")
+      return
+    }
+
+    // Anything edited while the transport was down goes up before the pull, so
+    // a unit changed on both sides meets the conflict path rather than being
+    // quietly overwritten by what arrives.
+    let deferred = syncDeferred
+    syncDeferred.removeAll()
+    await sendSync(unitIds: Array(deferred))
+    try? await sync.fetch()
+  }
+
+  /// Back in the foreground: another device may have moved on while this one
+  /// was away.
+  ///
+  /// The whole activation path rather than a bare `fetch`, because the engine
+  /// may never have come up — signed out at launch, or no network — and nothing
+  /// else would bring it up before the next document load. `start` is
+  /// idempotent for the profile already running, so the ordinary case costs one
+  /// account-status check.
+  ///
+  /// Backgrounding needs no counterpart: the save debounce has already posted
+  /// `syncDirty` for anything that changed.
+  func resumeSync() async {
+    // No activation yet means no profile and no engine; that path fetches for
+    // itself the moment the document comes up.
+    guard let syncProfileId else { return }
+    await startSync(profileId: syncProfileId)
+  }
+
+  /// Units whose bytes just landed on disk, named by `syncDirty`.
+  ///
+  /// The engine flushes EVERYTHING pending rather than just these, on purpose
+  /// (OPSync.swift): a unit whose last send failed transiently is sitting in
+  /// that queue and would otherwise wait for its own next edit.
+  func sendSync(unitIds: [String]) async {
+    guard !unitIds.isEmpty else { return }
+    do {
+      try await sync.send(unitIds: unitIds)
+    } catch {
+      // The only thing thrown here is `notStarted` — signed out, or an edit
+      // that beat the first activation. These ids are the ONLY record that
+      // those bytes changed: persistence names a unit once, on the save that
+      // wrote it, and will not name it again until it is edited again. So they
+      // wait for the next start instead of being dropped.
+      syncDeferred.formUnion(unitIds)
+      NSLog("[OPShell] sync is down; \(unitIds.count) unit(s) held for the next start")
+    }
+  }
+}
+
+/// Where the transport meets the page. Every one of these is a command on the
+/// same bridge the rest of the chrome uses, and not one of them looks inside a
+/// payload — a unit is `{ id, kind, payload, modifiedAt }` with the payload an
+/// opaque string, and all decomposition stays in JS.
+///
+/// The three non-async methods are called from inside the engine's event
+/// handling, so they stay cheap and none of them re-enters the engine directly.
+extension ShellModel: OPSyncHost {
+  /// The unit as the page holds it RIGHT NOW, asked at send time.
+  func syncUnit(withId id: String) async -> SyncUnit? {
+    // A nil result is this device having nothing under that id. The engine
+    // drops the queued send and the server keeps whatever it already holds:
+    // absence is never a deletion.
+    guard let object = await sendForResult("syncUnit", ["unitId": id]) as? [String: Any] else {
+      return nil
+    }
+    guard JSONSerialization.isValidJSONObject(object),
+          let data = try? JSONSerialization.data(withJSONObject: object),
+          let unit = try? JSONDecoder().decode(SyncUnit.self, from: data) else {
+      // The two halves of the bridge disagree about the shape of a unit. Same
+      // effect as having nothing to send, but it is a bug rather than a state,
+      // so it does not pass in silence.
+      NSLog("[OPShell] sync unit \(id) did not decode: \(object)")
+      return nil
+    }
+    return unit
+  }
+
+  /// Units from another device, handed to the page to apply.
+  func syncDidFetch(_ units: [SyncUnit]) {
+    guard let data = try? JSONEncoder().encode(units),
+          let json = String(data: data, encoding: .utf8) else {
+      NSLog("[OPShell] could not encode \(units.count) fetched unit(s)")
+      return
+    }
+    // A JSON STRING, not an object: the command channel is a JS string literal,
+    // the same reason a picked file crosses as base64. `syncApply` parses it.
+    //
+    // The refusal is worth hearing about even though nothing can be done with
+    // it here: the engine's change token has already moved past these records,
+    // so a batch the page would not take is one this device will not be offered
+    // again.
+    send("syncApply", ["units": json]) { ok in
+      if !ok { NSLog("[OPShell] the page refused \(units.count) fetched unit(s)") }
+    }
+  }
+
+  /// The older side of a conflict, parked in that résumé's version history
+  /// rather than discarded. One command each: `parkLoser` takes one unit, and
+  /// batching them here would only move the loop across the bridge.
+  func syncDidLoseConflict(_ losers: [SyncUnit]) {
+    for loser in losers {
+      // Refusing to park is the one way a version disappears in this design, so
+      // it is said out loud rather than assumed away.
+      send("syncParkLoser", ["unitId": loser.id, "payload": loser.payload]) { ok in
+        if !ok { NSLog("[OPShell] the page would not park the older \(loser.id)") }
+      }
+    }
+  }
+
+  /// Sends and fetches that did not land.
+  ///
+  /// One class of these has to be ACTED on rather than logged. A fetched record
+  /// that could not be read was dropped and its change tag forgotten, and the
+  /// engine's change token has already advanced past it with no public API to
+  /// rewind — so the server's newer copy reaches this device only if something
+  /// sends that unit again. Re-queueing it is a real recovery: with no tag the
+  /// save quotes none, CloudKit answers `serverRecordChanged`, and the record
+  /// comes back down the conflict path where both copies are compared and the
+  /// loser is parked. Nothing is lost whichever way that comparison goes.
+  ///
+  /// AT MOST ONCE PER UNIT PER ENGINE SESSION. An unreadable record is most
+  /// often an asset whose download did not finish, and an asset that never
+  /// downloads fails identically every time: unbounded, this is drop → send →
+  /// conflict → same unreadable record → drop, forever, at CloudKit's expense
+  /// and the battery's. One attempt either clears it or leaves it for the next
+  /// launch. `syncRecovered` is that memory, and `startSync` clears it when the
+  /// profile changes — the only point at which the engine session ends without
+  /// the process ending with it.
+  func syncDidFail(_ failures: [OPSyncFailure]) {
+    var recover: [String] = []
+    for failure in failures {
+      NSLog("[OPShell] sync failure (unit \(failure.unitId ?? "—"), "
+            + "willRetry \(failure.willRetry)): \(failure.reason)")
+      // Retryable, or about the zone or a fetch rather than one unit: the
+      // engine is already handling the first and there is no unit to re-queue
+      // for the second. Both are for the status line.
+      guard let unitId = failure.unitId, !failure.willRetry else {
+        syncFailure = failure
+        continue
+      }
+      // `insert` reports whether this is the first time. A second failure for
+      // the same unit is where the loop would have been, so it is held for the
+      // status line instead — this device has now stopped trying.
+      guard syncRecovered.insert(unitId).inserted else {
+        syncFailure = failure
+        continue
+      }
+      recover.append(unitId)
+    }
+
+    guard !recover.isEmpty else { return }
+    // Deferred, not inline: this runs inside the engine's event handling and
+    // `send` re-enters the engine. The task puts it on a later main-actor turn,
+    // once the event these failures belong to has been fully handled.
+    Task { @MainActor [weak self] in await self?.sendSync(unitIds: recover) }
   }
 }
 
@@ -765,7 +1062,26 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
       // reclaimed the content process of a backgrounded app. Either way the
       // scroll view's zoom settings were re-derived from the new page, so the
       // lock has to be re-applied or the canvas gets a second scale back.
-      Task { @MainActor in OPShell.lockWebViewZoom() }
+      //
+      // It also carries the active workspace profile, which is the one thing
+      // sync cannot start without: `getActiveProfileId()` lives in JS and the
+      // profile names the CloudKit zone. This message is the right carrier
+      // because a profile switch reloads the window, so the id is fixed for the
+      // life of a document.
+      let profileId = body["profileId"] as? String ?? ""
+      Task { @MainActor in
+        OPShell.lockWebViewZoom()
+        await self.model?.startSync(profileId: profileId)
+      }
+    case "syncDirty":
+      // Persistence names the units whose bytes just landed, on the save
+      // debounce it already had. WHEN they go up is the engine's to decide —
+      // this only says what changed.
+      guard let unitIds = body["unitIds"] as? [String], !unitIds.isEmpty else {
+        NSLog("[OPShell] syncDirty with no unit ids: \(body)")
+        return
+      }
+      Task { @MainActor in await self.model?.sendSync(unitIds: unitIds) }
     default:
       guard let snapshot = try? JSONDecoder().decode(ShellSnapshot.self, from: data) else {
         NSLog("[OPShell] undecodable snapshot: \(message.body)")
@@ -1238,6 +1554,19 @@ private struct ShellView: View {
     // behind the dialog anyway.
     .overlay(alignment: .bottom) {
       if !snapshot.modalOpen { bottomBar }
+    }
+    // Pull whatever another device changed while this one was away. Nothing
+    // waits on it and no failure surfaces — sync is background reconciliation.
+    //
+    // The notification rather than `scenePhase`: this view is installed into a
+    // UIHostingController by hand, under a window tao owns and a scene
+    // delegate declared in project.yml, so how much of SwiftUI's scene
+    // environment reaches it is an inference. `willEnterForeground` is
+    // UIKit's own signal and does not depend on any of that.
+    .onReceive(NotificationCenter.default.publisher(
+      for: UIApplication.willEnterForegroundNotification
+    )) { _ in
+      Task { await model.resumeSync() }
     }
     // The app's own theme setting, not the system's. Without this a user who
     // picks Dark gets a dark resume canvas inside light native chrome; the two

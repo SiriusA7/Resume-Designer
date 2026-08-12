@@ -1658,8 +1658,17 @@ export function initIOSShell(deps) {
       // pinch zoom. Those settings live on the scroll view and WebKit re-derives
       // them from the new page's viewport, so a reload hands the canvas back a
       // second scale that fights the app's own.
+      //
+      // The active profile rides along because Swift has no notion of one and
+      // the CloudKit zone is named after it. This is the right carrier: a
+      // profile switch reloads the window, so the id cannot change under a
+      // document. Empty means the workspace has not adopted a profile yet, and
+      // the native side leaves sync down until an activation names one.
       if (isNativeShellAvailable()) {
-        window.webkit.messageHandlers[SHELL_HANDLER].postMessage({ kind: 'activated' });
+        window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
+          kind: 'activated',
+          profileId: deps.getActiveProfileId?.() || '',
+        });
       }
       publish();
       return true;

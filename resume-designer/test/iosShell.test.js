@@ -972,6 +972,26 @@ describe('the Design sheet commands', () => {
     expect(collectUnit).toHaveBeenCalledWith('resume:unknown');
   });
 
+  it('names the active profile in the activation, since Swift has no way to know it', async () => {
+    // The CloudKit zone is one per profile and `getActiveProfileId` lives in
+    // JS, so the activation is where the native side learns which one it is
+    // syncing. Without it `start(profileId:)` has nothing to open a zone with.
+    const { postMessage } = await mount({ getActiveProfileId: () => 'p-42' });
+    const activations = postMessage.mock.calls
+      .map(([m]) => m).filter((m) => m.kind === 'activated');
+    expect(activations).toEqual([{ kind: 'activated', profileId: 'p-42' }]);
+  });
+
+  it('activates with an empty profile id rather than not at all', async () => {
+    // Before adoption there is no active profile. The message still has to go
+    // — it is also what re-locks WKWebView's own zoom on every reload — and
+    // the native side leaves sync down until an activation names one.
+    const { postMessage } = await mount({ getActiveProfileId: () => null });
+    expect(postMessage.mock.calls.map(([m]) => m)).toContainEqual({
+      kind: 'activated', profileId: '',
+    });
+  });
+
   it('posts the dirty unit ids to the native sync engine', async () => {
     let notifyDirty;
     const setSyncDirtyNotifier = vi.fn((notify) => { notifyDirty = notify; });

@@ -9,7 +9,7 @@ import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
-  hasProfileNamespaces, stripDeadProviderCredentials,
+  hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -591,7 +591,10 @@ export async function init() {
     addListItem: (listPath, item) => store.addToArray(listPath, item),
     removeListItem: (listPath, index) => store.removeFromArray(listPath, index),
     // CloudKit sync. The model owns what a unit is; the shell only carries it.
+    // `getActiveProfileId` is here rather than imported by the shell because
+    // the zone is per-profile and Swift has no way to read the pointer.
     collectUnit, collectUnits, applyUnits, parkLoser, touchUnit, setSyncDirtyNotifier,
+    getActiveProfileId,
     generateId,
     subscribeDocument: (cb) => store.subscribe(cb),
     // AI change review, routed to the live session rather than a copy of it.
