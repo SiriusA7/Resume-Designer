@@ -164,10 +164,31 @@ server's copy. On that rejection:
 Nothing is destroyed, recovery is a restore the app already supports, and the
 user is never asked to make a decision mid-edit.
 
-**Token usage takes a different path.** Every event carries a unique `id`, and
-`summary` is derived from `events`. So the merge is a union of events by id
-followed by a recomputed summary — correct rather than lossy, and nearly free.
-It is the one unit where newer-wins would be actively wrong.
+### The two units that merge instead
+
+**Token usage.** Every event carries a unique `id`, and `summary` is derived
+from `events`. The merge is a union of events by id followed by a recomputed
+summary — correct rather than lossy, and nearly free.
+
+**Version history** (amended 2026-08-12, after implementation proved the
+original rule self-defeating). History is append-shaped too, so newer-wins
+loses entries — and because a conflict's loser is *parked in history*, the
+lossy rule destroyed the thing it was meant to protect the moment it synced.
+Exercised: a remote history unit lands, one local edit rewrites the key from
+the store's in-memory array, and the parked loser is gone. History therefore
+takes the same union treatment: union both sides' entries, order by timestamp,
+cap at the store's `MAX_HISTORY`.
+
+Entries have no unique id — they are `{data, timestamp, description,
+changeType}` — so identity is a canonical hash of the entry, using the same
+key-sorted serialisation the token-usage tie-break already relies on. Two
+devices must compute the same identity for the same entry, which insertion-order
+-dependent `JSON.stringify` would not guarantee.
+
+**The general rule, stated once so the next append-shaped unit does not repeat
+this:** a unit whose payload GROWS by accumulation cannot take newer-wins. Ask
+of every synced unit whether it is a snapshot or a log. Snapshots take
+newer-wins; logs need a merge.
 
 ## Record size
 

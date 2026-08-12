@@ -1577,6 +1577,9 @@ Checked against the spec:
 - **Platform scope** — Tasks 6-9 are iOS-only; nothing in Tasks 1-5 references a platform, so the Mac client reimplements Tasks 6-8 alone. ✅
 - **Record granularity** — Task 2. ✅
 - **Conflict resolution** — Task 3 (`resolveConflict`), Task 4 (`parkLoser`), Task 7 (detection), Task 8 (the loop). ✅
+- **History union merge** — added to Tasks 3 and 4 on 2026-08-12 after review
+  proved newer-wins on history destroys the parked loser it exists to protect.
+  See the amended spec section "The two units that merge instead". ✅
 - **Multi-profile zones** — Task 6. ✅
 - **What syncs / device-local** — Task 1, enforced by an exhaustiveness test. ✅
 - **Token-usage merge** — Task 3. ✅
