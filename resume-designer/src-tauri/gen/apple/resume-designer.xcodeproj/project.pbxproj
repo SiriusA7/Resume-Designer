@@ -11,13 +11,16 @@
 		06AF95A5701BC1D586B4A815 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4ED538225C2B89B0B74B9238 /* QuartzCore.framework */; };
 		183BDC2AC585FBFBC1B8EC3C /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0941D4F19255C0F1089055FF /* CoreGraphics.framework */; };
 		3C7969A8468941C590381228 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 129E38387B051F17EF9D53E5 /* LaunchScreen.storyboard */; };
+		447291C0C4E20538A16B13EE /* OPOnboardingSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730496408BF41500E3916FA4 /* OPOnboardingSteps.swift */; };
 		4B1E68FD7C05B6ED7630813C /* OPProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 047806FF26AAFE76BECD9C42 /* OPProfile.swift */; };
 		5418EC314A3B990066ED85E4 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 87E409B1C7E66819D8BCED98 /* libapp.a */; };
+		5FC9F42641420E171A89224D /* OPSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9B406120356F983B00F5FF4 /* OPSync.swift */; };
 		7735759748A8A13B6AE32296 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 40E9A11DE6BB4B3F6CD679B0 /* UIKit.framework */; };
 		7BD85CDCBFB176F90470ADF0 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0F2ECBB747B05C1B37AC115E /* MetalKit.framework */; };
 		8E62FE24B5DB3826FEE18744 /* OPJobs.swift in Sources */ = {isa = PBXBuildFile; fileRef = C665389A04CB90B3400E715B /* OPJobs.swift */; };
 		9385AF1EC7B487DC17F29DF0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 40AC3895B0F50D73B4EAA992 /* WebKit.framework */; };
 		984AAC14A9168AA9C439B19A /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9152E668470BC82F185D95EB /* Metal.framework */; };
+		9B2052C0C9C332D0224EF0E5 /* OPOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C60F24079644F4668ACC33 /* OPOnboarding.swift */; };
 		9BEEA6B6EF4FE4B81856F179 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D82239C056B94F6C12B6AFF /* Security.framework */; };
 		9C560E19D1A37B784329F1D8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 35C6EC1683A0B36BC4D973E6 /* Assets.xcassets */; };
 		A09EF06F6E8D97BCF483834E /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 6EEE3405CED55B9A7875970D /* assets */; };
@@ -43,9 +46,11 @@
 		66250B1BE62BA664F214CB7E /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		6EEE3405CED55B9A7875970D /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		72B526A3E02A81204398D45E /* pdf_merge.rs */ = {isa = PBXFileReference; path = pdf_merge.rs; sourceTree = "<group>"; };
+		730496408BF41500E3916FA4 /* OPOnboardingSteps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPOnboardingSteps.swift; sourceTree = "<group>"; };
 		7D82239C056B94F6C12B6AFF /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		87E409B1C7E66819D8BCED98 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		9152E668470BC82F185D95EB /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		95C60F24079644F4668ACC33 /* OPOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPOnboarding.swift; sourceTree = "<group>"; };
 		9A9711B14FF4DC338F1E4F70 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		A9AD7A55017F2378971EFABE /* bundle_name.rs */ = {isa = PBXFileReference; path = bundle_name.rs; sourceTree = "<group>"; };
 		B741908E2A880994641D65B4 /* storage.rs */ = {isa = PBXFileReference; path = storage.rs; sourceTree = "<group>"; };
@@ -54,6 +59,7 @@
 		C3298D515A47F34CE46B1895 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		C665389A04CB90B3400E715B /* OPJobs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPJobs.swift; sourceTree = "<group>"; };
 		D0B324E3BDB2150B1FCB4350 /* resume-designer_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "resume-designer_iOS.entitlements"; sourceTree = "<group>"; };
+		D9B406120356F983B00F5FF4 /* OPSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPSync.swift; sourceTree = "<group>"; };
 		DCF643378505CF59EB076023 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E0E20CAEEACE3F9ED75B90D8 /* migration.rs */ = {isa = PBXFileReference; path = migration.rs; sourceTree = "<group>"; };
 		EB78AF9BA041928CF0687CC6 /* bridge.rs */ = {isa = PBXFileReference; path = bridge.rs; sourceTree = "<group>"; };
@@ -98,8 +104,11 @@
 			isa = PBXGroup;
 			children = (
 				C665389A04CB90B3400E715B /* OPJobs.swift */,
+				95C60F24079644F4668ACC33 /* OPOnboarding.swift */,
+				730496408BF41500E3916FA4 /* OPOnboardingSteps.swift */,
 				047806FF26AAFE76BECD9C42 /* OPProfile.swift */,
 				EFDC81558432D9A46C5B9FFB /* OPShell.swift */,
+				D9B406120356F983B00F5FF4 /* OPSync.swift */,
 			);
 			name = Shell;
 			path = ../../ios;
@@ -200,18 +209,18 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_2979BAF1-16DC-486E-811C-B3E5D364DA73" /* x86_64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = x86_64;
-			sourceTree = "<group>";
-		};
-		"TEMP_F0C6B03C-487A-4E52-A72F-D3253E4A7CCF" /* arm64 */ = {
+		"TEMP_8CBDC9AE-9D16-4363-B468-FE841ED45844" /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = arm64;
+			sourceTree = "<group>";
+		};
+		"TEMP_C67776CD-3962-45F1-8871-66412A755D78" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -313,8 +322,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				8E62FE24B5DB3826FEE18744 /* OPJobs.swift in Sources */,
+				9B2052C0C9C332D0224EF0E5 /* OPOnboarding.swift in Sources */,
+				447291C0C4E20538A16B13EE /* OPOnboardingSteps.swift in Sources */,
 				4B1E68FD7C05B6ED7630813C /* OPProfile.swift in Sources */,
 				06374AE0C0946D2AB07C94AC /* OPShell.swift in Sources */,
+				5FC9F42641420E171A89224D /* OPSync.swift in Sources */,
 				FC45B961568C0DF70307199A /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -346,7 +358,7 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.resumedesigner.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.onpaper.app;
 				PRODUCT_NAME = "On Paper";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -378,7 +390,7 @@
 				);
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.resumedesigner.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.onpaper.app;
 				PRODUCT_NAME = "On Paper";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
