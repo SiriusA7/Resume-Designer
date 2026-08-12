@@ -111,6 +111,23 @@ struct OPSyncFailure: Equatable {
   let reason: String
 }
 
+/// Asked to move data while the transport is down: `start(profileId:)` was
+/// never called, or `stop()` has since taken it down.
+///
+/// `send` and `fetch` used to return quietly here, which is indistinguishable
+/// from "sent" and "fetched, nothing new" to a caller whose only other channel
+/// is the delegate — and the delegate says nothing either, because no engine
+/// ran. They are `throws` functions; this is what they throw.
+enum OPSyncError: Error, LocalizedError {
+  case notStarted
+
+  var errorDescription: String? {
+    switch self {
+    case .notStarted: return "Sync is not running."
+    }
+  }
+}
+
 /// The app side of the transport.
 ///
 /// `CKSyncEngine` is delegate-driven: it decides WHEN to send and asks for the
@@ -171,6 +188,11 @@ final class OPSyncEngine {
   /// invisible.
   private var systemFields: [String: Data] = [:]
 
+  /// Set by `remember`/`forget`, cleared by `flushSystemFields`. It exists so
+  /// the map reaches `UserDefaults` once per engine event instead of once per
+  /// record — see `flushSystemFields`.
+  private var systemFieldsDirty = false
+
   init(host: OPSyncHost) {
     self.host = host
   }
@@ -217,7 +239,7 @@ final class OPSyncEngine {
     let engine = CKSyncEngine(
       CKSyncEngine.Configuration(
         database: container.privateCloudDatabase,
-        stateSerialization: Self.loadState(profileId: profileId),
+        stateSerialization: loadState(profileId: profileId),
         delegate: delegate
       )
     )
@@ -246,6 +268,7 @@ final class OPSyncEngine {
     profileId = nil
     zoneID = nil
     systemFields = [:]
+    systemFieldsDirty = false
   }
 
   /// Queue units to go up, and send now.
@@ -255,7 +278,7 @@ final class OPSyncEngine {
   /// queue, and scoping to the ids named here would leave it sitting there until
   /// that same unit happened to be edited again.
   func send(unitIds: [String]) async throws {
-    guard let engine, let zoneID else { return }
+    guard let engine, let zoneID else { throw OPSyncError.notStarted }
     let changes = unitIds.map { id in
       CKSyncEngine.PendingRecordZoneChange.saveRecord(
         CKRecord.ID(recordName: id, zoneID: zoneID)
@@ -271,7 +294,7 @@ final class OPSyncEngine {
   /// its own schedule, and a return value would have been a second, quieter path
   /// for the same data — one the caller would have to remember to also handle.
   func fetch() async throws {
-    guard let engine else { return }
+    guard let engine else { throw OPSyncError.notStarted }
     try await engine.fetchChanges()
   }
 }
@@ -324,6 +347,11 @@ extension OPSyncEngine {
   fileprivate var currentZoneID: CKRecordZone.ID? { zoneID }
 
   fileprivate func handle(_ event: CKSyncEngine.Event, engine: CKSyncEngine) {
+    // Every path that touches the change-tag map runs under here, so this is
+    // the one place that has to write it out — and writing it once per event
+    // rather than once per record is the whole point of the dirty flag.
+    defer { flushSystemFields() }
+
     switch event {
     case .stateUpdate(let update):
       saveState(update.stateSerialization)
@@ -337,11 +365,39 @@ extension OPSyncEngine {
       // does not implement it — nothing here may turn a record's absence, or the
       // server's deletion list, into a local delete.
       var units: [SyncUnit] = []
+      var unreadable: [OPSyncFailure] = []
       for modification in changes.modifications {
-        remember(modification.record)
-        if let unit = unit(from: modification.record) { units.append(unit) }
+        let record = modification.record
+        // DECODE FIRST. `remember` used to run before this check, and the two
+        // in that order were a silent overwrite. A record that will not decode
+        // is not hypothetical — it is an asset whose `fileURL` is nil because
+        // the download did not finish, which is what every payload over
+        // `opSyncAssetThreshold` travels as. It was dropped without a word, and
+        // this device kept its change tag anyway; holding that tag makes the
+        // NEXT save of that id a clean update, so it destroys the server copy
+        // with no conflict raised and nothing parked.
+        guard let unit = unit(from: record) else {
+          // The tag goes with it. A tag is a claim to know which server version
+          // this device is editing, and that cannot be true of content nobody
+          // read. Without one the next save quotes no tag, CloudKit answers
+          // `serverRecordChanged`, and the record comes back down the conflict
+          // path where both copies are compared and the loser is parked.
+          forget(record.recordID)
+          unreadable.append(OPSyncFailure(
+            unitId: record.recordID.recordName, willRetry: false, code: nil,
+            reason: "a fetched record could not be read — most likely a large "
+              + "payload whose asset did not finish downloading — and was not applied"
+          ))
+          continue
+        }
+        remember(record)
+        units.append(unit)
       }
       if !units.isEmpty { host?.syncDidFetch(units) }
+      // Reported, not swallowed: the engine's change token has already advanced
+      // past these and there is no public way to rewind it, so the only thing
+      // that can bring the record back down is something acting on this.
+      report(unreadable)
 
     case .sentRecordZoneChanges(let sent):
       // The saved records come back carrying their NEW change tags. Recording
@@ -352,7 +408,10 @@ extension OPSyncEngine {
 
     case .sentDatabaseChanges(let sent):
       // A zone that would not save takes every unit in it with it, so it is put
-      // back and reported against no unit in particular.
+      // back and reported against no unit in particular. The same split as in
+      // `handleFailedSaves` applies to `pendingDatabaseChanges` — the engine
+      // keeps the retryable ones itself — but `add` deduplicates, so putting one
+      // back unconditionally costs nothing and covers the rest.
       for failure in sent.failedZoneSaves {
         engine.state.add(pendingDatabaseChanges: [.saveZone(failure.zone)])
       }
@@ -398,7 +457,7 @@ extension OPSyncEngine {
       break
     case .signOut, .switchAccounts:
       systemFields = [:]
-      saveSystemFields()
+      systemFieldsDirty = true
     @unknown default:
       break
     }
@@ -412,10 +471,26 @@ extension OPSyncEngine {
     var losers: [SyncUnit] = []
     var reported: [OPSyncFailure] = []
 
-    // By the time this event arrives the engine has already taken these changes
-    // off the queue. Anything that should be tried again has to be put back, and
-    // anything not put back is a decision to stop — which is why the ones that
-    // are not put back are reported.
+    // WHAT THE ENGINE HAS ALREADY DONE WITH THESE, because the shape of every
+    // branch below depends on it and half an answer is worse than none.
+    //
+    // `CKSyncEngine` keeps a failed change in `state.pendingRecordZoneChanges`
+    // when — and only when — the error is one it documents as handling itself.
+    // CKSyncEngineState.h states the rule for the queue directly: it removes a
+    // change once it sends it, and "if it fails to send a change due to some
+    // retryable error (e.g. a network failure), it keeps that change in this
+    // list". CKSyncEngine.h's "Error Handling" section names that set exactly,
+    // and it is seven codes: notAuthenticated, accountTemporarilyUnavailable,
+    // networkFailure, networkUnavailable, requestRateLimited, serviceUnavailable
+    // and zoneBusy. Everything else is what Apple calls application-specific —
+    // the engine drops the change and hands the error here.
+    //
+    // So the seven are left where they are, and every other error that deserves
+    // another go is put back by hand. Re-adding one of the seven would not be
+    // merely redundant: `add(pendingRecordZoneChanges:)` schedules a send when
+    // none is scheduled, which is the one thing the engine's backoff exists to
+    // avoid. Anything not put back is a decision to stop, and that is what
+    // `willRetry: false` means on the way out.
     for failure in failures {
       let recordID = failure.record.recordID
       let error = failure.error
@@ -477,11 +552,25 @@ extension OPSyncEngine {
                                       code: error.code,
                                       reason: error.localizedDescription))
 
-      case .networkFailure, .networkUnavailable, .serviceUnavailable,
-           .requestRateLimited, .zoneBusy, .serverResponseLost,
-           .accountTemporarilyUnavailable:
-        // Transient. CKSyncEngine owns the backoff; putting the change back is
-        // the whole of this side's job.
+      case .notAuthenticated, .accountTemporarilyUnavailable, .networkFailure,
+           .networkUnavailable, .requestRateLimited, .serviceUnavailable,
+           .zoneBusy:
+        // The seven above. The change is still queued and the engine owns the
+        // backoff, so saying so is the whole of this side's job. `notAuthenticated`
+        // in particular used to fall through to `default` and be dropped as
+        // permanent — it is not: the account can come back, and the engine is
+        // already waiting for it.
+        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
+                                      code: error.code,
+                                      reason: error.localizedDescription))
+
+      case .operationCancelled, .serverResponseLost:
+        // Transient too — a cancelled operation is the app going to the
+        // background or `stop()` being called, and a lost response is a request
+        // whose outcome is simply unknown — but neither is on the engine's list,
+        // so the change is off the queue and this side puts it back. Dropping
+        // them as permanent, which is what `default` did, lost a local edit
+        // until the unit happened to be edited again.
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
                                       code: error.code,
@@ -519,17 +608,28 @@ extension OPSyncEngine {
     guard !pending.isEmpty else { return nil }
     return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { [weak self] recordID in
       guard let self else { return nil }
-      return await self.recordToSend(recordID)
+      return await self.recordToSend(recordID, engine: engine)
     }
   }
 
   /// The record for one queued unit, built at SEND time.
   ///
-  /// Returning nil tells the engine to drop the queued change. That is a dropped
-  /// SEND, never a delete — the server keeps whatever it already holds, because
-  /// absence is not deletion here.
-  private func recordToSend(_ recordID: CKRecord.ID) async -> CKRecord? {
-    guard let unit = await host?.syncUnit(withId: recordID.recordName) else { return nil }
+  /// Returning nil SKIPS the change for this batch — `CKSyncEngineRecordZoneChangeBatch`
+  /// documents exactly that, and skipping is not removing: the change stays in
+  /// `pendingRecordZoneChanges` and is asked for again on the next send, and the
+  /// next, forever. Both nil paths here are final answers, so both take the
+  /// change off the queue themselves, which is what Apple's own CKSyncEngine
+  /// sample does in this branch and what makes the reported `willRetry: false`
+  /// true. It is still a dropped SEND and never a delete — the server keeps
+  /// whatever it already holds, because absence is not deletion here.
+  private func recordToSend(_ recordID: CKRecord.ID, engine: CKSyncEngine) async -> CKRecord? {
+    guard let unit = await host?.syncUnit(withId: recordID.recordName) else {
+      // This device has nothing under that id, and nothing will build one
+      // later either, so leaving it queued is a question re-asked on every
+      // send for the life of the app.
+      engine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
+      return nil
+    }
     // The record as it was last seen on the server, change tag and all. Without
     // it this is a brand-new CKRecord with no tag, which the engine's
     // `.ifServerRecordUnchanged` save policy rejects as a conflict every single
@@ -539,6 +639,11 @@ extension OPSyncEngine {
     do {
       try apply(unit, to: record)
     } catch {
+      // Staging the payload on disk failed. The next send would fail the same
+      // way, so the change comes off the queue and the caller is told — which
+      // is the only arrangement in which `willRetry: false` is a true statement
+      // about what happens next.
+      engine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
       report([OPSyncFailure(unitId: recordID.recordName, willRetry: false, code: nil,
                             reason: "could not stage the payload: \(error.localizedDescription)")])
       return nil
@@ -680,38 +785,66 @@ extension OPSyncEngine {
   private static func stateKey(_ profileId: String) -> String { "op-sync-state-\(profileId)" }
   private static func recordsKey(_ profileId: String) -> String { "op-sync-records-\(profileId)" }
 
-  fileprivate static func loadState(profileId: String) -> CKSyncEngine.State.Serialization? {
-    guard let data = UserDefaults.standard.data(forKey: stateKey(profileId)) else { return nil }
-    return try? JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
+  /// Absent state is normal — the first launch for a profile. Absent state
+  /// because it would not DECODE is not, and it is not a small thing either: the
+  /// change tokens live in there, so a nil return means fetching the whole zone
+  /// again and re-sending every pending change. Silence would make that look
+  /// like a slow first sync forever.
+  fileprivate func loadState(profileId: String) -> CKSyncEngine.State.Serialization? {
+    guard let data = UserDefaults.standard.data(forKey: Self.stateKey(profileId)) else { return nil }
+    do {
+      return try JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
+    } catch {
+      report([OPSyncFailure(
+        unitId: nil, willRetry: false, code: nil,
+        reason: "the stored sync state could not be read, so this device is "
+          + "starting over and will refetch everything: \(error.localizedDescription)"
+      )])
+      return nil
+    }
   }
 
   fileprivate func saveState(_ serialization: CKSyncEngine.State.Serialization) {
-    guard let profileId, let data = try? JSONEncoder().encode(serialization) else { return }
-    UserDefaults.standard.set(data, forKey: Self.stateKey(profileId))
+    guard let profileId else { return }
+    do {
+      UserDefaults.standard.set(try JSONEncoder().encode(serialization),
+                                forKey: Self.stateKey(profileId))
+    } catch {
+      report([OPSyncFailure(
+        unitId: nil, willRetry: false, code: nil,
+        reason: "the sync state could not be saved, so the next launch will "
+          + "refetch and re-send everything: \(error.localizedDescription)"
+      )])
+    }
   }
 
   fileprivate static func loadSystemFields(profileId: String) -> [String: Data] {
     UserDefaults.standard.dictionary(forKey: recordsKey(profileId)) as? [String: Data] ?? [:]
   }
 
-  fileprivate func saveSystemFields() {
-    guard let profileId else { return }
+  /// Write the map out, if it changed. Called once per engine event by
+  /// `handle`, never per record: `remember` used to write the WHOLE dictionary
+  /// on every call, so a fetch carrying a hundred records rewrote it a hundred
+  /// times, inside the loop.
+  private func flushSystemFields() {
+    guard systemFieldsDirty, let profileId else { return }
+    systemFieldsDirty = false
     UserDefaults.standard.set(systemFields, forKey: Self.recordsKey(profileId))
   }
 
   /// Keep this record's system fields — id, zone, and the change tag that says
-  /// which server version we are editing.
+  /// which server version we are editing. In memory; `handle` flushes.
   fileprivate func remember(_ record: CKRecord) {
     let coder = NSKeyedArchiver(requiringSecureCoding: true)
     record.encodeSystemFields(with: coder)
     coder.finishEncoding()
     systemFields[record.recordID.recordName] = coder.encodedData
-    saveSystemFields()
+    systemFieldsDirty = true
   }
 
   fileprivate func forget(_ recordID: CKRecord.ID) {
     guard systemFields.removeValue(forKey: recordID.recordName) != nil else { return }
-    saveSystemFields()
+    systemFieldsDirty = true
   }
 
   /// An empty record carrying only the remembered system fields — which is
