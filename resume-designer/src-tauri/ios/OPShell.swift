@@ -3268,6 +3268,13 @@ private struct HistorySheet: View {
     case "reorder": return "arrow.up.arrow.down"
     case "add": return "plus"
     case "remove": return "minus"
+    // A conflict's losing version, kept so it can still be restored. The web
+    // dialog draws lucide's MonitorSmartphone for this; two device shapes is
+    // the readable idea, so `laptopcomputer.and.iphone` is its counterpart
+    // here. Only the LABEL is shared across the two platforms — the drawings
+    // cannot be, which is why `src/historyEntryLabels.js` holds the strings and
+    // nothing else.
+    case "sync-conflict": return "laptopcomputer.and.iphone"
     default: return "pencil"
     }
   }

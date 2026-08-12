@@ -14,6 +14,7 @@ import {
   openNativePdfPreview,
   SHELL_HANDLER,
 } from '../src/iosShell.js';
+import { TYPE_LABELS } from '../src/historyEntryLabels.js';
 
 // The bridge's contract with src-tauri/ios/OPShell.swift. Swift decodes the
 // snapshot into a Codable struct and sends commands back as JSON, so the shapes
@@ -980,6 +981,29 @@ describe('buildHistory', () => {
     changeType: 'edit',
     isCurrent: false,
     ...over,
+  });
+
+  it('names a version parked from another device as such, not as an edit', () => {
+    // A conflict's losing version is kept in history so it can be restored.
+    // Labelling it 'Edit' would say this machine made it, which is untrue and
+    // is the one thing a person needs to know before restoring it.
+    const { entries } = buildHistory([entry({ changeType: 'sync-conflict' })]);
+    expect(entries[0].label).toBe('From another device');
+  });
+
+  it('draws its labels from the shared map, not a private copy', () => {
+    // There used to be a second copy of this map in iosShell.js, and it is how
+    // 'sync-conflict' came to be missing on iOS after the web dialog gained it.
+    // Every type the web dialog can name, the bridge must name identically.
+    for (const [changeType, label] of Object.entries(TYPE_LABELS)) {
+      const { entries } = buildHistory([entry({ changeType })]);
+      expect(entries[0].label, changeType).toBe(label);
+    }
+  });
+
+  it('falls back to Edit for a change type nothing has named yet', () => {
+    const { entries } = buildHistory([entry({ changeType: 'invented-later' })]);
+    expect(entries[0].label).toBe('Edit');
   });
 
   it('lists the newest version first, keeping the store’s own index', () => {

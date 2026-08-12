@@ -29,6 +29,10 @@
 // module free of anything with a side effect, which is the property that lets
 // every projection here be unit-tested without a DOM.
 import { computeStats, timelinePoints } from './applicationStats.js';
+// Version-history entry names, shared with the web dialog. The leaf module
+// holds only strings: the dialog's lucide icons live beside IT, because this
+// bridge draws nothing and Swift picks its own SF Symbols.
+import { TYPE_LABELS } from './historyEntryLabels.js';
 
 export const SHELL_HANDLER = 'opShell';
 
@@ -545,21 +549,6 @@ export function buildPendingChanges(changes) {
 }
 
 /**
- * Labels for the store's `changeType`, lifted out of HistoryDialog.jsx where
- * they were module-private. Resolved HERE rather than in Swift so the two
- * platforms cannot end up naming the same version differently.
- */
-const HISTORY_LABELS = {
-  initial: 'Created',
-  edit: 'Edit',
-  ai: 'AI change',
-  import: 'Import',
-  reorder: 'Reordered',
-  add: 'Added',
-  remove: 'Removed',
-};
-
-/**
  * Project the undo stack as a list of versions.
  *
  * Newest first, matching the web dialog — the useful end of a hundred-entry
@@ -594,7 +583,7 @@ export function buildHistory(entries, variantId = null, diff = null) {
       timestamp: typeof entry?.timestamp === 'string' ? entry.timestamp : '',
       description: typeof entry?.description === 'string' ? entry.description : '',
       changeType: typeof entry?.changeType === 'string' ? entry.changeType : 'edit',
-      label: HISTORY_LABELS[entry?.changeType] || HISTORY_LABELS.edit,
+      label: TYPE_LABELS[entry?.changeType] || TYPE_LABELS.edit,
       isCurrent: !!entry?.isCurrent,
     }))
     .reverse();
