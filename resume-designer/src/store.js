@@ -252,6 +252,31 @@ function createStore() {
       this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
     },
     
+    // Insert a history entry this store did not produce — the losing side of a
+    // sync conflict, parked by src/sync/syncModel.js so "newer wins" destroys
+    // nothing. Returns false when `variantId` is not the loaded variant, which
+    // tells the caller to write that variant's history key directly instead.
+    //
+    // Going through the store is not a nicety: saveHistory() rewrites the whole
+    // key from THIS array, so an entry written straight to storage for the
+    // loaded variant is erased by the next edit's save.
+    //
+    // The entry lands BEFORE historyIndex, not after it. Everything after the
+    // index is the redo future, and pushHistory() splices the future away on the
+    // next edit — precisely how a parked entry used to vanish. In the past it is
+    // out of that splice's reach, and historyIndex still points at the entry the
+    // live document is on, so parking changes what history holds and never what
+    // the document shows.
+    adoptHistoryEntry(variantId, entry) {
+      if (!variantId || variantId !== currentVariantId || !entry) return false;
+
+      history.splice(Math.max(0, historyIndex), 0, entry);
+      historyIndex = Math.max(0, historyIndex + 1);
+      this.saveHistory();
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+      return true;
+    },
+
     // Save history to storage (quota throws survive the browser passthrough,
     // hence the try/catch; cached mode never throws here)
     saveHistory() {

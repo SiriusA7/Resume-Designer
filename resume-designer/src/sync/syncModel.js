@@ -7,6 +7,11 @@
  */
 import { appStorage } from '../appStorage.js';
 import { splitPhysicalKey, BACKUP_HISTORY_PREFIX } from '../profileKeys.js';
+import { getActiveProfileId } from '../profiles.js';
+// The store owns the loaded variant's history IN MEMORY and rewrites the whole
+// key from it on every edit, so parking a loser for that variant has to go
+// through it — see parkLoser.
+import { store } from '../store.js';
 import { classifyKey } from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
 import { mergeTokenUsage, resolveConflict } from './syncMerge.js';
@@ -33,9 +38,39 @@ const readJSON = (key, fallback) => {
 
 const state = () => readJSON(STATE_KEY, {});
 
-/** Now, or the recorded time if this unit has one. */
+/**
+ * The recorded modification time, or `null` when this device never stamped one.
+ *
+ * NOT `new Date()`. An unstamped unit would then claim to have been modified at
+ * the instant it was collected — newer than any real remote stamp — so the
+ * collecting device would win EVERY conflict and park or discard the other
+ * device's genuine edit on a timestamp it never earned. Nothing calls
+ * `touchUnit` yet, so today that is every unit this device sends.
+ *
+ * `null` says "unknown", and `resolveConflict` already gives an unparseable or
+ * absent stamp -Infinity: it loses to any real one, which is the honest meaning
+ * of not knowing. Two unknowns tie, and its tie-break (remote wins) keeps both
+ * devices computing the same winner.
+ *
+ * Sent as an explicit `null` rather than an omitted field so the unit crossing
+ * the bridge keeps the shape the header documents.
+ */
 function modifiedAtFor(unitId, recorded) {
-  return recorded[unitId]?.modifiedAt || new Date().toISOString();
+  return recorded[unitId]?.modifiedAt ?? null;
+}
+
+/**
+ * `mergeData`'s own skip rule (syncUnits.js), applied here so `applied` counts
+ * what actually landed rather than what was offered.
+ */
+function parsesAsJSON(payload) {
+  if (typeof payload !== 'string') return false;
+  try {
+    JSON.parse(payload);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -69,15 +104,34 @@ export function collectUnits() {
   // and map them internally. Classifying a physical key returns 'unknown' and
   // would sync nothing at all, so every key is reduced to its logical name
   // first. A key that is not namespaced (a shared key) is already logical.
+  //
+  // The cache holds EVERY profile's keys, not just the active one, so the
+  // profile filter is not optional: reducing another profile's key to its
+  // logical name emits it as if it belonged to the active profile, and reads it
+  // back through `getItem`, which maps to the ACTIVE profile — so the unit
+  // carries the wrong profile's value, or none at all. Same filter as
+  // persistence.js's collectActiveOwnedKeys: namespaced keys must match the
+  // active profile, unnamespaced ones (shared keys, and pre-adoption
+  // unprefixed keys, which are the live workspace while mapping is off) pass.
+  const activeProfile = getActiveProfileId();
   for (const physical of appStorage.keys()) {
-    const key = splitPhysicalKey(physical)?.logicalKey ?? physical;
+    const split = splitPhysicalKey(physical);
+    if (split && split.profileId !== activeProfile) continue;
+    const key = split?.logicalKey ?? physical;
     if (key === DATA_KEY) continue; // decomposed above
     if (classifyKey(key) !== 'synced') continue;
+    // Absent is not empty. `?? ''` here emits a unit whose payload CLEARS the
+    // key on every receiving device — and an empty history payload makes
+    // store.js's loadHistory throw on `JSON.parse('')` and reset that variant's
+    // history. A key `getItem` cannot read is a key this device has nothing to
+    // say about, so it sends nothing.
+    const payload = appStorage.getItem(key);
+    if (payload == null) continue;
     const id = `${KEY_UNIT_PREFIX}${key}`;
     units.push({
       id,
       kind: key === TOKEN_KEY ? 'tokenUsage' : 'plain',
-      payload: appStorage.getItem(key) ?? '',
+      payload,
       modifiedAt: modifiedAtFor(id, recorded),
     });
   }
@@ -98,16 +152,27 @@ export function applyUnits(units) {
   const resumeUnits = incoming.filter((u) => u?.id?.startsWith(RESUME_UNIT_PREFIX));
   let applied = 0;
 
-  if (resumeUnits.length > 0) {
+  // `mergeData` silently skips a payload that is not a string or will not parse
+  // (syncUnits.js), so `resumeUnits.length` reports records that never landed —
+  // and this count is how a caller tells a no-op from a failure. Filtering by
+  // the same rule makes the number the truth, and leaves the blob untouched
+  // when nothing at all can land.
+  const landing = resumeUnits.filter((unit) => parsesAsJSON(unit.payload));
+  if (landing.length > 0) {
     const blob = readJSON(DATA_KEY, {});
-    appStorage.setItem(DATA_KEY, JSON.stringify(mergeData(blob, resumeUnits)));
-    applied += resumeUnits.length;
+    appStorage.setItem(DATA_KEY, JSON.stringify(mergeData(blob, landing)));
+    applied += landing.length;
   }
 
   for (const unit of incoming) {
     if (!unit?.id?.startsWith(KEY_UNIT_PREFIX)) continue;
     const key = unit.id.slice(KEY_UNIT_PREFIX.length);
     if (classifyKey(key) !== 'synced') continue;
+    // `appStorage.setItem` does `String(value)`, so a malformed unit off the
+    // native bridge would write the literal text `undefined` into a real
+    // storage key — data that looks valid and parses nowhere. `mergeData`
+    // guards résumé payloads the same way (syncUnits.js).
+    if (typeof unit.payload !== 'string') continue;
 
     if (key === TOKEN_KEY) {
       let remote;
@@ -140,9 +205,24 @@ export function applyUnits(units) {
  * carry `{ data, timestamp, description, changeType }`. Writing any other
  * shape — or writing to any other key — would park the loser somewhere the
  * version-history dialog can never read it back from, which is a silent data
- * loss dressed up as a successful park. `historyIndex` is left pointing at
- * whatever was already current: this appends an archived entry, it does not
- * change what the live document considers "current".
+ * loss dressed up as a successful park.
+ *
+ * WHERE in that array the entry goes decides whether it survives at all, and
+ * both halves of this function are written to the same rule — the entry goes in
+ * just BEFORE `historyIndex`, never after it:
+ *
+ * - Everything after `historyIndex` is store.js's redo future, and pushHistory
+ *   (store.js) splices the future away on the very next local edit. Appending
+ *   there and leaving the index alone — the obvious reading of "don't change
+ *   what's current" — parks the loser exactly where one keystroke deletes it.
+ * - In the past it is out of that splice's reach, and the index still points at
+ *   the same ENTRY it pointed at before, so the live document's notion of
+ *   "current" is unchanged. Only its numeric position moved.
+ *
+ * That is necessary but not sufficient for the variant the app currently has
+ * open: store.js holds that variant's history in memory and saveHistory rewrites
+ * the whole key from that array, which never saw this entry. So the loaded
+ * variant is handed to the store instead of written here.
  */
 export function parkLoser(unitId, payload) {
   if (typeof unitId !== 'string' || !unitId.startsWith(RESUME_UNIT_PREFIX)) return false;
@@ -156,6 +236,20 @@ export function parkLoser(unitId, payload) {
     return false;
   }
 
+  const entry = {
+    data,
+    timestamp: new Date().toISOString(),
+    description: 'Conflicting edit synced from another device',
+    changeType: 'sync-conflict',
+  };
+
+  // The loaded variant: only the store can make this stick (see above). It
+  // reports false for any other variant, and this is the one call that can tell
+  // — `currentVariantId` is private to store.js.
+  if (store.adoptHistoryEntry(variantId, entry)) return true;
+
+  // Any other variant: nothing holds its history in memory, so the key is ours
+  // to write.
   const key = `${HISTORY_PREFIX}${variantId}`;
   const raw = readJSON(key, null);
   const existingHistory = raw && typeof raw === 'object' && Array.isArray(raw.history)
@@ -164,15 +258,11 @@ export function parkLoser(unitId, payload) {
   // Mirrors store.js's own loadHistory() fallback (`historyData.historyIndex
   // ?? history.length - 1`) so a variant with no recorded index yet — or none
   // at all — comes out exactly as store.js would compute it on load.
-  const historyIndex = Number.isInteger(raw?.historyIndex) ? raw.historyIndex : existingHistory.length - 1;
+  const current = Number.isInteger(raw?.historyIndex) ? raw.historyIndex : existingHistory.length - 1;
+  const at = Math.max(0, current);
 
-  const history = [...existingHistory, {
-    data,
-    timestamp: new Date().toISOString(),
-    description: 'Conflicting edit synced from another device',
-    changeType: 'sync-conflict',
-  }];
-  appStorage.setItem(key, JSON.stringify({ history, historyIndex }));
+  const history = [...existingHistory.slice(0, at), entry, ...existingHistory.slice(at)];
+  appStorage.setItem(key, JSON.stringify({ history, historyIndex: Math.max(0, current + 1) }));
   return true;
 }
 
