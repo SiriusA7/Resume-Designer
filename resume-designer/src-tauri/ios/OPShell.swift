@@ -2785,7 +2785,10 @@ private struct ComposerSendStyle: ViewModifier {
     if enabled {
       sized.glassEffect(.regular.tint(.accentColor).interactive(), in: .circle)
     } else {
-      sized.background(enabled ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary), in: .circle)
+      // Plain, not glass: a disabled Send should not look tappable. The
+      // accent-coloured arm of this branch went with the iOS-26 guard — inside
+      // the `else`, `enabled` is false by construction.
+      sized.background(.quaternary, in: .circle)
     }
   }
 }
