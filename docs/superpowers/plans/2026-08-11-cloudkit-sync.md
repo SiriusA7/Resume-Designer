@@ -616,11 +616,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // appStorage is the only dependency, and it is mocked so these tests stay
 // pure: the real one is an async coalescing writer over a disk backend.
+// appStorage is the only dependency, and it is mocked so these tests stay
+// pure: the real one is an async coalescing writer over a disk backend.
+//
+// The mock reproduces the real asymmetry deliberately, because it is what a
+// naive implementation gets wrong: `keys()` returns PHYSICAL, profile-
+// namespaced keys, while `getItem`/`setItem` take LOGICAL ones. A mock that
+// returned logical keys from `keys()` would pass against code that never
+// syncs anything.
+const PROFILE = 'p-test';
 const store = new Map();
+const physical = (k) => `resume-p--${PROFILE}--${k}`;
 vi.mock('../src/appStorage.js', () => ({
   appStorage: {
-    getItem: (k) => (store.has(k) ? store.get(k) : null),
-    setItem: (k, v) => { store.set(k, v); },
+    getItem: (k) => (store.has(physical(k)) ? store.get(physical(k)) : null),
+    setItem: (k, v) => { store.set(physical(k), v); },
     keys: () => [...store.keys()],
   },
 }));
@@ -631,13 +641,13 @@ const DATA = 'resume-designer-data';
 
 beforeEach(() => {
   store.clear();
-  store.set(DATA, JSON.stringify({
+  store.set(physical(DATA), JSON.stringify({
     variants: { 'v-1': { name: 'Design Engineer' } },
     currentVariantId: 'v-1',
     settings: { pageSize: 'letter' },
   }));
-  store.set('resume-designer-applications', '[]');
-  store.set('resume-zoom', '1.5');
+  store.set(physical('resume-designer-applications'), '[]');
+  store.set(physical('resume-zoom'), '1.5');
 });
 
 describe('collectUnits', () => {
@@ -657,7 +667,7 @@ describe('collectUnits', () => {
   });
 
   it('marks token usage with its own kind so the transport can merge it', () => {
-    store.set('resume-designer-token-usage', JSON.stringify({ events: [], summary: {} }));
+    store.set(physical('resume-designer-token-usage'), JSON.stringify({ events: [], summary: {} }));
     const unit = collectUnits().find((u) => u.id === 'key:resume-designer-token-usage');
     expect(unit.kind).toBe('tokenUsage');
   });
@@ -670,13 +680,13 @@ describe('applyUnits', () => {
       payload: JSON.stringify({ name: 'Product Lead' }),
       modifiedAt: '2026-08-09T00:00:00.000Z',
     }]);
-    const blob = JSON.parse(store.get(DATA));
+    const blob = JSON.parse(store.get(physical(DATA)));
     expect(Object.keys(blob.variants).sort()).toEqual(['v-1', 'v-2']);
     expect(blob.currentVariantId).toBe('v-1');
   });
 
   it('merges token usage instead of replacing it', () => {
-    store.set('resume-designer-token-usage', JSON.stringify({
+    store.set(physical('resume-designer-token-usage'), JSON.stringify({
       events: [{ id: 'mine', timestamp: '2026-08-01T00:00:00.000Z', inputTokens: 1 }],
       summary: {},
     }));
@@ -688,15 +698,15 @@ describe('applyUnits', () => {
       }),
       modifiedAt: '2026-08-09T00:00:00.000Z',
     }]);
-    const merged = JSON.parse(store.get('resume-designer-token-usage'));
+    const merged = JSON.parse(store.get(physical('resume-designer-token-usage')));
     expect(merged.events.map((e) => e.id)).toEqual(['mine', 'theirs']);
     expect(merged.summary.totalInputTokens).toBe(3);
   });
 
   it('refuses a unit for a key that is device-local', () => {
-    const before = store.get('resume-zoom');
+    const before = store.get(physical('resume-zoom'));
     applyUnits([{ id: 'key:resume-zoom', kind: 'plain', payload: '"2"', modifiedAt: '2026-08-09T00:00:00.000Z' }]);
-    expect(store.get('resume-zoom')).toBe(before);
+    expect(store.get(physical('resume-zoom'))).toBe(before);
   });
 
   it('reports how many landed, so a caller can tell a no-op from a failure', () => {
@@ -708,7 +718,7 @@ describe('parkLoser', () => {
   it('writes a losing résumé into that résumé’s version history', () => {
     const ok = parkLoser('resume:v-1', JSON.stringify({ name: 'The version that lost' }));
     expect(ok).toBe(true);
-    const history = JSON.parse(store.get('resume-designer-history-variant-v-1'));
+    const history = JSON.parse(store.get(physical('resume-designer-history-variant-v-1')));
     expect(history.at(-1).data).toEqual({ name: 'The version that lost' });
     expect(history.at(-1).reason).toBe('sync-conflict');
   });
@@ -722,7 +732,7 @@ describe('touchUnit', () => {
   it('records a modification time that collectUnits then reports', () => {
     touchUnit('resume:v-1');
     const unit = collectUnits().find((u) => u.id === 'resume:v-1');
-    const state = JSON.parse(store.get('resume-designer-sync-state'));
+    const state = JSON.parse(store.get(physical('resume-designer-sync-state')));
     expect(unit.modifiedAt).toBe(state['resume:v-1'].modifiedAt);
   });
 });
@@ -745,6 +755,7 @@ Expected: FAIL — `Failed to resolve import "../src/sync/syncModel.js"`
  * crosses as `{ id, kind, payload, modifiedAt }` with an opaque payload.
  */
 import { appStorage } from '../appStorage.js';
+import { splitPhysicalKey } from '../profileKeys.js';
 import { classifyKey } from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
 import { mergeTokenUsage, resolveConflict } from './syncMerge.js';
@@ -798,7 +809,13 @@ export function collectUnits() {
     units.push({ ...unit, modifiedAt: modifiedAtFor(unit.id, recorded) });
   }
 
-  for (const key of appStorage.keys()) {
+  // `appStorage.keys()` returns PHYSICAL keys — profile-namespaced
+  // (`resume-p--<id>--<logical>`) — while `getItem`/`setItem` take LOGICAL ones
+  // and map them internally. Classifying a physical key returns 'unknown' and
+  // would sync nothing at all, so every key is reduced to its logical name
+  // first. A key that is not namespaced (a shared key) is already logical.
+  for (const physical of appStorage.keys()) {
+    const key = splitPhysicalKey(physical)?.logicalKey ?? physical;
     if (key === DATA_KEY) continue; // decomposed above
     if (classifyKey(key) !== 'synced') continue;
     const id = `${KEY_UNIT_PREFIX}${key}`;
@@ -1248,11 +1265,28 @@ extension OPSyncEngine {
       let localAt = ISO8601DateFormatter().date(from: localUnit.modifiedAt) ?? .distantPast
       let serverAt = ISO8601DateFormatter().date(from: serverUnit.modifiedAt) ?? .distantPast
       if localAt > serverAt {
-        // Ours is newer: overwrite the server, and their copy is the loser.
-        let forced = try record(for: localUnit, in: zone)
-        forced.setValuesForKeys([:])
+        // Ours is newer, so overwrite the server and their copy is the loser.
+        //
+        // The retry MUST start from `serverRecord`, not from a freshly built
+        // record: CloudKit rejects a save whose change tag it does not
+        // recognise, and a new CKRecord carries none — so retrying with one
+        // fails forever in exactly the case a conflict just proved is live.
+        // Mutating the server's own copy keeps its tag.
+        serverRecord["kind"] = localUnit.kind as CKRecordValue
+        serverRecord["modifiedAt"] = localUnit.modifiedAt as CKRecordValue
+        let data = Data(localUnit.payload.utf8)
+        if data.count > opSyncAssetThreshold {
+          let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+          try data.write(to: url)
+          serverRecord["asset"] = CKAsset(fileURL: url)
+          serverRecord["payload"] = nil
+        } else {
+          serverRecord["payload"] = localUnit.payload as CKRecordValue
+          serverRecord["asset"] = nil
+        }
         _ = try? await database.modifyRecords(
-          saving: [forced], deleting: [], savePolicy: .changedKeys
+          saving: [serverRecord], deleting: [], savePolicy: .changedKeys
         )
         losers.append(serverUnit)
       } else {
