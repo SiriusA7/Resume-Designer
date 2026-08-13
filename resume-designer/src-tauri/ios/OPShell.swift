@@ -700,8 +700,8 @@ final class ShellModel: ObservableObject {
   @Published private(set) var syncFailure: OPSyncFailure?
 
   /// The one thing sync says while the app is in USE, rather than in Settings: a
-  /// conflict was resolved underneath the person, and the version it replaced is
-  /// still there to be restored. `nil` draws nothing. See `announceParked`.
+  /// conflict was resolved underneath the person, and the version that lost it
+  /// is still there to be restored. `nil` draws nothing. See `announceParked`.
   ///
   /// The design spec asks for "one non-blocking notice per resolution — not per
   /// record", and this is the whole of that. Non-blocking is not a style
@@ -1377,9 +1377,9 @@ extension ShellModel {
   }
 
   /// Long enough to read two clauses and decide whether to tap, short enough
-  /// that it is gone before it becomes furniture. The same ten seconds the
-  /// migration notice on the desktop already uses (`showMigrationToast` in
-  /// src/main.js).
+  /// that it is gone before it becomes furniture. Two seconds more than the
+  /// desktop migration toast, which sets its own eight in `showMigrationToast`
+  /// (src/main.js) for one line of text with nothing to tap.
   private static let conflictNoticeSeconds = 10.0
 
   /// Raise the one notice for a resolution, and start the clock that takes it
@@ -1390,7 +1390,16 @@ extension ShellModel {
   /// notice per batch, applied across batches.
   private func announceParked(_ parked: Int) {
     guard parked > 0 else { return }
-    conflictNotice = Self.conflictNoticeText(parked)
+    let text = Self.conflictNoticeText(parked)
+    conflictNotice = text
+    // Said as well as drawn. A banner that appears on nobody's action and takes
+    // itself down on a clock can live and die entirely unheard: VoiceOver moves
+    // focus only where the person sends it, so nothing would ever read this out
+    // and there is nothing left to find afterwards. An announcement is the one
+    // form that suits the banner's own rule — it speaks the same sentence once
+    // and moves no focus, so whatever the person was reading or typing is
+    // exactly where they left it.
+    AccessibilityNotification.Announcement(text).post()
     conflictNoticeGeneration += 1
     let generation = conflictNoticeGeneration
     Task { @MainActor [weak self] in
@@ -1409,24 +1418,39 @@ extension ShellModel {
 
   /// What the notice says. The rules behind the words:
   ///
+  /// - **It does not say which side won**, and that is the load-bearing one. A
+  ///   conflict parks a loser in BOTH directions: `handleFailedSaves`
+  ///   (OPSync.swift) appends the SERVER's older unit when `localWins` — this
+  ///   device holding the newer edit and pushing second is an ordinary half of
+  ///   all conflicts — and the LOCAL one when it does not. Both arrive here as
+  ///   losers and count the same, so "another device replaced yours" would be
+  ///   false about half the time, and a single batch can hold both directions
+  ///   under one count. What is true of every parked version either way is the
+  ///   shape of the event: two devices had the résumé, the newer copy is what
+  ///   the app now holds, the older one went to history. Wording it that way
+  ///   costs nothing; carrying the direction across `syncDidLoseConflict` to
+  ///   say more would cost the transport a field it has no other use for.
   /// - **The source device is not named**, though the spec's example sentence
   ///   named one. The record carries an opaque device id and nothing else, and
   ///   since iOS 16 `UIDevice.current.name` is a generic model string anyway —
   ///   so "from your iPhone" would be a guess printed as a fact. The parked
-  ///   entry is already labelled "From another device"
-  ///   (src/historyEntryLabels.js) and this agrees with it, word for word.
+  ///   entry the person lands on is labelled "From another device"
+  ///   (src/historyEntryLabels.js); this stops where that label does, at the
+  ///   fact that a second device was involved.
   /// - **It names no résumé.** History is per-résumé, a batch can hold several,
   ///   and the unit id is the page's to decompose, not this side's — a unit is
-  ///   `{ id, kind, payload, modifiedAt }` here and stays opaque. Saying "one of
-  ///   your resumes" is less than the person would like and all that is true.
+  ///   `{ id, kind, payload, modifiedAt }` here and stays opaque. "The same
+  ///   resume" is less than the person would like and all that is true.
   /// - **Nothing suggests loss**, because there is none: the sentence exists to
-  ///   say where the previous version went.
+  ///   say where the older version went.
+  /// - **`resume`, not `résumé`**, in display copy — the brand guide is
+  ///   explicit about it (docs/brand/on-paper-brand-guide.md).
   private static func conflictNoticeText(_ parked: Int) -> String {
     parked == 1
-      ? "A newer version from another device replaced one of your resumes. "
-        + "The previous one is in Version history."
-      : "Newer versions from another device replaced \(parked) of your resumes. "
-        + "The previous ones are in Version history."
+      ? "Two devices edited the same resume. On Paper kept the newer version; "
+        + "the earlier one is in Version history."
+      : "Two devices edited the same \(parked) resumes. On Paper kept the newer "
+        + "version of each; the earlier ones are in Version history."
   }
 }
 
@@ -1580,18 +1604,28 @@ extension ShellModel: OPSyncHost {
       // The HANDLER's own return value, off the dispatcher's `{ ok, result }`
       // envelope. `send` collapses that to `ok`, which is only whether the
       // command ran — a refusal comes back as `{ ok: true, result: false }`, so
-      // the log line below could never fire and this side could not have told a
-      // parked version from a discarded one.
+      // the refusal line below could never fire and this side could not have
+      // told a parked version from a discarded one.
       let reply = await sendForResult(
         "syncParkLoser", ["unitId": loser.id, "payload": loser.payload]
       )
-      guard case .answered(let value) = reply, (value as? Bool) == true else {
+      switch reply {
+      case .answered(let value) where (value as? Bool) == true:
+        parked += 1
+      case .answered:
+        // The page ANSWERED, and the answer was no: `parkLoser` returns false
+        // for a payload with no document in it and for every non-résumé unit.
         // Refusing to park is the one way a version disappears in this design,
         // so it is said out loud rather than assumed away.
         NSLog("[OPShell] the page would not park the older \(loser.id)")
-        continue
+      case .unanswered:
+        // A different event, and worth telling apart from the refusal above: no
+        // webview, an eval that failed, or `sendForResult`'s ten-second bound
+        // ran out. Nobody said no — nobody said anything, and whether the park
+        // happened is unknown. Uncounted and unannounced either way, so only
+        // the wording of the record changes.
+        NSLog("[OPShell] no answer parking the older \(loser.id)")
       }
-      parked += 1
     }
     announceParked(parked)
   }
