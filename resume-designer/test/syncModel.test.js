@@ -47,7 +47,7 @@ vi.mock('../src/appStorage.js', () => ({
 
 const {
   collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler,
-  touchUnit, resolveConflict,
+  registerEditingProbe, touchUnit, resolveConflict,
 } = await import('../src/sync/syncModel.js');
 // The résumé store, not the storage map above: parking into the LOADED
 // variant's history has to go through it.
@@ -74,6 +74,26 @@ beforeEach(() => {
   // A SHARED key (never namespaced) that nonetheless syncs — see
   // SYNCED_SHARED_KEYS in syncKeys.js.
   disk.set(physical('resume-designer-profiles'), JSON.stringify([{ id: PROFILE, name: 'Personal' }]));
+  // No inline editing session unless a test says so — the app registers a real
+  // probe from main.js, and nothing else in this file has a DOM.
+  registerEditingProbe(null);
+});
+
+// A résumé unit's payload is the whole variant RECORD, exactly as splitData
+// emits it — `{ id, name, data, ... }`, with the document one level in, under
+// `data`. The store and version history both hold the DOCUMENT.
+//
+// The two shapes are deliberately told apart here, and every fixture below
+// keeps them apart: the record's `name` is the RÉSUMÉ'S name (a label in the
+// variant switcher) and the document's is the PERSON'S, so a fixture whose
+// document is `{ name: '…' }` alone reads as valid whichever way it is
+// interpreted — and a test built on one cannot see the difference between
+// parking a record and parking the document inside it.
+const variantRecord = (id, document, name = 'Tailored for Acme') => JSON.stringify({
+  id, name, data: document, createdAt: AT, updatedAt: AT,
+});
+const resumeUnit = (id, document, modifiedAt = AT) => ({
+  id: `resume:${id}`, kind: 'resume', payload: variantRecord(id, document), modifiedAt,
 });
 
 describe('collectUnits', () => {
@@ -183,13 +203,12 @@ describe('collectUnit', () => {
 
 describe('applyUnits', () => {
   it('lands a remote résumé without touching the local currentVariantId', () => {
-    applyUnits([{
-      id: 'resume:v-2', kind: 'resume',
-      payload: JSON.stringify({ name: 'Product Lead' }),
-      modifiedAt: AT,
-    }]);
+    applyUnits([resumeUnit('v-2', { name: 'Ada Lovelace', summary: 'Product Lead' })]);
     const blob = JSON.parse(disk.get(physical(DATA)));
     expect(Object.keys(blob.variants).sort()).toEqual(['v-1', 'v-2']);
+    // The whole RECORD lands, document and all — mergeData reassembles exactly
+    // what splitData took apart.
+    expect(blob.variants['v-2'].data).toEqual({ name: 'Ada Lovelace', summary: 'Product Lead' });
     expect(blob.currentVariantId).toBe('v-1');
   });
 
@@ -461,7 +480,7 @@ describe('applyUnits', () => {
     // 2 landed — and `applied` is the only thing that tells a caller a no-op
     // from a failure.
     const { applied } = applyUnits([
-      { id: 'resume:v-2', kind: 'resume', payload: JSON.stringify({ name: 'Product Lead' }), modifiedAt: AT },
+      resumeUnit('v-2', { name: 'Ada Lovelace', summary: 'Product Lead' }),
       { id: 'resume:v-3', kind: 'resume', payload: '{ not json', modifiedAt: AT },
       { id: 'key:resume-designer-applications', kind: 'plain', payload: '[{"id":"a-1"}]', modifiedAt: AT },
     ]);
@@ -484,16 +503,6 @@ describe('applyUnits', () => {
   it('reports how many landed, so a caller can tell a no-op from a failure', () => {
     expect(applyUnits([]).applied).toBe(0);
   });
-});
-
-// A résumé unit's payload is the whole variant RECORD, exactly as splitData
-// emits it — `{ id, name, data, ... }`, with the document under `data`. The
-// store holds only that document.
-const variantRecord = (id, document, name = 'Design Engineer') => JSON.stringify({
-  id, name, data: document, createdAt: AT, updatedAt: AT,
-});
-const resumeUnit = (id, document, modifiedAt = AT) => ({
-  id: `resume:${id}`, kind: 'resume', payload: variantRecord(id, document), modifiedAt,
 });
 
 describe('applyUnits and the variant the app has OPEN', () => {
@@ -567,6 +576,10 @@ describe('applyUnits and the variant the app has OPEN', () => {
     // document the adoption replaces is still there to restore.
     open({ name: 'Mine1' });
     resumeStore.update('name', 'Mine2');
+    // The save that edit scheduled, landing — an adoption is refused outright
+    // while one is still in flight (below), so this is the state in which a
+    // fetch may replace the document at all.
+    resumeStore.markSaved();
 
     applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
 
@@ -590,17 +603,103 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(resumeStore.adoptDocument('v-other', { name: 'Theirs' })).toBe(false);
   });
 
-  it('never clears the open document off a unit that carries no résumé', () => {
+  it('never clears the open document off a unit that carries no résumé — on disk or in the store', () => {
     // Absence is never deletion: a variant record with no `data` is a broken
     // unit, not an empty résumé.
+    //
+    // The STORE refused it and the filter did not, so the data-less record went
+    // through mergeData and over the blob's good copy while the document on
+    // screen stayed — disk and memory disagreeing, which is the exact state
+    // this path exists to eliminate. It counted as applied too, so the
+    // transport kept the change tag, and the app reloaded data-less if it quit
+    // before this variant's next save.
     open({ name: 'Mine' });
 
-    applyUnits([{
+    const { applied } = applyUnits([{
       id: 'resume:v-open', kind: 'resume', modifiedAt: AT,
-      payload: JSON.stringify({ id: 'v-open', name: 'Design Engineer' }),
+      payload: JSON.stringify({ id: 'v-open', name: 'Tailored for Acme' }),
     }]);
 
+    expect(applied).toBe(0);
     expect(resumeStore.getData().name).toBe('Mine');
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data).toEqual({ name: 'Mine' });
+  });
+
+  it('never blanks a CLOSED variant’s copy on disk off a unit that carries no résumé', () => {
+    // No store involved at all here, which is the point: the loaded variant was
+    // saved by adoptDocument's own guard, and every other variant had nothing
+    // between the broken unit and the blob.
+    open({ name: 'Mine' });
+    applyUnits([resumeUnit('v-other', { name: 'Theirs' })]);
+
+    const { applied } = applyUnits([{
+      id: 'resume:v-other', kind: 'resume', modifiedAt: AT,
+      payload: JSON.stringify({ id: 'v-other', name: 'Tailored for Acme' }),
+    }]);
+
+    expect(applied).toBe(0);
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-other'].data).toEqual({ name: 'Theirs' });
+  });
+
+  it('refuses a résumé while an edit is still in flight, rather than repainting over it', () => {
+    // Adoption repaints: the store emits 'change' and main.js rebuilds
+    // #resume's innerHTML from it. An edit the store has taken but no save has
+    // written is also an edit whose time is NOT in the sync bookkeeping — the
+    // stamp compared here is the last PERSISTED one and the save debounce has
+    // no max wait, so under continuous editing a remote copy older than the
+    // live document outranks it and displaces it.
+    open({ name: 'Mine1' });
+    resumeStore.update('name', 'Mine2');
+
+    const { applied } = applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+
+    expect(applied).toBe(0);
+    expect(resumeStore.getData().name).toBe('Mine2');
+    // Refused on disk too: landing there and not in the store is the
+    // disagreement this filter exists to stop.
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data).toEqual({ name: 'Mine1' });
+
+    // And the remote copy is not dropped. The short count makes the transport
+    // forfeit the change tag, so the save this edit is about to trigger meets
+    // the conflict path with a fresh stamp — where the loser is parked.
+    resumeStore.markSaved();
+    expect(applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]).applied).toBe(1);
+    expect(resumeStore.getData().name).toBe('Edited on the iPhone');
+  });
+
+  it('refuses a résumé while someone is typing, whose text exists only in the DOM', () => {
+    // An inline edit commits on BLUR (src/inlineEditor.js's finishEditing), so
+    // mid-word the text is in the contentEditable node and nowhere else: the
+    // store is not dirty, no history entry holds it, and a repaint deletes the
+    // characters outright. The sync layer cannot see the DOM, so main.js hands
+    // it the question (registerEditingProbe).
+    open({ name: 'Mine' });
+    registerEditingProbe(() => true);
+
+    const { applied } = applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+
+    expect(applied).toBe(0);
+    expect(resumeStore.getData().name).toBe('Mine');
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data).toEqual({ name: 'Mine' });
+
+    // The session ends when the edit commits, and the unit the transport
+    // re-offers lands then.
+    registerEditingProbe(() => false);
+    expect(applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]).applied).toBe(1);
+    expect(resumeStore.getData().name).toBe('Edited on the iPhone');
+  });
+
+  it('lets a résumé for a variant that is NOT open land while another one is being edited', () => {
+    // The guard is about the document on screen. Refusing every résumé because
+    // one variant is being typed into would stall sync on a whole workspace.
+    open({ name: 'Mine' });
+    registerEditingProbe(() => true);
+    resumeStore.update('name', 'Mine, mid-edit');
+
+    expect(applyUnits([resumeUnit('v-other', { name: 'Theirs' })]).applied).toBe(1);
+
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-other'].data).toEqual({ name: 'Theirs' });
+    expect(resumeStore.getData().name).toBe('Mine, mid-edit');
   });
 
   it('refuses a résumé older than the copy this device holds, on the fetch path too', () => {
@@ -639,6 +738,20 @@ describe('applyUnits and the variant the app has OPEN', () => {
 });
 
 describe('parkLoser', () => {
+  // The losing version, in the shape the transport really hands over: a
+  // `resume:` unit's payload, which is the whole variant RECORD. A history
+  // entry's `data` is the DOCUMENT inside it.
+  //
+  // The fixture keeps the two apart deliberately. `{ name: 'The version that
+  // lost' }` — what this used to park — reads as valid whichever shape it is
+  // taken for, so a test built on it passed identically whether the record or
+  // the document went into history. Here the record is named for the RÉSUMÉ,
+  // the document for the PERSON, and only the document carries a summary: park
+  // the record and the entry restores to a résumé called 'Tailored for Acme'
+  // with nothing in it.
+  const LOST_DOCUMENT = { name: 'Ada Lovelace', summary: 'The paragraph that lost' };
+  const lostPayload = (id) => variantRecord(id, LOST_DOCUMENT, 'Tailored for Acme');
+
   // The real key/shape, confirmed against src/store.js (saveHistory/
   // loadHistory) and src/components/HistoryDialog.jsx: the value at
   // `resume-designer-history-<variantId>` (BACKUP_HISTORY_PREFIX + variantId
@@ -648,12 +761,17 @@ describe('parkLoser', () => {
   // `resume-designer-history-variant-<id>` would park the loser at a key
   // nothing reads and in a shape loadHistory() would discard on the next load.
   it('writes a losing résumé into that résumé’s version history, in the shape store.js reads', () => {
-    const ok = parkLoser('resume:v-1', JSON.stringify({ name: 'The version that lost' }));
+    const ok = parkLoser('resume:v-1', lostPayload('v-1'));
     expect(ok).toBe(true);
     const historyData = JSON.parse(disk.get(physical('resume-designer-history-v-1')));
     expect(Array.isArray(historyData.history)).toBe(true);
     const entry = historyData.history.at(-1);
-    expect(entry.data).toEqual({ name: 'The version that lost' });
+    // The DOCUMENT, not the variant record around it. Parking the record put a
+    // shape one level too high into `data`: the entry listed and restored like
+    // any other, and what it restored was a near-empty résumé named after the
+    // variant. The entire conflict design rests on a parked loser being
+    // RESTORABLE — otherwise "newer wins, nothing is discarded" is not true.
+    expect(entry.data).toEqual(LOST_DOCUMENT);
     expect(entry.changeType).toBe('sync-conflict');
     expect(typeof entry.description).toBe('string');
     expect(entry.description.length).toBeGreaterThan(0);
@@ -668,7 +786,7 @@ describe('parkLoser', () => {
       ],
       historyIndex: 1,
     }));
-    parkLoser('resume:v-1', JSON.stringify({ name: 'The version that lost' }));
+    parkLoser('resume:v-1', lostPayload('v-1'));
     const historyData = JSON.parse(disk.get(physical('resume-designer-history-v-1')));
 
     expect(historyData.history).toHaveLength(3);
@@ -695,14 +813,14 @@ describe('parkLoser', () => {
     // keystroke later, and "newer wins is safe because nothing is destroyed"
     // was destroying the losing version it promised to keep.
     resumeStore.setData({ name: 'Design Engineer' }, true, 'v-park');
-    expect(parkLoser('resume:v-park', JSON.stringify({ name: 'The version that lost' }))).toBe(true);
+    expect(parkLoser('resume:v-park', lostPayload('v-park'))).toBe(true);
 
     resumeStore.update('name', 'Edited after the park');
 
     const historyData = JSON.parse(disk.get(physical('resume-designer-history-v-park')));
     const parked = historyData.history.filter((e) => e.changeType === 'sync-conflict');
     expect(parked).toHaveLength(1);
-    expect(parked[0].data).toEqual({ name: 'The version that lost' });
+    expect(parked[0].data).toEqual(LOST_DOCUMENT);
     // The winner is still what the document shows — parking archives, it does
     // not restore.
     expect(resumeStore.getData().name).toBe('Edited after the park');
@@ -716,7 +834,7 @@ describe('parkLoser', () => {
     // below the index, so the entry goes BELOW it and undo is untouched.
     resumeStore.setData({ name: 'First' }, true, 'v-undo');
     resumeStore.update('name', 'Second');
-    expect(parkLoser('resume:v-undo', JSON.stringify({ name: 'The version that lost' }))).toBe(true);
+    expect(parkLoser('resume:v-undo', lostPayload('v-undo'))).toBe(true);
 
     expect(resumeStore.undo()).toBe(true);
     expect(resumeStore.getData().name).toBe('First');
@@ -725,7 +843,7 @@ describe('parkLoser', () => {
     const stored = JSON.parse(disk.get(physical('resume-designer-history-v-undo')));
     const parked = stored.history.filter((e) => e.changeType === 'sync-conflict');
     expect(parked).toHaveLength(1);
-    expect(parked[0].data).toEqual({ name: 'The version that lost' });
+    expect(parked[0].data).toEqual(LOST_DOCUMENT);
   });
 
   it('does not put a park in undo’s reach on a freshly loaded résumé, where there is no slot below the index', () => {
@@ -737,7 +855,7 @@ describe('parkLoser', () => {
     resumeStore.setData({ name: 'Fresh' }, true, 'v-fresh');
     expect(resumeStore.canUndo()).toBe(false);
 
-    expect(parkLoser('resume:v-fresh', JSON.stringify({ name: 'The version that lost' }))).toBe(true);
+    expect(parkLoser('resume:v-fresh', lostPayload('v-fresh'))).toBe(true);
 
     expect(resumeStore.canUndo()).toBe(false);
     expect(resumeStore.undo()).toBe(false);
@@ -750,9 +868,9 @@ describe('parkLoser', () => {
     // from the history dialog, which is the whole point of parking it.
     const parked = resumeStore.getHistoryEntries().filter((e) => e.changeType === 'sync-conflict');
     expect(parked).toHaveLength(1);
-    expect(resumeStore.getHistoryEntryData(parked[0].index)).toEqual({ name: 'The version that lost' });
+    expect(resumeStore.getHistoryEntryData(parked[0].index)).toEqual(LOST_DOCUMENT);
     expect(resumeStore.restoreToEntry(parked[0].index)).toBe(true);
-    expect(resumeStore.getData().name).toBe('The version that lost');
+    expect(resumeStore.getData()).toEqual(LOST_DOCUMENT);
   });
 
   it('opens a résumé whose only history is a park without treating the rejected version as current', () => {
@@ -761,7 +879,7 @@ describe('parkLoser', () => {
     // historyIndex: 0 }`. loadHistory then takes its SUCCESS path — no
     // 'Initial state' is pushed — and the rejected version is what the store
     // calls current, so one edit and one Cmd+Z put it on screen.
-    expect(parkLoser('resume:v-cold', JSON.stringify({ name: 'The version that lost' }))).toBe(true);
+    expect(parkLoser('resume:v-cold', lostPayload('v-cold'))).toBe(true);
     expect(JSON.parse(disk.get(physical('resume-designer-history-v-cold'))).historyIndex).toBe(0);
 
     resumeStore.setData({ name: 'The version that won' }, true, 'v-cold');
@@ -774,6 +892,18 @@ describe('parkLoser', () => {
 
     const parked = resumeStore.getHistoryEntries().filter((e) => e.changeType === 'sync-conflict');
     expect(parked).toHaveLength(1);
+  });
+
+  it('refuses a payload with no document rather than parking an entry that restores to nothing', () => {
+    // The one thing worse than refusing is an entry that looks parked. The
+    // caller (OPShell.swift's syncDidLoseConflict) logs a refusal out loud,
+    // because refusing to park is the only way a version disappears in this
+    // design; a park that cannot be restored disappears silently instead, and
+    // leaves a row in the history dialog claiming otherwise.
+    expect(parkLoser('resume:v-broken', JSON.stringify({ id: 'v-broken', name: 'Tailored for Acme' }))).toBe(false);
+    expect(parkLoser('resume:v-broken', '{ not json')).toBe(false);
+    expect(parkLoser('resume:v-broken', 'null')).toBe(false);
+    expect(disk.has(physical('resume-designer-history-v-broken'))).toBe(false);
   });
 
   it('refuses a unit that is not a résumé, which has no history to park in', () => {

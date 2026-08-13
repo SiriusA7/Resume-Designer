@@ -74,8 +74,15 @@ export function setSyncEnabled(enabled) {
  * NOT `new Date()`. An unstamped unit would then claim to have been modified at
  * the instant it was collected — newer than any real remote stamp — so the
  * collecting device would win EVERY conflict and park or discard the other
- * device's genuine edit on a timestamp it never earned. Nothing calls
- * `touchUnit` yet, so today that is every unit this device sends.
+ * device's genuine edit on a timestamp it never earned. A résumé and its
+ * history are stamped on every persisted save (registerPersistedSaveHandler);
+ * every other unit is unstamped until something calls `touchUnit` for it.
+ *
+ * It is the last PERSISTED time, which is not the same as the document's — the
+ * save debounce has no max wait, so under continuous editing this stamp goes
+ * arbitrarily stale. `applyUnits` does not lean on it alone for that reason:
+ * a variant with an edit in flight is refused before any comparison runs (see
+ * store.isBusyEditing).
  *
  * `null` says "unknown", and `resolveConflict` already gives an unparseable or
  * absent stamp -Infinity: it loses to any real one, which is the honest meaning
@@ -125,6 +132,86 @@ function landsAsDataField(unit) {
 }
 
 /**
+ * The document inside a `resume:` unit, or `null` when the unit carries none.
+ *
+ * A résumé unit's payload is the whole variant RECORD as splitData emits it —
+ * `{ id, name, data, ... }` — and the document is its `.data`, one level in.
+ * Confusing the two is not a cosmetic mistake: a record put where a document
+ * belongs reads as a near-empty résumé named after the variant, because the
+ * only field the two shapes share is `name`.
+ *
+ * ONE reader for every place that has to answer it, deliberately. The disk
+ * write (mergeData) and the in-memory adoption (store.adoptDocument) must
+ * accept exactly the same units or they disagree about what this device holds —
+ * see `applyUnits`, which refuses on this before `mergeData` is reached — and
+ * `parkLoser` unwraps the same way, version-history entries holding the
+ * document too.
+ */
+function resumeDocument(payload) {
+  let record;
+  try {
+    record = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  const document = record?.data;
+  return document && typeof document === 'object' ? document : null;
+}
+
+/**
+ * Whether a fetched résumé is one this device can land at all.
+ *
+ * A record with no document is a broken unit, not an empty résumé, and letting
+ * it through wrote the data-less record over the blob's good copy AND counted
+ * it applied — so the transport kept the change tag while the store, which
+ * applies the same rule, refused it. Disk and memory then disagreed, which is
+ * the exact state this path exists to prevent, and the app reloaded data-less
+ * if it quit before that variant's next save. Absence is never deletion: the
+ * same class of malformed unit is what blanked `settings` wholesale before
+ * `landsAsDataField` was written.
+ */
+function landsAsResume(unit) {
+  return resumeDocument(unit.payload) !== null;
+}
+
+// Whether a person is typing into the résumé right now. Installed by main.js
+// (registerEditingProbe) for the same reason registerPersistedSaveHandler is
+// installed there: the answer lives in the DOM — src/inlineEditor.js's active
+// contentEditable node — and this module must not import it. A shell that
+// never registers one has no inline editor to interrupt, so "no" is right.
+let inlineEditingProbe = () => false;
+
+/**
+ * Install the "someone is typing right now" probe. main.js owns this graph edge.
+ */
+export function registerEditingProbe(probe) {
+  inlineEditingProbe = typeof probe === 'function' ? probe : () => false;
+}
+
+/**
+ * Whether landing this résumé would land on top of work in flight.
+ *
+ * Adoption repaints: `store.adoptDocument` emits 'change', and every renderer
+ * rebuilds `#resume`'s innerHTML from it. An inline edit lives ONLY in the DOM
+ * until blur commits it (src/inlineEditor.js), so a fetch arriving mid-word
+ * destroyed exactly the characters the person was typing, with no history entry
+ * anywhere. That exposure is new: before the store adopted, a fetch never
+ * repainted the screen.
+ *
+ * REFUSED, not deferred, and refusing is not a loss. A deferred unit would have
+ * to be held somewhere, go stale there, and still be re-offered by the transport
+ * — while the count returned now would claim it landed, which is the very
+ * disagreement between disk and memory this filter exists to stop. Refusing
+ * shortens the applied count instead, the transport forfeits the record's change
+ * tag, and the imminent save of the edit in flight meets the conflict path with
+ * a FRESH stamp, where both copies are compared and the loser is parked. The
+ * remote copy is still on the server and on the device that wrote it throughout.
+ */
+function interruptsLiveEditing(unit) {
+  return store.isBusyEditing(unit.id.slice(RESUME_UNIT_PREFIX.length), inlineEditingProbe());
+}
+
+/**
  * Whether a fetched résumé is newer than the copy this device holds.
  *
  * Newer wins — on THIS path too. The fetch path merged every résumé
@@ -160,23 +247,16 @@ function outranksLocalResume(unit, recorded) {
  * history merge document, and the same answer. The store is asked rather than
  * told, because `currentVariantId` is private to it.
  *
- * A unit's payload is the whole variant RECORD as splitData emits it — `{ id,
- * name, data, ... }` — and the store holds only its `data`. A record without
- * one is a broken unit, not an empty résumé, so it leaves the document alone:
- * absence is never deletion.
+ * The store holds the DOCUMENT, one level into the variant record the unit
+ * carries — see resumeDocument, which the filter above uses on the same unit so
+ * a record this cannot read never reaches the blob either.
  */
 function adoptLoadedDocument(unit) {
   const variantId = unit.id.slice(RESUME_UNIT_PREFIX.length);
   if (!variantId) return;
 
-  let variant;
-  try {
-    variant = JSON.parse(unit.payload);
-  } catch {
-    return;
-  }
-  const document = variant?.data;
-  if (!document || typeof document !== 'object') return;
+  const document = resumeDocument(unit.payload);
+  if (!document) return;
 
   store.adoptDocument(variantId, document);
 }
@@ -300,8 +380,11 @@ export function collectUnit(unitId) {
  * Résumé and `data:` units are merged into the blob so `currentVariantId` —
  * which never travelled — is left alone, and a résumé for the variant the app
  * has OPEN is handed to the store as well, because that document lives in
- * memory too (adoptLoadedDocument). A résumé older than this device's own copy
- * is refused outright (outranksLocalResume): newer wins here as everywhere.
+ * memory too (adoptLoadedDocument). A résumé is refused outright when it
+ * carries no document (landsAsResume), when it would land on an edit still in
+ * flight (interruptsLiveEditing), or when it is older than this device's own
+ * copy (outranksLocalResume): newer wins here as everywhere, and a refusal
+ * destroys nothing — see interruptsLiveEditing for where a refused unit goes.
  * Token usage and version history, the two units that accumulate, take the
  * union rule; everything else is a snapshot and is written as it arrived. A
  * unit naming a device-local key is refused: nothing should have sent it, and
@@ -322,17 +405,23 @@ export function applyUnits(units) {
   // tells a no-op from a failure. Filtering by the same rules makes the number
   // the truth, and leaves the blob untouched when nothing at all can land.
   //
-  // A résumé this device has a NEWER copy of is filtered out here for a
-  // different reason and to the same effect: it must not land, and the count
-  // has to say so — see outranksLocalResume, which relies on the short count.
+  // Three more rules apply to a résumé, for three different reasons and to the
+  // same effect — it must not land, and the count has to say so. Every one of
+  // them is decided HERE rather than downstream, because a unit that reaches
+  // `mergeData` is on disk whatever the store then does with it, and disk
+  // disagreeing with memory is the failure this whole path is written to avoid:
+  // it must carry a document (landsAsResume), it must not land on top of an
+  // edit in flight (interruptsLiveEditing), and it must be newer than the copy
+  // this device holds (outranksLocalResume).
   const recorded = state();
   const landing = incoming.filter((unit) => {
     const id = typeof unit?.id === 'string' ? unit.id : '';
     if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) return false;
     if (!parsesAsJSON(unit.payload)) return false;
-    return id.startsWith(RESUME_UNIT_PREFIX)
-      ? outranksLocalResume(unit, recorded)
-      : landsAsDataField(unit);
+    if (!id.startsWith(RESUME_UNIT_PREFIX)) return landsAsDataField(unit);
+    return landsAsResume(unit)
+      && !interruptsLiveEditing(unit)
+      && outranksLocalResume(unit, recorded);
   });
   if (landing.length > 0) {
     const blob = readJSON(DATA_KEY, {});
@@ -409,6 +498,17 @@ export function applyUnits(units) {
  * version-history dialog can never read it back from, which is a silent data
  * loss dressed up as a successful park.
  *
+ * An entry's `data` is the DOCUMENT, and the unit's payload is the whole
+ * variant RECORD around it (resumeDocument). Parking the record put the wrong
+ * shape one level up: the entry listed and restored fine, and restoring it
+ * produced a near-empty résumé named after the variant, because `name` is the
+ * only field the two shapes share. That is the same silent loss as writing the
+ * wrong key, only harder to see — the whole conflict design rests on a parked
+ * loser being RESTORABLE, or "newer wins, nothing is discarded" is not true.
+ * A payload with no document is refused for that reason rather than parked:
+ * the caller (OPShell.swift's syncDidLoseConflict) logs a refusal, which is
+ * louder than an entry that restores to nothing.
+ *
  * WHERE in that array the entry goes decides whether it survives at all, and
  * both halves of this function are written to the same rule — the entry goes in
  * BELOW `historyIndex`, at `historyIndex - 1`:
@@ -441,12 +541,8 @@ export function parkLoser(unitId, payload) {
   const variantId = unitId.slice(RESUME_UNIT_PREFIX.length);
   if (!variantId) return false;
 
-  let data;
-  try {
-    data = JSON.parse(payload);
-  } catch {
-    return false;
-  }
+  const data = resumeDocument(payload);
+  if (!data) return false;
 
   const entry = {
     data,

@@ -397,6 +397,35 @@ function createStore() {
       this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
     },
     
+    // Whether `variantId` is the variant on screen AND work on it is still in
+    // flight. src/sync/syncModel.js asks before it lands a fetched résumé:
+    // adopting one repaints the canvas, and a repaint over work in flight
+    // destroys it.
+    //
+    // Two things count as in flight, and the second cannot be seen from here:
+    //
+    // - `isDirty` — an edit this store has taken but no save has written yet.
+    //   It also stands in for the OTHER half of the same race: the fetch path
+    //   compares the remote stamp against the last PERSISTED one (syncModel's
+    //   modifiedAtFor), and the save debounce has no max wait, so under
+    //   continuous editing that stamp goes arbitrarily stale and a remote copy
+    //   older than the live document can outrank it. Dirty says "the recorded
+    //   time is not the document's time", which is the honest answer.
+    // - `sessionActive`, passed in — an inline-editing session. Text typed into
+    //   a contentEditable exists ONLY in the DOM until blur commits it through
+    //   `update` (src/inlineEditor.js), so `isDirty` is false while a person is
+    //   mid-word. This module has no DOM, so the caller reports it.
+    //
+    // Refusing rather than deferring is what the caller does with a true here,
+    // and nothing is lost by it: the refusal shortens the applied count, the
+    // transport forfeits the record's change tag, and the next save — which the
+    // in-flight edit is about to trigger — meets the conflict path, where both
+    // copies are compared and the loser is parked.
+    isBusyEditing(variantId, sessionActive = false) {
+      if (!variantId || variantId !== currentVariantId) return false;
+      return isDirty || sessionActive === true;
+    },
+
     // Adopt a résumé that arrived from another device as the LOADED variant's
     // document, called by src/sync/syncModel.js when a `resume:` unit lands.
     // Returns false when `variantId` is not the loaded variant, which tells the

@@ -38,7 +38,7 @@ import {
 } from './iosShell.js';
 import {
   collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler, touchUnit,
-  isSyncEnabled, setSyncEnabled,
+  registerEditingProbe, isSyncEnabled, setSyncEnabled,
 } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
@@ -86,6 +86,14 @@ import { initPhotoService } from './photoService.js';
 // Keep persistence below the sync model in the import graph: main owns the
 // callback wiring between them, so neither feature module imports the other.
 registerPersistedSaveHandler(setPersistedSaveHandler);
+
+// Same edge, same reason. A fetched résumé for the open variant is adopted by
+// the store, which repaints #resume from scratch — and an inline edit exists
+// ONLY in the DOM until blur commits it, so a sync landing mid-word would
+// delete the characters being typed. The sync model refuses to land one while
+// this says yes; it cannot ask the DOM itself (it is storage-only, and the same
+// file runs on iOS), so main.js hands it the question.
+registerEditingProbe(() => getActiveInlineEditable() !== null);
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
