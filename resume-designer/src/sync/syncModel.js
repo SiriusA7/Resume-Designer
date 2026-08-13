@@ -393,6 +393,13 @@ function outranksLocalCopy(unit, recorded) {
  * are never pruned (`tokenTrackingService.js`), and a version-history entry is
  * never individually removed — which is also why a conflict's loser can be
  * PARKED in one.
+ *
+ * `resume-designer-profiles` is the one the bootstrap design moves across
+ * (docs/superpowers/specs/2026-08-13-sync-bootstrap-design.md §2): it earns a
+ * union by adding the tombstones that stop one, which is the general shape of
+ * the answer for any list that wants to accumulate. When it moves, it moves
+ * HERE — adding a merge branch without adding it to this function would leave
+ * the union guarded by newer-wins, which drops exactly what the union is for.
  */
 function accumulatorFor(key) {
   if (key === TOKEN_KEY) return landTokenUsage;
