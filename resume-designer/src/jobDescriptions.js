@@ -12,27 +12,77 @@ const STORAGE_KEY = 'resume-designer-job-descriptions';
 // In-memory cache of job descriptions
 let jobDescriptions = [];
 
+// Re-read callbacks for whoever renders this list. Nothing subscribed here
+// until sync could replace the whole key from under an open dialog: JobsDialog
+// re-reads the cache after each of its OWN mutations (a `bump` reducer) and the
+// native sheet re-reads on every publish, so both cover every writer they drive
+// themselves — and neither covers the one they do not.
+const subscribers = new Set();
+
+/** Subscribe to replacements of the whole list. Returns an unsubscribe. */
+export function subscribeJobDescriptions(callback) {
+  subscribers.add(callback);
+  return () => subscribers.delete(callback);
+}
+
+/**
+ * Parse a stored value into the array shape this module requires, or `null`
+ * when it is not one.
+ *
+ * Self-heals an id-keyed OBJECT map (a legacy Electron shape that earlier
+ * migrations wrote through verbatim — stores migrated before the import
+ * normalizer still hold it): spreading an object in getAllJobDescriptions()
+ * threw and killed the Jobs dialog.
+ *
+ * `null` for anything else, because the two callers need opposite answers to
+ * it — see adoptStoredJobDescriptions.
+ */
+function parseList(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return parsed && typeof parsed === 'object' ? Object.values(parsed) : null;
+  } catch (e) {
+    console.error('Failed to load job descriptions:', e);
+    return null;
+  }
+}
+
 /**
  * Initialize job descriptions from storage
  */
 export function initJobDescriptions() {
-  try {
-    const stored = appStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      // Self-heal an id-keyed OBJECT map (a legacy Electron shape that earlier
-      // migrations wrote through verbatim — stores migrated before the import
-      // normalizer still hold it). This module requires an array; spreading an
-      // object here threw and killed the Jobs dialog.
-      jobDescriptions = Array.isArray(parsed)
-        ? parsed
-        : (parsed && typeof parsed === 'object' ? Object.values(parsed) : []);
-    }
-  } catch (e) {
-    console.error('Failed to load job descriptions:', e);
-    jobDescriptions = [];
-  }
+  const stored = appStorage.getItem(STORAGE_KEY);
+  if (stored) jobDescriptions = parseList(stored) ?? [];
   return jobDescriptions;
+}
+
+/**
+ * Take the list `applyUnits` has just written to storage.
+ *
+ * The cache above is this module's whole truth: every mutation edits it and
+ * `save()` serializes it back over the key. So a job list that arrived from
+ * another device lasted exactly until the next local change, which wrote the
+ * stale cache over it, stamped the unit, and — the transport legitimately
+ * holding the record's change tag, because the page had confirmed the apply —
+ * pushed the revert up as a clean, uncontested update. No conflict was raised
+ * and the other device's postings were gone. Same trap as store.adoptDocument's,
+ * and the same answer: the owner adopts, rather than being written behind.
+ *
+ * Subscribers are told because a corrected cache the screen has not re-read is
+ * only half of it: the Jobs dialog renders straight out of this array.
+ *
+ * A value it cannot read leaves the cache alone — absence is never deletion,
+ * and one malformed remote unit must not empty someone's job list. The list
+ * this device holds is then still the one the next local write puts back on
+ * disk, so the bad bytes are corrected rather than inherited.
+ */
+export function adoptStoredJobDescriptions() {
+  const stored = appStorage.getItem(STORAGE_KEY);
+  const list = stored ? parseList(stored) : null;
+  if (!list) return;
+  jobDescriptions = list;
+  subscribers.forEach((cb) => cb());
 }
 
 /**

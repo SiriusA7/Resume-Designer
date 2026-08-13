@@ -22,6 +22,7 @@ import {
   initJobDescriptions, getAllJobDescriptions, getActiveJobDescriptions,
   addJobDescription, updateJobDescription, deleteJobDescription, toggleJobDescriptionActive,
   parseJobDescriptionText, exportJobDescriptions, importJobDescriptions,
+  subscribeJobDescriptions,
 } from '../../jobDescriptions.js';
 import {
   getConfiguredProviders, getAllModels, isConfigured, validateModelId, getDefaultModelId,
@@ -137,6 +138,12 @@ export default function JobsDialog() {
   }, []);
 
   useEffect(() => { initJobDescriptions(); }, []);
+
+  // The `bump` below covers every mutation this dialog makes; sync is the one
+  // writer it does not make. A job list landing from another device replaces the
+  // whole module array, and without this the open list keeps rendering the rows
+  // that array no longer holds.
+  useEffect(() => subscribeJobDescriptions(bump), []);
 
   useEffect(() => {
     const onOpen = () => { reloadAnalysis(); setOpen(true); };

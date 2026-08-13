@@ -14,6 +14,11 @@ import { getActiveProfileId } from '../profiles.js';
 // key from it on every edit, so parking a loser for that variant has to go
 // through it — see parkLoser.
 import { store, CHANGE_TYPES } from '../store.js';
+// The three modules that hold their whole key in memory the way the store holds
+// the loaded document — see KEY_OWNERS below.
+import { adoptStoredApplications } from '../applications.js';
+import { adoptStoredJobDescriptions } from '../jobDescriptions.js';
+import { adoptStoredThreads, threadHolderBusy } from '../chatThreads.js';
 import { classifyKey } from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
 import { mergeTokenUsage, mergeHistory, resolveConflict } from './syncMerge.js';
@@ -213,6 +218,43 @@ function interruptsLiveEditing(unit) {
 }
 
 /**
+ * The keys something holds a whole in-memory copy of.
+ *
+ * A `key:` unit lands by overwriting its key — which is enough only while the
+ * key is nobody's cache. These three are somebody's: applications.js and
+ * jobDescriptions.js each keep the parsed list in a module array and serialize
+ * THAT array back over the key on every local change, and the chat's thread
+ * list lives in useChat's React state, which `persistThreads` writes back the
+ * same way. So content this device applied lasted exactly until that module's
+ * next ordinary write, which put the stale copy back, stamped the unit, and —
+ * this device legitimately holding the record's change tag, because the page
+ * had confirmed the apply — pushed the revert up as a clean, uncontested
+ * update. No conflict was raised and nothing was parked: the other device's
+ * content was simply gone. The résumé had exactly this bug and
+ * `store.adoptDocument` is exactly this answer.
+ *
+ * `adopt()` re-reads storage rather than being handed the payload, so the
+ * module's copy is by construction the bytes that reached the key — one source
+ * of truth, and no second parser to disagree with the module's own.
+ *
+ * `isBusy()` is the résumé's `interruptsLiveEditing` rule for a different
+ * screen, and only the chat needs one: adopting there replaces the thread list
+ * a streamed reply commits into, and that reply exists nowhere else until it
+ * does. It is asked BEFORE the write, never after — a unit that reaches storage
+ * is on disk whatever the owner then does with it, and disk disagreeing with
+ * memory is the failure this whole path exists to avoid.
+ *
+ * `resume-designer-chat-history` is deliberately absent: the legacy
+ * single-thread key is read once by loadThreads() when there are no threads at
+ * all, and nothing caches it.
+ */
+const KEY_OWNERS = new Map([
+  ['resume-designer-applications', { adopt: adoptStoredApplications }],
+  ['resume-designer-job-descriptions', { adopt: adoptStoredJobDescriptions }],
+  ['resume-designer-chat-threads', { isBusy: threadHolderBusy, adopt: adoptStoredThreads }],
+]);
+
+/**
  * Whether a fetched résumé is newer than the copy this device holds.
  *
  * Newer wins — on THIS path too. The fetch path merged every résumé
@@ -397,9 +439,16 @@ function changedDataUnits(previous, next) {
  *   résumé on every save. There is no `key:resume-designer-data` unit at all
  *   (`collectKeyUnit` refuses the blob), so the write maps to its `data:`
  *   fields or to nothing.
- * - `HISTORY_PREFIX + variantId` is written by store.js's saveHistory for the
- *   LOADED variant only, and that same save stamps it through the persistence
- *   path. Stamping it again here would be the same unit twice.
+ * - `HISTORY_PREFIX + variantId` is left alone too, but the premise is narrower
+ *   than "saveHistory for the loaded variant is its only writer". THREE things
+ *   write a history key, and each is already answered for: store.js's
+ *   saveHistory rides the persisted save that stamps both its units, so
+ *   stamping here would name the same unit twice; `applyUnits` is an apply and
+ *   must not stamp at all (see `applying`); and `parkLoser` runs from the
+ *   conflict path, outside any save AND outside `applying`, so it stamps the
+ *   unit itself. Unstamped, the parked loser went up carrying no modification
+ *   time — which `resolveConflict` reads as -Infinity, so the archive that
+ *   makes newer-wins safe would have lost every conflict it ever met.
  */
 function unitsFor(logicalKey, value, previous) {
   if (classifyKey(logicalKey) !== 'synced') return [];
@@ -434,9 +483,17 @@ function onStorageFlush() {
   // once and will not name it again until it is edited again. The set is bounded
   // by the number of units, so holding costs nothing.
   if (!dirtyNotifier) return;
+  // Notified BEFORE the set is cleared, for the same reason onStorageWrite
+  // stamps before it queues: the bookkeeping that says "this is handled" must
+  // come after the thing it claims. Cleared first, a notifier that threw took a
+  // whole window's uploads with it — appStorage only logs the throw — and
+  // nothing would name those units again until they were edited again. Today's
+  // notifier is guarded and effectively cannot throw; this ordering is what
+  // makes that fact not load-bearing. A throw leaves the ids in place and they
+  // ride the next drain.
   const unitIds = [...pendingDirty];
-  pendingDirty.clear();
   dirtyNotifier(unitIds);
+  pendingDirty.clear();
 }
 
 /** Wire the interceptor onto the storage facade. main.js owns this edge too. */
@@ -548,6 +605,11 @@ export function collectUnit(unitId) {
  * unit naming a device-local key is refused: nothing should have sent it, and
  * honouring it would let one device's zoom overwrite another's.
  *
+ * A key something holds a whole in-memory copy of — the applications list, the
+ * job list, the chat threads — is not finished by the storage write either, for
+ * the same reason the résumé is not: the owner is asked to adopt what was just
+ * written, and asked FIRST whether it can. See KEY_OWNERS.
+ *
  * Every write below goes through the storage interceptor, so the whole landing
  * runs with stamping suppressed — see `applying` for what an echo would cost.
  * The flag is restored in a `finally`: this reaches store.js, which can throw,
@@ -620,6 +682,13 @@ function landFetchedUnits(units) {
     // guards résumé payloads the same way (syncUnits.js).
     if (typeof unit.payload !== 'string') continue;
 
+    // Decided BEFORE the write, exactly as the résumé's guards are, and for the
+    // same reason: a unit that reaches storage is on disk whatever its owner
+    // then does with it. See KEY_OWNERS, and interruptsLiveEditing for where a
+    // refused unit goes.
+    const owner = KEY_OWNERS.get(key);
+    if (owner?.isBusy?.()) continue;
+
     if (key === TOKEN_KEY) {
       let remote;
       try {
@@ -652,6 +721,10 @@ function landFetchedUnits(units) {
     } else {
       appStorage.setItem(key, unit.payload);
     }
+    // AFTER the write, never before — the same ordering adoptLoadedDocument
+    // takes: a module told to adopt bytes the write then failed to persist
+    // (quota) would show the user content this device does not hold.
+    owner?.adopt();
     applied += 1;
   }
 
@@ -728,10 +801,24 @@ export function parkLoser(unitId, payload) {
     changeType: CHANGE_TYPES.SYNC_CONFLICT,
   };
 
+  // Both branches below CHANGE that variant's history unit, and this is the one
+  // history write no persisted save accompanies: Swift calls parkLoser from the
+  // conflict path, outside `applying` and outside any save. The storage
+  // interceptor skips history keys (see `unitsFor`) on the premise that the
+  // persistence path stamps them, and this is the counterexample — so the stamp
+  // is taken here. Without it the unit went up with no modification time, which
+  // resolveConflict reads as -Infinity: the parked loser, which is the whole
+  // reason newer-wins destroys nothing, would lose every conflict it ever met
+  // and be overwritten by any device that had not seen the park.
+  const stampParked = () => touchUnit(`${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`);
+
   // The loaded variant: only the store can make this stick (see above). It
   // reports false for any other variant, and this is the one call that can tell
   // — `currentVariantId` is private to store.js.
-  if (store.adoptHistoryEntry(variantId, entry)) return true;
+  if (store.adoptHistoryEntry(variantId, entry)) {
+    stampParked();
+    return true;
+  }
 
   // Any other variant: nothing holds its history in memory, so the key is ours
   // to write.
@@ -756,6 +843,9 @@ export function parkLoser(unitId, payload) {
 
   const history = [...existingHistory.slice(0, at), entry, ...existingHistory.slice(at)];
   appStorage.setItem(key, JSON.stringify({ history, historyIndex: Math.max(0, current + 1) }));
+  // AFTER the write, so a quota throw above leaves no unit claiming a change
+  // that never landed — the same ordering appStorage's own observer takes.
+  stampParked();
   return true;
 }
 

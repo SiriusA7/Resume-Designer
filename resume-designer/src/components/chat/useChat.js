@@ -14,6 +14,7 @@ import { showInlineChanges } from '../../inlineChanges.js';
 import {
   loadThreads, persistThreads, makeThread, trimMessages, clearLegacyHistory,
   migrateThreads, pickCurrentThreadId, chooseThreadAfterDelete, withContextMarker,
+  registerThreadHolder,
 } from '../../chatThreads.js';
 import { getCurrentId, loadVariant, getVariantList } from '../../variantManager.js';
 
@@ -1116,6 +1117,38 @@ Let's begin!`);
     });
     return unsub;
   }, [setThreads, setCurrentThreadId, setMessages]);
+
+  // This hook holds the app's ONE live copy of the thread list, and
+  // persistThreads writes it straight back over the key — so a thread list sync
+  // landed in storage was reverted by the next send and pushed back up as a
+  // clean, uncontested update (see src/chatThreads.js). Register as its holder
+  // while mounted, the same way the store adopts a fetched résumé.
+  //
+  // `adopt` re-reads storage into this state and deliberately does NOT persist:
+  // what it adopts is exactly what the caller just wrote, and a write-back would
+  // restamp the unit and send this device's copy of what it only just received.
+  // The thread on screen is kept when it survived the replacement, so a landing
+  // never moves the user to another conversation.
+  //
+  // `isBusy` is the chat's own in-flight signal, not a flag invented for sync: a
+  // streamed reply lives only in this state until it commits into the thread
+  // list, so replacing that list mid-reply drops it with nothing holding it.
+  useEffect(() => {
+    registerThreadHolder({
+      isBusy: () => loadingRef.current || abortRef.current !== null,
+      adopt: () => {
+        const next = migrateThreads(loadThreads().threads);
+        const keep = currentThreadIdRef.current;
+        const cid = keep && next.some((t) => t.id === keep)
+          ? keep
+          : (pickCurrentThreadId(next, getCurrentId()) ?? next[0]?.id ?? null);
+        setThreads(next);
+        setCurrentThreadId(cid);
+        setMessages(next.find((t) => t.id === cid)?.messages || []);
+      },
+    });
+    return () => registerThreadHolder(null);
+  }, [setThreads, setCurrentThreadId, setMessages, loadingRef, currentThreadIdRef]);
 
   useEffect(() => {
     const onSettings = () => refresh();

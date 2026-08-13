@@ -202,6 +202,63 @@ export function persistThreads(threads) {
   }
 }
 
+// ── the live thread list ───────────────────────────────────────────────────
+//
+// This module is stateless on purpose — every function above takes threads and
+// hands threads back — but the APP holds exactly one live copy of the list:
+// useChat's React state, which `persistThreads` writes straight back over the
+// key. So a thread list `applyUnits` landed in storage lasted only until the
+// next send, which wrote the stale in-memory list over it, stamped the unit,
+// and — the transport legitimately holding the record's change tag, because the
+// page had confirmed the apply — pushed the revert up as a clean, uncontested
+// update. No conflict was raised and the other device's threads were gone.
+//
+// Same trap store.adoptDocument answers for the résumé, and the same answer:
+// ask the holder to adopt rather than writing behind its back. The holder is
+// asked rather than told for the same reason too — only it knows whether it can
+// take a replacement right now.
+//
+// Every OTHER reader of this key (deleteVariantThreadsFlow, LibraryDialog,
+// DetailPane) calls loadThreads(), which reads storage each time and therefore
+// holds nothing that could go stale.
+let holder = null;
+
+/**
+ * Install (or, with null, remove) the live thread-list holder — `{ isBusy(),
+ * adopt() }`. useChat registers itself while mounted; ChatPanel drives both the
+ * desktop panel and the native iOS chat sheet from it, so this is one holder on
+ * both platforms.
+ */
+export function registerThreadHolder(next) {
+  holder = next && typeof next.adopt === 'function' ? next : null;
+}
+
+/**
+ * Whether replacing the thread list right now would destroy work in flight.
+ *
+ * A streamed reply lives ONLY in the hook's state until it commits, and it
+ * commits by mapping over the thread list — so a list replaced mid-stream takes
+ * the reply with it, with no history and nothing else holding it. Exactly the
+ * exposure store.isBusyEditing covers for the résumé's inline edit, and it is
+ * answered from the same place the chat's own flows read it: the hook's
+ * existing `loading` / in-flight-stream refs, not a new flag invented for sync.
+ *
+ * The caller REFUSES on a true rather than deferring — see
+ * src/sync/syncModel.js, where refusing shortens the applied count, the
+ * transport forfeits the record's change tag, and the unit is re-offered.
+ */
+export function threadHolderBusy() {
+  return holder?.isBusy?.() === true;
+}
+
+/**
+ * Ask the holder to take the thread list now in storage. A no-op when nothing
+ * holds one, which is the honest answer: loadThreads() re-reads storage.
+ */
+export function adoptStoredThreads() {
+  holder?.adopt();
+}
+
 // Clear the legacy single-thread history key (used by /clear).
 export function clearLegacyHistory() {
   try {

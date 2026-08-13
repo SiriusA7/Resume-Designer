@@ -1024,6 +1024,23 @@ describe('the Design sheet commands', () => {
     expect(collectUnit).toHaveBeenCalledWith('resume:unknown');
   });
 
+  it('republishes after landing units, so an open sheet is not left on the old projection', async () => {
+    // Every sheet projects on demand and nothing else re-reads it, so a landing
+    // that replaced the job list or the application history would otherwise sit
+    // behind whatever the sheet last drew until the user touched something.
+    const applyUnits = vi.fn(() => ({ applied: 1 }));
+    const { postMessage, send } = await mount({ applyUnits });
+    await settled();
+    const before = postMessage.mock.calls.filter(([m]) => m.kind === 'snapshot').length;
+
+    expect(send({ type: 'syncApply', units: '[{"id":"key:x","payload":"[]"}]' }))
+      .toEqual({ ok: true, result: { applied: 1 } });
+    await settled();
+
+    expect(postMessage.mock.calls.filter(([m]) => m.kind === 'snapshot').length)
+      .toBeGreaterThan(before);
+  });
+
   it('names the active profile in the activation, since Swift has no way to know it', async () => {
     // The CloudKit zone is one per profile and `getActiveProfileId` lives in
     // JS, so the activation is where the native side learns which one it is

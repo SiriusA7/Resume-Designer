@@ -1537,7 +1537,16 @@ export function initIOSShell(deps) {
       // here is what let a batch the page never applied leave its change tags
       // behind, and a tag for content this device does not hold makes the next
       // save of that unit a clean update that destroys the server's copy.
-      return deps.applyUnits(parsed);
+      const result = deps.applyUnits(parsed);
+      // Republished like every other mutating route here, and for the same
+      // reason: an open sheet projects on demand and nothing else re-reads it.
+      // A landing that changed the job list or the application history would
+      // otherwise sit behind whatever the sheet last drew, until the user
+      // happened to touch something. (The chat sheet gets there anyway —
+      // ChatPanel publishes on every engine change, and adopting a thread list
+      // is one — so this is the other screens catching up with it.)
+      publish();
+      return result;
     },
     syncParkLoser: ({ unitId, payload }) =>
       deps.parkLoser(String(unitId ?? ''), String(payload ?? '')),

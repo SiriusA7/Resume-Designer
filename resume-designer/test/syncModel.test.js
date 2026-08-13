@@ -55,6 +55,19 @@ const { store: resumeStore } = await import('../src/store.js');
 const {
   initPersistence, setPersistedSaveHandler, setSyncDirtyNotifier,
 } = await import('../src/persistence.js');
+// The three modules that hold a whole synced key in memory. Imported after the
+// mock like everything else here, so their own appStorage reads go through the
+// same disk map.
+const {
+  initApplications, addApplication, getAllApplications,
+  subscribeApplications, getApplicationsSnapshot,
+} = await import('../src/applications.js');
+const {
+  initJobDescriptions, addJobDescription, getAllJobDescriptions, subscribeJobDescriptions,
+} = await import('../src/jobDescriptions.js');
+const {
+  loadThreads, persistThreads, makeThread, registerThreadHolder,
+} = await import('../src/chatThreads.js');
 
 const DATA = 'resume-designer-data';
 const AT = '2026-08-09T00:00:00.000Z';
@@ -77,6 +90,9 @@ beforeEach(() => {
   // No inline editing session unless a test says so — the app registers a real
   // probe from main.js, and nothing else in this file has a DOM.
   registerEditingProbe(null);
+  // Nobody holds the thread list unless a test says so — the app registers
+  // useChat from ChatPanel, and this file mounts no React tree.
+  registerThreadHolder(null);
 });
 
 // A résumé unit's payload is the whole variant RECORD, exactly as splitData
@@ -737,6 +753,178 @@ describe('applyUnits and the variant the app has OPEN', () => {
   });
 });
 
+// The same trap as the résumé's, one layer out: a module that holds its WHOLE
+// key in memory and rewrites the key from that copy on the next local write
+// reverts anything sync landed underneath it — and, the transport legitimately
+// holding the record's change tag by then, pushes the revert back as a clean
+// uncontested update that destroys the other device's content with no conflict
+// raised. Three modules do it, in three different ownership shapes.
+describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
+  const keyUnit = (key, payload, modifiedAt = AT) => ({
+    id: `key:${key}`, kind: 'plain', payload, modifiedAt,
+  });
+
+  const APPS_KEY = 'resume-designer-applications';
+  const JOBS_KEY = 'resume-designer-job-descriptions';
+  const THREADS_KEY = 'resume-designer-chat-threads';
+
+  const storedIds = (key) => JSON.parse(disk.get(physical(key))).map((r) => r.id);
+
+  describe('applications — a cache with its own React subscribers', () => {
+    it('survives the next local write through the module', () => {
+      initApplications();
+
+      expect(applyUnits([keyUnit(APPS_KEY, JSON.stringify([
+        { id: 'app-iphone', variantId: 'v-1', status: 'applied', statusHistory: [] },
+      ]))]).applied).toBe(1);
+      // A perfectly ordinary local write — the record it saves is not the point,
+      // the LIST it serializes is.
+      addApplication({ variantId: 'v-1', variantName: 'Design Engineer' });
+
+      expect(storedIds(APPS_KEY)).toContain('app-iphone');
+      expect(getAllApplications().map((a) => a.id)).toContain('app-iphone');
+    });
+
+    it('reaches the screen, not just the cache', () => {
+      // React reads this module through useSyncExternalStore
+      // (hooks/useApplications.js), so a cache corrected without notifying
+      // leaves the Library showing a list that no longer exists.
+      initApplications();
+      const seen = vi.fn();
+      const stop = subscribeApplications(seen);
+
+      applyUnits([keyUnit(APPS_KEY, JSON.stringify([{ id: 'app-iphone' }]))]);
+      stop();
+
+      expect(seen).toHaveBeenCalled();
+      expect(getApplicationsSnapshot().map((a) => a.id)).toContain('app-iphone');
+    });
+
+    it('never empties the list off a unit it cannot read', () => {
+      // Absence is never deletion. `null` parses fine and would land as an
+      // empty list; the cache keeps what it has, and the next local write puts
+      // it back on disk.
+      initApplications();
+      addApplication({ variantId: 'v-1', variantName: 'Mine' });
+      const mine = getAllApplications()[0].id;
+
+      applyUnits([keyUnit(APPS_KEY, 'null')]);
+
+      expect(getAllApplications().map((a) => a.id)).toEqual([mine]);
+    });
+  });
+
+  describe('job descriptions — a cache the UI re-reads, with no second copy', () => {
+    // The module cache outlives a test, and initJobDescriptions() deliberately
+    // KEEPS it when the key is absent (an empty read must not wipe a seeded
+    // list). Seed the key so each test's init really starts from nothing.
+    beforeEach(() => { disk.set(physical(JOBS_KEY), '[]'); });
+
+    it('survives the next local write through the module', () => {
+      initJobDescriptions();
+
+      expect(applyUnits([keyUnit(JOBS_KEY, JSON.stringify([
+        { id: 'jd-iphone', title: 'Staff Engineer', company: 'Acme', isActive: true },
+      ]))]).applied).toBe(1);
+      addJobDescription({ title: 'Added here', company: 'Globex', description: 'x' });
+
+      expect(storedIds(JOBS_KEY)).toContain('jd-iphone');
+      expect(getAllJobDescriptions().map((j) => j.id)).toContain('jd-iphone');
+    });
+
+    it('tells the dialog to re-read, so an open Jobs list is not stale', () => {
+      initJobDescriptions();
+      const seen = vi.fn();
+      const stop = subscribeJobDescriptions(seen);
+
+      applyUnits([keyUnit(JOBS_KEY, JSON.stringify([{ id: 'jd-iphone' }]))]);
+      stop();
+
+      expect(seen).toHaveBeenCalled();
+    });
+
+    it('never empties the list off a unit it cannot read', () => {
+      initJobDescriptions();
+      addJobDescription({ title: 'Mine', company: 'Mine', description: 'x' });
+      const mine = getAllJobDescriptions()[0].id;
+
+      applyUnits([keyUnit(JOBS_KEY, 'null')]);
+
+      expect(getAllJobDescriptions().map((j) => j.id)).toEqual([mine]);
+    });
+  });
+
+  describe('chat threads — a cache that lives in the React tree', () => {
+    // chatThreads.js is stateless by design: every function takes threads and
+    // hands threads back. The one live copy is useChat's React state, and
+    // `persistThreads` writes THAT back. This stands in for the hook — the same
+    // hold-and-write-back shape, without a renderer — and `busy` stands in for
+    // its `loading`/in-flight-stream refs.
+    const liveChat = () => {
+      const holder = {
+        busy: false,
+        threads: loadThreads().threads,
+        isBusy: () => holder.busy,
+        adopt: () => { holder.threads = loadThreads().threads; },
+      };
+      registerThreadHolder(holder);
+      return holder;
+    };
+
+    const theirs = [{
+      id: 'thread-iphone', name: 'From the iPhone', messages: [],
+      createdAt: AT, updatedAt: AT, homeVariantId: null,
+    }];
+
+    beforeEach(() => {
+      disk.set(physical(THREADS_KEY), JSON.stringify([{
+        id: 'thread-mine', name: 'Mine', messages: [],
+        createdAt: AT, updatedAt: AT, homeVariantId: null,
+      }]));
+    });
+
+    it('survives the next local write through the module', () => {
+      const chat = liveChat();
+
+      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      // What useChat does on every send: rebuild the list from the copy it
+      // holds and persist it.
+      persistThreads([...chat.threads, makeThread('Typed here', [], 'v-1')]);
+
+      expect(storedIds(THREADS_KEY)).toContain('thread-iphone');
+    });
+
+    it('refuses a thread list while a reply is in flight, rather than repainting over it', () => {
+      // Same exposure as the résumé's inline edit, same answer. A streamed
+      // reply exists only in React state until it commits, and it commits by
+      // mapping over the thread list — so replacing that list mid-stream drops
+      // the reply on the floor with nothing anywhere holding it.
+      const chat = liveChat();
+      chat.busy = true;
+
+      const { applied } = applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]);
+
+      expect(applied).toBe(0);
+      // Refused on disk too: landing there and not in the hook is the
+      // disagreement the refusal exists to stop.
+      expect(storedIds(THREADS_KEY)).toEqual(['thread-mine']);
+
+      // And nothing is lost by refusing — the short count forfeits the change
+      // tag, and the unit the transport re-offers lands once the reply is in.
+      chat.busy = false;
+      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      expect(storedIds(THREADS_KEY)).toEqual(['thread-iphone']);
+    });
+
+    it('lands with nobody holding a copy, because loadThreads reads storage each time', () => {
+      registerThreadHolder(null);
+
+      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      expect(loadThreads().threads.map((t) => t.id)).toEqual(['thread-iphone']);
+    });
+  });
+});
+
 describe('parkLoser', () => {
   // The losing version, in the shape the transport really hands over: a
   // `resume:` unit's payload, which is the whole variant RECORD. A history
@@ -909,6 +1097,49 @@ describe('parkLoser', () => {
   it('refuses a unit that is not a résumé, which has no history to park in', () => {
     expect(parkLoser('key:resume-designer-applications', '[]')).toBe(false);
     expect(parkLoser('key:resume-designer-history-v-1', '{}')).toBe(false);
+  });
+
+  // A park CHANGES that variant's history unit, and it is the one history write
+  // no persisted save accompanies: Swift calls it from the conflict path,
+  // outside `applying` and outside any save. The storage interceptor skips
+  // history keys on the premise that the persistence path stamps them, so an
+  // unstamped park left the unit carrying `modifiedAt: null` — which
+  // resolveConflict reads as -Infinity. Swift names the record to CloudKit
+  // either way, so the parked loser went up as a unit that loses EVERY conflict
+  // it ever meets: the archive the whole newer-wins design rests on, quietly
+  // beaten by anything.
+  const stampOf = (unitId) => JSON.parse(disk.get(physical('resume-designer-sync-state')) ?? '{}')[unitId];
+
+  it('stamps the history unit it changed for the LOADED variant', () => {
+    resumeStore.setData({ name: 'On screen' }, true, 'v-1');
+    expect(parkLoser('resume:v-1', lostPayload('v-1'))).toBe(true);
+
+    const unitId = `key:${BACKUP_HISTORY_PREFIX}v-1`;
+    const { modifiedAt } = stampOf(unitId) ?? {};
+    expect(new Date(modifiedAt).toISOString()).toBe(modifiedAt);
+  });
+
+  it('stamps the history unit it changed for a variant that is NOT loaded', () => {
+    // The other branch — the direct history-key write — mutates the same unit
+    // and needs the same stamp.
+    resumeStore.setData({ name: 'On screen' }, true, 'v-1');
+    expect(parkLoser('resume:v-cold', lostPayload('v-cold'))).toBe(true);
+
+    const unitId = `key:${BACKUP_HISTORY_PREFIX}v-cold`;
+    const { modifiedAt } = stampOf(unitId) ?? {};
+    expect(new Date(modifiedAt).toISOString()).toBe(modifiedAt);
+  });
+
+  it('leaves the parked history a unit that can WIN a later conflict, not one read as -Infinity', () => {
+    resumeStore.setData({ name: 'On screen' }, true, 'v-1');
+    parkLoser('resume:v-1', lostPayload('v-1'));
+
+    const unitId = `key:${BACKUP_HISTORY_PREFIX}v-1`;
+    const local = collectUnit(unitId);
+    expect(local.modifiedAt).not.toBe(null);
+    // An older remote copy — one that does not hold the park — must not beat it.
+    const remote = { id: unitId, modifiedAt: '2024-01-01T00:00:00.000Z' };
+    expect(resolveConflict(local, remote).winner).toBe(local);
   });
 });
 

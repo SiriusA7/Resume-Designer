@@ -54,27 +54,64 @@ export function getApplicationsSnapshot() {
 }
 
 /**
- * Initialize applications from storage. Self-heals an id-keyed object map to
- * the array shape this module requires (same legacy hazard jobDescriptions
- * hit) and degrades garbage to an empty list.
+ * The stored list, or `null` when nothing readable is there. Self-heals an
+ * id-keyed object map to the array shape this module requires (same legacy
+ * hazard jobDescriptions hit).
+ *
+ * `null` rather than `[]` for an unreadable value, because the two callers
+ * below need opposite answers to it: a BOOT with nothing stored starts empty,
+ * while an ADOPTION that cannot read what it was told about must keep the list
+ * it has — see adoptStoredApplications.
  */
-export function initApplications() {
+function readStoredApplications() {
+  const raw = appStorage.getItem(STORAGE_KEY);
+  if (!raw) return null;
   try {
-    const stored = appStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      applications = Array.isArray(parsed)
-        ? parsed
-        : (parsed && typeof parsed === 'object' ? Object.values(parsed) : []);
-    } else {
-      applications = [];
-    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return parsed && typeof parsed === 'object' ? Object.values(parsed) : null;
   } catch (e) {
     console.error('Failed to load applications:', e);
-    applications = [];
+    return null;
   }
+}
+
+/**
+ * Initialize applications from storage, degrading garbage to an empty list.
+ */
+export function initApplications() {
+  applications = readStoredApplications() ?? [];
   notify();
   return applications;
+}
+
+/**
+ * Take the list `applyUnits` has just written to storage.
+ *
+ * The cache above is this module's whole truth: every mutation edits it and
+ * `save()` serializes it back over the key. So an applications list that
+ * arrived from another device lasted exactly until the next local change,
+ * which wrote the stale cache over it, stamped the unit, and — the transport
+ * legitimately holding the record's change tag, because the page had confirmed
+ * the apply — pushed the revert up as a clean, uncontested update. No conflict
+ * was raised and the other device's records were gone. Same trap as
+ * store.adoptDocument's, and the same answer: the owner adopts, rather than
+ * being written behind.
+ *
+ * `notify()` and not merely a cache swap: React reads this module through
+ * useSyncExternalStore (hooks/useApplications.js), so a corrected cache with no
+ * notification leaves the Library rendering a list that no longer exists.
+ *
+ * A value it cannot read leaves the cache alone — absence is never deletion,
+ * and one malformed remote unit must not empty someone's application history.
+ * The list this device holds is then still the one the next local write puts
+ * back on disk, so the bad bytes are corrected rather than inherited.
+ */
+export function adoptStoredApplications() {
+  const stored = readStoredApplications();
+  if (!stored) return;
+  applications = stored;
+  notify();
 }
 
 function save() {

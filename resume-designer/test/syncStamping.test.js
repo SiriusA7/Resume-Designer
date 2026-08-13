@@ -22,10 +22,31 @@ import {
   initPersistence, setPersistedSaveHandler, setSyncDirtyNotifier,
 } from '../src/persistence.js';
 import { registerPersistedSaveHandler } from '../src/sync/syncModel.js';
-import { BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
+import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
+import { SYNCED_SHARED_KEYS, classifyKey } from '../src/sync/syncKeys.js';
 
 const DATA = 'resume-designer-data';
 const STATE = 'resume-designer-sync-state';
+
+/**
+ * Every synced key the app writes as a whole key — DERIVED, not copied.
+ *
+ * The interceptor covers `classifyKey`'s list by construction, so a key added
+ * to the app later is stamped whether or not anyone remembers to cover it. A
+ * hand-copied list here would NOT follow, and the new key would ship with
+ * interceptor coverage and no test coverage — the drift this whole design was
+ * put at a choke point to avoid. Both inventories are read, because
+ * `SYNCED_SHARED_KEYS` members are not reached by the `BACKUP_FIXED_KEYS`
+ * check inside classifyKey.
+ *
+ * Two exclusions, both of them the interceptor's own documented carve-outs
+ * rather than conveniences: the data blob, which has no `key:` unit at all and
+ * travels as its `resume:`/`data:` units, and the per-variant history keys,
+ * which the persistence path stamps and which are a PREFIX rather than a
+ * member of either list, so they are absent here anyway.
+ */
+const SYNCED_KEYS = [...new Set([...BACKUP_FIXED_KEYS, ...SYNCED_SHARED_KEYS])]
+  .filter((key) => classifyKey(key) === 'synced' && key !== DATA);
 
 function makeBackend(initial = {}) {
   const files = new Map(Object.entries(initial));
@@ -106,24 +127,19 @@ describe('a write to a synced key stamps its unit and notifies', () => {
     expect(stampedIds()).toEqual(['key:resume-designer-profiles']);
   });
 
-  it('stamps every remaining synced key category the app writes', async () => {
-    const keys = [
-      'resume-designer-job-descriptions',
-      'resume-designer-chat-threads',
-      'resume-designer-chat-history',
-      'resume-designer-learned-answers',
-      'resume-designer-onboarding-complete',
-      'resume-edit-hint-dismissed',
-      'resume-header-style',
-      'resume-accent-settings',
-      'resume-font-settings',
-      'resume-spacing-settings',
-      'resume-photo-settings',
-    ];
-    for (const key of keys) appStorage.setItem(key, '"x"');
+  it('stamps EVERY synced key, derived from the sync policy rather than listed here', async () => {
+    // A vacuous pass is the one way this test could stop meaning anything, so
+    // the derivation is checked before it is used: an empty or collapsed list
+    // would make the loop below assert nothing at all.
+    expect(SYNCED_KEYS.length).toBeGreaterThan(10);
+    expect(SYNCED_KEYS).toContain('resume-designer-applications');
+    expect(SYNCED_KEYS).toContain('resume-designer-profiles');
+    expect(SYNCED_KEYS).not.toContain('resume-zoom');
+
+    for (const key of SYNCED_KEYS) appStorage.setItem(key, '"x"');
     await settle();
 
-    expect(stampedIds()).toEqual(keys.map((k) => `key:${k}`).sort());
+    expect(stampedIds()).toEqual(SYNCED_KEYS.map((k) => `key:${k}`).sort());
   });
 
   it('records a real ISO time, not a placeholder', async () => {
@@ -136,6 +152,13 @@ describe('a write to a synced key stamps its unit and notifies', () => {
 
 describe('device-local keys are never stamped or sent', () => {
   it('stamps nothing for the API key', async () => {
+    // NOTE: this passes on 'unknown', not on the device-local rule it looks
+    // like it tests. `resume-designer-openrouter-key` is not in
+    // BACKUP_FIXED_KEYS, so classifyKey answers 'unknown' for it even with no
+    // DEVICE_LOCAL_KEYS entry — and the interceptor stamps only 'synced'. It is
+    // still worth asserting (a credential must never be stamped or named,
+    // whatever the route), but it does NOT pin the key's presence in
+    // DEVICE_LOCAL_KEYS. syncKeys.test.js is what pins that.
     appStorage.setItem('resume-designer-openrouter-key', 'sk-secret');
     await settle();
 
@@ -312,6 +335,29 @@ describe('the notification is coalesced, not one per write', () => {
     await settle();
 
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('keeps a batch the notifier threw on instead of dropping those uploads', async () => {
+    // The ids were cleared BEFORE the notifier ran, and the wrapper around it
+    // only logs — so a notifier that threw took a whole window's uploads with
+    // it, and nothing would name those units again until they were edited
+    // again. Today's notifier is guarded and effectively cannot throw; this is
+    // the ordering that makes that irrelevant.
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setStorageDirtyNotifier(() => { throw new Error('the bridge went away'); });
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+
+    setStorageDirtyNotifier(notify);
+    appStorage.setItem('resume-designer-job-descriptions', '[]');
+    await settle();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0].sort()).toEqual([
+      'key:resume-designer-applications',
+      'key:resume-designer-job-descriptions',
+    ]);
+    logged.mockRestore();
   });
 
   it('holds ids written before the shell installed a notifier', async () => {
