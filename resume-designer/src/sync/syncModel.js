@@ -324,7 +324,7 @@ const KEY_OWNERS = new Map([
 ]);
 
 /**
- * Whether a fetched résumé is newer than the copy this device holds.
+ * Whether a fetched SNAPSHOT unit is newer than the copy this device holds.
  *
  * Newer wins — on THIS path too. The fetch path merged every résumé
  * unconditionally, which was survivable only because of the bug below it: the
@@ -333,10 +333,32 @@ const KEY_OWNERS = new Map([
  * the newer local version with it. That happens whenever this device edited
  * while the transport was down, or between a send and this pull.
  *
+ * IT ASKS THE QUESTION FOR EVERY SNAPSHOT UNIT, not just `resume:`, and that
+ * generalisation is the whole of this rule. Guarding the résumés alone left
+ * `data:settings`, `data:userProfile`, the applications and job lists, the chat
+ * threads, the learned answers and the profile registry landing unconditionally
+ * — and the race that costs is worse than losing the newer copy, because it
+ * LEGITIMISES the older one:
+ *
+ *  1. A local edit writes the key, which stamps the unit here and queues the
+ *     native dirty notification, which waits for the storage drain.
+ *  2. An OLDER server record arrives inside that window and is applied. The
+ *     newer local value is overwritten and the module that owns the key adopts
+ *     the old one.
+ *  3. The already-pending notification then uploads that STALE payload carrying
+ *     the NEWER local timestamp, under the change tag the apply just earned. It
+ *     goes up as a clean, uncontested update, and no later comparison can undo
+ *     it: the old version is now the newest one everywhere.
+ *
  * `resolveConflict` rather than a comparison written out here, so the fetch
  * path and the save-time conflict path (OPSync.swift's `localWins`) cannot
  * disagree about who won — including on the two cases that decide it: an
  * unknown local time LOSES to a real one, and the remote takes an exact tie.
+ * A device that has never stamped a unit scores -Infinity for it, so a fresh
+ * install still receives everything.
+ *
+ * NOT asked of the two append-shaped units — see `accumulatorFor`. They union,
+ * and a union does not need to be newer to be right.
  *
  * Refusing costs nothing that is not already designed for: the short `applied`
  * count makes the transport forfeit the record's change tag, so the next save
@@ -344,9 +366,84 @@ const KEY_OWNERS = new Map([
  * loser is parked. Nothing is destroyed by a refusal — the remote copy is still
  * on the server and on the device that wrote it.
  */
-function outranksLocalResume(unit, recorded) {
+function outranksLocalCopy(unit, recorded) {
   const local = { id: unit.id, modifiedAt: modifiedAtFor(unit.id, recorded) };
   return resolveConflict(local, unit).winner !== local;
+}
+
+/**
+ * How an append-shaped key lands, or `null` when the key is a snapshot.
+ *
+ * ONE list, used for both halves of the decision — which units are exempt from
+ * newer-wins above, and how those units are written below. Two lists would be
+ * the way a third accumulating unit gets a merge branch and silently keeps the
+ * snapshot guard, which would drop exactly the entries the merge exists to
+ * keep.
+ *
+ * WHICH UNITS BELONG HERE is decided by the spec's rule (see syncMerge.js's
+ * header): a unit whose payload GROWS by accumulation cannot take newer-wins,
+ * because the newer document is missing whatever the other device appended.
+ * The test that separates the two in this app is whether the app ever REMOVES
+ * an element on purpose. The lists that look append-shaped — applications, job
+ * descriptions, chat threads, learned answers, the profile registry — all have
+ * an authored delete (`deleteApplication`, `deleteJobDescription`, the chat's
+ * delete, `deleteLearnedAnswer`, `deleteProfile`), so unioning them would
+ * resurrect what somebody deliberately deleted, and the newest whole-list write
+ * is the authoritative state. The two below have no such delete: token events
+ * are never pruned (`tokenTrackingService.js`), and a version-history entry is
+ * never individually removed — which is also why a conflict's loser can be
+ * PARKED in one.
+ */
+function accumulatorFor(key) {
+  if (key === TOKEN_KEY) return landTokenUsage;
+  if (key.startsWith(HISTORY_PREFIX)) return landHistory;
+  return null;
+}
+
+/**
+ * Union token usage into what this device holds. Both devices append events, so
+ * the newer document is not the whole truth — see mergeTokenUsage.
+ *
+ * `false` when the payload will not parse, which shortens `applied` exactly as
+ * every other refusal here does.
+ */
+function landTokenUsage(key, unit) {
+  let remote;
+  try {
+    remote = JSON.parse(unit.payload);
+  } catch {
+    return false;
+  }
+  appStorage.setItem(key, JSON.stringify(mergeTokenUsage(readJSON(key, null), remote)));
+  return true;
+}
+
+/**
+ * Union version history into what this device holds.
+ *
+ * History accumulates, so it merges rather than replaces — and it is the one
+ * unit where replacing was self-defeating: a `setItem` here overwrote local
+ * history wholesale, destroying a loser parkLoser had just parked to make
+ * newer-wins safe.
+ *
+ * The loaded variant's history lives in store.js's in-memory array and
+ * saveHistory rewrites the whole key from it, so a merge written to storage
+ * here is undone by the next edit — the same trap parkLoser documents, and the
+ * same answer: hand it to the store, which is the only thing that can tell
+ * (currentVariantId is private to it).
+ */
+function landHistory(key, unit) {
+  let remote;
+  try {
+    remote = JSON.parse(unit.payload);
+  } catch {
+    return false;
+  }
+  const variantId = key.slice(HISTORY_PREFIX.length);
+  if (!store.adoptHistory(variantId, remote)) {
+    appStorage.setItem(key, JSON.stringify(mergeHistory(readJSON(key, null), remote)));
+  }
+  return true;
 }
 
 /**
@@ -671,13 +768,15 @@ export function collectUnit(unitId) {
  * which never travelled — is left alone, and a résumé for the variant the app
  * has OPEN is handed to the store as well, because that document lives in
  * memory too (adoptLoadedDocument). A résumé is refused outright when it
- * carries no document (landsAsResume), when it would land on an edit still in
- * flight (interruptsLiveEditing), or when it is older than this device's own
- * copy (outranksLocalResume): newer wins here as everywhere, and a refusal
- * destroys nothing — see interruptsLiveEditing for where a refused unit goes.
+ * carries no document (landsAsResume) and when it would land on an edit still
+ * in flight (interruptsLiveEditing); a refusal destroys nothing — see
+ * interruptsLiveEditing for where a refused unit goes.
+ *
  * Token usage and version history, the two units that accumulate, take the
- * union rule; everything else is a snapshot and is written as it arrived. A
- * unit naming a device-local key is refused: nothing should have sent it, and
+ * union rule (accumulatorFor). EVERY OTHER unit is a snapshot, and every
+ * snapshot must be newer than the copy this device holds or it is refused
+ * (outranksLocalCopy) — résumés, both `data:` fields and every plain key alike.
+ * A unit naming a device-local key is refused: nothing should have sent it, and
  * honouring it would let one device's zoom overwrite another's.
  *
  * A key something holds a whole in-memory copy of — the applications list, the
@@ -775,25 +874,29 @@ function landFetchedUnits(units) {
   // tells a no-op from a failure. Filtering by the same rules makes the number
   // the truth, and leaves the blob untouched when nothing at all can land.
   //
-  // Three more rules apply to a résumé, for three different reasons and to the
-  // same effect — it must not land, and the count has to say so. Every one of
-  // them is decided HERE rather than downstream, because a unit that reaches
-  // `mergeData` is on disk whatever the store then does with it, and disk
-  // disagreeing with memory is the failure this whole path is written to avoid:
-  // it must carry a document (landsAsResume), it must not land on top of an
-  // edit in flight (interruptsLiveEditing), and it must be newer than the copy
-  // this device holds (outranksLocalResume).
+  // Four more rules, for four different reasons and to the same effect — the
+  // unit must not land, and the count has to say so. Every one of them is
+  // decided HERE rather than downstream, because a unit that reaches `mergeData`
+  // is on disk whatever the store then does with it, and disk disagreeing with
+  // memory is the failure this whole path is written to avoid. A résumé must
+  // carry a document (landsAsResume) and must not land on top of an edit in
+  // flight (interruptsLiveEditing); a `data:` field must be a value of the shape
+  // that field holds (landsAsDataField) and must not land on top of an open
+  // profile edit (interruptsProfileEditing). BOTH kinds are snapshots, so both
+  // must also be newer than the copy this device holds (outranksLocalCopy).
   const recorded = state();
   const landing = incoming.filter((unit) => {
     const id = typeof unit?.id === 'string' ? unit.id : '';
     if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) return false;
     if (!parsesAsJSON(unit.payload)) return false;
     if (!id.startsWith(RESUME_UNIT_PREFIX)) {
-      return landsAsDataField(unit) && !interruptsProfileEditing(unit);
+      return landsAsDataField(unit)
+        && !interruptsProfileEditing(unit)
+        && outranksLocalCopy(unit, recorded);
     }
     return landsAsResume(unit)
       && !interruptsLiveEditing(unit)
-      && outranksLocalResume(unit, recorded);
+      && outranksLocalCopy(unit, recorded);
   });
   if (landing.length > 0) {
     const blob = readJSON(DATA_KEY, {});
@@ -830,36 +933,16 @@ function landFetchedUnits(units) {
     if (owner && !owner.lands(unit.payload)) continue;
     if (owner?.isBusy?.()) continue;
 
-    if (key === TOKEN_KEY) {
-      let remote;
-      try {
-        remote = JSON.parse(unit.payload);
-      } catch {
-        continue;
-      }
-      const merged = mergeTokenUsage(readJSON(TOKEN_KEY, null), remote);
-      appStorage.setItem(TOKEN_KEY, JSON.stringify(merged));
-    } else if (key.startsWith(HISTORY_PREFIX)) {
-      // Version history accumulates, so it merges rather than replaces — and
-      // it is the one unit where replacing was self-defeating: a `setItem`
-      // here overwrote local history wholesale, destroying a loser parkLoser
-      // had just parked to make newer-wins safe.
-      let remote;
-      try {
-        remote = JSON.parse(unit.payload);
-      } catch {
-        continue;
-      }
-      const variantId = key.slice(HISTORY_PREFIX.length);
-      // The loaded variant's history lives in store.js's in-memory array and
-      // saveHistory rewrites the whole key from it, so a merge written to
-      // storage here is undone by the next edit — the same trap parkLoser
-      // documents, and the same answer: hand it to the store, which is the
-      // only thing that can tell (currentVariantId is private to it).
-      if (!store.adoptHistory(variantId, remote)) {
-        appStorage.setItem(key, JSON.stringify(mergeHistory(readJSON(key, null), remote)));
-      }
+    const accumulate = accumulatorFor(key);
+    if (accumulate) {
+      if (!accumulate(key, unit)) continue;
     } else {
+      // A snapshot, so newer wins — decided BEFORE the write like every other
+      // refusal here, and by the same `resolveConflict` the résumés and the
+      // save-time conflict path use. See `outranksLocalCopy` for the race an
+      // unguarded write loses, which destroys the local edit AND promotes the
+      // stale copy to newest.
+      if (!outranksLocalCopy(unit, recorded)) continue;
       appStorage.setItem(key, unit.payload);
     }
     // AFTER the write, never before — the same ordering adoptLoadedDocument

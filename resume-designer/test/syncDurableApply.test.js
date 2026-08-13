@@ -17,19 +17,24 @@
  * the fetched value while the disk does not, which is exactly the state a
  * memory-asserting test would have called a pass.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   appStorage, initAppStorage, __resetAppStorageForTests, setProfileMapping,
   setStorageWriteObserver,
 } from '../src/appStorage.js';
 import {
-  applyUnits, installStorageStamping, registerEditingProbe,
+  applyUnits, collectUnit, installStorageStamping, registerEditingProbe,
 } from '../src/sync/syncModel.js';
 
 const DATA = 'resume-designer-data';
 const APPS = 'resume-designer-applications';
+const TOKENS = 'resume-designer-token-usage';
 const STATE = 'resume-designer-sync-state';
 const AT = '2026-08-09T00:00:00.000Z';
+// Older and newer than a stamp minted by `new Date()` while the test runs,
+// which is what a local edit gets.
+const OLD = '2020-01-01T00:00:00.000Z';
+const FUTURE = '2099-01-01T00:00:00.000Z';
 
 const SEEDED_BLOB = JSON.stringify({
   variants: { 'v-1': { name: 'Design Engineer', data: { name: 'Ada' } } },
@@ -170,6 +175,119 @@ describe('an apply is not confirmed until the bytes are on disk', () => {
     // otherwise works rather than as the only behaviour there is.
     expect(await applyUnits([appsUnit([{ id: 'app-9' }])])).toEqual({ applied: 1 });
     expect(onDisk(backend, APPS)).toEqual([{ id: 'app-9' }]);
+  });
+});
+
+/**
+ * THE RACE, and it is why these live here rather than in syncModel.test.js: it
+ * only exists in the gap between a local write reaching the cache and the same
+ * bytes reaching the disk, and the mocked facade in that file has no such gap.
+ *
+ * A local edit stamps its unit and queues the native dirty notification, which
+ * waits for the storage drain. An OLDER server record arriving inside that
+ * window used to land unconditionally for everything except a résumé — so the
+ * newer local value was overwritten, its owner adopted the old one, and the
+ * already-pending notification then uploaded THAT payload carrying the newer
+ * local timestamp and the change tag the apply had just earned. The older
+ * version did not merely win; it became the newest version everywhere, and no
+ * later comparison could undo it.
+ */
+describe('an older remote snapshot cannot overwrite a newer local edit', () => {
+  beforeEach(() => {
+    // The stamping the race depends on: without the interceptor a local write
+    // records no modification time and there is nothing to compare against.
+    installStorageStamping(setStorageWriteObserver);
+  });
+
+  afterEach(() => {
+    setStorageWriteObserver(null);
+  });
+
+  it('keeps the local blob field on DISK when an older data: unit arrives before the drain', async () => {
+    const blob = JSON.parse(appStorage.getItem(DATA));
+    blob.settings = { pageSize: 'a4' };
+    appStorage.setItem(DATA, JSON.stringify(blob));
+
+    // Mid-window: the cache holds the local edit, the disk still holds the
+    // seeded value, and the notification for `data:settings` has not gone out.
+    expect(onDisk(backend, DATA).settings).toEqual({ pageSize: 'letter' });
+
+    const { applied } = await applyUnits([{
+      id: 'data:settings',
+      kind: 'plain',
+      payload: JSON.stringify({ pageSize: 'legal' }),
+      modifiedAt: OLD,
+    }]);
+
+    // Refused, so the transport forfeits the tag and the record comes back down
+    // the conflict path where both copies are compared.
+    expect(applied).toBe(0);
+    await appStorage.flush();
+    expect(onDisk(backend, DATA).settings).toEqual({ pageSize: 'a4' });
+  });
+
+  it('keeps the local key on DISK when an older key: unit arrives before the drain', async () => {
+    appStorage.setItem(APPS, JSON.stringify([{ id: 'typed-just-now' }]));
+    expect(onDisk(backend, APPS)).toEqual([]);
+
+    const { applied } = await applyUnits([{
+      id: `key:${APPS}`, kind: 'plain', payload: JSON.stringify([{ id: 'stale' }]), modifiedAt: OLD,
+    }]);
+
+    expect(applied).toBe(0);
+    await appStorage.flush();
+    expect(onDisk(backend, APPS)).toEqual([{ id: 'typed-just-now' }]);
+    // The third step of the race, asserted directly: whatever the pending
+    // notification uploads under this device's fresh stamp is the local text,
+    // never the stale copy that would otherwise have been promoted to newest.
+    expect(JSON.parse(collectUnit(`key:${APPS}`).payload)).toEqual([{ id: 'typed-just-now' }]);
+  });
+
+  it('still lands a NEWER remote key unit over the same local edit', async () => {
+    // The control: the guard is a comparison, not a refusal to accept anything
+    // that meets a local stamp.
+    appStorage.setItem(APPS, JSON.stringify([{ id: 'typed-just-now' }]));
+
+    const { applied } = await applyUnits([{
+      id: `key:${APPS}`, kind: 'plain', payload: JSON.stringify([{ id: 'theirs' }]),
+      modifiedAt: FUTURE,
+    }]);
+
+    expect(applied).toBe(1);
+    expect(onDisk(backend, APPS)).toEqual([{ id: 'theirs' }]);
+  });
+
+  it('exempts the append-shaped units: an OLDER token log still unions', async () => {
+    // Newer-wins must NOT reach the two units that accumulate. Their merge is a
+    // union, so an older document still carries events this device has never
+    // seen, and refusing it would lose exactly what the union exists to keep.
+    backend.files.set(TOKENS, JSON.stringify({
+      events: [{ id: 'mine', timestamp: '2026-08-03T00:00:00.000Z', inputTokens: 1 }],
+      summary: {},
+    }));
+    await initAppStorage({ backend });
+    installStorageStamping(setStorageWriteObserver);
+    // A local append, which stamps the unit with the current time.
+    appStorage.setItem(TOKENS, JSON.stringify({
+      events: [
+        { id: 'mine', timestamp: '2026-08-03T00:00:00.000Z', inputTokens: 1 },
+        { id: 'mine-2', timestamp: '2026-08-04T00:00:00.000Z', inputTokens: 2 },
+      ],
+      summary: {},
+    }));
+
+    const { applied } = await applyUnits([{
+      id: `key:${TOKENS}`,
+      kind: 'tokenUsage',
+      payload: JSON.stringify({
+        events: [{ id: 'theirs', timestamp: '2026-08-02T00:00:00.000Z', inputTokens: 4 }],
+        summary: {},
+      }),
+      modifiedAt: OLD,
+    }]);
+
+    expect(applied).toBe(1);
+    expect(onDisk(backend, TOKENS).events.map((e) => e.id)).toEqual(['theirs', 'mine', 'mine-2']);
   });
 });
 
