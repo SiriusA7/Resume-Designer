@@ -9,7 +9,9 @@ import {
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
   activateProfileMappingForPrint, isUntouchedWorkspace,
 } from '../src/profiles.js';
-import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
+import {
+  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, SYNC_STATE_KEY, physicalKey,
+} from '../src/profileKeys.js';
 import { getSettings, saveSettings, saveApiKey } from '../src/persistence.js';
 
 beforeEach(() => {
@@ -1094,10 +1096,28 @@ describe('isUntouchedWorkspace', () => {
     expect(isUntouchedWorkspace(fresh.id)).toBe(true);
   });
 
-  it('is true with only the single résumé init leaves behind', () => {
+  // Was `is true with only the single résumé init leaves behind`, which pinned a
+  // state no shipping platform produces: on Tauri and iOS migrateBuiltInVariants
+  // seeds NOTHING (persistence.js), so init leaves no résumé behind and any
+  // variant present was authored. The allowance deleted the ordinary no-AI
+  // onboarding path — saveOnboardingResume writes exactly one variant, writes no
+  // history (only pushHistory does, on edits), never touches userProfile and
+  // spends no tokens, so it passed every other clause.
+  it('is false once the workspace holds any résumé at all', () => {
     const p = startWorkspace();
-    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({ variants: { only: {} } }));
-    expect(isUntouchedWorkspace(p.id)).toBe(true);
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({
+      variants: { 'custom-1755000000000': { id: 'custom-1755000000000', name: 'My Resume', data: {} } },
+      currentVariantId: 'custom-1755000000000',
+    }));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  // An array is typeof 'object' and has no `variants`, so '[]' sailed through
+  // the whole blob clause. A blob shaped like nothing this app writes is doubt.
+  it('is false when the blob is not the object shape this app writes', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-data', '[]');
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
   });
 
   it('is false once renamed', () => {
@@ -1167,13 +1187,21 @@ describe('isUntouchedWorkspace', () => {
     expect(isUntouchedWorkspace(p.id)).toBe(true);
   });
 
-  // ADDED beyond the brief, and the most dangerous case of all: the active
-  // POINTER names this profile but the key mapping is inactive (a degraded
-  // init runs exactly like that), so every ordinary read resolves to the
-  // unprefixed keys and a full workspace reads back as empty.
+  // The most dangerous case of all: the active POINTER names this profile but
+  // the key mapping is inactive (a degraded init runs exactly like that), so
+  // every ordinary read resolves to the unprefixed keys and a full workspace
+  // reads back as empty.
+  //
+  // It plants a RÉSUMÉ BLOB rather than a history key on purpose. The key walk
+  // iterates physical keys and is mapping-independent, so a planted history key
+  // refused through that walk even with the mapping guard deleted — the guard
+  // protecting the highest-stakes relaxation in this feature was pinned by
+  // nothing. The blob is read through the mapping: with the guard removed the
+  // read misses the namespace, returns null, and the predicate calls a
+  // two-résumé workspace untouched.
   it('keeps the workspace when key mapping is not active for it', () => {
     const p = startWorkspace('P');
-    writeProfileKey(p.id, 'resume-designer-history-v1', JSON.stringify({ history: [{}] }));
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({ variants: { a: {}, b: {} } }));
     setProfileMapping(null); // pointer still says p.id; reads no longer namespace
     expect(isUntouchedWorkspace(p.id)).toBe(false);
   });
@@ -1193,6 +1221,46 @@ describe('isUntouchedWorkspace', () => {
       ),
     ));
     expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  // THE test that makes the allowlist worth having. The predicate used to
+  // enumerate the keys it checked, so any key nobody remembered to enumerate
+  // was silently vouched for — a key a later release adds to BACKUP_FIXED_KEYS
+  // lands in the namespace looking exactly like this, and the enumeration would
+  // have called the workspace empty and deleted it.
+  it('is false for a key in the namespace it has never heard of', () => {
+    const p = startWorkspace('P');
+    localStorage.setItem(physicalKey(p.id, 'resume-designer-timesheets'), '[]');
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  // The live instance of the same hole: the headshot somebody uploaded and
+  // cropped is stored here, savePhotoSettings writes NO history entry, and the
+  // enumeration declared the workspace empty.
+  it('is false when a headshot was uploaded', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-photo-settings', JSON.stringify({
+      enabled: true, imageData: 'data:image/png;base64,iVBORw0KGgo=', shape: 'circle',
+    }));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  // The other side of the allowlist: an inversion that refused everything would
+  // pass every test above and never adopt anything. A starter workspace picks
+  // these up just by being opened once.
+  it('is true with only preferences, flags and sync bookkeeping in the namespace', () => {
+    const p = startWorkspace('P');
+    for (const [key, value] of [
+      [SYNC_STATE_KEY, JSON.stringify({ deviceId: 'dev1', units: {} })],
+      ['resume-designer-onboarding-complete', 'true'],
+      ['resume-edit-hint-dismissed', 'true'],
+      ['resume-header-style', 'centered'],
+      ['resume-accent-settings', JSON.stringify({ color: '#0a84ff' })],
+      ['resume-font-settings', JSON.stringify({ family: 'Inter' })],
+      ['resume-spacing-settings', JSON.stringify({ scale: 1.1 })],
+      ['resume-zoom', '1.25'],
+    ]) writeProfileKey(p.id, key, value);
+    expect(isUntouchedWorkspace(p.id)).toBe(true);
   });
 
   // The other direction: another workspace's history must not be read as this
@@ -1221,7 +1289,11 @@ describe('fresh-device adoption', () => {
     ]));
     localStorage.setItem(ACTIVE_PROFILE_KEY, 'pstarter');
     if (starterMarker) localStorage.setItem(STARTER_KEY, 'pstarter');
-    localStorage.setItem('resume-p--pstarter--resume-designer-data', '{"variants":{"v1":{}}}');
+    // No variant: init seeds none on the platforms this runs on, and one that
+    // is there was authored (isUntouchedWorkspace). A seed with a résumé in it
+    // would make every case below refuse for that reason instead of the one
+    // under test.
+    localStorage.setItem('resume-p--pstarter--resume-designer-data', '{"variants":{}}');
     if (starterTouched) {
       localStorage.setItem('resume-p--pstarter--resume-designer-history-v1', '{"history":[{}]}');
     }
@@ -1248,7 +1320,9 @@ describe('fresh-device adoption', () => {
       ]),
       [ACTIVE_PROFILE_KEY]: 'pstarter',
       [STARTER_KEY]: 'pstarter',
-      'resume-p--pstarter--resume-designer-data': '{"variants":{"v1":{}}}',
+      'resume-p--pstarter--resume-designer-data': '{"variants":{}}',
+      // Sync bookkeeping is on the harmless allowlist — a workspace that has
+      // merely been synced is still a starter workspace.
       'resume-p--pstarter--resume-designer-sync-state': '{}',
     });
     await initAppStorage({ backend });
@@ -1277,7 +1351,7 @@ describe('fresh-device adoption', () => {
     expect(id).toBe('pstarter');
     expect(getActiveProfileId()).toBe('pstarter');
     expect(loadRegistry().find((p) => p.id === 'pstarter').deletedAt).toBeUndefined();
-    expect(localStorage.getItem('resume-p--pstarter--resume-designer-data')).toBe('{"variants":{"v1":{}}}');
+    expect(localStorage.getItem('resume-p--pstarter--resume-designer-data')).toBe('{"variants":{}}');
   });
 
   // A workspace the PERSON created is empty and unstamped at the moment they
@@ -1331,7 +1405,7 @@ describe('fresh-device adoption', () => {
       ]),
       [ACTIVE_PROFILE_KEY]: 'pstarter',
       [STARTER_KEY]: 'pstarter',
-      'resume-p--pstarter--resume-designer-data': '{"variants":{"v1":{}}}',
+      'resume-p--pstarter--resume-designer-data': '{"variants":{}}',
     });
     backend.write.mockImplementation(async (key, value) => {
       if (key === PROFILES_KEY) throw new Error('disk full');
@@ -1351,7 +1425,7 @@ describe('fresh-device adoption', () => {
       expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe('pstarter');
       expect(loadRegistry().find((p) => p.id === 'pstarter').deletedAt).toBeUndefined();
       // And the namespace it would have deleted is untouched, on disk.
-      expect(backend.files.get('resume-p--pstarter--resume-designer-data')).toBe('{"variants":{"v1":{}}}');
+      expect(backend.files.get('resume-p--pstarter--resume-designer-data')).toBe('{"variants":{}}');
     } finally {
       errSpy.mockRestore();
     }

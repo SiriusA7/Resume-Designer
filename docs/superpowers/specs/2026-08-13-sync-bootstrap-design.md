@@ -147,19 +147,34 @@ local namespace. The tombstone governs only what the registry lists.
 anything, and is defined conservatively.** X qualifies only when ALL hold:
 
 - its registry entry has no `updatedAt` (never renamed), and
-- its `resume-designer-data` holds at most the single résumé
-  `resolveActiveProfile` created, and
+- **every key in its namespace is on a short allowlist of harmless ones** —
+  design and view preferences, this device's sync bookkeeping, and the app's own
+  onboarding/hint flags. The predicate walks the physical keys and refuses
+  anything it cannot affirmatively vouch for. Enumerating the *content* keys to
+  check instead was tried first and is the wrong shape: it vouches for every key
+  nobody remembered to enumerate, and `resume-photo-settings` — the headshot
+  somebody uploaded and cropped, written with no history entry — was already one
+  of them. A key this predicate has never heard of, including one a later release
+  adds, refuses. And
+- **it holds no résumé at all.** Not "at most the one init created": on Tauri and
+  iOS `migrateBuiltInVariants` seeds no variants, so init leaves none behind and
+  every variant present was authored — the no-AI onboarding path writes exactly
+  one, with no history, no user profile and no tokens spent. And
 - **it has no version-history key for any variant.** This is the load-bearing
-  clause: the store records a history entry on every change, so an absent
+  evidence: the store records a history entry on every change, so an absent
   history is the strongest available evidence that nothing was ever edited.
   Comparing the résumé against the default template was considered and rejected
   — the template evolves between releases, so a byte comparison would silently
   start keeping every X the moment the default changed, and a loose comparison
-  would be exactly the kind of "close enough" that discards real work. And
+  would be exactly the kind of "close enough" that discards real work. (Under the
+  allowlist a history key refuses simply by not being on it; it is called out
+  here because it is the reasoning the whole predicate rests on.) And
 - `resume-designer-applications`, `resume-designer-job-descriptions`,
   `resume-designer-chat-threads` and `resume-designer-learned-answers` are each
   absent or an empty collection, and
-- `resume-designer-token-usage` is absent or records no usage.
+- `resume-designer-token-usage` is absent or records no usage, and
+- the data blob parses to the object shape this app writes — an array is not one,
+  and a corrupt blob is doubt.
 
 Any read that fails, any key that cannot be parsed, or any doubt whatsoever
 keeps X. A stray empty workspace is an annoyance the person can delete;
@@ -194,7 +209,11 @@ absorbing real work is the failure this entire feature exists to prevent.
   retention, per-entry `updatedAt` resolution, and the unstamped cases.
 - The untouched-X predicate gets a test per clause, each proving that violating
   that one clause alone keeps X. This is the test that matters most: a
-  false positive discards a workspace.
+  false positive discards a workspace. Two of them carry extra weight: one plants
+  a key the predicate has never heard of, which is the test the allowlist exists
+  for; and the mapping-guard test plants a **résumé blob**, not a history key,
+  because the key walk is mapping-independent and would refuse a history key even
+  with the guard deleted — pinning the guard by nothing.
 - The bootstrap flow is exercised through the real `appStorage` with an injected
   backend, asserting the **disk**, consistent with the durability rules
   established elsewhere in this feature.

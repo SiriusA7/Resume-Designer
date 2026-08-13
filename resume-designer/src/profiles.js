@@ -5,7 +5,7 @@
  */
 import { appStorage, setProfileMapping, getProfileMapping } from './appStorage.js';
 import {
-  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, BACKUP_HISTORY_PREFIX,
+  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, SYNC_STATE_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
   withoutDeadProviderCredentials, withoutStoredCredentials, withoutDeviceIdentity,
 } from './profileKeys.js';
@@ -376,6 +376,47 @@ const WORKSPACE_LISTS = [
   'resume-designer-learned-answers',
 ];
 
+// The per-profile keys a starter workspace may hold and still BE a starter
+// workspace: design and view preferences, this device's own sync bookkeeping,
+// and flags the app sets for itself. Nothing here is anything a person would
+// mourn, and a workspace picks all of it up just by being opened once.
+//
+// An ALLOWLIST, and that is the whole point of it. The predicate used to
+// enumerate the CONTENT keys it checked, which silently vouched for every key
+// nobody remembered to enumerate — `resume-photo-settings` holds `imageData`,
+// the headshot somebody uploaded and cropped, savePhotoSettings records no
+// version history for it, and the enumeration therefore called that workspace
+// empty. holdsAuthoredContent below makes this argument one level down, about
+// FIELDS; this is the same argument about keys. Anything not listed here
+// refuses: a known content key, a key this predicate has never heard of, and
+// any key a later release adds without touching this file.
+//
+// `resume-designer-bridge-token` is deliberately absent. It is a shared key, so
+// mapKey can never put it in a namespace; one sitting there was written by
+// something this predicate does not understand, and doubt refuses.
+const STARTER_HARMLESS_KEYS = new Set([
+  SYNC_STATE_KEY, // per-unit sync stamps + this device's id — written by sync, never by a person
+  'resume-designer-theme',
+  'resume-designer-update-channel',
+  'resume-designer-auto-update-check',
+  'resume-designer-onboarding-complete',
+  'resume-edit-hint-dismissed',
+  'resume-header-style',
+  'resume-accent-settings',
+  'resume-font-settings',
+  'resume-spacing-settings',
+  'resume-zoom',
+]);
+
+// The keys with a clause of their own below, so presence alone cannot judge
+// them: they are allowed to EXIST and are then read. Every other key in the
+// namespace is judged by presence.
+const STARTER_INSPECTED_KEYS = new Set([
+  'resume-designer-data',
+  'resume-designer-token-usage',
+  ...WORKSPACE_LISTS,
+]);
+
 /**
  * Whether anything inside a stored structure was authored by a person.
  *
@@ -404,12 +445,18 @@ function holdsAuthoredContent(value) {
  * delete; absorbing real work is the failure this whole feature exists to
  * prevent.
  *
+ * It is an ALLOWLIST over the workspace's keys, not a list of content keys to
+ * check: a key it has never heard of refuses, so the next content key added to
+ * this app is safe from it without anyone having to remember this file exists.
+ * See STARTER_HARMLESS_KEYS.
+ *
  * Version history is the load-bearing clause — the store records an entry on
  * every change, so an absent history is the strongest evidence available that
  * nothing was ever edited. Comparing the résumé to the default template was
  * considered and rejected: the template changes between releases, so a byte
  * comparison would silently start absorbing every workspace the moment the
- * default changed.
+ * default changed. There is no default to compare against anyway — init seeds
+ * no résumé at all on Tauri and iOS, which is why ANY résumé refuses.
  */
 export function isUntouchedWorkspace(profileId) {
   // Only ever asked of the ACTIVE profile — the one init just created — so
@@ -428,28 +475,53 @@ export function isUntouchedWorkspace(profileId) {
     const entry = (loadRegistry() || []).find((p) => p.id === profileId);
     if (!entry || entry.updatedAt) return false;
 
-    // Any version history at all. The load-bearing clause: the store records an
-    // entry on every change. An UNPREFIXED history key counts too (`split` is
-    // null for it) — with mapping active it should not exist, and one that does
-    // is a half-finished adoption, which is doubt.
+    // Every key the workspace holds has to be one this can affirmatively vouch
+    // for (STARTER_HARMLESS_KEYS). Version history is still the load-bearing
+    // case — the store records an entry on every change, so an absent history is
+    // the strongest evidence available that nothing was ever edited — but it is
+    // no longer SPECIAL: it refuses because it is not on the harmless list,
+    // exactly like a headshot, or like a key from a release that does not exist
+    // yet.
     for (const physical of appStorage.keys()) {
+      if (!physical) continue;
       const split = splitPhysicalKey(physical);
-      const logical = split?.logicalKey ?? physical;
-      if (split && split.profileId !== profileId) continue;
-      if (logical.startsWith(BACKUP_HISTORY_PREFIX)) return false;
+      if (split) {
+        if (split.profileId !== profileId) continue; // another workspace's key
+        if (STARTER_HARMLESS_KEYS.has(split.logicalKey)) continue;
+        if (STARTER_INSPECTED_KEYS.has(split.logicalKey)) continue;
+        return false;
+      }
+      // Unprefixed, with the mapping proven active above: adoption has finished,
+      // so no per-profile key should still be sitting unprefixed, and one that
+      // is means a half-finished adoption — which is doubt. Shared keys are
+      // unprefixed BY DESIGN and say nothing about this workspace, and neither
+      // do the app's own markers, which are not owned keys at all.
+      if (isOwnedKey(physical) && !isSharedKey(physical)) return false;
     }
 
-    // At most the one résumé init created — "at most", because a device nobody
-    // has given a résumé to yet has no blob at all, and that is the state this
-    // feature exists for. Absence is only readable as emptiness because the
-    // mapping was proven above.
+    // NO résumé. Not "at most the one init created": on Tauri and iOS —
+    // the platforms this feature runs on — migrateBuiltInVariants seeds nothing
+    // (persistence.js), so init leaves no résumé behind and any variant present
+    // was AUTHORED. The allowance this started with described a state no
+    // shipping platform produces, and it absorbed the ordinary no-AI onboarding
+    // path: saveOnboardingResume writes exactly one variant, writes no history
+    // (only pushHistory does, on edits), never touches userProfile and spends no
+    // tokens, so a résumé somebody had just imported passed every other clause.
+    //
+    // A device nobody has given a résumé to yet has no blob at all, and absence
+    // is only readable as emptiness because the mapping was proven above.
     const rawBlob = appStorage.getItem('resume-designer-data');
     if (rawBlob !== null) {
       const blob = JSON.parse(rawBlob);
-      if (!blob || typeof blob !== 'object') return false;
-      const variants = blob.variants ?? {};
-      if (!variants || typeof variants !== 'object') return false;
-      if (Object.keys(variants).length > 1) return false;
+      // An ARRAY is typeof 'object' and has no `variants`, so `[]` used to sail
+      // through this entire clause. A blob shaped like nothing this app writes
+      // is a corrupt blob, and a corrupt blob is doubt.
+      if (!blob || typeof blob !== 'object' || Array.isArray(blob)) return false;
+      const { variants } = blob;
+      if (variants !== undefined) {
+        if (!variants || typeof variants !== 'object' || Array.isArray(variants)) return false;
+        if (Object.keys(variants).length > 0) return false;
+      }
       // The Profile screen writes straight into this blob and records NO
       // version history, so someone who filled in their contact details and
       // work history without ever opening a résumé passes every other clause.
