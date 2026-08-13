@@ -604,6 +604,27 @@ struct PdfPreviewRequest: Equatable, Identifiable {
   var url: URL { URL(fileURLWithPath: path) }
 }
 
+/// What one round trip to `window.__opShell.command()` produced — see
+/// `ShellModel.sendForResult`.
+///
+/// This was `Any?`, and one `nil` could not carry the answer: it meant "the page
+/// returned null", "the command refused", "the eval failed" and "nobody answered
+/// inside ten seconds" all at once. `syncUnit` needs the last one told apart
+/// from the first. A JS `null` is the page saying it holds nothing under that
+/// id — a final answer, and `recordToSend` is right to drop the queued send on
+/// it. A timeout is the page not answering AT ALL, and reading that as "nothing"
+/// threw a real local edit off the queue, where it stayed until the unit
+/// happened to be edited again.
+enum ShellReply {
+  /// The command ran and returned. `NSNull` is a real JS `null`; `nil` is a
+  /// handler that returned nothing, which the dispatcher sends as an absent
+  /// `result` key.
+  case answered(Any?)
+  /// No answer: no webview, the eval failed, the command refused, or the ten
+  /// seconds ran out.
+  case unanswered
+}
+
 // MARK: - Model
 
 /// The single piece of state the chrome renders from. Deliberately not durable:
@@ -666,6 +687,9 @@ final class ShellModel: ObservableObject {
 
   /// Unit ids named while the transport was down. See `sendSync`.
   private var syncDeferred: Set<String> = []
+
+  /// The `startSync` in flight, if any — see `startSync` for why one is enough.
+  private var syncStart: Task<Void, Never>?
 
   /// What the last `setZoom` said, so a finger resting still does not fire a
   /// command per touch event. Everything a frame carries is in here, because
@@ -739,27 +763,29 @@ final class ShellModel: ObservableObject {
   ///
   /// The dispatcher replies `{ ok, result }` and `send` collapses that to `ok`,
   /// which is all any command needed until sync: `syncUnit` asks the page for a
-  /// unit and the unit is the point. `nil` covers every way of not getting one
-  /// — the command did not run, it refused, or it returned nothing — because
-  /// the single caller treats all three the same way: there is nothing to send.
+  /// unit and the unit is the point.
   ///
   /// Never a Promise. The dispatcher drops thenables before replying, since
   /// `evaluateJavaScript` cannot serialize one.
-  func sendForResult(_ type: String, _ extra: [String: String] = [:]) async -> Any? {
+  func sendForResult(_ type: String, _ extra: [String: String] = [:]) async -> ShellReply {
     await withCheckedContinuation { continuation in
       // Resumed exactly once, from whichever of the two paths below arrives
       // first. Both land on the main thread — WKWebView calls its completion
       // handlers there, and the timer is on the main queue — so the flag needs
       // no lock.
       var settled = false
-      let finish: @MainActor (Any?) -> Void = { value in
+      let finish: @MainActor (ShellReply) -> Void = { value in
         guard !settled else { return }
         settled = true
         continuation.resume(returning: value)
       }
 
       evaluate(type, extra) { reply in
-        finish((reply?["ok"] as? Bool) == true ? reply?["result"] : nil)
+        guard let reply, (reply["ok"] as? Bool) == true else {
+          finish(.unanswered)
+          return
+        }
+        finish(.answered(reply["result"]))
       }
 
       // BOUNDED, because `evaluateJavaScript` against a webview that is still
@@ -774,7 +800,7 @@ final class ShellModel: ObservableObject {
       DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
         MainActor.assumeIsolated {
           if !settled { NSLog("[OPShell] command \(type) never answered") }
-          finish(nil)
+          finish(.unanswered)
         }
       }
     }
@@ -838,7 +864,31 @@ extension ShellModel {
   /// reclaiming a backgrounded content process and reloading. `start` is
   /// idempotent for the profile already running, so the repeats cost nothing
   /// and, importantly, do not tear down the engine's in-memory queue.
+  ///
+  /// ONE AT A TIME. That idempotency only holds up to the first suspension:
+  /// `sync.start` checks whether the engine is already up for this profile, and
+  /// `stop()`'s `await cancelOperations()` is a window in which a second caller
+  /// passes the same check and builds a second `CKSyncEngine` over the first.
+  /// An activation landing on a foreground `resumeSync` is exactly that pair,
+  /// and the engine is the one object every other piece of state here is keyed
+  /// to.
+  ///
+  /// Serialized rather than coalesced: a profile switch and a foreground resume
+  /// can name DIFFERENT profiles, so the second call has real work to do and
+  /// folding it into the first would skip the switch. It waits its turn instead.
   func startSync(profileId: String) async {
+    let previous = syncStart
+    let task = Task { @MainActor [weak self] in
+      await previous?.value
+      await self?.runStartSync(profileId: profileId)
+    }
+    syncStart = task
+    await task.value
+    // Only if nothing queued behind it, or this would drop a start still to run.
+    if syncStart == task { syncStart = nil }
+  }
+
+  private func runStartSync(profileId: String) async {
     guard !profileId.isEmpty else {
       // Before the workspace has an active profile there is no zone to sync
       // to. The app works; sync waits for the next activation.
@@ -901,11 +951,17 @@ extension ShellModel {
     do {
       try await sync.send(unitIds: unitIds)
     } catch {
-      // The only thing thrown here is `notStarted` — signed out, or an edit
-      // that beat the first activation. These ids are the ONLY record that
-      // those bytes changed: persistence names a unit once, on the save that
-      // wrote it, and will not name it again until it is edited again. So they
-      // wait for the next start instead of being dropped.
+      // Two things reach here: `notStarted` — signed out, or an edit that beat
+      // the first activation — and anything `engine.sendChanges()` itself
+      // throws. Holding the ids is what the first needs and costs the second
+      // nothing: `send` queued those changes before it threw and
+      // `add(pendingRecordZoneChanges:)` deduplicates, so the next start
+      // re-queues nothing that is already there.
+      //
+      // These ids are the ONLY record that those bytes changed: persistence
+      // names a unit once, on the save that wrote it, and will not name it
+      // again until it is edited again. So they wait for the next start instead
+      // of being dropped.
       syncDeferred.formUnion(unitIds)
       NSLog("[OPShell] sync is down; \(unitIds.count) unit(s) held for the next start")
     }
@@ -917,17 +973,30 @@ extension ShellModel {
 /// payload — a unit is `{ id, kind, payload, modifiedAt }` with the payload an
 /// opaque string, and all decomposition stays in JS.
 ///
-/// The three non-async methods are called from inside the engine's event
-/// handling, so they stay cheap and none of them re-enters the engine directly.
+/// The two non-async methods are called from inside the engine's event
+/// handling, so they stay cheap and neither re-enters the engine directly. The
+/// async pair suspends on the bridge, and the engine awaits them: the whole
+/// point of `syncDidFetch`'s answer is that the transport must not move on
+/// before it has one.
 extension ShellModel: OPSyncHost {
   /// The unit as the page holds it RIGHT NOW, asked at send time.
   func syncUnit(withId id: String) async -> SyncUnit? {
-    // A nil result is this device having nothing under that id. The engine
-    // drops the queued send and the server keeps whatever it already holds:
-    // absence is never a deletion.
-    guard let object = await sendForResult("syncUnit", ["unitId": id]) as? [String: Any] else {
+    guard case .answered(let value) = await sendForResult("syncUnit", ["unitId": id]) else {
+      // Nobody answered — most often `sendForResult`'s ten-second bound against
+      // a webview that is still reloading. That is NOT this device having
+      // nothing: `recordToSend` (OPSync.swift) treats nil as a final answer and
+      // takes the change off the queue, so reading silence that way dropped a
+      // real local edit until the unit happened to be edited again. The id
+      // waits for the next start instead, in the same set an edit made while
+      // the transport was down waits in.
+      syncDeferred.insert(id)
+      NSLog("[OPShell] no answer for unit \(id); held for the next start")
       return nil
     }
+    // A null result is this device having nothing under that id. The engine
+    // drops the queued send and the server keeps whatever it already holds:
+    // absence is never a deletion.
+    guard let object = value as? [String: Any] else { return nil }
     guard JSONSerialization.isValidJSONObject(object),
           let data = try? JSONSerialization.data(withJSONObject: object),
           let unit = try? JSONDecoder().decode(SyncUnit.self, from: data) else {
@@ -941,22 +1010,37 @@ extension ShellModel: OPSyncHost {
   }
 
   /// Units from another device, handed to the page to apply.
-  func syncDidFetch(_ units: [SyncUnit]) {
+  ///
+  /// Answers whether the page took ALL of them, which is what the transport
+  /// keeps their change tags on (`deliver` in OPSync.swift). Every way of not
+  /// knowing is `false`: the units would not encode, the round trip was never
+  /// answered, the reply carried no usable count, or the count came back short.
+  /// A wrong `true` is a silent overwrite of the server's newer copy; a wrong
+  /// `false` costs one extra round trip the next time this unit is saved.
+  func syncDidFetch(_ units: [SyncUnit]) async -> Bool {
     guard let data = try? JSONEncoder().encode(units),
           let json = String(data: data, encoding: .utf8) else {
       NSLog("[OPShell] could not encode \(units.count) fetched unit(s)")
-      return
+      return false
     }
     // A JSON STRING, not an object: the command channel is a JS string literal,
     // the same reason a picked file crosses as base64. `syncApply` parses it.
     //
-    // The refusal is worth hearing about even though nothing can be done with
-    // it here: the engine's change token has already moved past these records,
-    // so a batch the page would not take is one this device will not be offered
-    // again.
-    send("syncApply", ["units": json]) { ok in
-      if !ok { NSLog("[OPShell] the page refused \(units.count) fetched unit(s)") }
+    // `applied` is the count `applyUnits` returned, read off the dispatcher's
+    // own `{ ok, result }` envelope. That is the bridge's shape, not a unit's:
+    // this side still never looks inside a payload.
+    guard case .answered(let value) = await sendForResult("syncApply", ["units": json]),
+          let applied = (value as? [String: Any])?["applied"] as? Int else {
+      NSLog("[OPShell] no usable answer for \(units.count) fetched unit(s)")
+      return false
     }
+    guard applied == units.count else {
+      // Which of them landed is not knowable from a count, so the batch is
+      // treated as unconfirmed whole. See `deliver`.
+      NSLog("[OPShell] the page applied \(applied) of \(units.count) fetched unit(s)")
+      return false
+    }
+    return true
   }
 
   /// The older side of a conflict, parked in that résumé's version history

@@ -153,7 +153,13 @@ protocol OPSyncHost: AnyObject {
   /// Includes the winner of a conflict this device lost: that record is already
   /// in hand when the conflict is detected, and until it lands the two devices
   /// disagree, so it is delivered then rather than at the next fetch.
-  func syncDidFetch(_ units: [SyncUnit])
+  ///
+  /// Returns whether EVERY unit handed over was applied. The transport keeps a
+  /// record's change tag only on a `true` (see `deliver`), so this is not a
+  /// progress report — it is the answer to "may this device claim to know which
+  /// server version it is editing". Anything less than a confirmed full apply,
+  /// including not being able to ask at all, is `false`.
+  func syncDidFetch(_ units: [SyncUnit]) async -> Bool
 
   /// Units that LOST a conflict, for the caller to park in version history.
   /// Newer wins, and this is the older one — nothing is discarded silently.
@@ -315,7 +321,7 @@ private final class OPSyncDelegate: CKSyncEngineDelegate {
   }
 
   func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
-    owner?.handle(event, engine: syncEngine)
+    await owner?.handle(event, engine: syncEngine)
   }
 
   func nextRecordZoneChangeBatch(
@@ -346,10 +352,16 @@ private final class OPSyncDelegate: CKSyncEngineDelegate {
 extension OPSyncEngine {
   fileprivate var currentZoneID: CKRecordZone.ID? { zoneID }
 
-  fileprivate func handle(_ event: CKSyncEngine.Event, engine: CKSyncEngine) {
+  /// Async because delivering fetched records is: `deliver` waits for the page
+  /// to say whether it applied them, and the answer decides what happens to
+  /// their change tags. `CKSyncEngine` awaits its delegate's `handleEvent`, so
+  /// the event is not considered handled until that is settled — which is the
+  /// point. `nextBatch` already suspends on the same bridge.
+  fileprivate func handle(_ event: CKSyncEngine.Event, engine: CKSyncEngine) async {
     // Every path that touches the change-tag map runs under here, so this is
     // the one place that has to write it out — and writing it once per event
-    // rather than once per record is the whole point of the dirty flag.
+    // rather than once per record is the whole point of the dirty flag. It runs
+    // after the suspensions below, so a tag settled by `deliver` is included.
     defer { flushSystemFields() }
 
     switch event {
@@ -364,7 +376,7 @@ extension OPSyncEngine {
       // explicit tombstone unit that travels like any other unit, and this task
       // does not implement it — nothing here may turn a record's absence, or the
       // server's deletion list, into a local delete.
-      var units: [SyncUnit] = []
+      var arrivals: [Arrival] = []
       var unreadable: [OPSyncFailure] = []
       for modification in changes.modifications {
         let record = modification.record
@@ -390,10 +402,11 @@ extension OPSyncEngine {
           ))
           continue
         }
-        remember(record)
-        units.append(unit)
+        // Decoding it is not taking it. The record travels WITH its unit and
+        // `deliver` decides its tag, once the page has answered.
+        arrivals.append(Arrival(record: record, unit: unit))
       }
-      if !units.isEmpty { host?.syncDidFetch(units) }
+      await deliver(arrivals)
       // Reported, not swallowed: the engine's change token has already advanced
       // past these and there is no public way to rewind it, so the only thing
       // that can bring the record back down is something acting on this.
@@ -404,7 +417,7 @@ extension OPSyncEngine {
       // them is what makes the next save of the same unit a clean update rather
       // than a conflict.
       for record in sent.savedRecords { remember(record) }
-      handleFailedSaves(sent.failedRecordSaves, engine: engine)
+      await handleFailedSaves(sent.failedRecordSaves, engine: engine)
 
     case .sentDatabaseChanges(let sent):
       // A zone that would not save takes every unit in it with it, so it is put
@@ -466,8 +479,8 @@ extension OPSyncEngine {
   private func handleFailedSaves(
     _ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave],
     engine: CKSyncEngine
-  ) {
-    var arrived: [SyncUnit] = []
+  ) async {
+    var arrived: [Arrival] = []
     var losers: [SyncUnit] = []
     var reported: [OPSyncFailure] = []
 
@@ -508,23 +521,26 @@ extension OPSyncEngine {
           continue
         }
 
-        // The server's copy is the only place its current change tag exists, so
-        // it is recorded BEFORE anything decides what to do with it. A retry
-        // built without it is the fresh-record bug from the file header, in
-        // exactly the case a conflict has just proved is live.
-        remember(serverRecord)
-
         if Self.localWins(local: localUnit, server: serverUnit) {
-          // Ours is newer. Queue it again — `recordToSend` now builds it on the
-          // server's tag, so the retry is an update rather than another
-          // conflict.
+          // Ours is newer. The server's copy is the only place its current
+          // change tag exists, so it is recorded before the retry is queued: a
+          // retry built without it is the fresh-record bug from the file
+          // header, in exactly the case a conflict has just proved is live.
+          // `recordToSend` now builds on that tag, so the retry is an update
+          // rather than another conflict.
+          remember(serverRecord)
           engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
           losers.append(serverUnit)
         } else {
           // Theirs is newer, or the two tie and the tie goes to the server so
           // both devices break it the same way — otherwise they converge on
           // different winners and sync forever.
-          arrived.append(serverUnit)
+          //
+          // NOT remembered here: this device is about to take the server's
+          // content, and the tag is a claim to hold it. `deliver` records it if
+          // and only if the page says it landed — the same rule the fetch path
+          // runs under, and for the same reason.
+          arrived.append(Arrival(record: serverRecord, unit: serverUnit))
           losers.append(localUnit)
         }
 
@@ -586,15 +602,70 @@ extension OPSyncEngine {
       }
     }
 
-    if !arrived.isEmpty { host?.syncDidFetch(arrived) }
+    await deliver(arrived)
     if !losers.isEmpty { host?.syncDidLoseConflict(losers) }
     report(reported)
+  }
+
+  /// Hand records that arrived from the server to the page, and keep their
+  /// change tags only if the page took them.
+  ///
+  /// THE ONE PLACE a fetched record's tag is stored, which is what makes the
+  /// invariant checkable rather than remembered: a change tag is a claim to
+  /// know which server version this device is editing, and this device may only
+  /// make that claim about content it actually holds.
+  ///
+  /// Two things falsify the claim and they are one bug, one layer apart. A
+  /// record that would not DECODE never reaches here — its caller forgets the
+  /// tag on the spot. A record the PAGE would not apply is the same failure
+  /// after a longer trip: the apply is a round trip into JavaScript, and WebKit
+  /// reclaims the content process of a backgrounded app, so a fetch landing
+  /// while the webview reloads is answered by nobody. Remembering first and
+  /// asking second — which is what this used to do — left this device holding
+  /// tags for content it never took, and its next save of those units was then a
+  /// clean, uncontested update that destroyed the server's newer copy, with no
+  /// conflict raised, nothing parked and nothing logged.
+  ///
+  /// ALL OR NOTHING, deliberately. `applied` is a COUNT, not a set of ids, so
+  /// the only honest reading of a short count is "which ones landed is unknown".
+  /// The optimisation to resist is inventing per-id tracking to save a round
+  /// trip: this bug class keeps coming back through exactly that kind of
+  /// cleverness, and the trip it saves is worth nothing. Over-forgetting costs
+  /// one — the next save quotes no tag, CloudKit answers `serverRecordChanged`,
+  /// and the record comes back down the conflict path where both copies are
+  /// compared and the loser is parked, so nothing is lost either way.
+  /// Under-forgetting is the silent overwrite above.
+  ///
+  /// Nothing is reported: `syncDidFail`'s recovery re-queues a SEND, and a page
+  /// that could not be reached to apply cannot be reached to be asked for a unit
+  /// either — it would spend this session's one recovery attempt (see
+  /// `syncDidFail` in OPShell.swift) on a webview that is still gone. The tag is
+  /// forfeited, so the next save of these units meets the conflict path.
+  private func deliver(_ arrivals: [Arrival]) async {
+    guard !arrivals.isEmpty else { return }
+    let applied = await host?.syncDidFetch(arrivals.map(\.unit)) ?? false
+    for arrival in arrivals {
+      if applied { remember(arrival.record) } else { forget(arrival.recordID) }
+    }
   }
 
   private func report(_ failures: [OPSyncFailure]) {
     guard !failures.isEmpty else { return }
     host?.syncDidFail(failures)
   }
+}
+
+/// A record from the server travelling with the unit decoded out of it, from the
+/// moment it is read to the moment `deliver` settles its change tag.
+///
+/// The pair is the point: the unit is what the page is offered and the record is
+/// what carries the tag, so anything holding one without the other can only
+/// store a tag it cannot justify.
+private struct Arrival {
+  let record: CKRecord
+  let unit: SyncUnit
+
+  var recordID: CKRecord.ID { record.recordID }
 }
 
 // MARK: - Records

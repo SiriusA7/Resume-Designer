@@ -1035,6 +1035,23 @@ describe('the Design sheet commands', () => {
     expect(parkLoser).toHaveBeenCalledWith('resume:v-1', '{"name":"lost"}');
   });
 
+  it('answers with the count applyUnits actually landed', async () => {
+    // Swift decides whether to keep the server's change tags for this batch on
+    // this number, so it has to cross the bridge rather than be discarded: a
+    // change tag is a claim to know which server version this device is
+    // editing, and holding one for units the page never took makes the next
+    // save of them a clean update that destroys the server's copy.
+    const applyUnits = vi.fn(() => ({ applied: 2 }));
+    const { send } = await mount({ applyUnits });
+
+    expect(send({
+      type: 'syncApply',
+      units: '[{"id":"resume:v-1","kind":"resume","payload":"{}","modifiedAt":null},'
+        + '{"id":"resume:v-2","kind":"resume","payload":"{}","modifiedAt":null}]',
+    })).toEqual({ ok: true, result: { applied: 2 } });
+    expect(applyUnits).toHaveBeenCalledTimes(1);
+  });
+
   it('reports malformed units as data rather than throwing', async () => {
     const applyUnits = vi.fn();
     const { send } = await mount({ applyUnits });

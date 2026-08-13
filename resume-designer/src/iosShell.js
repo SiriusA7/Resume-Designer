@@ -1515,7 +1515,13 @@ export function initIOSShell(deps) {
     syncApply: ({ units }) => {
       const parsed = JSON.parse(String(units ?? '[]'));
       if (!Array.isArray(parsed)) throw new Error('syncApply needs an array of units');
-      deps.applyUnits(parsed);
+      // RETURNED, not discarded. `applyUnits` answers `{ applied }` — how many
+      // units actually landed — and the transport keeps the server's change tag
+      // for a unit only once it knows this device took it. Swallowing the count
+      // here is what let a batch the page never applied leave its change tags
+      // behind, and a tag for content this device does not hold makes the next
+      // save of that unit a clean update that destroys the server's copy.
+      return deps.applyUnits(parsed);
     },
     syncParkLoser: ({ unitId, payload }) =>
       deps.parkLoser(String(unitId ?? ''), String(payload ?? '')),
