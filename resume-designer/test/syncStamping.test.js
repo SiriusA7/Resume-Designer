@@ -261,7 +261,7 @@ describe('the data blob is split, not double-handled', () => {
 
 describe('applying remote units must not echo', () => {
   it('stamps nothing at all for an apply', async () => {
-    const { applied } = applyUnits([
+    const { applied } = await applyUnits([
       {
         id: 'resume:v-2',
         kind: 'resume',
@@ -289,12 +289,16 @@ describe('applying remote units must not echo', () => {
     const spy = vi.spyOn(store, 'adoptDocument').mockImplementation(() => { throw boom; });
     store.setData({ name: 'Ada' }, true, 'v-1');
 
-    expect(() => applyUnits([{
+    // A REJECTION now, not a throw: applyUnits waits for the disk before it
+    // answers, so it is async and a throw from the synchronous landing inside it
+    // surfaces as one. The suppression flag is restored in a `finally` that runs
+    // before any await, which is what the assertion below is really about.
+    await expect(applyUnits([{
       id: 'resume:v-1',
       kind: 'resume',
       payload: JSON.stringify({ id: 'v-1', name: 'Mine', data: { name: 'Grace' } }),
       modifiedAt: '2099-01-01T00:00:00.000Z',
-    }])).toThrow(boom);
+    }])).rejects.toThrow(boom);
 
     spy.mockRestore();
     error.mockRestore();

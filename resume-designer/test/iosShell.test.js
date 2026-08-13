@@ -204,6 +204,47 @@ describe('createCommandDispatcher', () => {
     expect('result' in reply).toBe(false);
   });
 
+  it('AWAITS that same Promise on the async route', async () => {
+    // The whole reason the second entry point exists: `applyUnits` cannot answer
+    // until the fetched content is on disk, and the transport keeps the server's
+    // change tags on that answer. `callAsyncJavaScript` resolves the promise;
+    // `evaluateJavaScript`, above, cannot.
+    const dispatch = createCommandDispatcher({
+      syncApply: () => Promise.resolve({ applied: 3 }),
+    });
+
+    await expect(dispatch.async({ type: 'syncApply' }))
+      .resolves.toEqual({ ok: true, result: { applied: 3 } });
+  });
+
+  it('carries a REJECTED promise as data, exactly as it carries a throw', async () => {
+    const dispatch = createCommandDispatcher({
+      syncApply: () => Promise.reject(new Error('disk is gone')),
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(dispatch.async({ type: 'syncApply' }))
+      .resolves.toEqual({ ok: false, error: 'disk is gone' });
+    spy.mockRestore();
+  });
+
+  it('answers a settled handler identically on both routes', async () => {
+    // Every command but one is synchronous, and routing them all through the
+    // async entry point must not change a single reply.
+    const actions = {
+      syncUnit: () => ({ id: 'resume:v-1' }),
+      zoomIn: () => undefined,
+      boom: () => { throw new Error('nope'); },
+    };
+    const dispatch = createCommandDispatcher(actions);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    for (const type of ['syncUnit', 'zoomIn', 'boom', 'unknown']) {
+      expect(await dispatch.async({ type })).toEqual(dispatch({ type }));
+    }
+    spy.mockRestore();
+  });
+
   it('omits result when a handler returns undefined', () => {
     const dispatch = createCommandDispatcher({ zoomIn: () => undefined });
 
@@ -716,7 +757,14 @@ describe('the Design sheet commands', () => {
     };
     const { initIOSShell } = await import('../src/iosShell.js');
     initIOSShell(deps);
-    return { deps, postMessage, send: (command) => window.__opShell.command(command) };
+    return {
+      deps,
+      postMessage,
+      send: (command) => window.__opShell.command(command),
+      // What Swift's `sendForResult` reaches, through `callAsyncJavaScript`:
+      // the same handlers, with a promised answer awaited instead of dropped.
+      sendAsync: (command) => window.__opShell.commandAsync(command),
+    };
   };
 
   // publish() coalesces into a microtask, so nothing is on the wire until one
@@ -1028,13 +1076,13 @@ describe('the Design sheet commands', () => {
     // Every sheet projects on demand and nothing else re-reads it, so a landing
     // that replaced the job list or the application history would otherwise sit
     // behind whatever the sheet last drew until the user touched something.
-    const applyUnits = vi.fn(() => ({ applied: 1 }));
-    const { postMessage, send } = await mount({ applyUnits });
+    const applyUnits = vi.fn(async () => ({ applied: 1 }));
+    const { postMessage, sendAsync } = await mount({ applyUnits });
     await settled();
     const before = postMessage.mock.calls.filter(([m]) => m.kind === 'snapshot').length;
 
-    expect(send({ type: 'syncApply', units: '[{"id":"key:x","payload":"[]"}]' }))
-      .toEqual({ ok: true, result: { applied: 1 } });
+    await expect(sendAsync({ type: 'syncApply', units: '[{"id":"key:x","payload":"[]"}]' }))
+      .resolves.toEqual({ ok: true, result: { applied: 1 } });
     await settled();
 
     expect(postMessage.mock.calls.filter(([m]) => m.kind === 'snapshot').length)
@@ -1091,11 +1139,11 @@ describe('the Design sheet commands', () => {
   });
 
   it('applies units and parks a conflict loser', async () => {
-    const applyUnits = vi.fn(() => ({ applied: 1 }));
+    const applyUnits = vi.fn(async () => ({ applied: 1 }));
     const parkLoser = vi.fn(() => true);
-    const { send } = await mount({ applyUnits, parkLoser });
+    const { send, sendAsync } = await mount({ applyUnits, parkLoser });
 
-    send({ type: 'syncApply', units: '[{"id":"resume:v-1","kind":"resume","payload":"{}","modifiedAt":"2026-08-09T00:00:00.000Z"}]' });
+    await sendAsync({ type: 'syncApply', units: '[{"id":"resume:v-1","kind":"resume","payload":"{}","modifiedAt":"2026-08-09T00:00:00.000Z"}]' });
     expect(applyUnits).toHaveBeenCalledWith([
       { id: 'resume:v-1', kind: 'resume', payload: '{}', modifiedAt: '2026-08-09T00:00:00.000Z' },
     ]);
@@ -1133,22 +1181,45 @@ describe('the Design sheet commands', () => {
     // change tag is a claim to know which server version this device is
     // editing, and holding one for units the page never took makes the next
     // save of them a clean update that destroys the server's copy.
-    const applyUnits = vi.fn(() => ({ applied: 2 }));
-    const { send } = await mount({ applyUnits });
+    const applyUnits = vi.fn(async () => ({ applied: 2 }));
+    const { sendAsync } = await mount({ applyUnits });
 
-    expect(send({
+    await expect(sendAsync({
       type: 'syncApply',
       units: '[{"id":"resume:v-1","kind":"resume","payload":"{}","modifiedAt":null},'
         + '{"id":"resume:v-2","kind":"resume","payload":"{}","modifiedAt":null}]',
-    })).toEqual({ ok: true, result: { applied: 2 } });
+    })).resolves.toEqual({ ok: true, result: { applied: 2 } });
     expect(applyUnits).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the DURABLE count, which only the async route can deliver', async () => {
+    // `applyUnits` answers a promise, because an apply is not confirmed until
+    // the bytes are on disk. `command` — evaluateJavaScript's route — cannot
+    // serialize one, so it replies with no result at all, which Swift reads as
+    // "not applied" and forfeits the change tags for. That is the safe reading
+    // of a lost answer, and it is why `sendForResult` goes through
+    // `callAsyncJavaScript` instead.
+    const applyUnits = vi.fn(async () => ({ applied: 0 }));
+    const { send, sendAsync } = await mount({ applyUnits });
+    const command = {
+      type: 'syncApply',
+      units: '[{"id":"resume:v-1","kind":"resume","payload":"{}","modifiedAt":null}]',
+    };
+
+    expect(send(command)).toEqual({ ok: true });
+    await expect(sendAsync(command)).resolves.toEqual({ ok: true, result: { applied: 0 } });
   });
 
   it('reports malformed units as data rather than throwing', async () => {
     const applyUnits = vi.fn();
-    const { send } = await mount({ applyUnits });
+    const { send, sendAsync } = await mount({ applyUnits });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Still a SYNCHRONOUS refusal, on both routes: the handler validates the
+    // batch before it reaches applyUnits, so a malformed one is never an
+    // answered command on either.
     expect(send({ type: 'syncApply', units: 'not json' }).ok).toBe(false);
+    await expect(sendAsync({ type: 'syncApply', units: 'not json' }))
+      .resolves.toMatchObject({ ok: false });
     expect(applyUnits).not.toHaveBeenCalled();
     spy.mockRestore();
   });

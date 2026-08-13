@@ -741,7 +741,7 @@ extension OPSyncEngine {
   /// know which server version this device is editing, and this device may only
   /// make that claim about content it actually holds.
   ///
-  /// Two things falsify the claim and they are one bug, one layer apart. A
+  /// THREE things falsify the claim and they are one bug, three layers apart. A
   /// record that would not DECODE never reaches here — its caller forgets the
   /// tag on the spot. A record the PAGE would not apply is the same failure
   /// after a longer trip: the apply is a round trip into JavaScript, and WebKit
@@ -751,6 +751,15 @@ extension OPSyncEngine {
   /// tags for content it never took, and its next save of those units was then a
   /// clean, uncontested update that destroyed the server's newer copy, with no
   /// conflict raised, nothing parked and nothing logged.
+  ///
+  /// The third is the same sentence one layer deeper again, and it is why the
+  /// tag this line stores is only ever written after the PAGE'S DISK: an apply
+  /// confirmed against a write-behind cache is not an apply. Killed before that
+  /// cache drains, the device relaunches with old content and this tag, which is
+  /// the overwrite above with no round trip left to catch it. Apple asks for
+  /// exactly this ordering — the engine's state must be persisted alongside the
+  /// app data and the fetched changes it came with (CKSyncEngineEvent.h) — and
+  /// `applyUnits` (syncModel.js) is where that barrier now is.
   ///
   /// ALL OR NOTHING, deliberately. `applied` is a COUNT, not a set of ids, so
   /// the only honest reading of a short count is "which ones landed is unknown".

@@ -691,15 +691,73 @@ export function collectUnit(unitId) {
  * and suppression left on would silently stop every later local edit from ever
  * being uploaded — a failure with no symptom until another device is missing
  * a day's work.
+ *
+ * ── WHAT `applied` MEANS, AND WHY THIS FUNCTION IS ASYNC ──────────────────
+ *
+ * `applied` is how many units are DURABLY this device's — on disk, not in a
+ * cache — and that is the whole of this function's answer to the transport.
+ * The count is the only thing `deliver` (OPSync.swift) keeps the server's
+ * change tags on, and a change tag is a claim to know which server version this
+ * device is editing.
+ *
+ * It used to be the count that reached STORAGE, which on every shipped desktop
+ * and iOS build is a write-behind cache: `appStorage.setItem` updates a Map and
+ * schedules the disk write 250ms later, and a failed write is deliberately kept
+ * in memory rather than dropped (see appStorage.js). So the count was true of
+ * the cache and said nothing about the disk. Kill the app inside that window —
+ * or let the write fail — and it relaunches holding its OLD content paired with
+ * the NEW change tag; its next edit of that unit is accepted by CloudKit as a
+ * clean update and destroys the other device's newer version. No
+ * `serverRecordChanged`, nothing parked, nothing logged. Apple states the
+ * requirement directly: CKSyncEngine state must be persisted alongside the app
+ * data and the fetched changes it was earned from (CKSyncEngineEvent.h). Here
+ * the content and the sync state are two independent stores, and this await is
+ * the durability barrier between them.
+ *
+ * `appStorage.flush()` is that barrier, and it already answers exactly the right
+ * question — `true` when every awaited write reached disk, `false` when any of
+ * them failed. Its answer is whole-store rather than per-key, so a failure
+ * anywhere makes this report ZERO: which units landed is not knowable, and the
+ * only honest reading of that is "none of them are confirmed". Over-forfeiting
+ * costs one round trip (the next save quotes no tag, CloudKit answers
+ * `serverRecordChanged`, both copies are compared and the loser is parked);
+ * under-forfeiting is the silent overwrite above. Nothing is destroyed by a
+ * `0` — the content is still on the server, still on the device that wrote it,
+ * and still in this device's cache on its way to disk.
+ *
+ * ── THE AWAIT IS OUTSIDE THE SUPPRESSED WINDOW, DELIBERATELY ──────────────
+ *
+ * `landFetchedUnits` stays entirely synchronous and the `applying` flag is
+ * restored in the `finally` BEFORE anything is awaited, so the suppressed window
+ * is still one run-to-completion turn of the event loop: no local write can
+ * interleave with it and be swallowed as an echo, which is what makes the flag
+ * safe at all. Nothing below the `finally` may ever move above it.
  */
-export function applyUnits(units) {
+export async function applyUnits(units) {
+  // A restore is mid-flight. `appStorage` is RECORDING every external write and
+  // skipping both the cache and the disk (beginRestoreGuard), so a landing here
+  // writes nothing at all — and `flush()` would still answer `true`, because
+  // nothing is dirty. That is this same bug one layer further out: a tag kept
+  // for content that was never stored, and the reload the restore ends with
+  // boots from the backup. Refusing is the safe direction, and these units are
+  // offered again at the next start.
+  if (appStorage.isRestoreGuardActive()) return { applied: 0 };
+
   const wasApplying = applying;
   applying = true;
+  let landed;
   try {
-    return landFetchedUnits(units);
+    landed = landFetchedUnits(units);
   } finally {
     applying = wasApplying;
   }
+
+  // Nothing landed means nothing was written, so there is no disk to wait for —
+  // and forcing a drain here would only push somebody else's coalescing window
+  // early. Every path that increments the count writes first.
+  if (landed.applied === 0) return landed;
+
+  return (await appStorage.flush()) ? landed : { applied: 0 };
 }
 
 function landFetchedUnits(units) {

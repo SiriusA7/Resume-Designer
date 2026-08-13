@@ -22,6 +22,7 @@ const PROFILE = 'ptest';
 const disk = new Map();
 let failDataWrites = false;
 let failSyncStateWrites = false;
+let restoreGuardArmed = false;
 const physical = (k) => mapKey(PROFILE, k);
 vi.mock('../src/appStorage.js', () => ({
   appStorage: {
@@ -38,6 +39,14 @@ vi.mock('../src/appStorage.js', () => ({
       disk.set(physical(k), String(v));
     },
     keys: () => [...disk.keys()],
+    // This mock's `setItem` IS the disk — there is no write-behind cache in
+    // front of it — so a flush here has nothing to wait for and is always
+    // durable. The real facade's is neither, which is why the durability of an
+    // apply is proven in syncDurableApply.test.js against the REAL appStorage
+    // and a backend whose writes can fail. These tests are about what lands, not
+    // about when it is safe to say so.
+    flush: async () => true,
+    isRestoreGuardActive: () => restoreGuardArmed,
   },
   // profiles.js imports this beside appStorage; syncModel reaches profiles.js
   // for getActiveProfileId. Never called here — the active profile is set by
@@ -83,6 +92,7 @@ beforeEach(() => {
   disk.clear();
   failDataWrites = false;
   failSyncStateWrites = false;
+  restoreGuardArmed = false;
   disk.set(physical('resume-designer-active-profile'), PROFILE);
   disk.set(physical(DATA), JSON.stringify({
     variants: { 'v-1': { name: 'Design Engineer' } },
@@ -227,8 +237,8 @@ describe('collectUnit', () => {
 });
 
 describe('applyUnits', () => {
-  it('lands a remote résumé without touching the local currentVariantId', () => {
-    applyUnits([resumeUnit('v-2', { name: 'Ada Lovelace', summary: 'Product Lead' })]);
+  it('lands a remote résumé without touching the local currentVariantId', async () => {
+    await applyUnits([resumeUnit('v-2', { name: 'Ada Lovelace', summary: 'Product Lead' })]);
     const blob = JSON.parse(disk.get(physical(DATA)));
     expect(Object.keys(blob.variants).sort()).toEqual(['v-1', 'v-2']);
     // The whole RECORD lands, document and all — mergeData reassembles exactly
@@ -237,12 +247,12 @@ describe('applyUnits', () => {
     expect(blob.currentVariantId).toBe('v-1');
   });
 
-  it('merges token usage instead of replacing it', () => {
+  it('merges token usage instead of replacing it', async () => {
     disk.set(physical('resume-designer-token-usage'), JSON.stringify({
       events: [{ id: 'mine', timestamp: '2026-08-01T00:00:00.000Z', inputTokens: 1 }],
       summary: {},
     }));
-    applyUnits([{
+    await applyUnits([{
       id: 'key:resume-designer-token-usage', kind: 'tokenUsage',
       payload: JSON.stringify({
         events: [{ id: 'theirs', timestamp: '2026-08-02T00:00:00.000Z', inputTokens: 2 }],
@@ -255,25 +265,25 @@ describe('applyUnits', () => {
     expect(merged.summary.totalInputTokens).toBe(3);
   });
 
-  it('refuses a unit for a key that is device-local', () => {
+  it('refuses a unit for a key that is device-local', async () => {
     const before = disk.get(physical('resume-zoom'));
-    applyUnits([{ id: 'key:resume-zoom', kind: 'plain', payload: '"2"', modifiedAt: AT }]);
+    await applyUnits([{ id: 'key:resume-zoom', kind: 'plain', payload: '"2"', modifiedAt: AT }]);
     expect(disk.get(physical('resume-zoom'))).toBe(before);
   });
 
-  it('refuses every device-local key, including the stored credential and this device’s sync bookkeeping', () => {
+  it('refuses every device-local key, including the stored credential and this device’s sync bookkeeping', async () => {
     // A device-local key never leaves a machine, so one arriving is a bug on
     // the other end or an attack on this one. Honouring it would let a remote
     // unit overwrite the OpenRouter credential, or rewrite the sync state this
     // device uses to decide what it has already sent.
     for (const key of ['resume-designer-openrouter-key', 'resume-designer-sync-state', 'resume-designer-theme']) {
-      const { applied } = applyUnits([{ id: `key:${key}`, kind: 'plain', payload: '"stolen"', modifiedAt: AT }]);
+      const { applied } = await applyUnits([{ id: `key:${key}`, kind: 'plain', payload: '"stolen"', modifiedAt: AT }]);
       expect(applied, key).toBe(0);
       expect(disk.has(physical(key)), key).toBe(false);
     }
   });
 
-  it('unions a version-history unit into local history instead of overwriting the loser parked in it', () => {
+  it('unions a version-history unit into local history instead of overwriting the loser parked in it', async () => {
     // Version history syncs precisely so a conflict's losing edit is not
     // stranded on the device that received it (syncKeys.js) — and it is
     // append-shaped, so a whole-key setItem here destroyed exactly that: the
@@ -287,20 +297,20 @@ describe('applyUnits', () => {
       history: [{ data: { name: 'Edited on the iPhone' }, timestamp: '2026-08-08T00:00:00.000Z', description: 'Edit', changeType: 'edit' }],
       historyIndex: 0,
     });
-    expect(applyUnits([{ id: 'key:resume-designer-history-v-9', kind: 'plain', payload, modifiedAt: AT }]).applied).toBe(1);
+    expect((await applyUnits([{ id: 'key:resume-designer-history-v-9', kind: 'plain', payload, modifiedAt: AT }])).applied).toBe(1);
 
     const stored = JSON.parse(disk.get(physical('resume-designer-history-v-9')));
     expect(stored.history.map((e) => e.changeType)).toEqual(['edit', 'sync-conflict']);
     expect(stored.historyIndex).toBe(1);
   });
 
-  it('lands a history unit for the LOADED variant through the store, so the next edit does not undo the merge', () => {
+  it('lands a history unit for the LOADED variant through the store, so the next edit does not undo the merge', async () => {
     // store.js holds the loaded variant's history in memory and saveHistory
     // rewrites the whole key from that array — which never saw a merge written
     // straight to storage. So a storage-only merge survives exactly until the
     // next keystroke, which is the same trap parkLoser documents.
     resumeStore.setData({ name: 'Loaded' }, true, 'v-loaded');
-    applyUnits([{
+    await applyUnits([{
       id: 'key:resume-designer-history-v-loaded',
       kind: 'plain',
       payload: JSON.stringify({
@@ -320,7 +330,7 @@ describe('applyUnits', () => {
     expect(stored.historyIndex).toBe(stored.history.length - 1);
   });
 
-  it('leaves the index on the document’s own entry after a history merge, so one Cmd+Z is still the user’s own last state', () => {
+  it('leaves the index on the document’s own entry after a history merge, so one Cmd+Z is still the user’s own last state', async () => {
     // The union interleaves by timestamp, so the newest merged entry is
     // routinely the other device's — or a loser IT parked. Taking mergeHistory's
     // index (the newest entry) therefore pointed historyIndex at an entry the
@@ -331,7 +341,7 @@ describe('applyUnits', () => {
 
     // Dated ahead of the entries the store just stamped with `new Date()`, so
     // the union sorts it LAST — the position that used to take the index.
-    applyUnits([{
+    await applyUnits([{
       id: 'key:resume-designer-history-v-merge',
       kind: 'plain',
       payload: JSON.stringify({
@@ -365,7 +375,7 @@ describe('applyUnits', () => {
     expect(stored.history.filter((e) => e.changeType === 'sync-conflict')).toHaveLength(1);
   });
 
-  it('keeps one Cmd+Z on this user’s own last state when the merge brings in another device’s edits', () => {
+  it('keeps one Cmd+Z on this user’s own last state when the merge brings in another device’s edits', async () => {
     // The union puts states in the timeline that this user was never in. Edit
     // on the phone, open the Mac, press Cmd+Z, and undo handed back the
     // phone's document rather than the user's own last state — nothing lost,
@@ -375,7 +385,7 @@ describe('applyUnits', () => {
     resumeStore.setData({ name: 'Mine1' }, true, 'v-foreign');
     resumeStore.update('name', 'Mine2');
 
-    applyUnits([{
+    await applyUnits([{
       id: 'key:resume-designer-history-v-foreign',
       kind: 'plain',
       // Dated ahead of the entries the store just stamped, so the union sorts
@@ -411,7 +421,7 @@ describe('applyUnits', () => {
     expect(resumeStore.getData().name).toBe('Edited on the iPhone');
   });
 
-  it('opens a variant whose history was merged while it was closed without marking the remote entry current', () => {
+  it('opens a variant whose history was merged while it was closed without marking the remote entry current', async () => {
     // The loaded variant's index is fixed by the store (adoptHistory). The COLD
     // variant's is not: this path writes mergeHistory's own index, the NEWEST
     // entry, which the union routinely takes from the other device. Nothing
@@ -423,7 +433,7 @@ describe('applyUnits', () => {
       history: [{ data: { name: 'Mine' }, timestamp: '2026-08-01T00:00:00.000Z', description: 'Edit', changeType: 'edit' }],
       historyIndex: 0,
     }));
-    applyUnits([{
+    await applyUnits([{
       id: 'key:resume-designer-history-v-closed',
       kind: 'plain',
       payload: JSON.stringify({
@@ -458,11 +468,11 @@ describe('applyUnits', () => {
     expect(listed.some((e) => resumeStore.getHistoryEntryData(e.index).name === 'Theirs')).toBe(true);
   });
 
-  it('lands the blob’s settings and userProfile units, which used to be dropped in silence', () => {
+  it('lands the blob’s settings and userProfile units, which used to be dropped in silence', async () => {
     // splitData emits them and mergeData reassembles them, but applyUnits
     // matched only `resume:` and `key:` — so settings and the user profile
     // synced OUT of a device and never back into it.
-    const { applied } = applyUnits([
+    const { applied } = await applyUnits([
       { id: 'data:settings', kind: 'plain', payload: JSON.stringify({ pageSize: 'a4' }), modifiedAt: AT },
       { id: 'data:userProfile', kind: 'plain', payload: JSON.stringify({ name: 'Ash' }), modifiedAt: AT },
     ]);
@@ -476,11 +486,11 @@ describe('applyUnits', () => {
     expect(Object.keys(blob.variants)).toEqual(['v-1']);
   });
 
-  it('refuses a data unit whose payload is null, rather than blanking settings and calling it applied', () => {
+  it('refuses a data unit whose payload is null, rather than blanking settings and calling it applied', async () => {
     // `'null'` parses fine, so it cleared the whole `settings` object off one
     // malformed remote unit AND counted as landed — the count being the only
     // thing that tells a caller a no-op from a failure.
-    const { applied } = applyUnits([
+    const { applied } = await applyUnits([
       { id: 'data:settings', kind: 'plain', payload: 'null', modifiedAt: AT },
       { id: 'data:userProfile', kind: 'plain', payload: 'null', modifiedAt: AT },
     ]);
@@ -512,8 +522,8 @@ describe('applyUnits', () => {
     const storedBlob = () => JSON.parse(disk.get(physical(DATA)));
 
     for (const payload of ['[]', '5', '"x"', 'true', '[{"company":"Acme"}]']) {
-      it(`refuses \`${payload}\` for the user profile, on disk and after a restart`, () => {
-        const { applied } = applyUnits([
+      it(`refuses \`${payload}\` for the user profile, on disk and after a restart`, async () => {
+        const { applied } = await applyUnits([
           { id: 'data:userProfile', kind: 'plain', payload, modifiedAt: AT },
         ]);
 
@@ -530,10 +540,10 @@ describe('applyUnits', () => {
         expect(getUserProfile()).toEqual(ORIGINAL);
       });
 
-      it(`refuses \`${payload}\` for settings, which would spread to defaults`, () => {
+      it(`refuses \`${payload}\` for settings, which would spread to defaults`, async () => {
         // The lower-stakes twin: `{ ...[], ...rest }` in saveSettings degrades
         // every stored preference to its default.
-        const { applied } = applyUnits([
+        const { applied } = await applyUnits([
           { id: 'data:settings', kind: 'plain', payload, modifiedAt: AT },
         ]);
 
@@ -542,10 +552,10 @@ describe('applyUnits', () => {
       });
     }
 
-    it('still lands a legitimate object, including an explicitly emptied one', () => {
+    it('still lands a legitimate object, including an explicitly emptied one', async () => {
       // An empty OBJECT is a value someone wrote — a profile they cleared — not
       // an absence, and it has to land exactly like any other edit.
-      const { applied } = applyUnits([
+      const { applied } = await applyUnits([
         { id: 'data:userProfile', kind: 'plain', payload: '{}', modifiedAt: AT },
         { id: 'data:settings', kind: 'plain', payload: '{"pageSize":"a4"}', modifiedAt: AT },
       ]);
@@ -556,21 +566,21 @@ describe('applyUnits', () => {
     });
   });
 
-  it('refuses a data unit for a field that never travels, and does not count it', () => {
+  it('refuses a data unit for a field that never travels, and does not count it', async () => {
     // `currentVariantId` is absent from splitData's list on purpose: which
     // résumé is open is a property of a device. mergeData refuses it, so the
     // count here has to refuse it too rather than report a phantom apply.
-    const { applied } = applyUnits([{ id: 'data:currentVariantId', kind: 'plain', payload: '"v-2"', modifiedAt: AT }]);
+    const { applied } = await applyUnits([{ id: 'data:currentVariantId', kind: 'plain', payload: '"v-2"', modifiedAt: AT }]);
     expect(applied).toBe(0);
     expect(JSON.parse(disk.get(physical(DATA))).currentVariantId).toBe('v-1');
   });
 
-  it('lands the units around a corrupt payload, and counts only the ones that landed', () => {
+  it('lands the units around a corrupt payload, and counts only the ones that landed', async () => {
     // mergeData skips an unparseable payload so one bad record cannot stop the
     // rest of a sync (syncUnits.js). Counting it anyway reported 3 applied when
     // 2 landed — and `applied` is the only thing that tells a caller a no-op
     // from a failure.
-    const { applied } = applyUnits([
+    const { applied } = await applyUnits([
       resumeUnit('v-2', { name: 'Ada Lovelace', summary: 'Product Lead' }),
       { id: 'resume:v-3', kind: 'resume', payload: '{ not json', modifiedAt: AT },
       { id: 'key:resume-designer-applications', kind: 'plain', payload: '[{"id":"a-1"}]', modifiedAt: AT },
@@ -581,18 +591,18 @@ describe('applyUnits', () => {
     expect(disk.get(physical('resume-designer-applications'))).toBe('[{"id":"a-1"}]');
   });
 
-  it('refuses a malformed unit rather than writing the text “undefined” into a real key', () => {
+  it('refuses a malformed unit rather than writing the text “undefined” into a real key', async () => {
     // appStorage.setItem does String(value), so a unit that crossed the native
     // bridge without a payload would store the literal string "undefined" —
     // data that looks written and parses nowhere.
     const before = disk.get(physical('resume-designer-applications'));
-    const { applied } = applyUnits([{ id: 'key:resume-designer-applications', kind: 'plain', modifiedAt: AT }]);
+    const { applied } = await applyUnits([{ id: 'key:resume-designer-applications', kind: 'plain', modifiedAt: AT }]);
     expect(applied).toBe(0);
     expect(disk.get(physical('resume-designer-applications'))).toBe(before);
   });
 
-  it('reports how many landed, so a caller can tell a no-op from a failure', () => {
-    expect(applyUnits([]).applied).toBe(0);
+  it('reports how many landed, so a caller can tell a no-op from a failure', async () => {
+    expect((await applyUnits([])).applied).toBe(0);
   });
 });
 
@@ -607,17 +617,17 @@ describe('applyUnits and the variant the app has OPEN', () => {
     resumeStore.setData(document, true, 'v-open');
   };
 
-  it('replaces the document the store holds, not only the copy on disk', () => {
+  it('replaces the document the store holds, not only the copy on disk', async () => {
     open({ name: 'Mine' });
 
-    expect(applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]).applied).toBe(1);
+    expect((await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })])).applied).toBe(1);
 
     expect(resumeStore.getData().name).toBe('Edited on the iPhone');
     expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data.name)
       .toBe('Edited on the iPhone');
   });
 
-  it('does not let the next save write the stale in-memory document back over it', () => {
+  it('does not let the next save write the stale in-memory document back over it', async () => {
     // THE BUG. Sync applies a fetched résumé by merging it into the blob ON
     // DISK and counts it applied, so the transport keeps the record's change
     // tag. The loaded variant's document also lives in store.js, and nothing
@@ -629,19 +639,19 @@ describe('applyUnits and the variant the app has OPEN', () => {
     registerPersistedSaveHandler(setPersistedSaveHandler);
     initPersistence('v-open');
 
-    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
     expect(resumeStore.saveNow()).toBe(true);
 
     expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data.name)
       .toBe('Edited on the iPhone');
   });
 
-  it('re-renders, because every renderer hangs off the store’s events', () => {
+  it('re-renders, because every renderer hangs off the store’s events', async () => {
     open({ name: 'Mine' });
     const seen = [];
     const stop = resumeStore.subscribe((event) => seen.push(event));
 
-    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
     stop();
 
     // 'change' is what a whole-document replacement of the SAME variant
@@ -650,18 +660,18 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(seen).toContain('change');
   });
 
-  it('leaves the store not dirty, so the adoption is not pushed straight back', () => {
+  it('leaves the store not dirty, so the adoption is not pushed straight back', async () => {
     // The adopted content is what the caller just wrote to storage. A store
     // left dirty would schedule a save of it, which restamps the unit and
     // sends this device's copy of what it has only just received.
     open({ name: 'Mine' });
 
-    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
 
     expect(resumeStore.isDirty()).toBe(false);
   });
 
-  it('leaves the replaced document one restore away in that résumé’s history', () => {
+  it('leaves the replaced document one restore away in that résumé’s history', async () => {
     // Newer wins, and the loser is never discarded silently. Every edit path
     // records its result in history before the save debounce runs, so the
     // document the adoption replaces is still there to restore.
@@ -672,7 +682,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
     // fetch may replace the document at all.
     resumeStore.markSaved();
 
-    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
 
     expect(resumeStore.getData().name).toBe('Edited on the iPhone');
     const mine = resumeStore.getHistoryEntries()
@@ -682,10 +692,10 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(resumeStore.getData().name).toBe('Mine2');
   });
 
-  it('writes a résumé for a variant that is NOT open to storage and leaves the store alone', () => {
+  it('writes a résumé for a variant that is NOT open to storage and leaves the store alone', async () => {
     open({ name: 'Mine' });
 
-    expect(applyUnits([resumeUnit('v-other', { name: 'Theirs' })]).applied).toBe(1);
+    expect((await applyUnits([resumeUnit('v-other', { name: 'Theirs' })])).applied).toBe(1);
 
     expect(JSON.parse(disk.get(physical(DATA))).variants['v-other'].data.name).toBe('Theirs');
     expect(resumeStore.getData().name).toBe('Mine');
@@ -694,7 +704,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(resumeStore.adoptDocument('v-other', { name: 'Theirs' })).toBe(false);
   });
 
-  it('never clears the open document off a unit that carries no résumé — on disk or in the store', () => {
+  it('never clears the open document off a unit that carries no résumé — on disk or in the store', async () => {
     // Absence is never deletion: a variant record with no `data` is a broken
     // unit, not an empty résumé.
     //
@@ -706,7 +716,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
     // before this variant's next save.
     open({ name: 'Mine' });
 
-    const { applied } = applyUnits([{
+    const { applied } = await applyUnits([{
       id: 'resume:v-open', kind: 'resume', modifiedAt: AT,
       payload: JSON.stringify({ id: 'v-open', name: 'Tailored for Acme' }),
     }]);
@@ -716,14 +726,14 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data).toEqual({ name: 'Mine' });
   });
 
-  it('never blanks a CLOSED variant’s copy on disk off a unit that carries no résumé', () => {
+  it('never blanks a CLOSED variant’s copy on disk off a unit that carries no résumé', async () => {
     // No store involved at all here, which is the point: the loaded variant was
     // saved by adoptDocument's own guard, and every other variant had nothing
     // between the broken unit and the blob.
     open({ name: 'Mine' });
-    applyUnits([resumeUnit('v-other', { name: 'Theirs' })]);
+    await applyUnits([resumeUnit('v-other', { name: 'Theirs' })]);
 
-    const { applied } = applyUnits([{
+    const { applied } = await applyUnits([{
       id: 'resume:v-other', kind: 'resume', modifiedAt: AT,
       payload: JSON.stringify({ id: 'v-other', name: 'Tailored for Acme' }),
     }]);
@@ -732,7 +742,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(JSON.parse(disk.get(physical(DATA))).variants['v-other'].data).toEqual({ name: 'Theirs' });
   });
 
-  it('refuses a résumé while an edit is still in flight, rather than repainting over it', () => {
+  it('refuses a résumé while an edit is still in flight, rather than repainting over it', async () => {
     // Adoption repaints: the store emits 'change' and main.js rebuilds
     // #resume's innerHTML from it. An edit the store has taken but no save has
     // written is also an edit whose time is NOT in the sync bookkeeping — the
@@ -742,7 +752,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
     open({ name: 'Mine1' });
     resumeStore.update('name', 'Mine2');
 
-    const { applied } = applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    const { applied } = await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
 
     expect(applied).toBe(0);
     expect(resumeStore.getData().name).toBe('Mine2');
@@ -754,11 +764,11 @@ describe('applyUnits and the variant the app has OPEN', () => {
     // forfeit the change tag, so the save this edit is about to trigger meets
     // the conflict path with a fresh stamp — where the loser is parked.
     resumeStore.markSaved();
-    expect(applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]).applied).toBe(1);
+    expect((await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })])).applied).toBe(1);
     expect(resumeStore.getData().name).toBe('Edited on the iPhone');
   });
 
-  it('refuses a résumé while someone is typing, whose text exists only in the DOM', () => {
+  it('refuses a résumé while someone is typing, whose text exists only in the DOM', async () => {
     // An inline edit commits on BLUR (src/inlineEditor.js's finishEditing), so
     // mid-word the text is in the contentEditable node and nowhere else: the
     // store is not dirty, no history entry holds it, and a repaint deletes the
@@ -767,7 +777,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
     open({ name: 'Mine' });
     registerEditingProbe(() => true);
 
-    const { applied } = applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    const { applied } = await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
 
     expect(applied).toBe(0);
     expect(resumeStore.getData().name).toBe('Mine');
@@ -776,24 +786,24 @@ describe('applyUnits and the variant the app has OPEN', () => {
     // The session ends when the edit commits, and the unit the transport
     // re-offers lands then.
     registerEditingProbe(() => false);
-    expect(applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]).applied).toBe(1);
+    expect((await applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })])).applied).toBe(1);
     expect(resumeStore.getData().name).toBe('Edited on the iPhone');
   });
 
-  it('lets a résumé for a variant that is NOT open land while another one is being edited', () => {
+  it('lets a résumé for a variant that is NOT open land while another one is being edited', async () => {
     // The guard is about the document on screen. Refusing every résumé because
     // one variant is being typed into would stall sync on a whole workspace.
     open({ name: 'Mine' });
     registerEditingProbe(() => true);
     resumeStore.update('name', 'Mine, mid-edit');
 
-    expect(applyUnits([resumeUnit('v-other', { name: 'Theirs' })]).applied).toBe(1);
+    expect((await applyUnits([resumeUnit('v-other', { name: 'Theirs' })])).applied).toBe(1);
 
     expect(JSON.parse(disk.get(physical(DATA))).variants['v-other'].data).toEqual({ name: 'Theirs' });
     expect(resumeStore.getData().name).toBe('Mine, mid-edit');
   });
 
-  it('refuses a résumé older than the copy this device holds, on the fetch path too', () => {
+  it('refuses a résumé older than the copy this device holds, on the fetch path too', async () => {
     // Newer wins. The fetch path merged every résumé unconditionally, so a
     // record the server had not caught up with — this device edited while the
     // transport was down, or between a send and this pull — overwrote a newer
@@ -804,7 +814,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
     open({ name: 'Mine' });
     touchUnit('resume:v-open');
 
-    const { applied } = applyUnits([
+    const { applied } = await applyUnits([
       resumeUnit('v-open', { name: 'Older, from the other device' }, '2024-01-01T00:00:00.000Z'),
     ]);
 
@@ -813,13 +823,13 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data.name).toBe('Mine');
   });
 
-  it('takes a remote résumé when this device has never stamped one, because unknown loses', () => {
+  it('takes a remote résumé when this device has never stamped one, because unknown loses', async () => {
     // `modifiedAtFor` answers null for a unit this device never saved, and an
     // unknown time has to lose to a real one — the same rule resolveConflict
     // applies everywhere else.
     open({ name: 'Mine' });
 
-    const { applied } = applyUnits([
+    const { applied } = await applyUnits([
       resumeUnit('v-open', { name: 'Edited on the iPhone' }, '2024-01-01T00:00:00.000Z'),
     ]);
 
@@ -852,12 +862,12 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
   const storedIdsOrNothing = (key) => JSON.parse(disk.get(physical(key)))?.map((r) => r.id);
 
   describe('applications — a cache with its own React subscribers', () => {
-    it('survives the next local write through the module', () => {
+    it('survives the next local write through the module', async () => {
       initApplications();
 
-      expect(applyUnits([keyUnit(APPS_KEY, JSON.stringify([
+      expect((await applyUnits([keyUnit(APPS_KEY, JSON.stringify([
         { id: 'app-iphone', variantId: 'v-1', status: 'applied', statusHistory: [] },
-      ]))]).applied).toBe(1);
+      ]))])).applied).toBe(1);
       // A perfectly ordinary local write — the record it saves is not the point,
       // the LIST it serializes is.
       addApplication({ variantId: 'v-1', variantName: 'Design Engineer' });
@@ -866,7 +876,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       expect(getAllApplications().map((a) => a.id)).toContain('app-iphone');
     });
 
-    it('reaches the screen, not just the cache', () => {
+    it('reaches the screen, not just the cache', async () => {
       // React reads this module through useSyncExternalStore
       // (hooks/useApplications.js), so a cache corrected without notifying
       // leaves the Library showing a list that no longer exists.
@@ -874,14 +884,14 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       const seen = vi.fn();
       const stop = subscribeApplications(seen);
 
-      applyUnits([keyUnit(APPS_KEY, JSON.stringify([{ id: 'app-iphone' }]))]);
+      await applyUnits([keyUnit(APPS_KEY, JSON.stringify([{ id: 'app-iphone' }]))]);
       stop();
 
       expect(seen).toHaveBeenCalled();
       expect(getApplicationsSnapshot().map((a) => a.id)).toContain('app-iphone');
     });
 
-    it('never empties the list off a unit it cannot read', () => {
+    it('never empties the list off a unit it cannot read', async () => {
       // Absence is never deletion. `null` parses fine and would land as an
       // empty list; the cache keeps what it has, and the next local write puts
       // it back on disk.
@@ -889,12 +899,12 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       addApplication({ variantId: 'v-1', variantName: 'Mine' });
       const mine = getAllApplications()[0].id;
 
-      applyUnits([keyUnit(APPS_KEY, 'null')]);
+      await applyUnits([keyUnit(APPS_KEY, 'null')]);
 
       expect(getAllApplications().map((a) => a.id)).toEqual([mine]);
     });
 
-    it('never lets a unit it cannot read reach the KEY — the restart chain', () => {
+    it('never lets a unit it cannot read reach the KEY — the restart chain', async () => {
       // The assertion above is about MEMORY, and memory was never where the
       // destruction happened. The unreadable payload was still WRITTEN and still
       // counted: the cache kept the good list while the key held `null`, which
@@ -906,7 +916,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       addApplication({ variantId: 'v-1', variantName: 'Mine' });
       const mine = getAllApplications()[0].id;
 
-      const { applied } = applyUnits([keyUnit(APPS_KEY, 'null')]);
+      const { applied } = await applyUnits([keyUnit(APPS_KEY, 'null')]);
 
       // Short count: the transport forfeits the change tag and re-offers it.
       expect(applied).toBe(0);
@@ -915,13 +925,13 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       expect(initApplications().map((a) => a.id)).toEqual([mine]);
     });
 
-    it('still lands an EXPLICIT empty list, which is a deletion someone made', () => {
+    it('still lands an EXPLICIT empty list, which is a deletion someone made', async () => {
       // The guard above tells absence from deletion; it must not refuse the
       // second. An empty array is what the other device's list actually is.
       initApplications();
       addApplication({ variantId: 'v-1', variantName: 'Mine' });
 
-      expect(applyUnits([keyUnit(APPS_KEY, '[]')]).applied).toBe(1);
+      expect((await applyUnits([keyUnit(APPS_KEY, '[]')])).applied).toBe(1);
 
       expect(getAllApplications()).toEqual([]);
       expect(disk.get(physical(APPS_KEY))).toBe('[]');
@@ -934,47 +944,47 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
     // list). Seed the key so each test's init really starts from nothing.
     beforeEach(() => { disk.set(physical(JOBS_KEY), '[]'); });
 
-    it('survives the next local write through the module', () => {
+    it('survives the next local write through the module', async () => {
       initJobDescriptions();
 
-      expect(applyUnits([keyUnit(JOBS_KEY, JSON.stringify([
+      expect((await applyUnits([keyUnit(JOBS_KEY, JSON.stringify([
         { id: 'jd-iphone', title: 'Staff Engineer', company: 'Acme', isActive: true },
-      ]))]).applied).toBe(1);
+      ]))])).applied).toBe(1);
       addJobDescription({ title: 'Added here', company: 'Globex', description: 'x' });
 
       expect(storedIds(JOBS_KEY)).toContain('jd-iphone');
       expect(getAllJobDescriptions().map((j) => j.id)).toContain('jd-iphone');
     });
 
-    it('tells the dialog to re-read, so an open Jobs list is not stale', () => {
+    it('tells the dialog to re-read, so an open Jobs list is not stale', async () => {
       initJobDescriptions();
       const seen = vi.fn();
       const stop = subscribeJobDescriptions(seen);
 
-      applyUnits([keyUnit(JOBS_KEY, JSON.stringify([{ id: 'jd-iphone' }]))]);
+      await applyUnits([keyUnit(JOBS_KEY, JSON.stringify([{ id: 'jd-iphone' }]))]);
       stop();
 
       expect(seen).toHaveBeenCalled();
     });
 
-    it('never empties the list off a unit it cannot read', () => {
+    it('never empties the list off a unit it cannot read', async () => {
       initJobDescriptions();
       addJobDescription({ title: 'Mine', company: 'Mine', description: 'x' });
       const mine = getAllJobDescriptions()[0].id;
 
-      applyUnits([keyUnit(JOBS_KEY, 'null')]);
+      await applyUnits([keyUnit(JOBS_KEY, 'null')]);
 
       expect(getAllJobDescriptions().map((j) => j.id)).toEqual([mine]);
     });
 
-    it('never lets a unit it cannot read reach the KEY — the restart chain', () => {
+    it('never lets a unit it cannot read reach the KEY — the restart chain', async () => {
       // As above: the cache surviving is not the same as the disk surviving,
       // and initJobDescriptions degrades the same `null` to an empty list.
       initJobDescriptions();
       addJobDescription({ title: 'Mine', company: 'Mine', description: 'x' });
       const mine = getAllJobDescriptions()[0].id;
 
-      const { applied } = applyUnits([keyUnit(JOBS_KEY, 'null')]);
+      const { applied } = await applyUnits([keyUnit(JOBS_KEY, 'null')]);
 
       expect(applied).toBe(0);
       expect(storedIdsOrNothing(JOBS_KEY)).toEqual([mine]);
@@ -1011,10 +1021,10 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       }]));
     });
 
-    it('survives the next local write through the module', () => {
+    it('survives the next local write through the module', async () => {
       const chat = liveChat();
 
-      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      expect((await applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))])).applied).toBe(1);
       // What useChat does on every send: rebuild the list from the copy it
       // holds and persist it.
       persistThreads([...chat.threads, makeThread('Typed here', [], 'v-1')]);
@@ -1022,7 +1032,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       expect(storedIds(THREADS_KEY)).toContain('thread-iphone');
     });
 
-    it('refuses a thread list while a reply is in flight, rather than repainting over it', () => {
+    it('refuses a thread list while a reply is in flight, rather than repainting over it', async () => {
       // Same exposure as the résumé's inline edit, same answer. A streamed
       // reply exists only in React state until it commits, and it commits by
       // mapping over the thread list — so replacing that list mid-stream drops
@@ -1030,7 +1040,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       const chat = liveChat();
       chat.busy = true;
 
-      const { applied } = applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]);
+      const { applied } = await applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]);
 
       expect(applied).toBe(0);
       // Refused on disk too: landing there and not in the hook is the
@@ -1040,18 +1050,18 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       // And nothing is lost by refusing — the short count forfeits the change
       // tag, and the unit the transport re-offers lands once the reply is in.
       chat.busy = false;
-      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      expect((await applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))])).applied).toBe(1);
       expect(storedIds(THREADS_KEY)).toEqual(['thread-iphone']);
     });
 
-    it('lands with nobody holding a copy, because loadThreads reads storage each time', () => {
+    it('lands with nobody holding a copy, because loadThreads reads storage each time', async () => {
       registerThreadHolder(null);
 
-      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      expect((await applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))])).applied).toBe(1);
       expect(loadThreads().threads.map((t) => t.id)).toEqual(['thread-iphone']);
     });
 
-    it('never lets a unit it cannot read reach the KEY', () => {
+    it('never lets a unit it cannot read reach the KEY', async () => {
       // The worst of the four, and the only one that needs no restart to bite:
       // loadThreads does not merely fall back to an empty list on garbage, it
       // MANUFACTURES a single fresh 'New Chat'. So a `null` allowed onto the key
@@ -1059,7 +1069,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       // that and pushes it up as a clean, uncontested update.
       const chat = liveChat();
 
-      const { applied } = applyUnits([keyUnit(THREADS_KEY, 'null')]);
+      const { applied } = await applyUnits([keyUnit(THREADS_KEY, 'null')]);
 
       expect(applied).toBe(0);
       expect(storedIdsOrNothing(THREADS_KEY)).toEqual(['thread-mine']);
@@ -1067,7 +1077,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       expect(chat.threads.map((t) => t.id)).toEqual(['thread-mine']);
     });
 
-    it('does not let a departing holder deregister its successor', () => {
+    it('does not let a departing holder deregister its successor', async () => {
       // One call site today, so the unconditional clear this replaces was
       // correct today — and silently stopped being correct the moment a second
       // holder registered. React mounts a replacement BEFORE unmounting the one
@@ -1080,7 +1090,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       registerThreadHolder(second);
       releaseFirst();
 
-      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      expect((await applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))])).applied).toBe(1);
       expect(second.adopt).toHaveBeenCalled();
       expect(first.adopt).not.toHaveBeenCalled();
     });
@@ -1101,10 +1111,10 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       updatedAt: AT,
     }];
 
-    it('survives the next local write through the module', () => {
+    it('survives the next local write through the module', async () => {
       initLearnedAnswers();
 
-      expect(applyUnits([keyUnit(LEARNED_KEY, JSON.stringify(theirAnswer))]).applied).toBe(1);
+      expect((await applyUnits([keyUnit(LEARNED_KEY, JSON.stringify(theirAnswer))])).applied).toBe(1);
       // One answer learned while filling a form is enough: `save()` serializes
       // the whole cache back over the key.
       saveLearnedAnswer('Work authorization?', 'US citizen');
@@ -1113,12 +1123,12 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       expect(getAllLearnedAnswers().map((a) => a.id)).toContain('ans-iphone');
     });
 
-    it('never lets a unit it cannot read reach the KEY — the restart chain', () => {
+    it('never lets a unit it cannot read reach the KEY — the restart chain', async () => {
       initLearnedAnswers();
       saveLearnedAnswer('Pronouns?', 'they/them');
       const mine = getAllLearnedAnswers()[0].id;
 
-      const { applied } = applyUnits([keyUnit(LEARNED_KEY, 'null')]);
+      const { applied } = await applyUnits([keyUnit(LEARNED_KEY, 'null')]);
 
       expect(applied).toBe(0);
       expect(storedIdsOrNothing(LEARNED_KEY)).toEqual([mine]);
@@ -1167,10 +1177,10 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       registerUserProfileHolder(null);
     });
 
-    it('survives the next debounced save through the dialog', () => {
+    it('survives the next debounced save through the dialog', async () => {
       const dialog = liveProfileDialog();
 
-      expect(applyUnits([dataUnit('userProfile', THEIRS)]).applied).toBe(1);
+      expect((await applyUnits([dataUnit('userProfile', THEIRS)])).applied).toBe(1);
       // One keystroke in any field of the open dialog: ProfileTabs mutates the
       // working copy in place and the 500 ms debounce writes the WHOLE object
       // back over `storage.userProfile`.
@@ -1181,14 +1191,14 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       expect(storedProfile().contactInfo.email).toBe('ada@example.com');
     });
 
-    it('refuses a profile while an edit is in flight, rather than overwriting it', () => {
+    it('refuses a profile while an edit is in flight, rather than overwriting it', async () => {
       // The edit lives ONLY in that ref until the debounce fires — no DOM copy,
       // no history — so adopting mid-edit drops the typing with nothing holding
       // it. Same rule as the chat's, same refusal.
       const dialog = liveProfileDialog();
       dialog.busy = true;
 
-      const { applied } = applyUnits([dataUnit('userProfile', THEIRS)]);
+      const { applied } = await applyUnits([dataUnit('userProfile', THEIRS)]);
 
       expect(applied).toBe(0);
       // Refused on disk too: landing there and not in the dialog is the
@@ -1198,11 +1208,11 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       // And nothing is lost by refusing — the short count forfeits the change
       // tag, and the unit the transport re-offers lands once the edit is saved.
       dialog.busy = false;
-      expect(applyUnits([dataUnit('userProfile', THEIRS)]).applied).toBe(1);
+      expect((await applyUnits([dataUnit('userProfile', THEIRS)])).applied).toBe(1);
       expect(storedProfile()).toEqual(THEIRS);
     });
 
-    it('leaves `data:settings` alone, which nobody holds a whole copy of', () => {
+    it('leaves `data:settings` alone, which nobody holds a whole copy of', async () => {
       // Every writer of settings calls saveSettings with the ONE field it
       // changed, merged into a freshly-read blob — so the busy rule must not
       // spread to it, and a settings unit lands whatever the profile editor is
@@ -1210,7 +1220,7 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       const dialog = liveProfileDialog();
       dialog.busy = true;
 
-      expect(applyUnits([dataUnit('settings', { pageSize: 'a4' })]).applied).toBe(1);
+      expect((await applyUnits([dataUnit('settings', { pageSize: 'a4' })])).applied).toBe(1);
       expect(JSON.parse(disk.get(physical(DATA))).settings.pageSize).toBe('a4');
     });
   });

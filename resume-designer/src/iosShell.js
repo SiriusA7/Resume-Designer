@@ -916,6 +916,13 @@ export function buildDesign(state) {
   };
 }
 
+/** Whether `value` is something that can be awaited. */
+function isThenable(value) {
+  return value !== null
+    && (typeof value === 'object' || typeof value === 'function')
+    && typeof value.then === 'function';
+}
+
 /**
  * Build the command dispatcher from a map of `type → handler`.
  *
@@ -923,41 +930,74 @@ export function buildDesign(state) {
  * the shell's chrome down with it, and Swift has no way to catch a JS
  * exception raised inside `evaluateJavaScript`. Failures come back as data.
  *
+ * TWO ENTRY POINTS onto the same handlers, because WebKit has two ways of
+ * asking and they differ in exactly one thing — what happens to a handler that
+ * answers with a PROMISE:
+ *
+ * - `dispatch(command)` is what `evaluateJavaScript` calls. It is synchronous by
+ *   contract; `evaluateJavaScript` cannot serialize a promise, so a thenable is
+ *   DROPPED and the reply carries no `result`.
+ * - `dispatch.async(command)` is what `callAsyncJavaScript` calls, and it awaits
+ *   the thenable before replying. `syncApply` is the reason it exists: an apply
+ *   is not confirmed until the bytes are on disk, and that is a promise (see
+ *   `applyUnits`). A rejection comes back as `{ ok: false }` like a throw, so
+ *   this entry point never rejects either.
+ *
  * Pure — the impurity is entirely in the `actions` the caller supplies.
  *
  * @param {Record<string, (payload: object) => unknown>} actions
  * @returns {(command: unknown) => {ok: boolean, result?: unknown, error?: string}}
  */
 export function createCommandDispatcher(actions) {
-  return function dispatch(command) {
+  // Everything both entry points share. Answers `{ reply }` when the command is
+  // settled and `{ pending, type }` when the handler returned a thenable — the
+  // one case the two treat differently.
+  const run = (command) => {
     let parsed = command;
     if (typeof parsed === 'string') {
       try {
         parsed = JSON.parse(parsed);
       } catch {
-        return { ok: false, error: 'malformed-json' };
+        return { reply: { ok: false, error: 'malformed-json' } };
       }
     }
     if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') {
-      return { ok: false, error: 'malformed-command' };
+      return { reply: { ok: false, error: 'malformed-command' } };
     }
     const action = actions[parsed.type];
     if (typeof action !== 'function') {
-      return { ok: false, error: `unknown-command:${parsed.type}` };
+      return { reply: { ok: false, error: `unknown-command:${parsed.type}` } };
     }
     try {
       const result = action(parsed);
-      const isThenable = result !== null
-        && (typeof result === 'object' || typeof result === 'function')
-        && typeof result.then === 'function';
-      // evaluateJavaScript cannot serialize a Promise. Drop it rather than
-      // await it: this dispatcher is synchronous by contract and must never throw.
-      return result === undefined || isThenable ? { ok: true } : { ok: true, result };
+      if (isThenable(result)) return { pending: result, type: parsed.type };
+      return { reply: result === undefined ? { ok: true } : { ok: true, result } };
     } catch (err) {
       console.error('[iosShell] command failed:', parsed.type, err);
+      return { reply: { ok: false, error: String(err?.message ?? err) } };
+    }
+  };
+
+  function dispatch(command) {
+    // A dropped thenable still RAN — the handler was called and its side effects
+    // happened; only its answer is unavailable here. Every caller that needs the
+    // answer goes through `dispatch.async`.
+    return run(command).reply ?? { ok: true };
+  }
+
+  dispatch.async = async (command) => {
+    const { reply, pending, type } = run(command);
+    if (reply) return reply;
+    try {
+      const result = await pending;
+      return result === undefined ? { ok: true } : { ok: true, result };
+    } catch (err) {
+      console.error('[iosShell] command failed:', type, err);
       return { ok: false, error: String(err?.message ?? err) };
     }
   };
+
+  return dispatch;
 }
 
 /**
@@ -1528,16 +1568,26 @@ export function initIOSShell(deps) {
       });
     },
     syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
+    // The ONE command whose answer is a promise, and the one Swift asks for
+    // through `callAsyncJavaScript` (see `dispatch.async`). A malformed batch
+    // still throws SYNCHRONOUSLY — this handler is not `async` on purpose — so
+    // it is a refusal on either entry point rather than an answer on one.
     syncApply: ({ units }) => {
       const parsed = JSON.parse(String(units ?? '[]'));
       if (!Array.isArray(parsed)) throw new Error('syncApply needs an array of units');
       // RETURNED, not discarded. `applyUnits` answers `{ applied }` — how many
-      // units actually landed — and the transport keeps the server's change tag
-      // for a unit only once it knows this device took it. Swallowing the count
-      // here is what let a batch the page never applied leave its change tags
-      // behind, and a tag for content this device does not hold makes the next
-      // save of that unit a clean update that destroys the server's copy.
-      const result = deps.applyUnits(parsed);
+      // units are DURABLY this device's — and the transport keeps the server's
+      // change tag for a unit only once it knows this device took it. Swallowing
+      // the count here is what let a batch the page never applied leave its
+      // change tags behind, and a tag for content this device does not hold
+      // makes the next save of that unit a clean update that destroys the
+      // server's copy.
+      //
+      // `applyUnits` lands everything synchronously and only THEN awaits the
+      // disk, so the cache is already current when this returns its promise —
+      // which is why the republish below can stay where it is and does not wait
+      // on a disk write. Nothing on screen ever waits for sync.
+      const pending = deps.applyUnits(parsed);
       // Republished like every other mutating route here, and for the same
       // reason: an open sheet projects on demand and nothing else re-reads it.
       // A landing that changed the job list or the application history would
@@ -1546,7 +1596,7 @@ export function initIOSShell(deps) {
       // ChatPanel publishes on every engine change, and adopting a thread list
       // is one — so this is the other screens catching up with it.)
       publish();
-      return result;
+      return pending;
     },
     syncParkLoser: ({ unitId, payload }) =>
       deps.parkLoser(String(unitId ?? ''), String(payload ?? '')),
@@ -1667,6 +1717,12 @@ export function initIOSShell(deps) {
 
   window.__opShell = {
     command: dispatch,
+    /**
+     * The same commands, for `callAsyncJavaScript`, which awaits what the page
+     * returns. `command` drops a promise because `evaluateJavaScript` cannot
+     * serialize one; this is how `syncApply`'s durable count crosses the bridge.
+     */
+    commandAsync: dispatch.async,
     /**
      * Called by ChatPanel whenever the chat engine's state changes.
      *

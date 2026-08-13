@@ -859,8 +859,13 @@ final class ShellModel: ObservableObject {
   /// which is all any command needed until sync: `syncUnit` asks the page for a
   /// unit and the unit is the point.
   ///
-  /// Never a Promise. The dispatcher drops thenables before replying, since
-  /// `evaluateJavaScript` cannot serialize one.
+  /// A PROMISE IS AWAITED, and that is why this goes through
+  /// `callAsyncJavaScript` rather than `evaluateJavaScript` (see `evaluateAsync`
+  /// and `syncApply` in iosShell.js). `evaluateJavaScript` cannot serialize a
+  /// promise, so the dispatcher's synchronous entry point drops one — and an
+  /// apply is not confirmed until the bytes are on disk, which is a promise.
+  /// Every other caller here answers synchronously and is unaffected: an already
+  /// settled value crosses this path exactly as it crossed the other one.
   func sendForResult(_ type: String, _ extra: [String: String] = [:]) async -> ShellReply {
     await withCheckedContinuation { continuation in
       // Resumed exactly once, from whichever of the two paths below arrives
@@ -874,7 +879,7 @@ final class ShellModel: ObservableObject {
         continuation.resume(returning: value)
       }
 
-      evaluate(type, extra) { reply in
+      evaluateAsync(type, extra) { reply in
         guard let reply, (reply["ok"] as? Bool) == true else {
           finish(.unanswered)
           return
@@ -891,6 +896,11 @@ final class ShellModel: ObservableObject {
       // later send for the life of the process, silently. Ten seconds is far
       // longer than a reply to a live page takes and short enough that the
       // engine is not left waiting on a page that is gone.
+      //
+      // It bounds the PAGE'S PROMISE too, now that one can be awaited here: a
+      // disk that never answers times out as `.unanswered`, which is a `false`
+      // from `syncDidFetch`, which forfeits the change tags. The safe direction,
+      // and the same one every other way of not knowing takes.
       DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
         MainActor.assumeIsolated {
           if !settled { NSLog("[OPShell] command \(type) never answered") }
@@ -900,21 +910,31 @@ final class ShellModel: ObservableObject {
     }
   }
 
-  /// One command out, one reply back. The encode-and-escape block lives here
-  /// and only here; `send` and `sendForResult` differ only in what they keep
-  /// from the reply.
+  /// The command body, encoded once for both ways of asking.
+  ///
+  /// `nil` means it could not be built or there is nobody to ask; the caller
+  /// must still answer whoever is waiting.
+  private func commandBody(_ type: String, _ extra: [String: String]) -> String? {
+    var body: [String: String] = extra
+    body["type"] = type
+    guard let json = try? JSONSerialization.data(withJSONObject: body),
+          let text = String(data: json, encoding: .utf8) else {
+      NSLog("[OPShell] could not encode command: \(type)")
+      return nil
+    }
+    return text
+  }
+
+  /// One command out, one reply back. `send` uses this; `sendForResult` uses
+  /// `evaluateAsync`, and the two differ only in whether a promise is awaited.
   ///
   /// `handle` is called exactly once, including when there is no webview to ask
   /// — a caller awaiting an answer has to get one.
   private func evaluate(
     _ type: String, _ extra: [String: String], _ handle: @escaping @MainActor ([String: Any]?) -> Void
   ) {
-    var body: [String: String] = extra
-    body["type"] = type
-    guard let json = try? JSONSerialization.data(withJSONObject: body),
-          let text = String(data: json, encoding: .utf8),
+    guard let text = commandBody(type, extra),
           let literal = Self.jsStringLiteral(text) else {
-      NSLog("[OPShell] could not encode command: \(type)")
       handle(nil)
       return
     }
@@ -927,6 +947,48 @@ final class ShellModel: ObservableObject {
       if let error { NSLog("[OPShell] command \(type) failed: \(error)") }
       let reply = error == nil ? value as? [String: Any] : nil
       Task { @MainActor in handle(reply) }
+    }
+  }
+
+  /// `evaluate`, through the API that AWAITS what the page returns.
+  ///
+  /// `callAsyncJavaScript` runs the body as an async function and resolves the
+  /// promise before calling back, which is the whole reason it is here — see
+  /// `applyUnits` in syncModel.js, whose answer is only true once the fetched
+  /// content is on disk. Hand-rolling that with a token and a `postMessage`
+  /// would be a second continuation registry racing the round trip it belongs
+  /// to; WebKit already owns this one.
+  ///
+  /// The command crosses in `arguments` rather than as a quoted literal — the
+  /// bridge's own escaping, which is one less thing to get right than
+  /// `jsStringLiteral`, and nothing in it can be parsed as code either way.
+  ///
+  /// `handle` is called exactly once, on the main actor, as in `evaluate`.
+  private func evaluateAsync(
+    _ type: String, _ extra: [String: String], _ handle: @escaping @MainActor ([String: Any]?) -> Void
+  ) {
+    guard let text = commandBody(type, extra) else {
+      handle(nil)
+      return
+    }
+    guard let webView else {
+      NSLog("[OPShell] no webview for command: \(type)")
+      handle(nil)
+      return
+    }
+    webView.callAsyncJavaScript(
+      "if (!window.__opShell) return null; return await window.__opShell.commandAsync(command);",
+      arguments: ["command": text],
+      in: nil,
+      in: .page
+    ) { result in
+      switch result {
+      case .success(let value):
+        handle(value as? [String: Any])
+      case .failure(let error):
+        NSLog("[OPShell] command \(type) failed: \(error)")
+        handle(nil)
+      }
     }
   }
 
@@ -1497,12 +1559,23 @@ extension ShellModel: OPSyncHost {
 
   /// Units from another device, handed to the page to apply.
   ///
-  /// Answers whether the page took ALL of them, which is what the transport
-  /// keeps their change tags on (`deliver` in OPSync.swift). Every way of not
-  /// knowing is `false`: the units would not encode, the round trip was never
-  /// answered, the reply carried no usable count, or the count came back short.
-  /// A wrong `true` is a silent overwrite of the server's newer copy; a wrong
-  /// `false` costs one extra round trip the next time this unit is saved.
+  /// Answers whether the page took ALL of them and can still prove it after a
+  /// relaunch, which is what the transport keeps their change tags on (`deliver`
+  /// in OPSync.swift). Every way of not knowing is `false`: the units would not
+  /// encode, the round trip was never answered, the reply carried no usable
+  /// count, or the count came back short. A wrong `true` is a silent overwrite
+  /// of the server's newer copy; a wrong `false` costs one extra round trip the
+  /// next time this unit is saved.
+  ///
+  /// TOOK is DURABLY took, and the distinction was a data-loss bug of its own:
+  /// the page's storage is a write-behind cache, so a count of what reached
+  /// STORAGE said nothing about what reached disk, and a device killed inside
+  /// that window relaunched holding old content paired with a new change tag.
+  /// `applyUnits` now waits for the disk before answering (syncModel.js), which
+  /// is why this round trip can take longer than the others and why it is the
+  /// one that goes through `callAsyncJavaScript`. Waiting here costs nothing on
+  /// screen: sync is background reconciliation and nothing in the app blocks on
+  /// it — only this confirmation does.
   ///
   /// A `false` also OWES THESE UNITS ANOTHER GO, and this is the only place that
   /// can record that. Forfeiting the change tags keeps the next save honest, but
