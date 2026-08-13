@@ -141,10 +141,38 @@ function parsesAsJSON(payload) {
  * `userProfile` wholesale off one malformed remote unit — and counted as
  * applied. Both are objects in every shape the app writes, so a null there is a
  * broken record, not a value.
+ *
+ * `null` was only the reachable half of that, though — the one `String(null)`
+ * coercion produces. Refusing it alone still let `'[]'`, `'5'` and `'"x"'`
+ * through, and the chain past the write is the same one `landsAsResume` and
+ * KEY_OWNERS close for their units, a field further in: the garbage lands on
+ * disk and counts applied, so this device keeps the change tag; `getUserProfile`
+ * returns it because it is TRUTHY; `completeProfile` normalises it to a
+ * defaults-shaped EMPTY profile; and the next debounced save persists that empty
+ * profile and pushes it up as a clean, uncontested update. Absence became
+ * deletion one restart later. `data:settings` is the lower-stakes twin —
+ * `saveSettings`' `{ ...[], ...rest }` degrades every preference to its default.
+ *
+ * So the question asked is the honest one — is this a value of the shape the
+ * field holds — and both fields hold an OBJECT in every shape the app writes.
+ * An array is refused with the scalars: `typeof [] === 'object'` is a fact about
+ * JavaScript, not about a settings blob. An explicitly EMPTY object still lands;
+ * that is a profile someone cleared, not an absence, exactly as an explicitly
+ * empty list lands for a KEY_OWNERS key.
+ *
+ * Deliberately NOT extended to non-owner plain keys like
+ * `resume-designer-profiles`: `loadRegistry` already reads a corrupt registry as
+ * `null` and routes boot through the registry rebuild, which recovers every
+ * namespace.
  */
 function landsAsDataField(unit) {
   const landed = mergeData({}, [unit]);
-  return Object.keys(landed).some((field) => field !== 'variants' && landed[field] !== null);
+  return Object.keys(landed).some((field) => field !== 'variants' && isFieldValue(landed[field]));
+}
+
+/** The shape both `data:` fields hold — see `landsAsDataField`. */
+function isFieldValue(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

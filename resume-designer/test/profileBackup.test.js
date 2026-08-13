@@ -434,6 +434,29 @@ describe('per-profile export/import', () => {
     expect(restored.settings.openrouterKey).toBeUndefined();
   });
 
+  // The third import boundary, and the one that carries a single workspace
+  // between devices most directly. See the sync-state block in
+  // test/importBackup.test.js for why the id must not travel and the stamps
+  // must.
+  it('drops the source device\'s id from an imported profile, keeping its stamps', async () => {
+    const { partnerId } = await seedTwoProfiles();
+    const readDownload = captureDownload();
+    await exportProfileBackup(partnerId);
+    const envelope = await readDownload();
+    envelope.keys['resume-designer-sync-state'] = JSON.stringify({
+      deviceId: 'device-theotherphone',
+      'resume:v2': { modifiedAt: '2026-08-09T00:00:00.000Z' },
+    });
+
+    const imported = await importProfileBackup(envelope);
+
+    const restored = JSON.parse(
+      localStorage.getItem(`resume-p--${imported.id}--resume-designer-sync-state`),
+    );
+    expect(restored.deviceId).toBeUndefined();
+    expect(restored['resume:v2']).toEqual({ modifiedAt: '2026-08-09T00:00:00.000Z' });
+  });
+
   it('exports the active profile\'s unprefixed live data in the recovery state', async () => {
     // Incomplete-adoption recovery: mapping off, live data at unprefixed keys.
     // A per-profile export of the recovering (active) profile must still capture

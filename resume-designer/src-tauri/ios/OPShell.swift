@@ -697,8 +697,10 @@ final class ShellModel: ObservableObject {
   /// Whether the person has turned iCloud sync on, as the page last reported
   /// it. `nil` until the first report, and that distinction is load-bearing:
   /// "this device already had sync on" and "they just turned it on" reach here
-  /// identically, and only the second CREATES a full-upload debt. An existing
-  /// debt survives either one (see `syncPreference`).
+  /// identically, and only the second CREATES a full-upload debt for the profile
+  /// that happens to be active. An existing debt survives either one (see
+  /// `syncPreference`); a profile this device has never offered one for gets its
+  /// own on the first gated start (see `runStartSync`).
   private var syncEnabled: Bool?
 
   /// The profile the page last activated with. The engine may not be running
@@ -720,6 +722,12 @@ final class ShellModel: ObservableObject {
   /// Per-profile because each profile is a different CloudKit zone, and outside
   /// JS storage so neither sync nor a backup can carry one device's debt to
   /// another.
+  ///
+  /// TRI-STATE, and all three states are load-bearing: absent means this device
+  /// has never offered this profile a full upload, `true` means it owes one, and
+  /// `false` means it settled one. `runStartSync` creates the debt on absent and
+  /// `sendAllUnits` settles it to `false` — never back to absent, or every later
+  /// activation of that profile would look like its first.
   private static func syncFullUploadKey(_ profileId: String) -> String {
     "op-sync-full-upload-owed-\(profileId)"
   }
@@ -929,12 +937,25 @@ extension ShellModel {
 
     guard let syncProfileId else {
       // No document has come up yet. Its activation starts the engine, and it
-      // will find the switch already on.
+      // will find the switch already on — and, this being that profile's first
+      // start past the gate, will create its debt there (see `runStartSync`).
       return
     }
     // `previous == nil` is the first report of a preference that was already on
     // — a launch, not a decision — so it does not CREATE a new debt. Any debt
     // created before process death is already in UserDefaults and remains owed.
+    //
+    // `previous == false` is a decision just made, and it re-offers the whole
+    // workspace even for a profile that settled a debt long ago: off-then-on
+    // means "put this device's contents in the account", and the account may
+    // have been emptied while the switch was down. That is deliberately NOT what
+    // `runStartSync` does — it offers a profile exactly once, because its
+    // trigger is an activation rather than a choice.
+    //
+    // The ACTIVE profile only, and that is a real limit rather than an oversight
+    // this hides: the shell has no list of the others. It learns a profile
+    // exists when the page activates it, which is exactly why `runStartSync` is
+    // where every profile's first offer has to be made.
     if previous == false {
       setSyncFullUploadOwed(true, profileId: syncProfileId)
     }
@@ -1049,6 +1070,39 @@ extension ShellModel {
       return
     }
 
+    // THIS profile's debt, if this device has never offered it one.
+    //
+    // `syncPreference` creates a debt when the switch is flipped, but only for
+    // the profile that was active at that moment — and workspaces are a shipped
+    // feature, so there are usually several. Every other profile's PRE-EXISTING
+    // résumés therefore never reached iCloud at all: a unit arrives in the
+    // account only when `send(unitIds:)` names it, and persistence names a unit
+    // once, on the save that wrote it, so a second workspace trickled up one
+    // résumé at a time as each happened to be edited again. Turning sync on is
+    // the moment this device offers everything it holds, and it holds every
+    // profile.
+    //
+    // Created on the profile's first start PAST THE GATE, which is the same
+    // moment `syncPreference` represents for the active profile — "sync is on
+    // and this workspace has come up" — generalised to all of them. Above the
+    // account check for the same reason `syncPreference` is: a debt is OWED, not
+    // sent, so turning sync on (or switching profile) while signed out still
+    // records it, and whichever start does come up pays it.
+    //
+    // ONCE per profile per install, and the marker is what guarantees that
+    // rather than a guess about when activations happen. An `activated` message
+    // is posted per DOCUMENT — every profile switch, every relaunch, and every
+    // time WebKit reclaims the content process and reloads — so a re-collection
+    // on each one would be a whole-workspace re-upload several times a day.
+    // `setSyncFullUploadOwed` now records `false` on settlement instead of
+    // removing the key, so a settled debt is still a decision on record and only
+    // a genuinely never-seen profile is absent here. Nothing removes the key
+    // afterwards, so this branch cannot be taken twice for the same profile.
+    if !syncFullUploadConsidered(profileId: profileId) {
+      NSLog("[OPShell] first gated start for this profile — a full upload is owed")
+      setSyncFullUploadOwed(true, profileId: profileId)
+    }
+
     let state = await sync.start(profileId: profileId)
     syncAccountState = state
     guard state == .available else {
@@ -1140,13 +1194,19 @@ extension ShellModel {
     UserDefaults.standard.bool(forKey: Self.syncFullUploadKey(profileId))
   }
 
+  /// Whether this device has ever decided about a full upload for this profile —
+  /// owed or settled, the two being the same answer to this question. Only an
+  /// ABSENT key is "never", which is the state `runStartSync` acts on.
+  private func syncFullUploadConsidered(profileId: String) -> Bool {
+    UserDefaults.standard.object(forKey: Self.syncFullUploadKey(profileId)) != nil
+  }
+
   private func setSyncFullUploadOwed(_ owed: Bool, profileId: String) {
-    let key = Self.syncFullUploadKey(profileId)
-    if owed {
-      UserDefaults.standard.set(true, forKey: key)
-    } else {
-      UserDefaults.standard.removeObject(forKey: key)
-    }
+    // RECORDED, not removed, on settlement. The absence of this key is what
+    // `runStartSync` reads as "this profile has never been offered a full
+    // upload", so removing it here would make every later activation of that
+    // profile look like its first and re-collect the whole workspace.
+    UserDefaults.standard.set(owed, forKey: Self.syncFullUploadKey(profileId))
   }
 
   /// The one line Settings shows under the switch — or "", which draws no row

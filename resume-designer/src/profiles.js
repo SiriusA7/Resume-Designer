@@ -7,7 +7,7 @@ import { appStorage, setProfileMapping } from './appStorage.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
-  withoutDeadProviderCredentials, withoutStoredCredentials,
+  withoutDeadProviderCredentials, withoutStoredCredentials, withoutDeviceIdentity,
 } from './profileKeys.js';
 
 // Starts with `resume-` ON PURPOSE so appStorage's one-time localStorage→disk
@@ -681,7 +681,16 @@ export async function importProfileBackup(parsed) {
     for (const [k, v] of Object.entries(parsed.keys)) {
       // Profile exports written before the strip still carry the credential;
       // sanitize on the way in so it cannot land back in plaintext storage.
-      appStorage.setItem(physicalKey(profile.id, k), withoutStoredCredentials(k, v));
+      //
+      // And drop the exporting device's `deviceId` out of the sync-state key:
+      // this is the boundary that carries ONE workspace between two machines, so
+      // it is the most direct way for both of them to end up claiming the same
+      // origin id — the thing undo scopes itself by. The per-unit stamps beside
+      // it are per-profile data and stay. See withoutDeviceIdentity.
+      appStorage.setItem(
+        physicalKey(profile.id, k),
+        withoutDeviceIdentity(k, withoutStoredCredentials(k, v)),
+      );
     }
   } catch (err) {
     // Browser passthrough: setItem throws synchronously at localStorage quota

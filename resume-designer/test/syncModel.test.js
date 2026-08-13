@@ -490,6 +490,72 @@ describe('applyUnits', () => {
     expect('userProfile' in blob).toBe(false);
   });
 
+  // `'null'` above is the corruption that is actually reachable (String(null)).
+  // These are the rest of the shapes the same predicate let through, and the
+  // reason it now asks for an OBJECT rather than merely not-null.
+  describe('a data unit whose payload is not an object', () => {
+    const ORIGINAL = { contactInfo: { fullName: 'Ada Lovelace' }, workExperience: [] };
+
+    beforeEach(() => {
+      disk.set(physical(DATA), JSON.stringify({
+        variants: { 'v-1': { name: 'Design Engineer' } },
+        currentVariantId: 'v-1',
+        settings: { pageSize: 'letter' },
+        userProfile: ORIGINAL,
+      }));
+    });
+
+    // Asserting the DISK is the whole point. The previous instance of this bug
+    // was masked by tests that asserted MEMORY: the holder refused the payload
+    // and kept the good copy, while the bad bytes sat on the key until the next
+    // boot read them. Every assertion below reads the stored blob back.
+    const storedBlob = () => JSON.parse(disk.get(physical(DATA)));
+
+    for (const payload of ['[]', '5', '"x"', 'true', '[{"company":"Acme"}]']) {
+      it(`refuses \`${payload}\` for the user profile, on disk and after a restart`, () => {
+        const { applied } = applyUnits([
+          { id: 'data:userProfile', kind: 'plain', payload, modifiedAt: AT },
+        ]);
+
+        // Refused, so the transport forfeits the change tag and re-offers it —
+        // the same terms as every other refusal here.
+        expect(applied).toBe(0);
+        expect(storedBlob().userProfile).toEqual(ORIGINAL);
+
+        // The restart. `getUserProfile` re-reads the key from storage on every
+        // call, so this is exactly what the app does after a relaunch — and it
+        // is where the damage used to happen: the truthy garbage came back,
+        // completeProfile normalised it to a defaults-shaped EMPTY profile, and
+        // the next debounced save persisted that and pushed it up.
+        expect(getUserProfile()).toEqual(ORIGINAL);
+      });
+
+      it(`refuses \`${payload}\` for settings, which would spread to defaults`, () => {
+        // The lower-stakes twin: `{ ...[], ...rest }` in saveSettings degrades
+        // every stored preference to its default.
+        const { applied } = applyUnits([
+          { id: 'data:settings', kind: 'plain', payload, modifiedAt: AT },
+        ]);
+
+        expect(applied).toBe(0);
+        expect(storedBlob().settings).toEqual({ pageSize: 'letter' });
+      });
+    }
+
+    it('still lands a legitimate object, including an explicitly emptied one', () => {
+      // An empty OBJECT is a value someone wrote — a profile they cleared — not
+      // an absence, and it has to land exactly like any other edit.
+      const { applied } = applyUnits([
+        { id: 'data:userProfile', kind: 'plain', payload: '{}', modifiedAt: AT },
+        { id: 'data:settings', kind: 'plain', payload: '{"pageSize":"a4"}', modifiedAt: AT },
+      ]);
+
+      expect(applied).toBe(2);
+      expect(storedBlob().userProfile).toEqual({});
+      expect(storedBlob().settings).toEqual({ pageSize: 'a4' });
+    });
+  });
+
   it('refuses a data unit for a field that never travels, and does not count it', () => {
     // `currentVariantId` is absent from splitData's list on purpose: which
     // résumé is open is a property of a device. mergeData refuses it, so the

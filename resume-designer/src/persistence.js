@@ -435,6 +435,7 @@ import {
   splitPhysicalKey,
   physicalKey,
   withoutStoredCredentials,
+  withoutDeviceIdentity,
 } from './profileKeys.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 
@@ -656,7 +657,7 @@ export function exportFullBackup(filename) {
 // one of the call sites — the credential strip was originally applied per-site
 // and the format-1 replacement path was simply missed.
 //
-// Two jobs:
+// Three jobs:
 //
 // 1. Legacy Electron stores can hold job descriptions as an id-keyed OBJECT map
 //    — a shape the Rust migration probe explicitly counts as valid and the
@@ -685,11 +686,23 @@ export function exportFullBackup(filename) {
 //    on first launch of this version. The plaintext hop is momentary and on the
 //    same disk the Electron app was already keeping the key on in the clear, so
 //    it exposes nothing that was not already exposed.
+//
+// 3. Drop the backup's `deviceId` out of the sync-state key. That key belongs in
+//    a backup — the per-unit modification stamps in it are per-profile data — but
+//    the id beside them names the MACHINE, and restoring one device's backup onto
+//    a second gave both the same origin id, which is what undo scopes itself by.
+//    NOT exempted by `keepCredential`: a same-machine Electron migration predates
+//    sync entirely and carries no such key, so there is nothing for an exemption
+//    to preserve. See withoutDeviceIdentity for the rest of the argument.
 function normalizeImportedValue(key, value, keepCredential = false) {
-  // One call, and the flag carries the exemption. `keepCredential` spares the
-  // OpenRouter key for a same-machine migration; the dead provider keys are
-  // never spared, which the helper enforces rather than leaving to this caller.
-  const sanitized = withoutStoredCredentials(key, value, { keepOpenRouterKey: keepCredential });
+  // One call each, and the flag carries the one exemption there is.
+  // `keepCredential` spares the OpenRouter key for a same-machine migration; the
+  // dead provider keys are never spared, which the helper enforces rather than
+  // leaving to this caller, and neither is the device id.
+  const sanitized = withoutDeviceIdentity(
+    key,
+    withoutStoredCredentials(key, value, { keepOpenRouterKey: keepCredential }),
+  );
   if (key !== 'resume-designer-job-descriptions') return sanitized;
   try {
     const jd = JSON.parse(sanitized);
@@ -1270,6 +1283,14 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
       // History keys are quota-tolerant (best-effort) since they can
       // easily blow past the localStorage cap; non-history fall back
       // to a normal setItem that propagates errors.
+      //
+      // The one branch of this function that does NOT go through
+      // normalizeImportedValue, so the device-id strip is taken here too:
+      // writing an incoming sync-state key into a gap is exactly the case that
+      // adopts another machine's origin id wholesale. Today's only caller feeds
+      // this an Electron envelope, which predates sync and cannot carry that key
+      // — which is precisely why the guard belongs at the boundary rather than
+      // resting on who happens to call it.
       if (existingValue === null) {
         if (key.startsWith(BACKUP_HISTORY_PREFIX)) {
           if (writeOwnedKeyOrSkip(key, incomingValue)) {
@@ -1278,7 +1299,7 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
             historySkipped++;
           }
         } else {
-          appStorage.setItem(key, incomingValue);
+          appStorage.setItem(key, withoutDeviceIdentity(key, incomingValue));
           settingsKeysAdded++;
         }
       }

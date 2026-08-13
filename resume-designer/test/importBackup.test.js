@@ -410,3 +410,94 @@ describe('import quota rollback', () => {
     expect(localStorage.getItem('resume-designer-job-descriptions')).toBeNull();
   });
 });
+
+// `resume-designer-sync-state` is in BACKUP_FIXED_KEYS because the per-unit
+// modification stamps in it are genuinely per-profile data a backup has to
+// carry. It also holds this device's `deviceId` — and seeding a second device
+// from the first's backup is the natural migration path, one the iOS Settings
+// sheet actively offers. Both devices then claimed the SAME origin id, and
+// store.js scopes undo by origin ("undo traverses only this device's own
+// steps"), so that invariant silently stopped holding between exactly the two
+// devices most likely to be syncing with each other.
+//
+// Dropped on the way IN rather than on the way out: the backups that can carry
+// a foreign id already exist, so only the receiving device can fix them — and
+// only the receiving device is the one that must not clone. Nothing MINTS an id
+// here; store.js's one-time memo is the single writer of that field and stays
+// so, which is why there is no second generator to race it.
+describe('the device identity in a restored sync-state key', () => {
+  const SYNC_STATE = 'resume-designer-sync-state';
+  const FOREIGN = 'device-theotherphone';
+  const sourceState = () => JSON.stringify({
+    deviceId: FOREIGN,
+    'resume:v-1': { modifiedAt: '2026-08-09T00:00:00.000Z' },
+    'key:resume-designer-applications': { modifiedAt: '2026-08-10T00:00:00.000Z' },
+  });
+  const storedState = () => JSON.parse(localStorage.getItem(SYNC_STATE));
+
+  // FIRST in this file to touch the store, deliberately: `deviceOrigin` memoises
+  // for the process, so a later test could not observe the mint. The
+  // `typeof … === 'string'` assertion is what makes a future reordering fail
+  // loudly instead of passing vacuously.
+  it('format 1: mints a different id than the backup carried, and keeps the stamps', async () => {
+    const { store } = await import('../src/store.js');
+
+    importFullBackupFromEnvelope({ backupFormat: 1, keys: { [SYNC_STATE]: sourceState() } });
+
+    // The import itself carries the foreign id nowhere.
+    expect(storedState().deviceId).toBeUndefined();
+
+    // Anything that records a step asks store.js for this device's origin, and
+    // that is the one thing that writes the field.
+    store.setData({}, true);
+
+    const after = storedState();
+    expect(typeof after.deviceId).toBe('string');
+    expect(after.deviceId.length).toBeGreaterThan(0);
+    expect(after.deviceId).not.toBe(FOREIGN);
+    // The rest of the key is per-profile data the backup is right to carry, and
+    // it survives both the import and the mint.
+    expect(after['resume:v-1']).toEqual({ modifiedAt: '2026-08-09T00:00:00.000Z' });
+    expect(after['key:resume-designer-applications'])
+      .toEqual({ modifiedAt: '2026-08-10T00:00:00.000Z' });
+  });
+
+  it('format 2: drops it per profile, and keeps that profile’s stamps', () => {
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pa', name: 'A' }, { id: 'pb', name: 'B' }],
+      activeProfile: 'pa',
+      shared: {},
+      profiles: {
+        pa: { keys: { [SYNC_STATE]: sourceState() } },
+        pb: { keys: { [SYNC_STATE]: sourceState() } },
+      },
+    });
+
+    for (const pid of ['pa', 'pb']) {
+      const stored = JSON.parse(localStorage.getItem(`resume-p--${pid}--${SYNC_STATE}`));
+      expect(stored.deviceId).toBeUndefined();
+      expect(stored['resume:v-1']).toEqual({ modifiedAt: '2026-08-09T00:00:00.000Z' });
+    }
+  });
+
+  it('merge: drops it when the incoming key lands in a gap', () => {
+    // The merge path writes an incoming owned key verbatim whenever this device
+    // has none — the one branch that does not go through the replace paths'
+    // normalizer.
+    importFullBackupMerge({ backupFormat: 1, keys: { [SYNC_STATE]: sourceState() } });
+
+    const stored = storedState();
+    expect(stored.deviceId).toBeUndefined();
+    expect(stored['resume:v-1']).toEqual({ modifiedAt: '2026-08-09T00:00:00.000Z' });
+  });
+
+  it('leaves an unparseable sync-state value alone rather than dropping it', () => {
+    // Still the user's data, and not a value this app could have read an id out
+    // of — the same rule withoutStoredCredentials follows for a blob that will
+    // not parse.
+    importFullBackupFromEnvelope({ backupFormat: 1, keys: { [SYNC_STATE]: '{ not json' } });
+    expect(localStorage.getItem(SYNC_STATE)).toBe('{ not json');
+  });
+});

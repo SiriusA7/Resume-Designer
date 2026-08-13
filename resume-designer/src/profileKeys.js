@@ -199,6 +199,66 @@ export function withoutStoredCredentials(logicalKey, value, { keepOpenRouterKey 
   return withoutDeadProviderCredentials(logicalKey, withoutActive);
 }
 
+/**
+ * Drop the device identity out of a `resume-designer-sync-state` value crossing
+ * a backup boundary INWARDS — a full restore, a format-1 replace or merge, or a
+ * per-profile import.
+ *
+ * That key is in BACKUP_FIXED_KEYS on its merits: the per-unit modification
+ * stamps in it are genuinely per-profile data, and a backup that dropped them
+ * would restore a workspace whose every unit reads as never-stamped, which
+ * `resolveConflict` treats as -Infinity — it would lose every conflict it met.
+ * So the key rides along and only this ONE field is removed.
+ *
+ * It has to be removed because it is the opposite kind of thing: `deviceId` is
+ * store.js's name for THIS MACHINE, stamped as `origin` on every history entry
+ * it writes, and undo traverses only entries carrying this device's own origin.
+ * Seeding a second device from the first's backup — the natural migration path,
+ * and one the iOS Settings sheet actively offers — therefore gave both devices
+ * the same origin id, and "undo traverses only this device's own steps" silently
+ * stopped holding between exactly the two devices most likely to be syncing with
+ * each other.
+ *
+ * On the way IN rather than on the way OUT, for two reasons. The backups that
+ * can carry a foreign id ALREADY EXIST, so stripping at export would leave every
+ * one of them still able to clone an identity, and those are the files a person
+ * migrating today actually has. And the boundary that matters is the receiving
+ * device's: it is the only one that can know it must not adopt a name it did not
+ * choose.
+ *
+ * Nothing here MINTS a replacement, deliberately. store.js's one-time memo
+ * (deviceOrigin) is the single writer of this field, and it already generates
+ * one when the field is absent — so removing it hands the job back to its owner
+ * rather than adding a second generator that could race it or disagree with it
+ * about the format. Every restore path reloads the window, and a profile switch
+ * reloads too, so that memo is re-read from the restored key.
+ *
+ * The cost, stated plainly: restoring your OWN backup onto the SAME device also
+ * mints a new id, so the restored history entries — all stamped with the old one
+ * — read as foreign and undo will not step into them until new edits accumulate.
+ * Nothing is lost; the version-history dialog still lists and restores every one
+ * of them, since only the TRAVERSAL narrows (see store.js). It is accepted rather
+ * than worked around because an import cannot tell a rollback from a migration:
+ * both hand this device a file, and the only difference is which machine wrote
+ * it, which the file does not honestly say. Guessing wrong in the other direction
+ * clones an identity between two syncing devices, and that one is silent.
+ *
+ * Returns the value untouched when there is nothing to strip, including when it
+ * will not parse — that is still the user's data and has to round-trip, exactly
+ * as withoutLegacyCredential treats an unparseable blob.
+ */
+export function withoutDeviceIdentity(logicalKey, value) {
+  if (logicalKey !== SYNC_STATE_KEY || typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || !('deviceId' in parsed)) return value;
+    delete parsed.deviceId;
+    return JSON.stringify(parsed);
+  } catch {
+    return value;
+  }
+}
+
 export function isPhysicalKey(key) {
   return typeof key === 'string' && key.startsWith(PHYSICAL_PREFIX);
 }
