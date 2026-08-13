@@ -45,6 +45,11 @@ export const DEVICE_LOCAL_KEYS = [
   'resume-designer-sync-enabled',
 ];
 
+// The profile registry's logical key. Defined once here — SYNCED_SHARED_KEYS
+// below is built from it, and syncModel.js imports this rather than writing
+// the string a second time, so PROFILES_KEY there is this constant.
+export const PROFILES_KEY = 'resume-designer-profiles';
+
 // SHARED_KEYS members that DO sync — the exception to DEVICE_LOCAL_KEYS
 // above. `resume-designer-profiles` is a SHARED_KEYS member, so
 // `BACKUP_FIXED_KEYS` membership below does not reach it; it needs its own
@@ -52,7 +57,7 @@ export const DEVICE_LOCAL_KEYS = [
 // profile in its own record zone and reconciles the zone list against this
 // registry — a device that never receives it cannot discover another
 // device's profiles.
-export const SYNCED_SHARED_KEYS = ['resume-designer-profiles'];
+export const SYNCED_SHARED_KEYS = [PROFILES_KEY];
 
 const LOCAL = new Set(DEVICE_LOCAL_KEYS);
 const SYNCED_SHARED = new Set(SYNCED_SHARED_KEYS);
@@ -66,4 +71,19 @@ export function classifyKey(logicalKey) {
   if (logicalKey.startsWith(BACKUP_HISTORY_PREFIX)) return 'synced';
   if (BACKUP_FIXED_KEYS.includes(logicalKey)) return 'synced';
   return 'unknown';
+}
+
+/**
+ * Which CloudKit zone a synced key's unit belongs in.
+ *
+ * SHARED keys describe the workspace set itself and cannot live inside a
+ * per-profile zone — that is the bootstrap cycle: a clean device needs the
+ * registry to learn the profile ids, and the ids to fetch the zone holding the
+ * registry. See docs/superpowers/specs/2026-08-13-sync-bootstrap-design.md.
+ *
+ * Swift routes on this answer and never inspects a unit id, which is what keeps
+ * zone choice a model decision.
+ */
+export function keyScope(logicalKey) {
+  return SYNCED_SHARED_KEYS.includes(logicalKey) ? 'shared' : 'profile';
 }

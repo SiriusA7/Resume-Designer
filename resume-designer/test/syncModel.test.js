@@ -89,6 +89,9 @@ const {
 const {
   loadThreads, persistThreads, makeThread, registerThreadHolder,
 } = await import('../src/chatThreads.js');
+// Only the new registry-landing test below reaches this directly — every
+// other test goes through the `disk` map above, which is the same mock.
+const { appStorage } = await import('../src/appStorage.js');
 
 const DATA = 'resume-designer-data';
 const AT = '2026-08-09T00:00:00.000Z';
@@ -1532,5 +1535,31 @@ describe('persisted save stamping', () => {
     } finally {
       error.mockRestore();
     }
+  });
+});
+
+describe('unit scope', () => {
+  it('marks the registry unit shared and résumé units profile-scoped', () => {
+    const units = collectUnits();
+    const registry = units.find((u) => u.id === 'key:resume-designer-profiles');
+    expect(registry?.scope).toBe('shared');
+    for (const unit of units.filter((u) => u.id.startsWith('resume:'))) {
+      expect(unit.scope).toBe('profile');
+    }
+  });
+});
+
+describe('registry landing', () => {
+  it('unions an incoming registry instead of replacing it', async () => {
+    // Seed a local registry with one profile, apply a remote unit naming
+    // another, and assert both survive.
+    const local = [{ id: 'pa', name: 'Local', emoji: '🙂', createdAt: '2026-01-01T00:00:00.000Z' }];
+    const remote = [{ id: 'pb', name: 'Remote', emoji: '🚀', createdAt: '2026-02-01T00:00:00.000Z' }];
+    appStorage.setItem('resume-designer-profiles', JSON.stringify(local));
+    await applyUnits([{
+      id: 'key:resume-designer-profiles', kind: 'plain', payload: JSON.stringify(remote), modifiedAt: '2026-03-01T00:00:00.000Z',
+    }]);
+    const merged = JSON.parse(appStorage.getItem('resume-designer-profiles'));
+    expect(merged.map((p) => p.id).sort()).toEqual(['pa', 'pb']);
   });
 });

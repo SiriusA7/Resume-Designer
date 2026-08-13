@@ -694,14 +694,25 @@ export function exportProfileBackup(profileId, filename) {
   });
 }
 
-// Remove a just-imported profile's partial keys and its registry entry so a
-// failed import never leaves a half-written workspace the user can switch into.
+// Remove a just-imported profile's partial keys and TOMBSTONE its registry
+// entry — not drop it — so a failed import never leaves a half-written
+// workspace the user can switch into. Same reasoning as deleteProfile, and it
+// applies here now that the registry syncs via a union merge (landRegistry,
+// syncModel.js): createProfile's write above races the storage interceptor's
+// dirty notification, and the import loop between it and this rollback is
+// long enough a window for another device to have already pulled the
+// "with this id" registry off CloudKit. A dropped entry is exactly what that
+// device's own next push — still carrying the id, untombstoned — resurrects
+// on the following union. A tombstone is retained by every merge instead.
 function rollbackImportedProfile(id) {
   const prefix = physicalKey(id, '');
   for (const k of appStorage.keys()) {
     if (k && k.startsWith(prefix)) appStorage.removeItem(k);
   }
-  saveRegistry((loadRegistry() || []).filter((p) => p.id !== id));
+  const stamp = new Date().toISOString();
+  saveRegistry((loadRegistry() || []).map((p) => (p.id === id
+    ? { ...p, deletedAt: stamp, updatedAt: stamp }
+    : p)));
 }
 
 export async function importProfileBackup(parsed) {

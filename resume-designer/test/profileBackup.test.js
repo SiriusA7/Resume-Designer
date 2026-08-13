@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appStorage, initAppStorage, __resetAppStorageForTests } from '../src/appStorage.js';
 import {
-  createProfile, ensureProfilesInitialized, loadRegistry,
+  createProfile, ensureProfilesInitialized, loadRegistry, listProfiles,
   exportProfileBackup, importProfileBackup, activateProfileDurably,
   extractSharedApiKey, deleteProfileDurably, renameProfileDurably,
 } from '../src/profiles.js';
@@ -487,8 +487,12 @@ describe('per-profile export/import', () => {
         backupFormat: 2, kind: 'profile', name: 'Imported', emoji: '🐢',
         keys: { 'resume-designer-data': '{"variants":{}}', 'resume-designer-history-v1': 'big' },
       })).rejects.toThrow(/quota/i);
-      // Registry entry rolled back…
-      expect(loadRegistry()).toHaveLength(before);
+      // Registry entry rolled back… tombstoned, not dropped (like
+      // deleteProfile): the raw registry still carries a slot for it — a
+      // union merge would otherwise let another device's copy of the
+      // just-created entry resurrect it — but it is invisible to the person.
+      expect(loadRegistry()).toHaveLength(before + 1);
+      expect(listProfiles()).toHaveLength(before);
       // …and the partially-written data key was cleaned up — only the two
       // seeded profiles' data keys remain, none from the failed import.
       const physicalDataKeys = Object.keys(localStorage).filter((k) => /^resume-p--.+--resume-designer-data$/.test(k));
@@ -525,8 +529,11 @@ describe('per-profile export/import', () => {
         backupFormat: 2, kind: 'profile', name: 'Imported', emoji: '🐢',
         keys: { 'resume-designer-data': '{"variants":{}}' },
       })).rejects.toThrow(/disk/i);
-      // Rolled back: only the original profile remains, no imported keys on disk.
-      expect(loadRegistry()).toHaveLength(1);
+      // Rolled back: only the original profile is visible; the imported one is
+      // tombstoned (see the quota-rollback test above) rather than dropped, so
+      // the raw registry carries its slot but nothing is on disk for it.
+      expect(loadRegistry()).toHaveLength(2);
+      expect(listProfiles()).toHaveLength(1);
       expect([...backend.files.keys()].some((k) => k.startsWith('resume-p--'))).toBe(false);
     } finally {
       errSpy.mockRestore();

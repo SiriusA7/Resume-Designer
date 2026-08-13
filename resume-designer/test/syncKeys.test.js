@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyKey, DEVICE_LOCAL_KEYS } from '../src/sync/syncKeys.js';
+import { classifyKey, keyScope, DEVICE_LOCAL_KEYS } from '../src/sync/syncKeys.js';
 import {
   BACKUP_FIXED_KEYS,
   BACKUP_HISTORY_PREFIX,
@@ -92,5 +92,16 @@ describe('classifyKey', () => {
     for (const key of DEVICE_LOCAL_KEYS) {
       expect(BACKUP_FIXED_KEYS.includes(key) || isSharedKey(key), key).toBe(true);
     }
+  });
+});
+
+describe('keyScope', () => {
+  it('calls the profile registry shared', () => {
+    expect(keyScope('resume-designer-profiles')).toBe('shared');
+  });
+
+  it('calls every other synced key profile-scoped', () => {
+    expect(keyScope('resume-designer-applications')).toBe('profile');
+    expect(keyScope('resume-designer-token-usage')).toBe('profile');
   });
 });

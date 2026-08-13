@@ -23,9 +23,11 @@ import { adoptStoredLearnedAnswers, landsAsLearnedAnswers } from '../learnedAnsw
 // The same ownership, one field further in: `data:userProfile` is a unit too,
 // and ProfileDialog holds a working copy of it. See the leaf for why it is one.
 import { adoptStoredUserProfile, userProfileHolderBusy } from '../userProfileHolder.js';
-import { classifyKey } from './syncKeys.js';
+import { classifyKey, keyScope, PROFILES_KEY } from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
-import { mergeTokenUsage, mergeHistory, resolveConflict } from './syncMerge.js';
+import {
+  mergeTokenUsage, mergeHistory, mergeRegistry, resolveConflict,
+} from './syncMerge.js';
 
 const DATA_KEY = 'resume-designer-data';
 const TOKEN_KEY = 'resume-designer-token-usage';
@@ -434,6 +436,9 @@ function outranksLocalCopy(unit, recorded) {
 function accumulatorFor(key) {
   if (key === TOKEN_KEY) return landTokenUsage;
   if (key.startsWith(HISTORY_PREFIX)) return landHistory;
+  // The registry is append-shaped for creation and snapshot-shaped per entry;
+  // mergeRegistry is the only merge that reads both.
+  if (key === PROFILES_KEY) return landRegistry;
   return null;
 }
 
@@ -480,6 +485,26 @@ function landHistory(key, unit) {
   if (!store.adoptHistory(variantId, remote)) {
     appStorage.setItem(key, JSON.stringify(mergeHistory(readJSON(key, null), remote)));
   }
+  return true;
+}
+
+/**
+ * Union an incoming registry into what this device holds.
+ *
+ * `false` when the payload will not parse or is not an array, which shortens
+ * `applied` exactly as every other refusal here does — absence is never
+ * deletion, and a registry that cannot be read is one this device has nothing
+ * to say about.
+ */
+function landRegistry(key, unit) {
+  let incoming;
+  try {
+    incoming = JSON.parse(unit.payload);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(incoming)) return false;
+  appStorage.setItem(key, JSON.stringify(mergeRegistry(readJSON(key, null), incoming)));
   return true;
 }
 
@@ -716,8 +741,10 @@ function withModifiedAt(unit, recorded) {
 }
 
 function collectDataUnits(recorded) {
+  // Every `resume:` and `data:` unit lives inside the active profile's own
+  // CloudKit zone — there is no shared variant of either kind.
   return splitData(readJSON(DATA_KEY, null))
-    .map((unit) => withModifiedAt(unit, recorded));
+    .map((unit) => withModifiedAt({ ...unit, scope: 'profile' }, recorded));
 }
 
 function collectKeyUnit(key, recorded) {
@@ -735,6 +762,7 @@ function collectKeyUnit(key, recorded) {
     id,
     kind: key === TOKEN_KEY ? 'tokenUsage' : 'plain',
     payload,
+    scope: keyScope(key),
   }, recorded);
 }
 
