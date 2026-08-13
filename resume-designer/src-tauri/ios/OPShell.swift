@@ -759,13 +759,12 @@ final class ShellModel: ObservableObject {
   /// recovery loop; see `syncDidFail` for why there has to be one.
   private var syncRecovered: Set<String> = []
 
-  /// Unit ids this device still owes the server a send of, drained by every
-  /// start. Three things put one here and they are the same thing: the send
-  /// could not be made (`sendSync`), the page could not be asked for the unit
-  /// (`syncUnit(withId:)`), or the page could not APPLY what arrived and its
-  /// change tag was forfeited, so only a send can bring that record back down
-  /// the conflict path (`syncDidFetch`).
-  private var syncDeferred: Set<String> = []
+  /// Ids re-deferred while the persisted set is being offered. The durable set
+  /// stays intact during the await — a kill there must leave every id owed — so
+  /// this is what distinguishes an id the completed send settled from one that
+  /// a refusal inside that same send owed again.
+  private var syncDeferredDrainProfileId: String?
+  private var syncDeferredReowed: Set<String> = []
 
   /// Device-local transport bookkeeping, beside OPSync's own
   /// `op-sync-state-<profile>` and `op-sync-records-<profile>` UserDefaults.
@@ -1195,10 +1194,12 @@ extension ShellModel {
     }
     if syncProfileId != profileId {
       // A different profile is a different zone and a different engine session,
-      // so neither the previous session's recovery attempts nor its unsent ids
-      // carry over — the latter name units in a zone this engine will not open.
+      // so the previous session's process-local recovery attempts do not carry
+      // over. Deferred ids stay under that profile's persisted key; loading only
+      // the active profile below is what prevents them crossing zones.
       syncRecovered.removeAll()
-      syncDeferred.removeAll()
+      syncDeferredDrainProfileId = nil
+      syncDeferredReowed.removeAll()
       // Its outstanding failures go with them, for the same reason and one more:
       // an outstanding failure comes down when the thing it names next reaches
       // iCloud, and nothing in another profile's zone can ever be that. Held, it
@@ -1290,9 +1291,7 @@ extension ShellModel {
     // recover a batch the page would not apply: the pull cannot re-deliver it —
     // the change token has moved past it — but a send with no tag brings it back
     // down that same conflict path. See `syncDeferred`.
-    let deferred = syncDeferred
-    syncDeferred.removeAll()
-    await sendSync(unitIds: Array(deferred))
+    await drainSyncDeferred(profileId: profileId)
     try? await sync.fetch()
 
     // Turning sync on is the one moment this device has to offer everything it
@@ -1358,10 +1357,62 @@ extension ShellModel {
       // names a unit once, on the save that wrote it, and will not name it
       // again until it is edited again. So they wait for the next start instead
       // of being dropped.
-      syncDeferred.formUnion(unitIds)
+      deferSync(unitIds)
       NSLog("[OPShell] sync is down; \(unitIds.count) unit(s) held for the next start")
       return false
     }
+  }
+
+  /// Unit ids this device still owes the server a send of, persisted per profile
+  /// and drained by every start. A send that could not be made, a page that
+  /// could not be asked for a unit, or an apply/conflict refusal all mean the
+  /// same thing: the id must be offered again without crossing into another
+  /// profile's zone.
+  private func syncDeferred(profileId: String) -> Set<String> {
+    Set(UserDefaults.standard.stringArray(forKey: OPSyncEngine.deferredKey(profileId)) ?? [])
+  }
+
+  private func setSyncDeferred(_ unitIds: Set<String>, profileId: String) {
+    UserDefaults.standard.set(
+      Array(unitIds).sorted(), forKey: OPSyncEngine.deferredKey(profileId)
+    )
+  }
+
+  /// Additive only. In particular, offering an id never removes it first in the
+  /// hope that this function will put it back: the process can die between
+  /// those operations, which is the durability hole this bookkeeping closes.
+  private func deferSync(_ unitIds: [String]) {
+    guard let profileId = syncProfileId else {
+      NSLog("[OPShell] no active profile for \(unitIds.count) deferred sync unit(s)")
+      return
+    }
+    var deferred = syncDeferred(profileId: profileId)
+    deferred.formUnion(unitIds)
+    setSyncDeferred(deferred, profileId: profileId)
+    if syncDeferredDrainProfileId == profileId {
+      syncDeferredReowed.formUnion(unitIds)
+    }
+  }
+
+  /// Offer the durable snapshot without clearing it first. Only a completed send
+  /// settles ids, and anything refused again during that send stays owed. If the
+  /// process dies before settlement, the whole snapshot is harmlessly offered
+  /// again on the next start.
+  private func drainSyncDeferred(profileId: String) async {
+    let offered = syncDeferred(profileId: profileId)
+    guard !offered.isEmpty else { return }
+
+    syncDeferredDrainProfileId = profileId
+    syncDeferredReowed.removeAll()
+    let sent = await sendSync(unitIds: Array(offered))
+    let reowed = syncDeferredReowed
+    syncDeferredDrainProfileId = nil
+    syncDeferredReowed.removeAll()
+
+    guard sent else { return }
+    var deferred = syncDeferred(profileId: profileId)
+    deferred.subtract(offered.subtracting(reowed))
+    setSyncDeferred(deferred, profileId: profileId)
   }
 
   private func syncFullUploadOwed(profileId: String) -> Bool {
@@ -1652,7 +1703,7 @@ extension ShellModel: OPSyncHost {
       // real local edit until the unit happened to be edited again. The id
       // waits for the next start instead, in the same set an edit made while
       // the transport was down waits in.
-      syncDeferred.insert(id)
+      deferSync([id])
       NSLog("[OPShell] no answer for unit \(id); held for the next start")
       return nil
     }
@@ -1724,7 +1775,7 @@ extension ShellModel: OPSyncHost {
   /// queue for good.
   func syncDidFetch(_ units: [SyncUnit]) async -> Bool {
     guard await applyFetched(units) else {
-      syncDeferred.formUnion(units.map(\.id))
+      deferSync(units.map(\.id))
       NSLog("[OPShell] \(units.count) fetched unit(s) were not applied; "
             + "they are offered again at the next start")
       return false
@@ -1793,7 +1844,7 @@ extension ShellModel: OPSyncHost {
     let resolved = Set(outcome.resolved.map(\.id))
     let unresolved = conflicts.map(\.server.id).filter { !resolved.contains($0) }
     if !unresolved.isEmpty {
-      syncDeferred.formUnion(unresolved)
+      deferSync(unresolved)
       NSLog("[OPShell] \(unresolved.count) of \(conflicts.count) conflict(s) were not "
             + "resolved; they are offered again at the next start")
     }

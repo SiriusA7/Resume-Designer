@@ -1147,6 +1147,8 @@ function resolveOneConflict(local, server) {
 
   // A snapshot. Newer wins, by the same `resolveConflict` the fetch path
   // compares with, over the two versions the transport actually had in hand.
+  if (server.id.startsWith(KEY_UNIT_PREFIX)
+      && classifyKey(server.id.slice(KEY_UNIT_PREFIX.length)) !== 'synced') return null;
   if (resolveConflict(local, server).winner === local) {
     // Ours is newer, so the server owes an update and its copy is the loser.
     // `parkLoser` takes it where there is a version history to take it — which

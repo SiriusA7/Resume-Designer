@@ -215,6 +215,20 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
 });
 
 describe('a conflict this device cannot resolve forfeits rather than proceeds', () => {
+  it('refuses a device-local snapshot even when the local copy is newer', async () => {
+    const id = 'key:resume-zoom';
+    const local = unit(id, 1.5, NEW);
+    const server = unit(id, 1.25, OLD);
+
+    // Device-local state must not cross devices in either direction. Omitting
+    // this refusal returned `retry: true`; later send-time filtering happened
+    // to stop the leak, but the conflict decision itself had already promised
+    // a retry for a unit that can never be synced.
+    expect(await resolveConflicts([{ local, server }]))
+      .toEqual({ resolved: [], parked: 0 });
+    expect(backend.files.has('resume-zoom')).toBe(false);
+  });
+
   it('refuses a payload that will not parse instead of writing half a merge', async () => {
     const id = `key:${TOKENS}`;
     const local = unit(id, { events: [event('mine', OLD)], summary: {} }, NEW, 'tokenUsage');

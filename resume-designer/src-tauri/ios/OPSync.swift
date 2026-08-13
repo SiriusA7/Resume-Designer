@@ -1205,6 +1205,7 @@ extension OPSyncEngine {
 extension OPSyncEngine {
   private static func stateKey(_ profileId: String) -> String { "op-sync-state-\(profileId)" }
   private static func recordsKey(_ profileId: String) -> String { "op-sync-records-\(profileId)" }
+  static func deferredKey(_ profileId: String) -> String { "op-sync-deferred-\(profileId)" }
   /// NOT per profile: an iCloud account is a property of the device, and every
   /// profile's zone lives in whichever one is signed in.
   private static let accountKey = "op-sync-icloud-account"
@@ -1266,11 +1267,12 @@ extension OPSyncEngine {
   ///
   /// This is what "delete any locally cached data" means for an app whose local
   /// store is the document and whose CloudKit zone is a mirror of it
-  /// (CKSyncEngineEvent.h asks for it on a purge). The two things removed are
-  /// the only two this device holds that describe the server: the engine's
-  /// state serialization, which carries the change tokens and the pending
-  /// queue, and the change-tag map. The staged assets go with them — they are an
-  /// outbox, and there is nothing left to send them to.
+  /// (CKSyncEngineEvent.h asks for it on a purge). The things removed are the
+  /// engine's state serialization, which carries the change tokens and pending
+  /// queue; the change-tag map; and the deferred-send ids, whose debt describes
+  /// the server that was just emptied. The staged assets go too — they are an
+  /// outbox, and there is nothing left to send them to. Local content stays, and
+  /// a later explicit opt-in creates the ordinary full-upload debt for it.
   ///
   /// EVERY profile, not the one running: a purge empties the container, so every
   /// zone's tokens and tags now describe records that are gone. The keys are
@@ -1284,10 +1286,10 @@ extension OPSyncEngine {
   /// their explicit instruction to resume.
   ///
   /// Called by the host only after the engine is down, since a running engine
-  /// rewrites both keys on its next event.
+  /// rewrites its state and record keys on its next event.
   static func forgetEverythingAboutTheServer() {
     let defaults = UserDefaults.standard
-    let prefixes = [stateKey(""), recordsKey("")]
+    let prefixes = [stateKey(""), recordsKey(""), deferredKey("")]
     for key in defaults.dictionaryRepresentation().keys
     where prefixes.contains(where: key.hasPrefix) {
       defaults.removeObject(forKey: key)
