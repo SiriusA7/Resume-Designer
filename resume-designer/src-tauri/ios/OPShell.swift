@@ -782,6 +782,27 @@ final class ShellModel: ObservableObject {
     "op-sync-full-upload-owed-\(profileId)"
   }
 
+  /// Set when the account's owner deleted this app's data from iCloud and the
+  /// PAGE has not yet recorded that sync is off.
+  ///
+  /// One flag doing two jobs, deliberately, because they are the same job: it is
+  /// the retry flag for a write the page may not have heard, and it is the gate
+  /// that keeps any engine from coming up in the meantime. The preference itself
+  /// lives in the page's storage — it is the person's answer and Settings reads
+  /// it from there — so until the page has written it, the only thing standing
+  /// between an explicit purge and a whole workspace being uploaded back into
+  /// the account is this key. `start` queues the zone creation unconditionally,
+  /// so "the next launch just starts as usual" IS the resend Apple's header
+  /// forbids (CKSyncEngineEvent.h).
+  ///
+  /// Device-wide rather than per profile, matching the switch: a purge empties
+  /// the container, and the switch is one answer per device covering all of it.
+  ///
+  /// Cleared ONLY by the page confirming the write, after which the switch reads
+  /// off and the person turning it back on is a new, explicit instruction that
+  /// takes the ordinary path — which re-owes every profile's full upload.
+  private static let syncPurgeKey = "op-sync-icloud-purged"
+
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
   private var syncStart: Task<Void, Never>?
 
@@ -1179,6 +1200,21 @@ extension ShellModel {
       syncProfileId = profileId
     }
 
+    // THE OTHER GATE, and it sits above the switch's because it outranks it:
+    // the account's owner deleted this app's data from iCloud, and the page has
+    // not recorded that yet, so its copy of the preference may still say ON.
+    // Starting on that answer would recreate the zone and upload the workspace
+    // back into the account they just emptied. Asking the page again is the
+    // whole of the recovery — a start is a moment the page is back — and it is
+    // asked here rather than on a timer for the same reason `syncDeferred` is
+    // drained here.
+    if Self.syncPurged() {
+      NSLog("[OPShell] this app's iCloud data was deleted by the account's owner — "
+            + "the transport stays down and nothing is re-sent")
+      await tellPageSyncIsOff()
+      return
+    }
+
     // THE GATE. Every way the transport comes up runs through here — the
     // activation of a document, a return to the foreground (`resumeSync`), and
     // the switch itself — so this one check is what makes the toggle mean
@@ -1336,6 +1372,57 @@ extension ShellModel {
     // upload", so removing it here would make every later activation of that
     // profile look like its first and re-collect the whole workspace.
     UserDefaults.standard.set(owed, forKey: Self.syncFullUploadKey(profileId))
+  }
+
+  private static func syncPurged() -> Bool {
+    UserDefaults.standard.bool(forKey: syncPurgeKey)
+  }
+
+  /// Everything an iCloud purge changes on this side, in the order that survives
+  /// a crash at any line of it.
+  ///
+  /// WHAT IS NOT DELETED, and why. The person emptied their ICLOUD, which is not
+  /// the same instruction as erasing the résumés on the device in their hand —
+  /// the Settings sheet they used says nothing about this device's documents,
+  /// and this app is not a cache of CloudKit: the local store IS the document
+  /// and the zone is a mirror of it. Reading a remote signal as "destroy the
+  /// person's work" is also the exact failure this whole feature has spent six
+  /// rounds refusing, and it is the one reading that cannot be undone. If they
+  /// do want the résumés gone, deleting them here is a thing they can do and
+  /// this side cannot do for them. So what goes is everything that describes
+  /// ICLOUD — change tags, change tokens, the pending queue, the staged assets —
+  /// and nothing that describes them.
+  private func applyICloudPurge() async {
+    // FIRST, so that a crash anywhere below still leaves the refusal on record.
+    // Everything after this is recovery that the next start repeats.
+    UserDefaults.standard.set(true, forKey: Self.syncPurgeKey)
+    // The transport goes down through the same path the switch takes, so the
+    // account state and any outstanding failure lines go with it.
+    await syncPreference(false)
+    // Only now: `stop()` has torn the engine down, so nothing is left to write
+    // these keys back on its next event.
+    OPSyncEngine.forgetEverythingAboutTheServer()
+    await tellPageSyncIsOff()
+  }
+
+  /// Ask the page to persist the switch as off, and keep owing it until the page
+  /// says it did.
+  ///
+  /// The answer is the point: `send` is fire-and-forget, and the one moment this
+  /// runs is a moment the webview may be reloading — WebKit reclaims the content
+  /// process of a backgrounded app while the engine fetches on a schedule of its
+  /// own. A lost write would leave the page's stored preference saying ON, and
+  /// the next launch would recreate the zone. So the flag stands until a
+  /// confirmed answer, and every start asks again.
+  private func tellPageSyncIsOff() async {
+    guard Self.syncPurged() else { return }
+    guard case .answered = await sendForResult("setSyncEnabled", ["value": "false"]) else {
+      NSLog("[OPShell] the page could not be told that iCloud sync is off; "
+            + "the transport stays down and it is asked again at the next start")
+      return
+    }
+    UserDefaults.standard.set(false, forKey: Self.syncPurgeKey)
+    NSLog("[OPShell] the iCloud purge is recorded: the sync switch is off")
   }
 
   /// Owe a full upload again for every profile this device has ever considered.
@@ -1782,6 +1869,22 @@ extension ShellModel: OPSyncHost {
   func syncDidSwitchAccounts() {
     NSLog("[OPShell] the iCloud account changed — re-offering every profile's full upload")
     oweFullUploadForEveryConsideredProfile()
+  }
+
+  /// The account's owner deleted this app's data from iCloud.
+  ///
+  /// Sync switches off — the app's own, visible answer to "do not put my
+  /// résumés in iCloud", and the only state in which "not resent" stays true
+  /// across a launch. The switch moving on its own is not a surprise here, which
+  /// is the usual objection to it: the person is coming back from the Settings
+  /// app where they just asked for exactly this. Turning it on again is a new
+  /// instruction and takes the ordinary path, full upload and all.
+  ///
+  /// Deferred onto a later main-actor turn, like every other host callback that
+  /// re-enters the transport: this is called from inside the engine's event
+  /// handling and the work below cancels the engine's operations.
+  func syncDidPurgeFromICloud() {
+    Task { @MainActor [weak self] in await self?.applyICloudPurge() }
   }
 }
 

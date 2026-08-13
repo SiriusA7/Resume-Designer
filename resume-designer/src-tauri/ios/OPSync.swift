@@ -198,6 +198,30 @@ protocol OPSyncHost: AnyObject {
   /// the same account signing back in. See `handleAccountChange` for how those
   /// are told apart.
   func syncDidSwitchAccounts()
+
+  /// THE OWNER OF THE ICLOUD ACCOUNT DELETED THIS APP'S DATA FROM IT.
+  ///
+  /// The one signal in this design that is not "absence", and the one place the
+  /// rule that absence is never deletion has to yield. That rule exists so a
+  /// sync bug cannot delete a résumé; it was never meant to overrule the
+  /// account's owner giving an instruction in the Settings app. Apple requires
+  /// the app to delete its locally cached data and NOT resend it
+  /// (CKSyncEngineEvent.h, `CKSyncEngineZoneDeletionReasonPurged`).
+  ///
+  /// Reached three ways, all of them the same instruction: a fetched zone
+  /// deletion whose reason is `.purged` or `.encryptedDataReset`, and a
+  /// `.userDeletedZone` error, which CKError.h defines as "the user deletes a
+  /// record zone using the Settings app".
+  ///
+  /// Everything this device cached ABOUT iCloud is gone by the time this is
+  /// called — change tags, pending sends, the queued zone creation. What the
+  /// caller must not do is put it back: this transport recreates its zone on
+  /// every `start`, so a caller that merely stopped would resend the whole
+  /// workspace at the next launch. The one thing that is NOT deleted, here or
+  /// by the caller, is the person's content: they emptied their iCloud, which
+  /// is not the same instruction as erasing the résumés on a device they are
+  /// holding.
+  func syncDidPurgeFromICloud()
 }
 
 private let opSyncRecordType = "SyncUnit"
@@ -485,20 +509,58 @@ extension OPSyncEngine {
         land([nil])
         break
       }
+      // The zone was deleted in the Settings app (CKError.h). That is the
+      // account owner's instruction, not an absence, and it is handled as one
+      // wherever it turns up.
+      if error.code == .userDeletedZone {
+        purgeFromICloud(engine: engine, reason: "a fetch found the zone deleted from Settings")
+        break
+      }
       // A zone that is not there is not a failure: it is the first sync, before
       // anything has been sent. It is not success either — a zone save that is
       // still queued is exactly the failure a nil unit id stands for, and this
       // is the server agreeing it has not happened yet — so it neither reports
       // nor lands. Everything else the caller should hear about.
-      if error.code != .zoneNotFound, error.code != .userDeletedZone {
+      if error.code != .zoneNotFound {
         report([OPSyncFailure(unitId: nil, willRetry: true, code: error.code,
                               reason: error.localizedDescription)])
       }
 
-    // `fetchedDatabaseChanges` carries zone deletions, which are ignored for the
-    // same reason record deletions are. The rest are progress notifications with
-    // nothing this transport has to decide.
-    case .fetchedDatabaseChanges, .willFetchChanges, .willFetchRecordZoneChanges,
+    case .fetchedDatabaseChanges(let changes):
+      // A zone deletion, which is the ONE fetched deletion this transport acts
+      // on. Record deletions and `.deleted` zones are still ignored — deletion
+      // in this design is an explicit tombstone unit that travels like any other
+      // unit, and nothing may turn a record's absence into a local delete. The
+      // two reasons below are not absence: they are the owner of the account
+      // saying so in the Settings app, and Apple requires that the data not be
+      // resent (CKSyncEngineEvent.h).
+      //
+      // Not matched against `zoneID`: a purge empties the container, so a
+      // deletion for ANY zone is the same instruction about this app's data, and
+      // this device syncs one profile's zone at a time and would otherwise
+      // ignore the notice for all the others.
+      for deletion in changes.deletions {
+        switch deletion.reason {
+        case .deleted:
+          // Only this app deletes its own zones, and it never does. Left alone
+          // rather than guessed at.
+          NSLog("[OPSync] a zone deletion this app did not make and cannot explain: "
+                + "\(deletion.zoneID.zoneName) — ignored, local data untouched")
+        case .purged:
+          purgeFromICloud(engine: engine, reason: "the account's owner deleted this app's iCloud data")
+        case .encryptedDataReset:
+          purgeFromICloud(engine: engine, reason: "the account's owner reset their encrypted iCloud data")
+        @unknown default:
+          // A reason that does not exist yet. Treated as a purge, because the
+          // two directions are not symmetric: stopping costs the person a switch
+          // they can turn back on and destroys nothing, while guessing "ignore"
+          // re-uploads data the account's owner may have just asked to remove.
+          purgeFromICloud(engine: engine, reason: "a zone deletion with a reason this build does not know")
+        }
+      }
+
+    // Progress notifications with nothing this transport has to decide.
+    case .willFetchChanges, .willFetchRecordZoneChanges,
          .didFetchChanges, .willSendChanges, .didSendChanges:
       break
 
@@ -602,6 +664,36 @@ extension OPSyncEngine {
     systemFieldsDirty = true
   }
 
+  /// The account's owner emptied this app's iCloud data. Stop, and do not put it
+  /// back.
+  ///
+  /// EVERYTHING QUEUED COMES OFF FIRST, and that ordering is the whole of this
+  /// function's job: the host tears the engine down on a later main-actor turn
+  /// (it cannot be done from inside an event), and anything still pending in
+  /// between would recreate the zone and upload into it. `start` queues a
+  /// `.saveZone` unconditionally, so that pending change is the specific one
+  /// that would undo the person's instruction.
+  ///
+  /// The change tags go too, and they go without a flush: they describe records
+  /// that no longer exist. The rest of what this device cached about the server
+  /// — the engine's state serialization, the staged assets — is removed by the
+  /// host once the engine is down and can no longer rewrite it
+  /// (`forgetEverythingAboutTheServer`).
+  ///
+  /// NOTHING OF THE PERSON'S IS TOUCHED HERE OR ANYWHERE BELOW. A résumé is not
+  /// a cache of a CloudKit record: this app's local store is where the document
+  /// lives and iCloud is a mirror of it, so "delete any locally cached data"
+  /// means the data that is a cache OF ICLOUD, which is the bookkeeping above.
+  private func purgeFromICloud(engine: CKSyncEngine, reason: String) {
+    NSLog("[OPSync] iCloud data purged — \(reason). Stopping; nothing local is deleted "
+          + "and nothing will be re-sent.")
+    engine.state.remove(pendingRecordZoneChanges: engine.state.pendingRecordZoneChanges)
+    engine.state.remove(pendingDatabaseChanges: engine.state.pendingDatabaseChanges)
+    systemFields = [:]
+    systemFieldsDirty = false
+    host?.syncDidPurgeFromICloud()
+  }
+
   private func handleFailedSaves(
     _ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave],
     engine: CKSyncEngine
@@ -670,17 +762,29 @@ extension OPSyncEngine {
           losers.append(localUnit)
         }
 
-      case .zoneNotFound, .userDeletedZone:
-        // The zone is gone from the server: never created, or deleted from
-        // Settings. Recreate it and send again. This is NOT "the server is empty
-        // so drop the local copy" — it is the opposite, the local copy is the
-        // only one left.
+      case .zoneNotFound:
+        // The zone has never been created — this is the first send of the first
+        // sync. Recreate it and send again. This is NOT "the server is empty so
+        // drop the local copy" — it is the opposite, the local copy is the only
+        // one left.
         if let zoneID {
           engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
         }
         forget(recordID)
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
+                                      code: error.code,
+                                      reason: error.localizedDescription))
+
+      case .userDeletedZone:
+        // NOT the same answer as `.zoneNotFound`, though the two used to share
+        // this branch and that shared branch is what let an explicit purge be
+        // silently undone: CKError.h defines this code as "the user deletes a
+        // record zone using the Settings app", so recreating the zone and
+        // re-sending puts back exactly what they just removed. Nothing local is
+        // touched; see `syncDidPurgeFromICloud`.
+        purgeFromICloud(engine: engine, reason: "a save found the zone deleted from Settings")
+        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: false,
                                       code: error.code,
                                       reason: error.localizedDescription))
 
@@ -1071,6 +1175,39 @@ extension OPSyncEngine {
 
   fileprivate static func loadSystemFields(profileId: String) -> [String: Data] {
     UserDefaults.standard.dictionary(forKey: recordsKey(profileId)) as? [String: Data] ?? [:]
+  }
+
+  /// Forget everything this device cached about the server, for EVERY profile.
+  ///
+  /// This is what "delete any locally cached data" means for an app whose local
+  /// store is the document and whose CloudKit zone is a mirror of it
+  /// (CKSyncEngineEvent.h asks for it on a purge). The two things removed are
+  /// the only two this device holds that describe the server: the engine's
+  /// state serialization, which carries the change tokens and the pending
+  /// queue, and the change-tag map. The staged assets go with them — they are an
+  /// outbox, and there is nothing left to send them to.
+  ///
+  /// EVERY profile, not the one running: a purge empties the container, so every
+  /// zone's tokens and tags now describe records that are gone. The keys are
+  /// enumerated by their own builders' prefixes, so the shapes have one source,
+  /// the same way `oweFullUploadForEveryConsideredProfile` reads its markers.
+  ///
+  /// Leaving them would be worse than untidy. If the person later turns sync
+  /// back on — the only way it comes back — a stale change token would name a
+  /// zone that no longer exists, and the fetch answering `.userDeletedZone`
+  /// would read as a fresh purge and switch sync straight back off, against
+  /// their explicit instruction to resume.
+  ///
+  /// Called by the host only after the engine is down, since a running engine
+  /// rewrites both keys on its next event.
+  static func forgetEverythingAboutTheServer() {
+    let defaults = UserDefaults.standard
+    let prefixes = [stateKey(""), recordsKey("")]
+    for key in defaults.dictionaryRepresentation().keys
+    where prefixes.contains(where: key.hasPrefix) {
+      defaults.removeObject(forKey: key)
+    }
+    clearOutbox()
   }
 
   /// Write the map out, if it changed. Called once per engine event by
