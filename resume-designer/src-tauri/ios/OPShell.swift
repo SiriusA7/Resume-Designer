@@ -1496,9 +1496,10 @@ extension ShellModel {
   ///   named one. The record carries an opaque device id and nothing else, and
   ///   since iOS 16 `UIDevice.current.name` is a generic model string anyway —
   ///   so "from your iPhone" would be a guess printed as a fact. The parked
-  ///   entry the person lands on is labelled "From another device"
-  ///   (src/historyEntryLabels.js); this stops where that label does, at the
-  ///   fact that a second device was involved.
+  ///   entry the person lands on is labelled "Earlier version"
+  ///   (src/historyEntryLabels.js), which follows the same rule for the same
+  ///   reason: it used to say "From another device", and that is false in every
+  ///   conflict this device loses, where the parked version is the person's own.
   /// - **It names no résumé.** History is per-résumé, a batch can hold several,
   ///   and the unit id is the page's to decompose, not this side's — a unit is
   ///   `{ id, kind, payload, modifiedAt }` here and stays opaque. "The same

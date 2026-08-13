@@ -28,9 +28,23 @@ export const TYPE_LABELS = {
   reorder: 'Reordered',
   add: 'Added',
   remove: 'Removed',
-  // A version another device had when both devices edited the same résumé. The
-  // newer edit won and this one was kept here rather than thrown away, so it
-  // can still be restored — which is exactly why it must not read as an edit
-  // made on this machine.
-  'sync-conflict': 'From another device',
+  // One of the two versions two devices held when both edited the same résumé.
+  // The newer one won and this one was kept here rather than thrown away, so it
+  // can still be restored — which is why it must not read as an ordinary edit.
+  //
+  // DIRECTION-NEUTRAL, and that is the load-bearing part. This used to read
+  // "From another device", which is false in half of all conflicts: when the
+  // remote copy is the newer one, the version parked here is THIS device's own
+  // work — labelled as somebody else's in exactly the branch where the person
+  // comes looking for what they lost. Carrying the direction across from the
+  // transport would not fix it either, because the transport does not know
+  // whose version it is: it knows which COPY lost, and the losing server copy
+  // is very often this device's own earlier upload (any send that quotes no
+  // change tag — the recovery path for a forfeited tag — meets the conflict
+  // path against a record this device wrote itself). What is true of every
+  // parked version either way is that two devices had the résumé and this is
+  // the earlier of the two, which is also exactly what the iOS conflict notice
+  // says (`conflictNoticeText` in OPShell.swift). Shown on both surfaces beside
+  // a two-device icon, so "earlier" is not read as "any older entry".
+  'sync-conflict': 'Earlier version',
 };

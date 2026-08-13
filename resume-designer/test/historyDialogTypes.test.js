@@ -13,13 +13,20 @@ describe('the version-history dialog’s type labels', () => {
     }
   });
 
-  it('does not show another device’s rejected version as an edit made here', () => {
-    // A parked conflict loser is a résumé another device had when both devices
-    // edited the same one: the newer edit won, and this version was kept rather
+  it('does not show a parked conflict loser as an ordinary edit', () => {
+    // A parked loser is one of the two versions two devices held when both
+    // edited the same résumé: the newer one won, and this one was kept rather
     // than thrown away so it can be restored. Rendered as "Edit" with a pencil,
-    // it claimed to be a change the user made on this machine.
+    // it claimed to be an ordinary change somebody made here.
     expect(TYPE_LABELS[CHANGE_TYPES.SYNC_CONFLICT]).not.toBe(TYPE_LABELS[CHANGE_TYPES.EDIT]);
     expect(TYPE_ICONS[CHANGE_TYPES.SYNC_CONFLICT]).not.toBe(TYPE_ICONS[CHANGE_TYPES.EDIT]);
-    expect(TYPE_LABELS[CHANGE_TYPES.SYNC_CONFLICT]).toMatch(/device/i);
+  });
+
+  it('does not claim a parked conflict loser came from another device', () => {
+    // It is this device's OWN version whenever the remote copy is the newer
+    // one, which is half of all conflicts — and the half in which the person is
+    // looking for the work they just lost. The label must be true of both
+    // directions, so it names which of the two versions this is and not whose.
+    expect(TYPE_LABELS[CHANGE_TYPES.SYNC_CONFLICT]).not.toMatch(/device|another|their/i);
   });
 });

@@ -1284,12 +1284,15 @@ describe('buildHistory', () => {
     ...over,
   });
 
-  it('names a version parked from another device as such, not as an edit', () => {
-    // A conflict's losing version is kept in history so it can be restored.
-    // Labelling it 'Edit' would say this machine made it, which is untrue and
-    // is the one thing a person needs to know before restoring it.
+  it('names a version parked by a conflict as such, not as an edit', () => {
+    // A conflict's losing version is kept in history so it can be restored, and
+    // labelling it 'Edit' would hide the one thing a person needs to know
+    // before restoring it. The label says which of the two versions this is and
+    // never whose it was: when the remote copy wins, the version parked here is
+    // this device's OWN, so "From another device" was false in exactly the
+    // branch where the person goes looking for what they lost.
     const { entries } = buildHistory([entry({ changeType: 'sync-conflict' })]);
-    expect(entries[0].label).toBe('From another device');
+    expect(entries[0].label).toBe('Earlier version');
   });
 
   it('draws its labels from the shared map, not a private copy', () => {

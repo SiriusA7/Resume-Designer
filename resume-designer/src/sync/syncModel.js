@@ -1019,7 +1019,12 @@ export function parkLoser(unitId, payload) {
   const entry = {
     data,
     timestamp: new Date().toISOString(),
-    description: 'Conflicting edit synced from another device',
+    // Says which two versions existed and which one this is, and NOT whose it
+    // was: the loser is this device's own copy whenever the remote one is
+    // newer, and even the server's copy is often this device's earlier upload.
+    // See TYPE_LABELS['sync-conflict'] in ../historyEntryLabels.js, which the
+    // web dialog and the iOS sheet both draw the badge from.
+    description: 'Two devices edited this resume; this is the earlier version.',
     // The string store.js's undo/redo traversal steps over, taken from there
     // rather than written twice.
     changeType: CHANGE_TYPES.SYNC_CONFLICT,
