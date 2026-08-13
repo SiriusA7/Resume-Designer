@@ -1595,17 +1595,17 @@ extension ShellModel {
   /// What the notice says. The rules behind the words:
   ///
   /// - **It does not say which side won**, and that is the load-bearing one. A
-  ///   conflict parks a loser in BOTH directions: `handleFailedSaves`
-  ///   (OPSync.swift) appends the SERVER's older unit when `localWins` — this
-  ///   device holding the newer edit and pushing second is an ordinary half of
-  ///   all conflicts — and the LOCAL one when it does not. Both arrive here as
-  ///   losers and count the same, so "another device replaced yours" would be
-  ///   false about half the time, and a single batch can hold both directions
-  ///   under one count. What is true of every parked version either way is the
+  ///   conflict parks a loser in BOTH directions: `resolveConflicts`
+  ///   (src/sync/syncModel.js) parks the SERVER's older unit when this device
+  ///   holds the newer edit — pushing second with the newer copy is an ordinary
+  ///   half of all conflicts — and the LOCAL one when it does not. Both count
+  ///   the same in `parked`, so "another device replaced yours" would be false
+  ///   about half the time, and a single batch can hold both directions under
+  ///   one count. What is true of every parked version either way is the
   ///   shape of the event: two devices had the résumé, the newer copy is what
   ///   the app now holds, the older one went to history. Wording it that way
-  ///   costs nothing; carrying the direction across `syncDidLoseConflict` to
-  ///   say more would cost the transport a field it has no other use for.
+  ///   costs nothing; carrying the direction back across `syncDidConflict` to
+  ///   say more would cost the answer a field it has no other use for.
   /// - **The source device is not named**, though the spec's example sentence
   ///   named one. The record carries an opaque device id and nothing else, and
   ///   since iOS 16 `UIDevice.current.name` is a generic model string anyway —
@@ -1761,61 +1761,86 @@ extension ShellModel: OPSyncHost {
     return true
   }
 
-  /// The older side of a conflict, parked in that résumé's version history
-  /// rather than discarded — and the one moment sync has anything to SAY.
+  /// Both versions of every unit whose save hit a conflict, handed to the model
+  /// to resolve — and the one moment sync has anything to SAY.
   ///
-  /// Deferred onto a later main-actor turn rather than run inline: this is
-  /// called from inside the engine's event handling and the bridge re-enters the
-  /// engine, which is the same reason `syncDidFail` defers.
-  func syncDidLoseConflict(_ losers: [SyncUnit]) {
-    Task { @MainActor [weak self] in await self?.park(losers) }
+  /// Awaited inline rather than deferred onto a later main-actor turn, unlike
+  /// the park it replaces: the transport must not settle a change tag before it
+  /// has this answer, which is the same reason `syncDidFetch` is awaited from
+  /// inside the same event.
+  ///
+  /// ONE NOTICE for the batch, which is the spec's rule and not a nicety: a
+  /// device that has been away comes back owing a full upload, so several
+  /// résumés conflicting in a single push is an ordinary shape, and a stack of
+  /// notices about something that resolved correctly reads as an alarm.
+  ///
+  /// The count is what actually reached a version history, and it comes from the
+  /// model because nothing else can compute it. It is not `conflicts.count`: an
+  /// append-shaped unit UNIONS, so neither side loses and there is nothing to
+  /// park, and a snapshot whose loser is not a résumé has nowhere to park one.
+  /// Zero parks, no notice — a notice pointing at Version history for a version
+  /// that is not in it would be worse than silence.
+  ///
+  /// A unit the model did not resolve OWES ANOTHER GO, recorded exactly as
+  /// `syncDidFetch` records one: the ids join the set an edit made while the
+  /// transport was down waits in, and every start drains it. Sending is the
+  /// recovery — the tag was forfeited by `resolve`, so the save quotes none,
+  /// CloudKit answers `serverRecordChanged`, and both versions come back here.
+  /// NOT `syncDidFail`, which would re-queue immediately and spend this
+  /// session's one recovery attempt on a page that has just failed to answer.
+  func syncDidConflict(_ conflicts: [SyncConflict]) async -> SyncConflictOutcome {
+    let outcome = await resolveConflicts(conflicts)
+    let resolved = Set(outcome.resolved.map(\.id))
+    let unresolved = conflicts.map(\.server.id).filter { !resolved.contains($0) }
+    if !unresolved.isEmpty {
+      syncDeferred.formUnion(unresolved)
+      NSLog("[OPShell] \(unresolved.count) of \(conflicts.count) conflict(s) were not "
+            + "resolved; they are offered again at the next start")
+    }
+    announceParked(outcome.parked)
+    return outcome
   }
 
-  /// Park each loser, then tell the person ONCE.
-  ///
-  /// One command per unit — `parkLoser` takes one, and batching them here would
-  /// only move the loop across the bridge — but one NOTICE for the batch, which
-  /// is the spec's rule and not a nicety: a device that has been away comes back
-  /// owing a full upload, so several résumés conflicting in a single push is an
-  /// ordinary shape, and a stack of notices about something that resolved
-  /// correctly reads as an alarm.
-  ///
-  /// The count is what actually LANDED, never `losers.count`. `parkLoser`
-  /// answers false for a payload with no document in it and for every non-résumé
-  /// unit, which has no history to park in — and a notice pointing at Version
-  /// history for a version that is not in it would be worse than silence. Zero
-  /// parks, no notice; the log lines are then the only record, which is right,
-  /// because there is nothing the person could do about either case.
-  private func park(_ losers: [SyncUnit]) async {
-    var parked = 0
-    for loser in losers {
-      // The HANDLER's own return value, off the dispatcher's `{ ok, result }`
-      // envelope. `send` collapses that to `ok`, which is only whether the
-      // command ran — a refusal comes back as `{ ok: true, result: false }`, so
-      // the refusal line below could never fire and this side could not have
-      // told a parked version from a discarded one.
-      let reply = await sendForResult(
-        "syncParkLoser", ["unitId": loser.id, "payload": loser.payload]
-      )
-      switch reply {
-      case .answered(let value) where (value as? Bool) == true:
-        parked += 1
-      case .answered:
-        // The page ANSWERED, and the answer was no: `parkLoser` returns false
-        // for a payload with no document in it and for every non-résumé unit.
-        // Refusing to park is the one way a version disappears in this design,
-        // so it is said out loud rather than assumed away.
-        NSLog("[OPShell] the page would not park the older \(loser.id)")
-      case .unanswered:
-        // A different event, and worth telling apart from the refusal above: no
-        // webview, an eval that failed, or `sendForResult`'s ten-second bound
-        // ran out. Nobody said no — nobody said anything, and whether the park
-        // happened is unknown. Uncounted and unannounced either way, so only
-        // the wording of the record changes.
-        NSLog("[OPShell] no answer parking the older \(loser.id)")
-      }
+  /// The ask itself, split out so that no unresolved conflict can reach the
+  /// transport without its id being held — the two would otherwise have to be
+  /// kept in step at three separate returns. The same shape as `applyFetched`,
+  /// and every way of not knowing is the same empty answer: the units would not
+  /// encode, the round trip was never answered, or the reply carried nothing
+  /// usable. A wrong resolution is a change tag held for content this device
+  /// does not have; a wrong refusal costs one round trip.
+  private func resolveConflicts(_ conflicts: [SyncConflict]) async -> SyncConflictOutcome {
+    guard let data = try? JSONEncoder().encode(conflicts),
+          let json = String(data: data, encoding: .utf8) else {
+      NSLog("[OPShell] could not encode \(conflicts.count) conflict(s)")
+      return .unresolved
     }
-    announceParked(parked)
+    // A JSON STRING, like `syncApply`'s units and for the same reason: the
+    // command channel is a JS string literal. This side still never looks inside
+    // a payload — it carries two opaque versions over and reads back ids and
+    // counts, which is the bridge's shape rather than a unit's.
+    guard case .answered(let value) = await sendForResult(
+            "syncResolveConflicts", ["conflicts": json]
+          ),
+          let object = value as? [String: Any],
+          let entries = object["resolved"] as? [[String: Any]],
+          let parked = object["parked"] as? Int
+    else {
+      NSLog("[OPShell] no usable answer for \(conflicts.count) conflict(s)")
+      return .unresolved
+    }
+
+    var resolved: [SyncResolution] = []
+    for entry in entries {
+      guard let id = entry["id"] as? String, let retry = entry["retry"] as? Bool else {
+        // The two halves of the bridge disagree about the shape of an answer.
+        // Dropping the entry forfeits that one unit's tag, which is the safe
+        // direction, so it is a log rather than a refusal of the whole batch.
+        NSLog("[OPShell] a conflict resolution did not decode: \(entry)")
+        continue
+      }
+      resolved.append(SyncResolution(id: id, retry: retry))
+    }
+    return SyncConflictOutcome(resolved: resolved, parked: parked)
   }
 
   /// Sends and fetches that did not land.

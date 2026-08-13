@@ -137,9 +137,16 @@ detection, retry and backoff. A record is:
 { unitId: String, kind: String, payload: <opaque>, modifiedAt: Date }
 ```
 
-`payload` is an opaque JSON string Swift never parses. `kind` exists so the
-transport can route a conflict to the right resolution without understanding
-the contents.
+`payload` is an opaque JSON string Swift never parses. `kind` describes its
+shape on the record.
+
+**Amended 2026-08-13.** `kind` was written down here as the thing that lets
+"the transport route a conflict to the right resolution without understanding
+the contents", and that was never achievable: whether a unit takes newer-wins
+or a *union* is a property of what the app does with it, not of a three-way
+label — and the implementation duly never branched on `kind` anywhere. So
+conflict resolution is the model's, top to bottom (below), and `kind` routes
+nothing.
 
 This is the same division every other screen uses, and it is what makes the Mac
 client a transport-only job.
@@ -155,14 +162,30 @@ buys atomic per-profile fetches and a clean per-profile delete.
 CloudKit rejects a save whose record changed underneath it and attaches the
 server's copy. On that rejection:
 
-1. Compare `modifiedAt`. The newer payload wins and is written locally.
-2. The losing payload is handed to JS, which writes it into that résumé's
-   version history.
-3. One non-blocking notice per resolution — not per record: *"A newer version
-   from your iPhone replaced this. The previous one is in Version history."*
+1. **Both versions cross to JS** — the payload this device tried to send and the
+   server's — with the server record's change tag held on the transport side.
+2. JS resolves. A snapshot compares `modifiedAt`: the newer payload wins and is
+   written locally, and the losing payload goes into that résumé's version
+   history. An append-shaped unit takes its **union** instead (below), and a
+   union has no loser to park.
+3. JS answers which units it resolved *durably* and which of them still owe the
+   server a save. The transport keeps the server's change tag only for those,
+   and re-queues the save; what goes up is read from the model at send time, so
+   it is the resolution or a later edit built on it.
+4. One non-blocking notice per resolution — not per record — raised on the
+   number of versions that actually reached version history.
 
 Nothing is destroyed, recovery is a restore the app already supports, and the
 user is never asked to make a decision mid-edit.
+
+**Amended 2026-08-13.** Steps 1–3 replace "the transport compares `modifiedAt`
+and hands JS the loser", which was the design until an adversarial review found
+what it cost: the transport applied newer-wins to *every* kind, so a save
+conflict on the token log or a version history never reached the union below —
+the loser was handed to the parking path, which has nowhere to put a unit that
+is not a résumé, and CloudKit was left holding one side. Conflict resolution is
+model-side for the same reason the split above puts everything else there: only
+the side that knows what a unit is can tell a comparison from a union.
 
 ### The two units that merge instead
 
@@ -248,7 +271,10 @@ as such, alongside the existing projections:
   did not know about
 - token-usage merge — union by id is order-independent, idempotent, and the
   recomputed summary matches a fresh computation over the merged events
-- conflict resolution — the newer payload wins, and the loser reaches history
+- conflict resolution — a snapshot's newer payload wins and the loser reaches
+  history, while an append-shaped unit unions on the save-conflict path exactly
+  as it does on the fetch path: asserted on the disk AND on what would be sent
+  back, since holding the union only locally is how the entries were lost
 
 Transport is deliberately thin and is verified on device, including: a real
 two-device edit of the same résumé, a first sync onto a fresh install, and

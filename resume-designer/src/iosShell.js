@@ -1619,8 +1619,33 @@ export function initIOSShell(deps) {
       publish();
       return pending;
     },
-    syncParkLoser: ({ unitId, payload }) =>
-      deps.parkLoser(String(unitId ?? ''), String(payload ?? '')),
+    // BOTH versions of every unit whose save hit a conflict, resolved by the
+    // model — the one side that can tell a newer-wins comparison from a union,
+    // and therefore the only one that can tell whether a loser exists at all.
+    // The transport used to decide this itself and hand back only the loser,
+    // which is why the two append-shaped units never unioned on the save path.
+    //
+    // A JSON STRING for the same reason `syncApply`'s units are one: the command
+    // channel is a JS string literal. The answer is a promise for the same
+    // reason its answer is — a resolution is not confirmed until the bytes are
+    // on disk — so this route is reached through `dispatch.async` too, and a
+    // malformed batch still throws SYNCHRONOUSLY rather than resolving to a
+    // refusal.
+    syncResolveConflicts: ({ conflicts }) => {
+      const parsed = JSON.parse(String(conflicts ?? '[]'));
+      if (!Array.isArray(parsed)) {
+        throw new Error('syncResolveConflicts needs an array of conflicts');
+      }
+      // RETURNED, not discarded, exactly as `syncApply`'s count is: the
+      // transport keeps the server's change tag for a unit only once the model
+      // says it merged, applied or parked the server's version, and it learns
+      // whether that unit still owes the server a save from the same answer.
+      const pending = deps.resolveConflicts(parsed);
+      // Republished like every other mutating route here: a resolution can
+      // replace the document on screen and can add a version-history entry.
+      publish();
+      return pending;
+    },
   });
 
   let pdfBusy = false;

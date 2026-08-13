@@ -33,8 +33,16 @@ import Foundation
 /// Mirrors the unit shape in src/sync/syncModel.js.
 struct SyncUnit: Codable, Equatable {
   let id: String
-  /// "resume" | "plain" | "tokenUsage" — enough to route a conflict without
-  /// understanding the contents.
+  /// "resume" | "plain" | "tokenUsage" — a description of the payload's shape,
+  /// carried on the record and read by nothing in this file.
+  ///
+  /// It was written down as "enough to route a conflict without understanding
+  /// the contents", and that was never true and could not have been: which
+  /// units take newer-wins and which take a UNION is a property of what the app
+  /// does with them, and no three-way label decides it — see `accumulatorFor`
+  /// (src/sync/syncModel.js), which is the one list that does. Conflicts are now
+  /// routed there, off the unit id, so this branches nowhere on purpose rather
+  /// than by omission.
   let kind: String
   let payload: String
   /// OPTIONAL, and it has to be.
@@ -48,14 +56,56 @@ struct SyncUnit: Codable, Equatable {
   ///
   /// `nil` means "unknown", never "old". `resolveConflict`
   /// (src/sync/syncMerge.js) scores an absent or unparseable stamp `-Infinity`,
-  /// so it loses to any real stamp and two unknowns tie. `Self.localWins` is
-  /// that rule in Swift, to the letter.
+  /// so it loses to any real stamp and two unknowns tie. NOTHING IN THIS FILE
+  /// COMPARES IT: that rule has one copy and it is the model's.
   ///
   /// Encoding drops the key rather than writing `null` — `Codable`'s synthesised
-  /// `encode` uses `encodeIfPresent` for optionals. That is fine in this
-  /// direction: `applyUnits` reads `id`, `kind` and `payload` and never the
-  /// stamp. It is only the JS→Swift direction that has to carry it.
+  /// `encode` uses `encodeIfPresent` for optionals — and the stamp IS read on
+  /// the way out now, by the fetch path's recency guard and by a conflict's
+  /// comparison. It is still faithful: `resolveConflict` reads an absent field
+  /// and an explicit `null` the same way, as -Infinity, which is what "unknown"
+  /// has to score at both ends.
   let modifiedAt: String?
+}
+
+/// A save conflict as it crosses to the model: the version this device tried to
+/// send and the version the server answered with, both opaque.
+///
+/// BOTH SIDES TRAVEL, and that is the whole of the correction. The transport
+/// used to compare `modifiedAt` here and pick a winner for every kind, which was
+/// a second copy of `resolveConflict` (src/sync/syncMerge.js) — a rule both
+/// devices must compute identically — and it was wrong outright for the two
+/// units that do not take newer-wins: token usage and version history UNION, and
+/// a union has no loser to park. Deciding which of those a unit is means knowing
+/// what a unit is, which is exactly the knowledge this file does not have.
+struct SyncConflict: Encodable, Equatable {
+  let local: SyncUnit
+  let server: SyncUnit
+}
+
+/// What the model did with one conflict.
+struct SyncResolution: Equatable {
+  /// The unit id. A conflict whose id is ABSENT from the answer was refused —
+  /// see `resolve`, which forfeits its change tag.
+  let id: String
+  /// Whether the SERVER still owes an update. True for a union (the merged
+  /// document has to go up) and for a snapshot this device won; false for a
+  /// snapshot the server won, where re-sending would push this device's stamp
+  /// back over the version it has just taken.
+  let retry: Bool
+}
+
+/// The model's answer for a batch of conflicts.
+struct SyncConflictOutcome: Equatable {
+  let resolved: [SyncResolution]
+  /// How many losers reached a version history — the only thing the conflict
+  /// notice is raised on. NOT the number of conflicts: a union parks nothing
+  /// because it loses nothing, and a snapshot whose loser is not a résumé has
+  /// nowhere to park one.
+  let parked: Int
+
+  /// Every conflict refused, which is what every way of not knowing comes to.
+  static let unresolved = SyncConflictOutcome(resolved: [], parked: 0)
 }
 
 /// Payloads larger than this go to a CKAsset. CloudKit caps a record's fields
@@ -150,10 +200,6 @@ protocol OPSyncHost: AnyObject {
 
   /// Units that arrived from another device.
   ///
-  /// Includes the winner of a conflict this device lost: that record is already
-  /// in hand when the conflict is detected, and until it lands the two devices
-  /// disagree, so it is delivered then rather than at the next fetch.
-  ///
   /// Returns whether EVERY unit handed over was applied. The transport keeps a
   /// record's change tag only on a `true` (see `deliver`), so this is not a
   /// progress report — it is the answer to "may this device claim to know which
@@ -161,9 +207,21 @@ protocol OPSyncHost: AnyObject {
   /// including not being able to ask at all, is `false`.
   func syncDidFetch(_ units: [SyncUnit]) async -> Bool
 
-  /// Units that LOST a conflict, for the caller to park in version history.
-  /// Newer wins, and this is the older one — nothing is discarded silently.
-  func syncDidLoseConflict(_ losers: [SyncUnit])
+  /// BOTH versions of every unit whose save hit `serverRecordChanged`, handed to
+  /// the model to resolve.
+  ///
+  /// The transport does not compare them and does not choose. A snapshot takes
+  /// newer-wins and an append-shaped unit takes a UNION, and only the side that
+  /// knows what a unit is can tell those apart — or tell that a union has no
+  /// loser to park. This is also where the older version reaches version
+  /// history: parking is part of resolving, not a separate errand run afterwards
+  /// on whichever side happened to be told.
+  ///
+  /// The answer names the units the model resolved DURABLY, and that is what the
+  /// transport keeps the server's change tag on — the same question
+  /// `syncDidFetch` answers, in the same terms. Anything less, including not
+  /// being able to ask, is an empty answer.
+  func syncDidConflict(_ conflicts: [SyncConflict]) async -> SyncConflictOutcome
 
   /// Sends and fetches that did not land. See `OPSyncFailure`.
   func syncDidFail(_ failures: [OPSyncFailure])
@@ -698,8 +756,7 @@ extension OPSyncEngine {
     _ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave],
     engine: CKSyncEngine
   ) async {
-    var arrived: [Arrival] = []
-    var losers: [SyncUnit] = []
+    var conflicts: [Conflict] = []
     var reported: [OPSyncFailure] = []
 
     // WHAT THE ENGINE HAS ALREADY DONE WITH THESE, because the shape of every
@@ -739,28 +796,17 @@ extension OPSyncEngine {
           continue
         }
 
-        if Self.localWins(local: localUnit, server: serverUnit) {
-          // Ours is newer. The server's copy is the only place its current
-          // change tag exists, so it is recorded before the retry is queued: a
-          // retry built without it is the fresh-record bug from the file
-          // header, in exactly the case a conflict has just proved is live.
-          // `recordToSend` now builds on that tag, so the retry is an update
-          // rather than another conflict.
-          remember(serverRecord)
-          engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-          losers.append(serverUnit)
-        } else {
-          // Theirs is newer, or the two tie and the tie goes to the server so
-          // both devices break it the same way — otherwise they converge on
-          // different winners and sync forever.
-          //
-          // NOT remembered here: this device is about to take the server's
-          // content, and the tag is a claim to hold it. `deliver` records it if
-          // and only if the page says it landed — the same rule the fetch path
-          // runs under, and for the same reason.
-          arrived.append(Arrival(record: serverRecord, unit: serverUnit))
-          losers.append(localUnit)
-        }
+        // BOTH VERSIONS TRAVEL, and nothing is decided here. Which of them wins
+        // — or whether the right answer is a union in which neither loses — is
+        // the model's, and so is the parking that follows from it. See
+        // `resolve`, and `SyncConflict` for what this file used to get wrong.
+        //
+        // Nothing is remembered yet either: the server's tag is a claim to hold
+        // its content, and this device holds none of it until the model says so.
+        conflicts.append(Conflict(
+          serverRecord: serverRecord,
+          versions: SyncConflict(local: localUnit, server: serverUnit)
+        ))
 
       case .zoneNotFound:
         // The zone has never been created — this is the first send of the first
@@ -832,9 +878,61 @@ extension OPSyncEngine {
       }
     }
 
-    await deliver(arrived)
-    if !losers.isEmpty { host?.syncDidLoseConflict(losers) }
+    await resolve(conflicts, engine: engine)
     report(reported)
+  }
+
+  /// Hand every conflict to the model, and keep the server's change tag only for
+  /// the units it resolved.
+  ///
+  /// THE MIRROR OF `deliver`, and the same invariant one path over: a change tag
+  /// is a claim to know which server version this device is editing, and the
+  /// server's version is accounted for only once the model says it merged,
+  /// applied or parked it — durably, on disk, which is what the answer waits for
+  /// (`resolveConflicts` in syncModel.js).
+  ///
+  /// `retry` is the model's answer too, not a rule kept here. A union owes the
+  /// server the merged document; a snapshot this device won owes it ours; a
+  /// snapshot the SERVER won owes it nothing, and re-sending there would push
+  /// this device's stamp back over the version it has just taken.
+  ///
+  /// WHAT A RETRY SENDS IS NOT CACHED HERE. The model has already written the
+  /// resolution to its own store, and `recordToSend` asks for the unit at send
+  /// time as it does for every other send. A payload held on this side would be
+  /// sent INSTEAD of a local edit that landed in between — the two collapse into
+  /// one queued change — and that edit would never be named again. Asked at send
+  /// time it is the resolution, or something newer built on top of it, and both
+  /// are correct.
+  ///
+  /// A unit the model did not name is FORFEITED: the tag goes, no save is
+  /// queued, and the host offers the unit again at the next start (see
+  /// `syncDidConflict` in OPShell.swift). Nothing is reported for it, for the
+  /// same reason `deliver` reports nothing — `syncDidFail`'s recovery re-queues
+  /// a send immediately, and a page that could not resolve a conflict cannot be
+  /// asked for the unit either, so it would spend this session's one attempt on
+  /// a webview that is still gone.
+  private func resolve(_ conflicts: [Conflict], engine: CKSyncEngine) async {
+    guard !conflicts.isEmpty else { return }
+    let outcome = await host?.syncDidConflict(conflicts.map(\.versions)) ?? .unresolved
+    // `uniquingKeysWith` rather than `uniqueKeysWithValues`, which TRAPS on a
+    // duplicate: these ids come off the bridge, and a malformed answer must cost
+    // a round trip, never the process.
+    let retries = Dictionary(outcome.resolved.map { ($0.id, $0.retry) },
+                             uniquingKeysWith: { first, _ in first })
+
+    for conflict in conflicts {
+      let recordID = conflict.recordID
+      guard let retry = retries[recordID.recordName] else {
+        forget(recordID)
+        continue
+      }
+      // The server's version is accounted for on this device, so this device may
+      // now say which server version it is editing. Recorded BEFORE the save is
+      // queued: a retry built without the tag is the fresh-record bug from the
+      // file header, in exactly the case a conflict has just proved is live.
+      remember(conflict.serverRecord)
+      if retry { engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)]) }
+    }
   }
 
   /// Hand records that arrived from the server to the page, and keep their
@@ -931,6 +1029,20 @@ private struct Arrival {
   let unit: SyncUnit
 
   var recordID: CKRecord.ID { record.recordID }
+}
+
+/// The same pairing for a save conflict: the server's record, which is where its
+/// change tag lives, travelling with BOTH versions of the unit from the moment
+/// the rejection is read to the moment `resolve` settles that tag.
+///
+/// Same reason as `Arrival` — anything holding the versions without the record
+/// can only store a tag it cannot justify — and one more: the two versions have
+/// to reach the model together or it has nothing to compare.
+private struct Conflict {
+  let serverRecord: CKRecord
+  let versions: SyncConflict
+
+  var recordID: CKRecord.ID { serverRecord.recordID }
 }
 
 // MARK: - Records
@@ -1066,42 +1178,15 @@ extension OPSyncEngine {
   }
 }
 
-// MARK: - Conflict rule
-
-extension OPSyncEngine {
-  /// `resolveConflict` from src/sync/syncMerge.js, in Swift.
-  ///
-  /// It has to be the same rule to the letter: both devices run it, and a
-  /// disagreement about who won is a resync that never settles. There, each side
-  /// scores `Date.parse(modifiedAt)` with `-Infinity` for absent or unparseable,
-  /// and local wins only on `>`. So, here: a nil or unreadable stamp never wins,
-  /// a real stamp beats a nil one, two nils tie, and an exact tie goes to the
-  /// server — arbitrary but computed identically on both devices.
-  static func localWins(local: SyncUnit, server: SyncUnit) -> Bool {
-    guard let localAt = timestamp(local.modifiedAt) else { return false }
-    guard let serverAt = timestamp(server.modifiedAt) else { return true }
-    return localAt > serverAt
-  }
-
-  /// Two parsers, the same pair OPShell.swift keeps for history dates:
-  /// ISO8601DateFormatter fails outright on the option it was not given rather
-  /// than ignoring it. Timestamps here are minted by JS's `toISOString()`, which
-  /// ALWAYS carries milliseconds, and a stock formatter parses none of them — so
-  /// a single default formatter would have returned nil for both sides of every
-  /// conflict, tied them, and handed the server the win every time. The plain
-  /// parser stays for any timestamp minted without them.
-  static func timestamp(_ iso: String?) -> Date? {
-    guard let iso else { return nil }
-    return isoWithFraction.date(from: iso) ?? isoPlain.date(from: iso)
-  }
-
-  private static let isoWithFraction: ISO8601DateFormatter = {
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f
-  }()
-  private static let isoPlain = ISO8601DateFormatter()
-}
+// THERE IS NO CONFLICT RULE IN THIS FILE, and that is deliberate. `localWins`
+// stood here — `resolveConflict` from src/sync/syncMerge.js transcribed into
+// Swift, with its own pair of ISO8601 parsers to read `modifiedAt` — and a rule
+// both devices must compute identically had two implementations that could
+// drift. Worse, it was applied to EVERY unit, including the two that must not
+// take newer-wins at all, so the append-shaped units never reached their union
+// on this path. The comparison now happens once, in the model, for the fetch
+// path and the save path alike. Nothing in this file reads `modifiedAt` for
+// anything but carrying it to and from a record.
 
 // MARK: - What survives a launch
 

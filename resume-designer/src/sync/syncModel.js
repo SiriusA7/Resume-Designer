@@ -379,9 +379,11 @@ const KEY_OWNERS = new Map([
  *     it: the old version is now the newest one everywhere.
  *
  * `resolveConflict` rather than a comparison written out here, so the fetch
- * path and the save-time conflict path (OPSync.swift's `localWins`) cannot
- * disagree about who won — including on the two cases that decide it: an
- * unknown local time LOSES to a real one, and the remote takes an exact tie.
+ * path and the save-time conflict path (`resolveConflicts`) cannot disagree
+ * about who won — there is now exactly one copy of that rule in the whole app,
+ * the transport having stopped keeping a second one in Swift. Including on the
+ * two cases that decide it: an unknown local time LOSES to a real one, and the
+ * remote takes an exact tie.
  * A device that has never stamped a unit scores -Infinity for it, so a fresh
  * install still receives everything.
  *
@@ -990,6 +992,189 @@ function landFetchedUnits(units) {
   return { applied };
 }
 
+/** Every conflict refused: the shape of an answer that resolves nothing. */
+const nothingResolved = () => ({ resolved: [], parked: 0 });
+
+/** Whether a side of a conflict is a unit at all. */
+function isUnit(unit) {
+  return !!unit && typeof unit.id === 'string' && !!unit.id && typeof unit.payload === 'string';
+}
+
+/**
+ * Resolve save conflicts, and land the resolutions durably.
+ *
+ * CloudKit rejects a save whose record moved underneath it and hands back the
+ * version it holds. The transport used to resolve that ITSELF — a Swift copy of
+ * `resolveConflict`, run for every kind — and that was two mistakes in one. It
+ * was a second copy of a rule both devices have to compute identically, and it
+ * was simply wrong for the two units that do not take newer-wins at all: the
+ * loser of a token-usage or version-history conflict went to `parkLoser`, which
+ * has nowhere to put a unit that is not a résumé, so CloudKit ended up holding
+ * ONE SIDE rather than the union. The other device's events survived only in
+ * this device's local copy, and a reinstall before the next local append made
+ * them unrecoverable. The fetch path had honoured the union rule all along;
+ * only the save path did not.
+ *
+ * So the transport carries both opaque versions across and decides nothing.
+ * Each conflict is `{ local, server }` — the unit this device tried to send and
+ * the one the server answered with — and the answer is, per unit:
+ *
+ *     { id, retry }   `retry`: does the SERVER still owe an update?
+ *
+ * plus `parked`, the number of losers that reached a version history. That
+ * count is the only thing the conflict notice is raised on, and only this side
+ * can produce it: a union has no loser, and a snapshot whose loser is not a
+ * résumé has nowhere to park one.
+ *
+ * A unit MISSING from `resolved` is a refusal, and refusing is the safe
+ * direction: the transport forfeits that record's change tag, queues no save,
+ * and offers the unit again at the next start, where the whole comparison
+ * happens over. Nothing is destroyed by one — both versions are still where
+ * they were.
+ *
+ * ── WHAT THE RETRY ACTUALLY SENDS ─────────────────────────────────────────
+ *
+ * Not a payload handed back over the bridge. The resolution is written to
+ * STORAGE here, and the transport re-queues the record and asks for it again at
+ * send time (`recordToSend` → `collectUnit`). That is the only reading of "the
+ * resolved unit" that cannot go stale: a local edit landing between the
+ * resolution and the send collapses into the same queued change, so a payload
+ * cached on the Swift side would be sent INSTEAD of that edit and the edit would
+ * never be named again. Asking at send time yields the resolution, or something
+ * newer built on top of it, and both are correct — what matters for the change
+ * tag is that the SERVER'S version is accounted for here, which it is: merged,
+ * applied, or parked.
+ *
+ * ── THE SAME TWO RULES `applyUnits` RUNS UNDER, FOR THE SAME REASONS ───────
+ *
+ * Everything below runs SYNCHRONOUSLY inside the `applying` window, and the one
+ * await is textually after the `finally` that restores the flag — so the
+ * suppressed region is still a single run-to-completion turn and no local write
+ * can interleave with it and be swallowed as an echo. `mergeHistory`,
+ * `mergeTokenUsage`, `landFetchedUnits` and `parkLoser` are all synchronous,
+ * which is what makes that possible. Nothing here may ever move above that
+ * `finally`.
+ *
+ * And the durability barrier: a resolution that reached the write-behind cache
+ * is not a resolution. The transport keeps the SERVER's change tag on this
+ * answer, and a tag is a claim to know which server version this device is
+ * editing — a claim a device that relaunches without the bytes cannot make. So
+ * the answer waits for the disk, and a failed flush forfeits the WHOLE batch,
+ * including the units that wrote nothing: which ones landed is not knowable, and
+ * over-forfeiting costs one round trip while under-forfeiting is a silent
+ * overwrite.
+ */
+export async function resolveConflicts(conflicts) {
+  // The same refusal `applyUnits` opens with, for the same reason: under a
+  // restore guard `setItem` records the write and touches neither the cache nor
+  // the disk, while `flush()` would still answer `true` over nothing dirty. The
+  // restore ends in a reload from the backup, so a tag kept here would describe
+  // content that is about to be replaced wholesale.
+  if (appStorage.isRestoreGuardActive()) return nothingResolved();
+
+  const wasApplying = applying;
+  applying = true;
+  let outcome;
+  try {
+    outcome = resolveEachConflict(conflicts);
+  } finally {
+    applying = wasApplying;
+  }
+
+  // Nothing was written, so there is no disk to wait for — that is the ordinary
+  // newer-wins case where this device already holds the winner and the server
+  // simply owes an update. Forcing a drain here would only push somebody else's
+  // coalescing window early.
+  if (!outcome.wrote) return outcome.answer;
+  return (await appStorage.flush()) ? outcome.answer : nothingResolved();
+}
+
+function resolveEachConflict(conflicts) {
+  const resolved = [];
+  let parked = 0;
+  let wrote = false;
+
+  for (const conflict of Array.isArray(conflicts) ? conflicts : []) {
+    const local = conflict?.local;
+    const server = conflict?.server;
+    // Both sides, or nothing. A resolution compares two versions of ONE unit,
+    // and a pair that does not agree on the id is a transport bug — refusing it
+    // costs a round trip, while guessing would write one unit's content over
+    // another's.
+    if (!isUnit(local) || !isUnit(server) || local.id !== server.id) continue;
+
+    const outcome = resolveOneConflict(local, server);
+    if (!outcome) continue;
+    resolved.push({ id: server.id, retry: outcome.retry });
+    if (outcome.parked) parked += 1;
+    if (outcome.wrote) wrote = true;
+  }
+
+  return { answer: { resolved, parked }, wrote };
+}
+
+/**
+ * One conflict, or `null` when this device cannot resolve it.
+ *
+ * The split is `accumulatorFor`'s and no other: the ONE list that already says
+ * which units accumulate is what decides whether this is a union or a
+ * comparison, so a third append-shaped unit cannot get a merge on the fetch path
+ * and keep newer-wins here.
+ */
+function resolveOneConflict(local, server) {
+  const accumulate = server.id.startsWith(KEY_UNIT_PREFIX)
+    ? accumulatorFor(server.id.slice(KEY_UNIT_PREFIX.length))
+    : null;
+
+  if (accumulate) {
+    // The union, through the same function the fetch path lands one with — one
+    // merge for both directions, so a save conflict and a fetch cannot disagree
+    // about what two documents come to. The other side is read from STORAGE
+    // rather than from `local`: the payload the transport tried to send is a
+    // snapshot taken before the send, the disk may have moved on since, and a
+    // union of both is still a union. There is no loser, so nothing is parked
+    // and nothing needs to be — which is the fact only this side can know.
+    const key = server.id.slice(KEY_UNIT_PREFIX.length);
+    // Nothing should ever have sent a device-local key, and honouring one here
+    // would let one device's zoom overwrite another's — the same refusal
+    // `landFetchedUnits` makes.
+    if (classifyKey(key) !== 'synced') return null;
+    // A payload that will not parse is refused rather than written: absence is
+    // never deletion, and half a merge is not a merge.
+    if (!accumulate(key, server)) return null;
+    return { retry: true, parked: false, wrote: true };
+  }
+
+  // A snapshot. Newer wins, by the same `resolveConflict` the fetch path
+  // compares with, over the two versions the transport actually had in hand.
+  if (resolveConflict(local, server).winner === local) {
+    // Ours is newer, so the server owes an update and its copy is the loser.
+    // `parkLoser` takes it where there is a version history to take it — which
+    // is résumés and nothing else — and refuses otherwise, which is precisely
+    // what newer-wins MEANS for a snapshot with nowhere to park: the older copy
+    // is discarded. Refusing the whole resolution over that would be worse than
+    // the discard: the tag would be forfeited, the same record would come back,
+    // and this device's newer content would never reach iCloud.
+    const wasParked = parkLoser(server.id, server.payload);
+    return { retry: true, parked: wasParked, wrote: wasParked };
+  }
+
+  // Theirs is newer, or the two tie and the tie goes to the server so both
+  // devices break it the same way. It lands through the FETCH path's own
+  // filters, so a unit that could not land from a fetch cannot land from a
+  // conflict either — including the case that matters most here, a local edit
+  // that landed between the send and this answer: `outranksLocalCopy` re-asks
+  // against the stamp recorded NOW, so the newer local copy refuses the landing
+  // instead of being overwritten by the comparison above.
+  if (landFetchedUnits([server]).applied !== 1) return null;
+  // Our copy is the loser, parked AFTER the write for the same reason
+  // `landFetchedUnits` adopts after its own: the entry records a version this
+  // device has just stopped holding. Nothing is retried — the server already
+  // holds the winner, and sending our copy back would push this device's stamp
+  // over the version it has only just taken.
+  return { retry: false, parked: parkLoser(local.id, local.payload), wrote: true };
+}
+
 /**
  * Park a conflict's losing version in that résumé's history.
  *
@@ -1013,8 +1198,8 @@ function landFetchedUnits(units) {
  * wrong key, only harder to see — the whole conflict design rests on a parked
  * loser being RESTORABLE, or "newer wins, nothing is discarded" is not true.
  * A payload with no document is refused for that reason rather than parked:
- * the caller (OPShell.swift's syncDidLoseConflict) logs a refusal, which is
- * louder than an entry that restores to nothing.
+ * `resolveConflicts` counts what actually landed, and a version that is not in
+ * Version history must not be announced as being there.
  *
  * WHERE in that array the entry goes decides whether it survives at all, and
  * both halves of this function are written to the same rule — the entry goes in
@@ -1066,14 +1251,17 @@ export function parkLoser(unitId, payload) {
   };
 
   // Both branches below CHANGE that variant's history unit, and this is the one
-  // history write no persisted save accompanies: Swift calls parkLoser from the
-  // conflict path, outside `applying` and outside any save. The storage
-  // interceptor skips history keys (see `unitsFor`) on the premise that the
-  // persistence path stamps them, and this is the counterexample — so the stamp
-  // is taken here. Without it the unit went up with no modification time, which
-  // resolveConflict reads as -Infinity: the parked loser, which is the whole
-  // reason newer-wins destroys nothing, would lose every conflict it ever met
-  // and be overwritten by any device that had not seen the park.
+  // history write no persisted save accompanies: `resolveConflicts` calls this
+  // from the conflict path, which is not a save. The storage interceptor skips
+  // history keys (see `unitsFor`) on the premise that the persistence path
+  // stamps them, and this is the counterexample — so the stamp is taken here.
+  // That it now runs INSIDE the `applying` window changes nothing about it:
+  // `applying` suppresses the interceptor, the interceptor was never going to
+  // stamp a history key, and `touchUnit` is a direct write rather than a
+  // reaction to one. Without the stamp the unit went up with no modification
+  // time, which resolveConflict reads as -Infinity: the parked loser, which is
+  // the whole reason newer-wins destroys nothing, would lose every conflict it
+  // ever met and be overwritten by any device that had not seen the park.
   const stampParked = () => touchUnit(`${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`);
 
   // The loaded variant: only the store can make this stick (see above). It

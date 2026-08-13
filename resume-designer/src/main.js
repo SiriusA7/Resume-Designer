@@ -39,7 +39,7 @@ import {
   initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
 } from './iosShell.js';
 import {
-  collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler, touchUnit,
+  collectUnit, collectUnits, applyUnits, resolveConflicts, registerPersistedSaveHandler, touchUnit,
   registerEditingProbe, isSyncEnabled, setSyncEnabled,
   installStorageStamping, setStorageDirtyNotifier,
 } from './sync/syncModel.js';
@@ -615,7 +615,7 @@ export async function init() {
     // CloudKit sync. The model owns what a unit is; the shell only carries it.
     // `getActiveProfileId` is here rather than imported by the shell because
     // the zone is per-profile and Swift has no way to read the pointer.
-    collectUnit, collectUnits, applyUnits, parkLoser, touchUnit,
+    collectUnit, collectUnits, applyUnits, resolveConflicts, touchUnit,
     // ONE notifier, handed to both things that name a dirty unit: persistence
     // (the résumé and its history, on the save that wrote them) and the sync
     // model's storage interceptor (every other synced key). The shell installs

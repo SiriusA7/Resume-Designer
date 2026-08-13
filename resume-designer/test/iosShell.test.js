@@ -1138,41 +1138,48 @@ describe('the Design sheet commands', () => {
     expect(() => notifyDirty(['resume:v-1'])).not.toThrow();
   });
 
-  it('applies units and parks a conflict loser', async () => {
+  it('applies units and hands both versions of a conflict to the model', async () => {
     const applyUnits = vi.fn(async () => ({ applied: 1 }));
-    const parkLoser = vi.fn(() => true);
-    const { send, sendAsync } = await mount({ applyUnits, parkLoser });
+    const resolveConflicts = vi.fn(async () => ({ resolved: [], parked: 0 }));
+    const { sendAsync } = await mount({ applyUnits, resolveConflicts });
 
     await sendAsync({ type: 'syncApply', units: '[{"id":"resume:v-1","kind":"resume","payload":"{}","modifiedAt":"2026-08-09T00:00:00.000Z"}]' });
     expect(applyUnits).toHaveBeenCalledWith([
       { id: 'resume:v-1', kind: 'resume', payload: '{}', modifiedAt: '2026-08-09T00:00:00.000Z' },
     ]);
 
-    send({ type: 'syncParkLoser', unitId: 'resume:v-1', payload: '{"name":"lost"}' });
-    expect(parkLoser).toHaveBeenCalledWith('resume:v-1', '{"name":"lost"}');
+    // BOTH sides cross, which is the whole of the boundary correction: the
+    // transport no longer compares them, so it has to carry them both.
+    const local = { id: 'resume:v-1', kind: 'resume', payload: '{"data":{"name":"mine"}}', modifiedAt: '2026-08-09T00:00:00.000Z' };
+    const server = { id: 'resume:v-1', kind: 'resume', payload: '{"data":{"name":"theirs"}}', modifiedAt: '2026-08-10T00:00:00.000Z' };
+    await sendAsync({
+      type: 'syncResolveConflicts', conflicts: JSON.stringify([{ local, server }]),
+    });
+    expect(resolveConflicts).toHaveBeenCalledWith([{ local, server }]);
   });
 
-  it('answers whether the loser was actually parked', async () => {
-    // The conflict notice is raised on this bit and on nothing else: Swift
-    // counts the losers that LANDED in a batch and says one thing about them
-    // (`park` in OPShell.swift). Discarding the answer here would leave that
-    // side unable to tell a parked version from a discarded one, and a notice
-    // pointing at Version history for a version that never reached it is worse
-    // than saying nothing at all.
-    const { send } = await mount({ parkLoser: () => true });
-    expect(send({ type: 'syncParkLoser', unitId: 'resume:v-1', payload: '{"data":{}}' }))
-      .toEqual({ ok: true, result: true });
+  it('answers with what the model resolved, and what it parked', async () => {
+    // Two decisions ride back on this: which records may keep the server's
+    // change tag (and which of those still owe the server a save), and how many
+    // older versions actually reached Version history — the count the conflict
+    // notice is raised on and nothing else. Discarding either would leave the
+    // transport holding tags for content this device does not have, and the
+    // notice pointing at a version that is not there.
+    const answer = { resolved: [{ id: 'key:resume-designer-token-usage', retry: true }], parked: 0 };
+    const { sendAsync } = await mount({ resolveConflicts: async () => answer });
+    await expect(sendAsync({ type: 'syncResolveConflicts', conflicts: '[]' }))
+      .resolves.toEqual({ ok: true, result: answer });
   });
 
-  it('carries a REFUSAL to park as a result, not as a failed command', async () => {
-    // `parkLoser` returns false for a payload with no document in it and for
-    // every non-résumé unit, which has no history to park in. Both are the
-    // handler answering, so the envelope is `ok: true` with a false RESULT —
-    // `ok` is only whether the command ran. Swift reads the result, having
-    // previously read `ok` and therefore counted every refusal as a park.
-    const { send } = await mount({ parkLoser: () => false });
-    expect(send({ type: 'syncParkLoser', unitId: 'key:resume-designer-applications', payload: '[]' }))
-      .toEqual({ ok: true, result: false });
+  it('refuses a malformed conflict batch synchronously rather than resolving to one', async () => {
+    // Same contract as `syncApply`'s: the handler is not async, so a batch that
+    // is not an array is a failed COMMAND on either entry point rather than an
+    // answer on one — and an answer here is a claim about change tags.
+    const resolveConflicts = vi.fn();
+    const { send } = await mount({ resolveConflicts });
+    expect(send({ type: 'syncResolveConflicts', conflicts: '{"local":{}}' }).ok).toBe(false);
+    expect(send({ type: 'syncResolveConflicts', conflicts: 'not json' }).ok).toBe(false);
+    expect(resolveConflicts).not.toHaveBeenCalled();
   });
 
   it('answers with the count applyUnits actually landed', async () => {

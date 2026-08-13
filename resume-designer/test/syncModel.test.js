@@ -1388,11 +1388,11 @@ describe('parkLoser', () => {
   });
 
   it('refuses a payload with no document rather than parking an entry that restores to nothing', () => {
-    // The one thing worse than refusing is an entry that looks parked. The
-    // caller (OPShell.swift's syncDidLoseConflict) logs a refusal out loud,
-    // because refusing to park is the only way a version disappears in this
-    // design; a park that cannot be restored disappears silently instead, and
-    // leaves a row in the history dialog claiming otherwise.
+    // The one thing worse than refusing is an entry that looks parked. A
+    // refusal is left out of `resolveConflicts`' parked count, so nothing tells
+    // the person to look in Version history for it; a park that cannot be
+    // restored disappears silently instead, and leaves a row in the history
+    // dialog claiming otherwise.
     expect(parkLoser('resume:v-broken', JSON.stringify({ id: 'v-broken', name: 'Tailored for Acme' }))).toBe(false);
     expect(parkLoser('resume:v-broken', '{ not json')).toBe(false);
     expect(parkLoser('resume:v-broken', 'null')).toBe(false);
