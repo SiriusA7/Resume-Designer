@@ -486,6 +486,158 @@ describe('applyUnits', () => {
   });
 });
 
+// A résumé unit's payload is the whole variant RECORD, exactly as splitData
+// emits it — `{ id, name, data, ... }`, with the document under `data`. The
+// store holds only that document.
+const variantRecord = (id, document, name = 'Design Engineer') => JSON.stringify({
+  id, name, data: document, createdAt: AT, updatedAt: AT,
+});
+const resumeUnit = (id, document, modifiedAt = AT) => ({
+  id: `resume:${id}`, kind: 'resume', payload: variantRecord(id, document), modifiedAt,
+});
+
+describe('applyUnits and the variant the app has OPEN', () => {
+  // Seed the blob the way the app really holds it — a variant record with a
+  // document inside — and open it, so the store and the disk start in step.
+  const open = (document) => {
+    disk.set(physical(DATA), JSON.stringify({
+      variants: { 'v-open': JSON.parse(variantRecord('v-open', document)) },
+      currentVariantId: 'v-open',
+    }));
+    resumeStore.setData(document, true, 'v-open');
+  };
+
+  it('replaces the document the store holds, not only the copy on disk', () => {
+    open({ name: 'Mine' });
+
+    expect(applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]).applied).toBe(1);
+
+    expect(resumeStore.getData().name).toBe('Edited on the iPhone');
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data.name)
+      .toBe('Edited on the iPhone');
+  });
+
+  it('does not let the next save write the stale in-memory document back over it', () => {
+    // THE BUG. Sync applies a fetched résumé by merging it into the blob ON
+    // DISK and counts it applied, so the transport keeps the record's change
+    // tag. The loaded variant's document also lives in store.js, and nothing
+    // told the store it had been replaced — so the next debounced save wrote
+    // the stale document straight back over the applied content, stamped it
+    // fresh, and pushed it as a clean, uncontested update. No conflict was
+    // raised and nothing was parked.
+    open({ name: 'Mine' });
+    registerPersistedSaveHandler(setPersistedSaveHandler);
+    initPersistence('v-open');
+
+    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    expect(resumeStore.saveNow()).toBe(true);
+
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data.name)
+      .toBe('Edited on the iPhone');
+  });
+
+  it('re-renders, because every renderer hangs off the store’s events', () => {
+    open({ name: 'Mine' });
+    const seen = [];
+    const stop = resumeStore.subscribe((event) => seen.push(event));
+
+    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+    stop();
+
+    // 'change' is what a whole-document replacement of the SAME variant
+    // already emits (undo/redo/restoreToEntry), and what main.js,
+    // useResumeStore and the iOS document snapshot all repaint on.
+    expect(seen).toContain('change');
+  });
+
+  it('leaves the store not dirty, so the adoption is not pushed straight back', () => {
+    // The adopted content is what the caller just wrote to storage. A store
+    // left dirty would schedule a save of it, which restamps the unit and
+    // sends this device's copy of what it has only just received.
+    open({ name: 'Mine' });
+
+    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+
+    expect(resumeStore.isDirty()).toBe(false);
+  });
+
+  it('leaves the replaced document one restore away in that résumé’s history', () => {
+    // Newer wins, and the loser is never discarded silently. Every edit path
+    // records its result in history before the save debounce runs, so the
+    // document the adoption replaces is still there to restore.
+    open({ name: 'Mine1' });
+    resumeStore.update('name', 'Mine2');
+
+    applyUnits([resumeUnit('v-open', { name: 'Edited on the iPhone' })]);
+
+    expect(resumeStore.getData().name).toBe('Edited on the iPhone');
+    const mine = resumeStore.getHistoryEntries()
+      .find((e) => resumeStore.getHistoryEntryData(e.index).name === 'Mine2');
+    expect(mine).toBeTruthy();
+    expect(resumeStore.restoreToEntry(mine.index)).toBe(true);
+    expect(resumeStore.getData().name).toBe('Mine2');
+  });
+
+  it('writes a résumé for a variant that is NOT open to storage and leaves the store alone', () => {
+    open({ name: 'Mine' });
+
+    expect(applyUnits([resumeUnit('v-other', { name: 'Theirs' })]).applied).toBe(1);
+
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-other'].data.name).toBe('Theirs');
+    expect(resumeStore.getData().name).toBe('Mine');
+    // The store is the only thing that can tell — currentVariantId is private
+    // to it — so it says so rather than guessing.
+    expect(resumeStore.adoptDocument('v-other', { name: 'Theirs' })).toBe(false);
+  });
+
+  it('never clears the open document off a unit that carries no résumé', () => {
+    // Absence is never deletion: a variant record with no `data` is a broken
+    // unit, not an empty résumé.
+    open({ name: 'Mine' });
+
+    applyUnits([{
+      id: 'resume:v-open', kind: 'resume', modifiedAt: AT,
+      payload: JSON.stringify({ id: 'v-open', name: 'Design Engineer' }),
+    }]);
+
+    expect(resumeStore.getData().name).toBe('Mine');
+  });
+
+  it('refuses a résumé older than the copy this device holds, on the fetch path too', () => {
+    // Newer wins. The fetch path merged every résumé unconditionally, so a
+    // record the server had not caught up with — this device edited while the
+    // transport was down, or between a send and this pull — overwrote a newer
+    // local edit on disk AND, now that the store adopts, on screen mid-edit.
+    // Refusing is what the transport is built for: the short count makes it
+    // forfeit the change tag, so the next save of this unit meets the conflict
+    // path, where both copies are compared and the loser is parked.
+    open({ name: 'Mine' });
+    touchUnit('resume:v-open');
+
+    const { applied } = applyUnits([
+      resumeUnit('v-open', { name: 'Older, from the other device' }, '2024-01-01T00:00:00.000Z'),
+    ]);
+
+    expect(applied).toBe(0);
+    expect(resumeStore.getData().name).toBe('Mine');
+    expect(JSON.parse(disk.get(physical(DATA))).variants['v-open'].data.name).toBe('Mine');
+  });
+
+  it('takes a remote résumé when this device has never stamped one, because unknown loses', () => {
+    // `modifiedAtFor` answers null for a unit this device never saved, and an
+    // unknown time has to lose to a real one — the same rule resolveConflict
+    // applies everywhere else.
+    open({ name: 'Mine' });
+
+    const { applied } = applyUnits([
+      resumeUnit('v-open', { name: 'Edited on the iPhone' }, '2024-01-01T00:00:00.000Z'),
+    ]);
+
+    expect(applied).toBe(1);
+    expect(resumeStore.getData().name).toBe('Edited on the iPhone');
+  });
+});
+
 describe('parkLoser', () => {
   // The real key/shape, confirmed against src/store.js (saveHistory/
   // loadHistory) and src/components/HistoryDialog.jsx: the value at

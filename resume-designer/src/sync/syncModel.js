@@ -125,6 +125,63 @@ function landsAsDataField(unit) {
 }
 
 /**
+ * Whether a fetched résumé is newer than the copy this device holds.
+ *
+ * Newer wins — on THIS path too. The fetch path merged every résumé
+ * unconditionally, which was survivable only because of the bug below it: the
+ * loaded variant's stale in-memory document wrote itself back afterwards. With
+ * the store adopting, an older record would land on screen mid-edit and take
+ * the newer local version with it. That happens whenever this device edited
+ * while the transport was down, or between a send and this pull.
+ *
+ * `resolveConflict` rather than a comparison written out here, so the fetch
+ * path and the save-time conflict path (OPSync.swift's `localWins`) cannot
+ * disagree about who won — including on the two cases that decide it: an
+ * unknown local time LOSES to a real one, and the remote takes an exact tie.
+ *
+ * Refusing costs nothing that is not already designed for: the short `applied`
+ * count makes the transport forfeit the record's change tag, so the next save
+ * of this unit meets the conflict path, where both copies are compared and the
+ * loser is parked. Nothing is destroyed by a refusal — the remote copy is still
+ * on the server and on the device that wrote it.
+ */
+function outranksLocalResume(unit, recorded) {
+  const local = { id: unit.id, modifiedAt: modifiedAtFor(unit.id, recorded) };
+  return resolveConflict(local, unit).winner !== local;
+}
+
+/**
+ * Hand a fetched résumé to the store when it is the variant the app has open.
+ *
+ * The blob write above is not enough for that one variant: store.js holds its
+ * document in memory and the debounced save writes that back over the blob, so
+ * an applied résumé lasted until the next save, which then pushed the stale
+ * document up as a clean, uncontested update — the same trap parkLoser and the
+ * history merge document, and the same answer. The store is asked rather than
+ * told, because `currentVariantId` is private to it.
+ *
+ * A unit's payload is the whole variant RECORD as splitData emits it — `{ id,
+ * name, data, ... }` — and the store holds only its `data`. A record without
+ * one is a broken unit, not an empty résumé, so it leaves the document alone:
+ * absence is never deletion.
+ */
+function adoptLoadedDocument(unit) {
+  const variantId = unit.id.slice(RESUME_UNIT_PREFIX.length);
+  if (!variantId) return;
+
+  let variant;
+  try {
+    variant = JSON.parse(unit.payload);
+  } catch {
+    return;
+  }
+  const document = variant?.data;
+  if (!document || typeof document !== 'object') return;
+
+  store.adoptDocument(variantId, document);
+}
+
+/**
  * Stamp a unit as changed locally. Called when the app writes something the
  * sync layer cares about; without it, units other than résumés have no
  * timestamp anywhere in storage and conflicts could not be resolved.
@@ -241,11 +298,14 @@ export function collectUnit(unitId) {
  * Land units that arrived from another device.
  *
  * Résumé and `data:` units are merged into the blob so `currentVariantId` —
- * which never travelled — is left alone. Token usage and version history, the
- * two units that accumulate, take the union rule; everything else is a
- * snapshot and is written as it arrived. A unit naming a device-local key is
- * refused: nothing should have sent it, and honouring it would let one device's
- * zoom overwrite another's.
+ * which never travelled — is left alone, and a résumé for the variant the app
+ * has OPEN is handed to the store as well, because that document lives in
+ * memory too (adoptLoadedDocument). A résumé older than this device's own copy
+ * is refused outright (outranksLocalResume): newer wins here as everywhere.
+ * Token usage and version history, the two units that accumulate, take the
+ * union rule; everything else is a snapshot and is written as it arrived. A
+ * unit naming a device-local key is refused: nothing should have sent it, and
+ * honouring it would let one device's zoom overwrite another's.
  */
 export function applyUnits(units) {
   const incoming = Array.isArray(units) ? units : [];
@@ -261,16 +321,29 @@ export function applyUnits(units) {
   // count reports records that never landed — and this count is how a caller
   // tells a no-op from a failure. Filtering by the same rules makes the number
   // the truth, and leaves the blob untouched when nothing at all can land.
+  //
+  // A résumé this device has a NEWER copy of is filtered out here for a
+  // different reason and to the same effect: it must not land, and the count
+  // has to say so — see outranksLocalResume, which relies on the short count.
+  const recorded = state();
   const landing = incoming.filter((unit) => {
     const id = typeof unit?.id === 'string' ? unit.id : '';
     if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) return false;
     if (!parsesAsJSON(unit.payload)) return false;
-    return id.startsWith(RESUME_UNIT_PREFIX) || landsAsDataField(unit);
+    return id.startsWith(RESUME_UNIT_PREFIX)
+      ? outranksLocalResume(unit, recorded)
+      : landsAsDataField(unit);
   });
   if (landing.length > 0) {
     const blob = readJSON(DATA_KEY, {});
     appStorage.setItem(DATA_KEY, JSON.stringify(mergeData(blob, landing)));
     applied += landing.length;
+    // AFTER the storage write, never before: the store is what the screen
+    // reads, and putting a résumé there that the write then failed to persist
+    // (quota) would show the user content this device does not hold.
+    for (const unit of landing) {
+      if (unit.id.startsWith(RESUME_UNIT_PREFIX)) adoptLoadedDocument(unit);
+    }
   }
 
   for (const unit of incoming) {

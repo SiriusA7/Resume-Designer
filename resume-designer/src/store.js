@@ -397,6 +397,65 @@ function createStore() {
       this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
     },
     
+    // Adopt a résumé that arrived from another device as the LOADED variant's
+    // document, called by src/sync/syncModel.js when a `resume:` unit lands.
+    // Returns false when `variantId` is not the loaded variant, which tells the
+    // caller the storage write it has already done is the whole job.
+    //
+    // It exists for the same reason adoptHistory and adoptHistoryEntry do, one
+    // layer over: sync applies a fetched résumé by merging it into
+    // `resume-designer-data` ON DISK, but the loaded variant's document also
+    // lives HERE, in `data`, and the debounced save writes `data` back over
+    // that blob. So an applied résumé survived exactly until the next save,
+    // which wrote the stale in-memory document over it, stamped it with a fresh
+    // `modifiedAt`, and — this device legitimately holding the server's change
+    // tag, because the page had confirmed the apply — pushed it up as a clean,
+    // uncontested update. No conflict was raised and nothing was parked. Only
+    // the store can tell whether this is the variant on screen: currentVariantId
+    // is private to it.
+    //
+    // `isDirty` goes FALSE and no save is scheduled: what is adopted is exactly
+    // what the caller has just written to storage, so there is nothing left to
+    // persist, and saving would restamp the unit and send back what this device
+    // has only just received. A debounce already in flight cannot resurrect the
+    // replaced document either — scheduleSave's timer re-reads isDirty when it
+    // fires.
+    //
+    // The replaced document is not discarded silently. Every edit path records
+    // its result in `history` (pushHistory) BEFORE the save debounce runs, so
+    // the version this replaces is in that résumé's version history and one
+    // restore away — which is where "newer wins" says a loser belongs. The one
+    // writer that marks the store dirty without recording history is
+    // updateSilent, and what it writes is transient UI state by definition (an
+    // accordion's `_expanded`, the sort mode).
+    //
+    // `history` is otherwise left alone: this is not a step the user took here,
+    // and the step the OTHER device took arrives by itself as that variant's
+    // history unit (adoptHistory). historyIndex therefore keeps pointing at the
+    // entry it pointed at before, and `data` drifts from it — the same drift
+    // updateSilent produces, which setData is explicitly written to tolerate
+    // (see the comment there).
+    //
+    // 'change' is the event, because it is the one a whole-document replacement
+    // of the SAME variant already emits — undo, redo and restoreToEntry all use
+    // it — and every renderer hangs off it: the canvas (main.js), React
+    // (useResumeStore.js) and the iOS shell's document snapshot. 'dataLoaded'
+    // is the other candidate and it is the wrong one: subscribers read that as a
+    // DIFFERENT document backing the render (variant switch, import, restore)
+    // and act accordingly — ending a pending inline-change session, re-settling
+    // the chat threads for a variant that has not changed.
+    adoptDocument(variantId, document) {
+      if (!variantId || variantId !== currentVariantId) return false;
+      // Absence is never deletion: a unit carrying no document leaves the one
+      // on screen where it is rather than blanking the résumé.
+      if (!document || typeof document !== 'object') return false;
+
+      data = deepClone(migrateSectionAreas(document));
+      isDirty = false;
+      this.emit('change', data);
+      return true;
+    },
+
     // Insert a history entry this store did not produce — the losing side of a
     // sync conflict, parked by src/sync/syncModel.js so "newer wins" destroys
     // nothing. Returns false when `variantId` is not the loaded variant, which
