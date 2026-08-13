@@ -697,7 +697,8 @@ final class ShellModel: ObservableObject {
   /// Whether the person has turned iCloud sync on, as the page last reported
   /// it. `nil` until the first report, and that distinction is load-bearing:
   /// "this device already had sync on" and "they just turned it on" reach here
-  /// identically, and only the second uploads everything (see `syncPreference`).
+  /// identically, and only the second CREATES a full-upload debt. An existing
+  /// debt survives either one (see `syncPreference`).
   private var syncEnabled: Bool?
 
   /// The profile the page last activated with. The engine may not be running
@@ -714,9 +715,14 @@ final class ShellModel: ObservableObject {
   /// Unit ids named while the transport was down. See `sendSync`.
   private var syncDeferred: Set<String> = []
 
-  /// Set when sync is switched ON, cleared by the start that acts on it. See
-  /// `runStartSync` for why the upload is owed rather than sent from the toggle.
-  private var syncFullUploadOwed = false
+  /// Device-local transport bookkeeping, beside OPSync's own
+  /// `op-sync-state-<profile>` and `op-sync-records-<profile>` UserDefaults.
+  /// Per-profile because each profile is a different CloudKit zone, and outside
+  /// JS storage so neither sync nor a backup can carry one device's debt to
+  /// another.
+  private static func syncFullUploadKey(_ profileId: String) -> String {
+    "op-sync-full-upload-owed-\(profileId)"
+  }
 
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
   private var syncStart: Task<Void, Never>?
@@ -908,20 +914,11 @@ extension ShellModel {
       // turning sync off deletes the cloud copy. It does not, and deleting it
       // is a separate feature that is not built.
       //
-      // A start can be IN FLIGHT while this runs: the toggle is reachable during
-      // the account check a foreground or an activation kicked off. Stopping
-      // ahead of it would tear down an engine that is then built a moment later,
-      // and the switch would read off with the transport up. So it waits its
-      // turn, the same serialization `startSync` uses on itself — and the gate
-      // in `runStartSync` reads the `false` set just above, so a start that has
-      // not reached it yet gives up on its own.
-      await syncStart?.value
-      await sync.stop()
-      // The status line is about a transport that is now down; keeping the last
-      // account state or failure would leave it describing a machine that
-      // stopped running.
-      syncAccountState = nil
-      syncFailure = nil
+      // A start can be IN FLIGHT while this runs, and another start can be
+      // enqueued by a quick ON flick after this one. The stop joins that same
+      // chain: it lands after everything already queued and before everything
+      // queued later, including `stop()`'s `cancelOperations` suspension.
+      await stopSync()
       // Only a real change earns a line. The first report of "off" is this
       // device's stored answer arriving at launch, not a decision just made.
       if previous == true {
@@ -930,14 +927,16 @@ extension ShellModel {
       return
     }
 
-    // `previous == nil` is the first report of a preference that was already on
-    // — a launch, not a decision — and a launch must not put the whole device on
-    // the wire. See `runStartSync`.
-    syncFullUploadOwed = previous == false
     guard let syncProfileId else {
       // No document has come up yet. Its activation starts the engine, and it
       // will find the switch already on.
       return
+    }
+    // `previous == nil` is the first report of a preference that was already on
+    // — a launch, not a decision — so it does not CREATE a new debt. Any debt
+    // created before process death is already in UserDefaults and remains owed.
+    if previous == false {
+      setSyncFullUploadOwed(true, profileId: syncProfileId)
     }
     await startSync(profileId: syncProfileId)
   }
@@ -947,15 +946,43 @@ extension ShellModel {
   ///
   /// The switch can go off during that round trip, and a batch that arrives
   /// after it did must not be sent — this is the whole device, not one save.
-  /// A transport that is merely DOWN needs no guard here: `sendSync` holds the
-  /// ids for the next start, which is exactly what they are for.
+  /// A transport that is merely DOWN keeps the persisted debt: `sendSync` may
+  /// also hold the ids for the next start, but a profile switch drops that
+  /// process-local set because the ids belong to another zone. Re-collecting
+  /// from the persisted marker is what closes that hole.
   func sendAllUnits(_ unitIds: [String]) async {
     guard syncEnabled == true else {
       NSLog("[OPShell] iCloud sync is off; \(unitIds.count) unit(s) not sent")
       return
     }
+    guard let profileId = syncProfileId, syncFullUploadOwed(profileId: profileId) else {
+      NSLog("[OPShell] no full upload is owed; \(unitIds.count) collected unit(s) ignored")
+      return
+    }
     NSLog("[OPShell] offering \(unitIds.count) unit(s) after iCloud sync was switched on")
-    await sendSync(unitIds: unitIds)
+    let sent = await sendSync(unitIds: unitIds)
+    if sent {
+      setSyncFullUploadOwed(false, profileId: profileId)
+    }
+  }
+
+  /// Stop through the same ONE-AT-A-TIME chain as `startSync`. Capturing the
+  /// current tail before installing this task is what orders a later ON flick
+  /// behind the stop instead of letting its start enter `cancelOperations`.
+  private func stopSync() async {
+    let previous = syncStart
+    let task = Task { @MainActor [weak self] in
+      await previous?.value
+      await self?.sync.stop()
+      // The status line is about a transport that is now down; keeping the last
+      // account state or failure would leave it describing a stopped engine.
+      self?.syncAccountState = nil
+      self?.syncFailure = nil
+    }
+    syncStart = task
+    await task.value
+    // Only if nothing queued behind it, or this would drop a start still to run.
+    if syncStart == task { syncStart = nil }
   }
 
   /// Bring sync up for the profile the webview just loaded, and pull once.
@@ -1048,10 +1075,10 @@ extension ShellModel {
     //
     // OWED rather than sent from the toggle, because turning it on while signed
     // out starts nothing: the upload waits for whichever start does come up.
-    // Cleared here, so it happens once per switch-on rather than on every
-    // activation — the whole device on the wire at every launch is not this.
-    if syncFullUploadOwed {
-      syncFullUploadOwed = false
+    // Requesting the collection does NOT clear the debt. The process can die,
+    // the page can reload, or `sendSync` can defer these ids; only a successful
+    // send in `sendAllUnits` clears it.
+    if syncFullUploadOwed(profileId: profileId) {
       send("syncCollect")
     }
   }
@@ -1083,10 +1110,14 @@ extension ShellModel {
   /// The engine flushes EVERYTHING pending rather than just these, on purpose
   /// (OPSync.swift): a unit whose last send failed transiently is sitting in
   /// that queue and would otherwise wait for its own next edit.
-  func sendSync(unitIds: [String]) async {
-    guard !unitIds.isEmpty else { return }
+  @discardableResult
+  func sendSync(unitIds: [String]) async -> Bool {
+    // An answered collection can legitimately be empty. There is no transport
+    // work to do, and treating that as sent lets its persisted debt settle.
+    guard !unitIds.isEmpty else { return true }
     do {
       try await sync.send(unitIds: unitIds)
+      return true
     } catch {
       // Two things reach here: `notStarted` — signed out, or an edit that beat
       // the first activation — and anything `engine.sendChanges()` itself
@@ -1101,6 +1132,20 @@ extension ShellModel {
       // of being dropped.
       syncDeferred.formUnion(unitIds)
       NSLog("[OPShell] sync is down; \(unitIds.count) unit(s) held for the next start")
+      return false
+    }
+  }
+
+  private func syncFullUploadOwed(profileId: String) -> Bool {
+    UserDefaults.standard.bool(forKey: Self.syncFullUploadKey(profileId))
+  }
+
+  private func setSyncFullUploadOwed(_ owed: Bool, profileId: String) {
+    let key = Self.syncFullUploadKey(profileId)
+    if owed {
+      UserDefaults.standard.set(true, forKey: key)
+    } else {
+      UserDefaults.standard.removeObject(forKey: key)
     }
   }
 
@@ -1135,7 +1180,7 @@ extension ShellModel {
       guard syncFailure == nil else {
         return "Some changes haven't reached iCloud yet. Your resumes are still here."
       }
-      return "Connected to iCloud. New changes go up in the background."
+      return "iCloud sync is on. New changes go up in the background."
     case .signedOut:
       return "Sign in to iCloud in the Settings app to sync this device."
     case .restricted:
@@ -1362,7 +1407,8 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
         return
       }
       let unitIds = units.compactMap { $0["id"] as? String }
-      guard !unitIds.isEmpty else { return }
+      // An empty collection is still an answer: there is nothing to put on the
+      // wire, and `sendAllUnits` can settle the persisted full-upload debt.
       Task { @MainActor in await self.model?.sendAllUnits(unitIds) }
     default:
       guard let snapshot = try? JSONDecoder().decode(ShellSnapshot.self, from: data) else {
