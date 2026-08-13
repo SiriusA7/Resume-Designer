@@ -515,11 +515,24 @@ extension OPSyncEngine {
     switch change {
     case .signIn(let currentUser):
       let last = Self.lastAccount()
-      Self.rememberAccount(currentUser)
       // The same account coming back. Its tags went with the sign-out and its
       // records are exactly where this device left them, so there is nothing to
       // drop and nothing to re-offer.
-      guard last != currentUser.recordName else { break }
+      //
+      // THE ONLY BRANCH HERE THAT CAN BE SILENTLY WRONG, so it is the only one
+      // that has to earn its silence. A name is trusted only if it is a real
+      // per-account id: CloudKit spells "whoever is signed in" with the
+      // placeholder `CKCurrentUserDefaultName` elsewhere in its API, and if that
+      // ever reached here, signing out of one account and into another would
+      // compare placeholder to placeholder and suppress the re-offer — leaving
+      // the new account permanently missing everything not edited since. So a
+      // placeholder counts as unknown, and unknown re-offers.
+      let recognised = last != nil
+        && last != CKCurrentUserDefaultName
+        && currentUser.recordName != CKCurrentUserDefaultName
+        && last == currentUser.recordName
+      Self.rememberAccount(currentUser)
+      guard !recognised else { break }
       dropChangeTags()
       host?.syncDidSwitchAccounts()
     case .signOut(let previousUser):
@@ -528,11 +541,22 @@ extension OPSyncEngine {
       Self.rememberAccount(previousUser)
       dropChangeTags()
     case .switchAccounts(_, let currentUser):
-      Self.rememberAccount(currentUser)
+      // Deliberately does NOT consult the stored name: CloudKit is asserting the
+      // change, so this branch holds even if the record names turn out to carry
+      // nothing useful.
       dropChangeTags()
       host?.syncDidSwitchAccounts()
+      // AFTER the re-offer, not before. A crash between the two would otherwise
+      // leave the new name stored with no debt recorded, and the next launch
+      // would recognise the account and suppress. This order fails to a wasted
+      // upload instead of a missing one.
+      Self.rememberAccount(currentUser)
     @unknown default:
-      break
+      // A case that does not exist yet still changed something about the
+      // account, and `break` would neither drop the tags nor re-offer — the
+      // silent direction. Treated as a switch.
+      dropChangeTags()
+      host?.syncDidSwitchAccounts()
     }
   }
 
