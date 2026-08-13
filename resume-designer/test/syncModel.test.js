@@ -60,7 +60,7 @@ vi.mock('../src/appStorage.js', () => ({
 }));
 
 const {
-  collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler,
+  collectUnit, collectUnits, unitScopes, applyUnits, parkLoser, registerPersistedSaveHandler,
   registerEditingProbe, touchUnit, resolveConflict,
 } = await import('../src/sync/syncModel.js');
 // The résumé store, not the storage map above: parking into the LOADED
@@ -1546,6 +1546,23 @@ describe('unit scope', () => {
     for (const unit of units.filter((u) => u.id.startsWith('resume:'))) {
       expect(unit.scope).toBe('profile');
     }
+  });
+
+  it('answers by id exactly what the collection stamps on the unit', () => {
+    // The transport asks by id when it QUEUES a save and reads `scope` off the
+    // unit it collects. Two answers for one unit is a record saved into one zone
+    // and looked for in the other, so they are asserted against each other.
+    const units = collectUnits();
+    const scopes = unitScopes(units.map((unit) => unit.id));
+    expect(units.length).toBeGreaterThan(0);
+    for (const unit of units) expect(scopes[unit.id], unit.id).toBe(unit.scope);
+  });
+
+  it('calls an id in no shape it issues profile-scoped', () => {
+    expect(unitScopes(['nonsense', 'key:resume-designer-profiles'])).toEqual({
+      nonsense: 'profile',
+      'key:resume-designer-profiles': 'shared',
+    });
   });
 });
 

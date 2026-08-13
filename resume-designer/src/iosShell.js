@@ -1588,6 +1588,17 @@ export function initIOSShell(deps) {
       });
     },
     syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
+    // Which zone each named unit belongs in, asked when the transport QUEUES a
+    // save: a CloudKit record id carries its zone, and all Swift holds at that
+    // moment is the id it was handed. Answered here rather than derived there
+    // for the same reason a conflict is resolved here — what a unit id means is
+    // this side's knowledge. A JSON STRING in, an object out, like the two
+    // batch routes below.
+    syncScopes: ({ unitIds }) => {
+      const parsed = JSON.parse(String(unitIds ?? '[]'));
+      if (!Array.isArray(parsed)) throw new Error('syncScopes needs an array of unit ids');
+      return deps.unitScopes(parsed);
+    },
     // One of the two commands whose answer is a promise — `setSyncEnabled` is
     // the other, for the same durability reason — and both are asked for
     // through `callAsyncJavaScript` (see `dispatch.async`). A malformed batch

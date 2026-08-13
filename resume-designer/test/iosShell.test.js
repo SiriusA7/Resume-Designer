@@ -1072,6 +1072,27 @@ describe('the Design sheet commands', () => {
     expect(collectUnit).toHaveBeenCalledWith('resume:unknown');
   });
 
+  it('answers which zone each named unit belongs in, from the model', async () => {
+    const unitScopes = vi.fn(() => ({ 'key:resume-designer-profiles': 'shared' }));
+    const { send } = await mount({ unitScopes });
+
+    expect(send({
+      type: 'syncScopes', unitIds: '["key:resume-designer-profiles"]',
+    })).toEqual({ ok: true, result: { 'key:resume-designer-profiles': 'shared' } });
+    expect(unitScopes).toHaveBeenCalledWith(['key:resume-designer-profiles']);
+  });
+
+  it('refuses a zone lookup that is not an array of ids', async () => {
+    // The same contract the two batch routes have: a malformed request is a
+    // refusal, not an answer Swift could route a save on.
+    const unitScopes = vi.fn();
+    const { send } = await mount({ unitScopes });
+
+    expect(send({ type: 'syncScopes', unitIds: '{"id":"key:x"}' }).ok).toBe(false);
+    expect(send({ type: 'syncScopes', unitIds: 'not json' }).ok).toBe(false);
+    expect(unitScopes).not.toHaveBeenCalled();
+  });
+
   it('republishes after landing units, so an open sheet is not left on the old projection', async () => {
     // Every sheet projects on demand and nothing else re-reads it, so a landing
     // that replaced the job list or the application history would otherwise sit

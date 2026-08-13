@@ -1285,6 +1285,18 @@ extension ShellModel {
       return
     }
 
+    // THE SHARED ZONE FIRST, AND BEFORE ANYTHING GOES UP. It holds the profile
+    // registry, which is what a device that has just been installed reads to
+    // discover that this account already has workspaces — and that device is
+    // never a blank slate: init has already given it a starter workspace of its
+    // own, and it owes a full upload. Either send below would put that starter
+    // workspace on the server first, and after that nothing tells the two apart.
+    // So this one zone is pulled ahead of the drain rather than with the rest.
+    //
+    // Not fatal when it fails, like every other fetch here: the device runs on
+    // the registry it has and tries again at the next start.
+    try? await sync.fetchShared()
+
     // Anything this device still owes a send of goes up before the pull, so a
     // unit changed on both sides meets the conflict path rather than being
     // quietly overwritten by what arrives. That is also the only thing that can
@@ -1346,10 +1358,13 @@ extension ShellModel {
       try await sync.send(unitIds: unitIds)
       return true
     } catch {
-      // Two things reach here: `notStarted` — signed out, or an edit that beat
-      // the first activation — and anything `engine.sendChanges()` itself
-      // throws. Holding the ids is what the first needs and costs the second
-      // nothing: `send` queued those changes before it threw and
+      // Three things reach here, and two of them queued nothing at all before
+      // throwing: `notStarted` — signed out, or an edit that beat the first
+      // activation — and `scopeUnknown`, the page not saying which zone these
+      // units belong in, which is refused rather than routed on a guess. Holding
+      // the ids is the whole of what those two need. The third is anything
+      // `engine.sendChanges()` itself throws, and holding costs it nothing:
+      // `send` queued those changes before it threw and
       // `add(pendingRecordZoneChanges:)` deduplicates, so the next start
       // re-queues nothing that is already there.
       //
@@ -1721,6 +1736,35 @@ extension ShellModel: OPSyncHost {
       return nil
     }
     return unit
+  }
+
+  /// Which zone each named unit belongs in, answered by the model.
+  ///
+  /// Cheap on purpose — ids in, one word each out, no payload either way — since
+  /// it is asked once per send, at the moment the changes are queued. It is the
+  /// one thing about a unit that cannot wait for send time: a `CKRecord.ID`
+  /// carries its zone.
+  ///
+  /// Nothing is deferred here, unlike `syncUnit(withId:)`. A refusal fails the
+  /// whole `send`, and `sendSync` holds every id it was given for the next start
+  /// — which is the same set, reached one level up, without this side having to
+  /// guess which of the ids the transport had already queued.
+  func syncScopes(forUnitIds ids: [String]) async -> [String: String]? {
+    guard let data = try? JSONEncoder().encode(ids),
+          let json = String(data: data, encoding: .utf8) else {
+      NSLog("[OPShell] could not encode \(ids.count) unit id(s) for a zone lookup")
+      return nil
+    }
+    guard case .answered(let value) = await sendForResult("syncScopes", ["unitIds": json]),
+          let scopes = value as? [String: String] else {
+      // Every way of not knowing is the same refusal, and refusing is the safe
+      // direction: a shared unit saved into a profile zone is a registry the
+      // next clean device cannot find, and this is the feature that exists to
+      // let it find one.
+      NSLog("[OPShell] no usable zone answer for \(ids.count) unit id(s)")
+      return nil
+    }
+    return scopes
   }
 
   /// Units from another device, handed to the page to apply.

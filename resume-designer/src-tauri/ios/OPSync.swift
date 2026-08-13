@@ -113,6 +113,24 @@ struct SyncConflictOutcome: Equatable {
 /// so the decision never has to be revisited at the boundary.
 let opSyncAssetThreshold = 700 * 1024
 
+/// The zone holding units that describe the workspace SET rather than any one
+/// workspace. Its name is a fixed literal and never derived, so a device that
+/// knows nothing can still fetch it — that is the whole point. The profile
+/// registry lives here, and a clean install needs the registry to learn which
+/// profile zones exist at all.
+///
+/// It cannot collide with a profile zone: `generateProfileId()` returns
+/// `p` + base36 timestamp + suffix, so every profile zone name begins with `p`.
+/// It is not a reserved name either — CloudKit reserves the leading underscore,
+/// which this does not use.
+let opSharedZoneName = "opShared"
+
+/// The model's word for a unit that belongs in the zone above. The vocabulary is
+/// `keyScope`'s (src/sync/syncKeys.js); anything else — including no answer for
+/// an id at all — is profile-scoped, which is what every unit was before this
+/// zone existed.
+let opSharedScope = "shared"
+
 /// Whether sync may run — and when it may not, why.
 ///
 /// This was a `Bool`, and one bit could not carry the answer: `false` meant
@@ -170,10 +188,18 @@ struct OPSyncFailure: Equatable {
 /// ran. They are `throws` functions; this is what they throw.
 enum OPSyncError: Error, LocalizedError {
   case notStarted
+  /// The model could not be asked which zone these units belong in — the page is
+  /// gone, or still reloading. NOT the same as "they are all profile-scoped":
+  /// the shared zone exists so that a device which knows nothing can still find
+  /// the registry, and a registry saved into a profile zone is invisible to
+  /// exactly that device. Refusing costs a retry; guessing costs the feature.
+  /// The caller holds the ids for the next start, as it does for `notStarted`.
+  case scopeUnknown
 
   var errorDescription: String? {
     switch self {
     case .notStarted: return "Sync is not running."
+    case .scopeUnknown: return "The page did not say which zone these units belong in."
     }
   }
 }
@@ -197,6 +223,27 @@ protocol OPSyncHost: AnyObject {
   /// Returning nil drops the queued send. It never deletes anything: absence is
   /// not a deletion here, and the server keeps whatever it already holds.
   func syncUnit(withId id: String) async -> SyncUnit?
+
+  /// Which zone each of these units belongs in — `opSharedScope` or anything
+  /// else for the profile's own zone — keyed by unit id.
+  ///
+  /// ASKED, because the answer follows from what a unit IS and this file holds
+  /// no such knowledge. A `hasPrefix` on the id here would be the transport
+  /// reading a unit's meaning out of its name, which is the boundary the
+  /// conflict rule was moved across (see `SyncConflict`); `unitScopes`
+  /// (src/sync/syncModel.js) answers from the same `keyScope` that stamps the
+  /// unit when it is collected, so a unit cannot be queued into one zone and
+  /// built as if it belonged in the other.
+  ///
+  /// Asked at QUEUE time rather than at send time, unlike everything else about
+  /// a unit, because a `CKRecord.ID` carries its zone: by the time
+  /// `recordToSend` has the unit in hand the zone is already chosen.
+  ///
+  /// An id MISSING from the answer is profile-scoped. `nil` is not that — it is
+  /// the page not answering at all, and the send is refused rather than guessed,
+  /// because a registry that lands in a profile zone is one a clean device
+  /// cannot find.
+  func syncScopes(forUnitIds ids: [String]) async -> [String: String]?
 
   /// Units that arrived from another device.
   ///
@@ -296,6 +343,10 @@ final class OPSyncEngine {
   private var delegate: OPSyncDelegate?
   private var profileId: String?
   private var zoneID: CKRecordZone.ID?
+  /// `opSharedZoneName`'s zone, alongside the profile's for the whole life of an
+  /// engine session. Held rather than rebuilt at each use so the two zones are
+  /// always set and cleared together.
+  private var sharedZoneID: CKRecordZone.ID?
 
   /// The system fields — record id, zone, and the `recordChangeTag` — of every
   /// record this device has seen on the server.
@@ -350,8 +401,18 @@ final class OPSyncEngine {
     // delete. The zone name is the profile id, which is already a stable
     // identifier on disk.
     let zone = CKRecordZone(zoneName: profileId)
+    // And ONE zone for every profile, which is what a device that has never
+    // heard of this account's profiles can still name. See `opSharedZoneName`.
+    let sharedZone = CKRecordZone(zoneName: opSharedZoneName)
     self.profileId = profileId
     self.zoneID = zone.zoneID
+    self.sharedZoneID = sharedZone.zoneID
+    // Per profile even for the shared zone's records, because the map belongs to
+    // an ENGINE's conversation with the server and each profile runs its own.
+    // Two profiles therefore hold separate tags for the same shared record; the
+    // first save after a switch quotes none, meets the conflict path and unions.
+    // That costs a round trip and cannot lose anything, which is the trade every
+    // forfeited tag in this file makes.
     self.systemFields = Self.loadSystemFields(profileId: profileId)
 
     let delegate = OPSyncDelegate(owner: self)
@@ -365,11 +426,11 @@ final class OPSyncEngine {
     self.delegate = delegate
     self.engine = engine
 
-    // Saving a zone that already exists is a no-op, so this is queued on every
-    // start rather than tracked. It is the only thing that creates the zone, and
-    // the alternative — a "have I made it yet" flag — is a second piece of state
-    // that can disagree with the server.
-    engine.state.add(pendingDatabaseChanges: [.saveZone(zone)])
+    // Saving a zone that already exists is a no-op, so these are queued on every
+    // start rather than tracked. It is the only thing that creates either zone,
+    // and the alternative — a "have I made it yet" flag — is a second piece of
+    // state that can disagree with the server.
+    engine.state.add(pendingDatabaseChanges: [.saveZone(zone), .saveZone(sharedZone)])
 
     // Nothing staged for an earlier run can be uploaded now: every record is
     // rebuilt from `syncUnit(withId:)` at send time. Clearing the outbox here is
@@ -386,6 +447,7 @@ final class OPSyncEngine {
     delegate = nil
     profileId = nil
     zoneID = nil
+    sharedZoneID = nil
     systemFields = [:]
     systemFieldsDirty = false
   }
@@ -396,11 +458,24 @@ final class OPSyncEngine {
   /// unit whose last send failed for a transient reason was put back in the
   /// queue, and scoping to the ids named here would leave it sitting there until
   /// that same unit happened to be edited again.
+  ///
+  /// WHICH ZONE EACH UNIT GOES TO IS THE MODEL'S ANSWER, asked here because a
+  /// `CKRecord.ID` carries its zone and this is where the change is queued —
+  /// `recordToSend`, which finally has the unit itself, is already too late to
+  /// choose. Nothing about the id is inspected on this side; see `syncScopes`.
+  /// A refused answer refuses the whole send rather than routing on a guess.
   func send(unitIds: [String]) async throws {
-    guard let engine, let zoneID else { throw OPSyncError.notStarted }
+    guard let engine, let zoneID, let sharedZoneID else { throw OPSyncError.notStarted }
+    guard let scopes = await host?.syncScopes(forUnitIds: unitIds) else {
+      throw OPSyncError.scopeUnknown
+    }
     let changes = unitIds.map { id in
+      // No answer for an id is profile-scoped, which is what every unit was
+      // before the shared zone existed — including every unit a build older than
+      // that zone ever queued.
       CKSyncEngine.PendingRecordZoneChange.saveRecord(
-        CKRecord.ID(recordName: id, zoneID: zoneID)
+        CKRecord.ID(recordName: id,
+                    zoneID: scopes[id] == opSharedScope ? sharedZoneID : zoneID)
       )
     }
     engine.state.add(pendingRecordZoneChanges: changes)
@@ -415,6 +490,25 @@ final class OPSyncEngine {
   func fetch() async throws {
     guard let engine else { throw OPSyncError.notStarted }
     try await engine.fetchChanges()
+  }
+
+  /// Pull the SHARED zone, and only it.
+  ///
+  /// It exists for order, not for scope. The registry has to come down before
+  /// this device sends anything: a fresh install owes a full upload, and an
+  /// upload that went first would put its throwaway starter workspace on the
+  /// server before the merge had seen what is already there — after which
+  /// nothing distinguishes the two. The ordinary `fetch` cannot be that, because
+  /// the start path deliberately drains the outbox before pulling (see
+  /// `runStartSync` in OPShell.swift), and that drain is a send.
+  ///
+  /// The narrower scope survives `nextFetchChangesOptions`, which intersects
+  /// rather than replaces.
+  func fetchShared() async throws {
+    guard let engine, let sharedZoneID else { throw OPSyncError.notStarted }
+    try await engine.fetchChanges(
+      CKSyncEngine.FetchChangesOptions(scope: .zoneIDs([sharedZoneID]))
+    )
   }
 }
 
@@ -447,15 +541,33 @@ private final class OPSyncDelegate: CKSyncEngineDelegate {
   func nextFetchChangesOptions(
     _ context: CKSyncEngine.FetchChangesContext, syncEngine: CKSyncEngine
   ) async -> CKSyncEngine.FetchChangesOptions {
-    // Narrowed to this profile's zone. The private database holds a zone per
-    // profile, and this engine's persisted state carries only this profile's
-    // change tokens — so fetching another profile's zone here would advance a
-    // token for records that are then dropped on the floor, which is the "pull
-    // advanced past records it discarded" bug one level up. Another profile's
-    // zone is fetched by another profile's engine, from its own state.
-    guard let zoneID = owner?.currentZoneID else { return context.options }
+    // Narrowed to the zones this device actually handles: this profile's, and
+    // the shared one. The private database holds a zone per profile, and this
+    // engine's persisted state carries only this profile's change tokens — so
+    // fetching ANOTHER profile's zone here would advance a token for records
+    // that are then dropped on the floor, which is the "pull advanced past
+    // records it discarded" bug one level up. That reasoning is untouched by the
+    // shared zone joining the scope: its records are genuinely handled, landing
+    // through the same `deliver` every other unit does, so its token never
+    // advances past anything discarded either. Another profile's zone is still
+    // fetched by another profile's engine, from its own state.
+    //
+    // INTERSECTED with what was asked for rather than replacing it, so a caller
+    // that wanted LESS keeps it: `fetchShared` pulls the registry on its own,
+    // ahead of the first upload, and handing back a widened scope would quietly
+    // undo that. A zone outside these two is dropped from the scope either way.
+    //
+    // An EMPTY intersection falls back to both zones, because "no zones" is not
+    // a scope CloudKit can be handed: `CKSyncEngineFetchChangesScope` documents
+    // a nil zone-id set as meaning EVERY zone, and an empty one is too close to
+    // that to bet the invariant above on. It is unreachable from this file —
+    // the only narrowed ask names a zone that is in this list — and a request
+    // naming none of them gets exactly the answer this delegate gave before it
+    // honoured a narrower ask at all.
+    guard let zoneIDs = owner?.currentZoneIDs, !zoneIDs.isEmpty else { return context.options }
+    let asked = zoneIDs.filter { context.options.scope.contains($0) }
     var options = context.options
-    options.scope = .zoneIDs([zoneID])
+    options.scope = .zoneIDs(asked.isEmpty ? zoneIDs : asked)
     return options
   }
 }
@@ -463,7 +575,9 @@ private final class OPSyncDelegate: CKSyncEngineDelegate {
 // MARK: - Events
 
 extension OPSyncEngine {
-  fileprivate var currentZoneID: CKRecordZone.ID? { zoneID }
+  /// Every zone this engine session handles. Empty when it is not running,
+  /// which is the one case `nextFetchChangesOptions` must not narrow on.
+  fileprivate var currentZoneIDs: [CKRecordZone.ID] { [zoneID, sharedZoneID].compactMap { $0 } }
 
   /// Async because delivering fetched records is: `deliver` waits for the page
   /// to say whether it applied them, and the answer decides what happens to
@@ -813,9 +927,13 @@ extension OPSyncEngine {
         // sync. Recreate it and send again. This is NOT "the server is empty so
         // drop the local copy" — it is the opposite, the local copy is the only
         // one left.
-        if let zoneID {
-          engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-        }
+        //
+        // THE RECORD'S OWN ZONE, not the profile's: this device writes to two of
+        // them now, and recreating the profile zone for a shared record's
+        // failure would retry against a zone that is still missing, for ever.
+        engine.state.add(
+          pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: recordID.zoneID))]
+        )
         forget(recordID)
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
@@ -1334,6 +1452,13 @@ extension OPSyncEngine {
     coder.requiresSecureCoding = true
     let record = CKRecord(coder: coder)
     coder.finishDecoding()
+    // THE ZONE HAS TO MATCH, because the map is keyed by record NAME alone and a
+    // unit's zone can change under it: the registry used to be saved into the
+    // active profile's zone, so every device upgrading into the shared zone
+    // still holds a tag naming the old one. Handing that record back would build
+    // the save against the wrong zone entirely. Answering nil instead makes it a
+    // first save into the new zone, which is exactly what it is.
+    guard record?.recordID == recordID else { return nil }
     return record
   }
 }

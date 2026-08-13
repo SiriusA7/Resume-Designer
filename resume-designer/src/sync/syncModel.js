@@ -827,6 +827,41 @@ export function collectUnit(unitId) {
 }
 
 /**
+ * Which CloudKit zone each named unit belongs in — `'shared'` or `'profile'`,
+ * keyed by unit id.
+ *
+ * Asked by the transport when it QUEUES a save, and asked by ID because that is
+ * all it has at that moment: a `CKRecord.ID` carries its zone, so the zone is
+ * fixed when the change is queued rather than later, when the unit itself is
+ * finally in hand — and what names a unit for send is an id, from `syncDirty`,
+ * from the deferred set a failed send holds, or from a conflict re-offered at
+ * the next start. The `scope` each collector stamps on a unit is the same answer
+ * for the one path that carries whole units.
+ *
+ * ASKED rather than worked out in Swift. Which zone a unit belongs in follows
+ * from what the unit IS, and no id-shaped rule on the native side is anything
+ * but a second copy of that knowledge, kept in the one file that is not supposed
+ * to hold any (see OPSync.swift's header, and the boundary correction that
+ * moved conflict resolution here).
+ *
+ * Every answer comes from `keyScope`, the same one `collectKeyUnit` stamps on
+ * the unit it builds, so a unit cannot be queued into one zone and collected as
+ * if it belonged in the other. An id in no shape this module issues is
+ * profile-scoped, which is what every unit was before the shared zone existed.
+ */
+export function unitScopes(unitIds) {
+  const scopes = {};
+  if (!Array.isArray(unitIds)) return scopes;
+  for (const unitId of unitIds) {
+    if (typeof unitId !== 'string') continue;
+    scopes[unitId] = unitId.startsWith(KEY_UNIT_PREFIX)
+      ? keyScope(unitId.slice(KEY_UNIT_PREFIX.length))
+      : 'profile';
+  }
+  return scopes;
+}
+
+/**
  * Land units that arrived from another device.
  *
  * Résumé and `data:` units are merged into the blob so `currentVariantId` —
