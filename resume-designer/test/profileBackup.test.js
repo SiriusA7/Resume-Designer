@@ -655,7 +655,11 @@ describe('deleteProfileDurably', () => {
     backend.delete.mockImplementation(async (key) => { backend.files.delete(key); });
     await expect(deleteProfileDurably('b')).resolves.toBe(true);
     expect(backend.files.has('resume-p--b--resume-designer-data')).toBe(false);
-    expect(JSON.parse(backend.files.get(PROFILES_KEY)).map((p) => p.id)).toEqual(['a']);
+    // Tombstoned, not dropped: b's entry stays in the registry (deletedAt set)
+    // so a union merge can't resurrect it — it just no longer lists.
+    const registry = JSON.parse(backend.files.get(PROFILES_KEY));
+    expect(registry.map((p) => p.id)).toEqual(['a', 'b']);
+    expect(registry.find((p) => p.id === 'b').deletedAt).toEqual(expect.any(String));
   });
 });
 

@@ -7,7 +7,7 @@ import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 
 import { completeOnboarding, shouldShowOnboarding } from '../../onboarding.js';
-import { loadRegistry } from '../../profiles.js';
+import { listProfiles } from '../../profiles.js';
 import {
   INTERVIEW_QUESTIONS,
   validateOpenRouterKey,
@@ -106,7 +106,7 @@ export default function OnboardingWizard() {
     // on the API-key step — no skip, no cancel, only a reload. Snapshot at open
     // so the affordance doesn't pop in mid-wizard (completeOnboarding fires at
     // the end).
-    setCanDismiss(skipApiKeyStep || !shouldShowOnboarding() || (loadRegistry()?.length ?? 0) > 1);
+    setCanDismiss(skipApiKeyStep || !shouldShowOnboarding() || listProfiles().length > 1);
 
     setIsNewResumeMode(skipApiKeyStep);
     setStep(skipApiKeyStep ? 1 : 0);

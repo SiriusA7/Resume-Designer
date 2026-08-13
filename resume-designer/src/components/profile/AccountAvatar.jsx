@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 
 import {
-  loadRegistry, getActiveProfileId, isAdoptionPending, PROFILES_CHANGED_EVENT,
+  listProfiles, getActiveProfileId, isAdoptionPending, PROFILES_CHANGED_EVENT,
 } from '../../profiles.js';
 import { openSettings } from '../../settingsModal.js';
 import { profileInitials } from '../../accountStats.js';
@@ -28,7 +28,7 @@ export function AccountAvatar() {
     return () => window.removeEventListener(PROFILES_CHANGED_EVENT, onChange);
   }, []);
 
-  const registry = loadRegistry() || [];
+  const registry = listProfiles();
   const active = registry.find((p) => p.id === getActiveProfileId());
   if (!active || registry.length === 0 || isAdoptionPending()) return null;
 

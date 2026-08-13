@@ -16,7 +16,7 @@ import { appStorage } from '../../appStorage.js';
 import { store } from '../../store.js';
 import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
-  loadRegistry, getActiveProfileId, activateProfileDurably, createProfile,
+  listProfiles, getActiveProfileId, activateProfileDurably, createProfile,
   renameProfileDurably, deleteProfile, deleteProfileDurably, exportProfileBackup,
   importProfileBackup, isAdoptionPending, PROFILES_CHANGED_EVENT,
 } from '../../profiles.js';
@@ -73,7 +73,7 @@ async function flushActiveEdits() {
 }
 
 export function AccountSection() {
-  const [registry, setRegistry] = useState(() => loadRegistry() || []);
+  const [registry, setRegistry] = useState(() => listProfiles());
   const [editingId, setEditingId] = useState(null);
   const [draftName, setDraftName] = useState('');
   const [adding, setAdding] = useState(false);
@@ -89,7 +89,7 @@ export function AccountSection() {
   const adopting = isAdoptionPending();
 
   const refresh = () => {
-    setRegistry(loadRegistry() || []);
+    setRegistry(listProfiles());
     // Notify header chrome that reads the registry independently (AccountAvatar)
     // so a renamed active profile updates its initials/label without a reload.
     window.dispatchEvent(new CustomEvent(PROFILES_CHANGED_EVENT));

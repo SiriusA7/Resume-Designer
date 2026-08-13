@@ -4,8 +4,8 @@ import {
 } from '../src/appStorage.js';
 import { __resetSecretStoreForTests, initSecretStore, getSecret } from '../src/secretStore.js';
 import {
-  loadRegistry, getActiveProfileId, setActiveProfile,
-  createProfile, renameProfile, deleteProfile,
+  loadRegistry, listProfiles, getActiveProfileId, setActiveProfile,
+  createProfile, renameProfile, deleteProfile, exportProfileBackup,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
   activateProfileMappingForPrint,
 } from '../src/profiles.js';
@@ -123,8 +123,65 @@ describe('registry CRUD', () => {
     expect(() => deleteProfile(a.id)).toThrow(/active/i);
     deleteProfile(b.id);
     expect(appStorage.keys().some((k) => k.includes(b.id))).toBe(false);
-    expect(loadRegistry()).toHaveLength(1);
+    // Tombstoned, not dropped: the raw registry still carries b's entry (a
+    // union merge would otherwise resurrect it), but it is hidden from the
+    // listing a person sees.
+    expect(loadRegistry()).toHaveLength(2);
+    expect(loadRegistry().find((p) => p.id === b.id).deletedAt).toEqual(expect.any(String));
+    expect(listProfiles()).toHaveLength(1);
     expect(() => deleteProfile(a.id)).toThrow(); // last remaining
+  });
+});
+
+describe('registry entry stamps', () => {
+  it('stamps updatedAt on rename', () => {
+    const created = createProfile({ name: 'Work' });
+    expect(created.updatedAt).toBeUndefined();
+    renameProfile(created.id, { name: 'Renamed' });
+    const entry = loadRegistry().find((p) => p.id === created.id);
+    expect(entry.name).toBe('Renamed');
+    expect(typeof entry.updatedAt).toBe('string');
+  });
+
+  it('tombstones on delete instead of dropping the entry', () => {
+    createProfile({ name: 'Keep' }); // deleteProfile refuses to drop the last profile
+    const created = createProfile({ name: 'Doomed' });
+    deleteProfile(created.id);
+    const entry = loadRegistry().find((p) => p.id === created.id);
+    expect(entry).toBeDefined();
+    expect(typeof entry.deletedAt).toBe('string');
+    expect(typeof entry.updatedAt).toBe('string');
+  });
+
+  it('hides tombstoned profiles from the listing', () => {
+    const kept = createProfile({ name: 'Kept' });
+    const gone = createProfile({ name: 'Gone' });
+    deleteProfile(gone.id);
+    const ids = listProfiles().map((p) => p.id);
+    expect(ids).toContain(kept.id);
+    expect(ids).not.toContain(gone.id);
+  });
+
+  // Regression: before tombstoning, a deleted profile's entry was gone from
+  // the registry outright, so setActiveProfile could never target it. Now the
+  // entry still physically exists (deletedAt set) — validation must check
+  // listProfiles(), not the raw registry, or a person could switch back into
+  // a workspace they just deleted.
+  it('setActiveProfile refuses a tombstoned profile', () => {
+    const { b } = seedRegistry(); // a is active, b is not
+    deleteProfile(b.id);
+    expect(() => setActiveProfile(b.id)).toThrow();
+  });
+
+  // Same regression, for export: a tombstoned entry's physical keys are
+  // already gone, so finding it in the raw registry would silently produce
+  // an empty backup instead of the "unknown profile" error a stale id
+  // deserves.
+  it('exportProfileBackup refuses a tombstoned profile', () => {
+    const { b } = seedRegistry();
+    deleteProfile(b.id);
+    // Deliberately NOT async — an unknown id throws synchronously.
+    expect(() => exportProfileBackup(b.id)).toThrow(/unknown profile/i);
   });
 });
 

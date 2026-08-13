@@ -85,6 +85,15 @@ function saveRegistry(registry) {
   appStorage.setItem(PROFILES_KEY, JSON.stringify(registry));
 }
 
+/**
+ * The profiles a person should see. `loadRegistry` returns the raw array,
+ * tombstones included, because the merge needs them; every UI and every
+ * iteration over "the profiles" wants this instead.
+ */
+export function listProfiles() {
+  return (loadRegistry() || []).filter((p) => !p?.deletedAt);
+}
+
 // Adoption is a two-phase move, split so that NO unprefixed source is ever
 // deleted while profile mapping is inactive. That ordering is load-bearing:
 // while adoption is incomplete the app runs mapping-OFF and reads/writes the
@@ -502,8 +511,10 @@ export function getActiveProfileId() {
 }
 
 export function setActiveProfile(id) {
-  const registry = loadRegistry() || [];
-  if (!registry.some((p) => p.id === id)) throw new Error(`Unknown profile id: ${id}`);
+  // listProfiles(), not loadRegistry(): a tombstoned entry is still physically
+  // present in the raw registry (see deleteProfile), so validating against the
+  // raw array would let a person switch into a workspace they just deleted.
+  if (!listProfiles().some((p) => p.id === id)) throw new Error(`Unknown profile id: ${id}`);
   appStorage.setItem(ACTIVE_PROFILE_KEY, id);
 }
 
@@ -546,7 +557,14 @@ export function createProfile({ name, emoji = '🙂' }) {
 export function renameProfile(id, { name, emoji }) {
   const registry = loadRegistry() || [];
   saveRegistry(registry.map((p) => (p.id === id
-    ? { ...p, ...(name !== undefined ? { name } : {}), ...(emoji !== undefined ? { emoji } : {}) }
+    ? {
+      ...p,
+      ...(name !== undefined ? { name } : {}),
+      ...(emoji !== undefined ? { emoji } : {}),
+      // mergeRegistry settles a collision on this stamp. Without it a rename on
+      // one device loses to an unstamped entry on another.
+      updatedAt: new Date().toISOString(),
+    }
     : p)));
 }
 
@@ -575,7 +593,15 @@ export function deleteProfile(id) {
   for (const k of appStorage.keys()) {
     if (k && k.startsWith(prefix)) appStorage.removeItem(k);
   }
-  saveRegistry(registry.filter((p) => p.id !== id));
+  // TOMBSTONE, not a drop. Under a union merge a dropped entry is restored by
+  // the other device's copy on the next sync, and the workspace reappears
+  // forever. This is metadata: it hides a listing and destroys no content —
+  // the profile's résumés are removed locally by the code above exactly as
+  // before, and its CloudKit zone is left alone.
+  const stamp = new Date().toISOString();
+  saveRegistry(registry.map((p) => (p.id === id
+    ? { ...p, deletedAt: stamp, updatedAt: stamp }
+    : p)));
 }
 
 /**
@@ -608,8 +634,10 @@ export async function deleteProfileDurably(id) {
 // Deliberately NOT async: an unknown id throws synchronously (programmer
 // error), while the returned promise covers only the download itself.
 export function exportProfileBackup(profileId, filename) {
-  const registry = loadRegistry() || [];
-  const profile = registry.find((p) => p.id === profileId);
+  // listProfiles(): a tombstoned entry's physical keys are already gone (see
+  // deleteProfile), so finding it in the raw registry would silently produce
+  // an empty export instead of the "unknown profile" error a stale id should get.
+  const profile = listProfiles().find((p) => p.id === profileId);
   if (!profile) throw new Error(`Unknown profile id: ${profileId}`);
   const prefix = physicalKey(profileId, '');
   const keys = {};
