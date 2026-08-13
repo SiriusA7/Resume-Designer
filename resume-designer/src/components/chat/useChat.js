@@ -1133,22 +1133,24 @@ Let's begin!`);
   // `isBusy` is the chat's own in-flight signal, not a flag invented for sync: a
   // streamed reply lives only in this state until it commits into the thread
   // list, so replacing that list mid-reply drops it with nothing holding it.
-  useEffect(() => {
-    registerThreadHolder({
-      isBusy: () => loadingRef.current || abortRef.current !== null,
-      adopt: () => {
-        const next = migrateThreads(loadThreads().threads);
-        const keep = currentThreadIdRef.current;
-        const cid = keep && next.some((t) => t.id === keep)
-          ? keep
-          : (pickCurrentThreadId(next, getCurrentId()) ?? next[0]?.id ?? null);
-        setThreads(next);
-        setCurrentThreadId(cid);
-        setMessages(next.find((t) => t.id === cid)?.messages || []);
-      },
-    });
-    return () => registerThreadHolder(null);
-  }, [setThreads, setCurrentThreadId, setMessages, loadingRef, currentThreadIdRef]);
+  //
+  // The cleanup is the deregistration this registration handed back, not an
+  // unconditional clear: it releases the slot only while THIS holder still owns
+  // it, so a second holder mounting before this one unmounts is not deregistered
+  // by its predecessor's teardown.
+  useEffect(() => registerThreadHolder({
+    isBusy: () => loadingRef.current || abortRef.current !== null,
+    adopt: () => {
+      const next = migrateThreads(loadThreads().threads);
+      const keep = currentThreadIdRef.current;
+      const cid = keep && next.some((t) => t.id === keep)
+        ? keep
+        : (pickCurrentThreadId(next, getCurrentId()) ?? next[0]?.id ?? null);
+      setThreads(next);
+      setCurrentThreadId(cid);
+      setMessages(next.find((t) => t.id === cid)?.messages || []);
+    },
+  }), [setThreads, setCurrentThreadId, setMessages, loadingRef, currentThreadIdRef]);
 
   useEffect(() => {
     const onSettings = () => refresh();

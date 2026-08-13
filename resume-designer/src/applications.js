@@ -54,17 +54,16 @@ export function getApplicationsSnapshot() {
 }
 
 /**
- * The stored list, or `null` when nothing readable is there. Self-heals an
- * id-keyed object map to the array shape this module requires (same legacy
- * hazard jobDescriptions hit).
+ * The list inside a stored or fetched value, or `null` when it is not one.
+ * Self-heals an id-keyed object map to the array shape this module requires
+ * (same legacy hazard jobDescriptions hit).
  *
- * `null` rather than `[]` for an unreadable value, because the two callers
- * below need opposite answers to it: a BOOT with nothing stored starts empty,
- * while an ADOPTION that cannot read what it was told about must keep the list
- * it has — see adoptStoredApplications.
+ * `null` rather than `[]` for an unreadable value, because the callers below
+ * need opposite answers to it: a BOOT with nothing stored starts empty, while
+ * an ADOPTION that cannot read what it was told about must keep the list it
+ * has — see adoptStoredApplications.
  */
-function readStoredApplications() {
-  const raw = appStorage.getItem(STORAGE_KEY);
+function applicationsIn(raw) {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -74,6 +73,26 @@ function readStoredApplications() {
     console.error('Failed to load applications:', e);
     return null;
   }
+}
+
+function readStoredApplications() {
+  return applicationsIn(appStorage.getItem(STORAGE_KEY));
+}
+
+/**
+ * Whether a fetched payload is one this module could adopt — asked by the sync
+ * layer BEFORE it writes the key (src/sync/syncModel.js, KEY_OWNERS).
+ *
+ * The same reader `adoptStoredApplications` uses, so the two cannot disagree
+ * about what "readable" means. That agreement is the whole point: a payload the
+ * adoption refuses but the write accepted sits on disk as garbage, and the next
+ * boot's `initApplications` degrades it to `[]` — which the first local save
+ * then persists and pushes up as a clean, uncontested update. Refusing before
+ * the write is what keeps absence from becoming deletion on DISK as well as in
+ * memory.
+ */
+export function landsAsApplications(payload) {
+  return applicationsIn(payload) !== null;
 }
 
 /**

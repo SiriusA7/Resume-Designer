@@ -12,6 +12,7 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { getUserProfile, saveUserProfile } from '../../persistence.js';
+import { registerUserProfileHolder } from '../../userProfileHolder.js';
 import { profileToMarkdown } from '../../profileMarkdown.js';
 import { completeProfile, parseProfileImport } from '../../profileBridge.js';
 import { ProfileTabContent } from './ProfileTabs.jsx';
@@ -105,6 +106,26 @@ export default function ProfileDialog() {
 
   // Save + remount the tab so a structural change (add/delete) shows.
   const refresh = useCallback(() => { scheduleSave(); bump(); }, [scheduleSave]);
+
+  // This dialog holds the app's ONE live copy of the user profile, and it is
+  // mounted for the app's whole lifetime — so a profile sync landed in storage
+  // was reverted by the next keystroke's debounced save, which wrote the
+  // open-time snapshot back over the whole field and pushed it up as a clean,
+  // uncontested update (see src/userProfileHolder.js). Register as its holder
+  // while mounted, the same way useChat does for the thread list.
+  //
+  // `adopt` rebuilds the working copy from storage — which is exactly what the
+  // caller just wrote — and bumps so the uncontrolled inputs remount onto it. It
+  // deliberately does NOT save: a write-back would restamp the unit and send
+  // this device's copy of what it only just received.
+  //
+  // `isBusy` is the dialog's own in-flight signal rather than a flag invented
+  // for sync: an edit lives only in `profileRef` until the debounce fires, and a
+  // fired-and-failed save is still in flight because flush() has to retry it.
+  useEffect(() => registerUserProfileHolder({
+    isBusy: () => saveTimeoutRef.current !== null || failedSaveRef.current,
+    adopt: () => { profileRef.current = buildWorkingCopy(); bump(); },
+  }), []);
 
   useEffect(() => {
     const onOpen = () => { profileRef.current = buildWorkingCopy(); bump(); setOpen(true); };

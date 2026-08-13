@@ -38,6 +38,7 @@ export function subscribeJobDescriptions(callback) {
  * it — see adoptStoredJobDescriptions.
  */
 function parseList(raw) {
+  if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return parsed;
@@ -46,6 +47,22 @@ function parseList(raw) {
     console.error('Failed to load job descriptions:', e);
     return null;
   }
+}
+
+/**
+ * Whether a fetched payload is one this module could adopt — asked by the sync
+ * layer BEFORE it writes the key (src/sync/syncModel.js, KEY_OWNERS).
+ *
+ * The same reader `adoptStoredJobDescriptions` uses, so the two cannot disagree
+ * about what "readable" means. That agreement is the whole point: a payload the
+ * adoption refuses but the write accepted sits on disk as garbage, and the next
+ * boot's `initJobDescriptions` degrades it to `[]` — which the first local save
+ * then persists and pushes up as a clean, uncontested update. Refusing before
+ * the write is what keeps absence from becoming deletion on DISK as well as in
+ * memory.
+ */
+export function landsAsJobDescriptions(payload) {
+  return parseList(payload) !== null;
 }
 
 /**
@@ -78,8 +95,7 @@ export function initJobDescriptions() {
  * disk, so the bad bytes are corrected rather than inherited.
  */
 export function adoptStoredJobDescriptions() {
-  const stored = appStorage.getItem(STORAGE_KEY);
-  const list = stored ? parseList(stored) : null;
+  const list = parseList(appStorage.getItem(STORAGE_KEY));
   if (!list) return;
   jobDescriptions = list;
   subscribers.forEach((cb) => cb());

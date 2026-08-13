@@ -54,14 +54,21 @@ const {
 const { store: resumeStore } = await import('../src/store.js');
 const {
   initPersistence, setPersistedSaveHandler, setSyncDirtyNotifier,
+  getUserProfile, saveUserProfile,
 } = await import('../src/persistence.js');
-// The three modules that hold a whole synced key in memory. Imported after the
+// The four modules that hold a whole synced key in memory. Imported after the
 // mock like everything else here, so their own appStorage reads go through the
 // same disk map.
 const {
   initApplications, addApplication, getAllApplications,
   subscribeApplications, getApplicationsSnapshot,
 } = await import('../src/applications.js');
+const {
+  initLearnedAnswers, saveLearnedAnswer, getAllLearnedAnswers,
+} = await import('../src/learnedAnswers.js');
+// The fifth holder, and the only one whose unit is a FIELD of the data blob
+// rather than a key of its own: `data:userProfile`, held by ProfileDialog.
+const { registerUserProfileHolder } = await import('../src/userProfileHolder.js');
 const {
   initJobDescriptions, addJobDescription, getAllJobDescriptions, subscribeJobDescriptions,
 } = await import('../src/jobDescriptions.js');
@@ -93,6 +100,8 @@ beforeEach(() => {
   // Nobody holds the thread list unless a test says so — the app registers
   // useChat from ChatPanel, and this file mounts no React tree.
   registerThreadHolder(null);
+  // Same for the profile working copy, whose holder is ProfileDialog.
+  registerUserProfileHolder(null);
 });
 
 // A résumé unit's payload is the whole variant RECORD, exactly as splitData
@@ -758,7 +767,7 @@ describe('applyUnits and the variant the app has OPEN', () => {
 // reverts anything sync landed underneath it — and, the transport legitimately
 // holding the record's change tag by then, pushes the revert back as a clean
 // uncontested update that destroys the other device's content with no conflict
-// raised. Three modules do it, in three different ownership shapes.
+// raised. Four modules do it, in four different ownership shapes.
 describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
   const keyUnit = (key, payload, modifiedAt = AT) => ({
     id: `key:${key}`, kind: 'plain', payload, modifiedAt,
@@ -767,8 +776,14 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
   const APPS_KEY = 'resume-designer-applications';
   const JOBS_KEY = 'resume-designer-job-descriptions';
   const THREADS_KEY = 'resume-designer-chat-threads';
+  const LEARNED_KEY = 'resume-designer-learned-answers';
 
   const storedIds = (key) => JSON.parse(disk.get(physical(key))).map((r) => r.id);
+  // The same, but reading through an unreadable value rather than throwing on
+  // it: the whole point of the refusal tests below is that the key USED to end
+  // up holding the literal bytes `null`, and `expected undefined to deeply equal
+  // [...]` says that far more clearly than a TypeError from `.map`.
+  const storedIdsOrNothing = (key) => JSON.parse(disk.get(physical(key)))?.map((r) => r.id);
 
   describe('applications — a cache with its own React subscribers', () => {
     it('survives the next local write through the module', () => {
@@ -812,6 +827,39 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
 
       expect(getAllApplications().map((a) => a.id)).toEqual([mine]);
     });
+
+    it('never lets a unit it cannot read reach the KEY — the restart chain', () => {
+      // The assertion above is about MEMORY, and memory was never where the
+      // destruction happened. The unreadable payload was still WRITTEN and still
+      // counted: the cache kept the good list while the key held `null`, which
+      // survives exactly as long as the process does. Restart before the next
+      // local write and initApplications reads the garbage, degrades it to `[]`,
+      // and the first save afterwards persists that empty list and pushes it up
+      // as a clean, uncontested update.
+      initApplications();
+      addApplication({ variantId: 'v-1', variantName: 'Mine' });
+      const mine = getAllApplications()[0].id;
+
+      const { applied } = applyUnits([keyUnit(APPS_KEY, 'null')]);
+
+      // Short count: the transport forfeits the change tag and re-offers it.
+      expect(applied).toBe(0);
+      expect(storedIdsOrNothing(APPS_KEY)).toEqual([mine]);
+      // The restart the in-memory refusal could not survive.
+      expect(initApplications().map((a) => a.id)).toEqual([mine]);
+    });
+
+    it('still lands an EXPLICIT empty list, which is a deletion someone made', () => {
+      // The guard above tells absence from deletion; it must not refuse the
+      // second. An empty array is what the other device's list actually is.
+      initApplications();
+      addApplication({ variantId: 'v-1', variantName: 'Mine' });
+
+      expect(applyUnits([keyUnit(APPS_KEY, '[]')]).applied).toBe(1);
+
+      expect(getAllApplications()).toEqual([]);
+      expect(disk.get(physical(APPS_KEY))).toBe('[]');
+    });
   });
 
   describe('job descriptions — a cache the UI re-reads, with no second copy', () => {
@@ -851,6 +899,20 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       applyUnits([keyUnit(JOBS_KEY, 'null')]);
 
       expect(getAllJobDescriptions().map((j) => j.id)).toEqual([mine]);
+    });
+
+    it('never lets a unit it cannot read reach the KEY — the restart chain', () => {
+      // As above: the cache surviving is not the same as the disk surviving,
+      // and initJobDescriptions degrades the same `null` to an empty list.
+      initJobDescriptions();
+      addJobDescription({ title: 'Mine', company: 'Mine', description: 'x' });
+      const mine = getAllJobDescriptions()[0].id;
+
+      const { applied } = applyUnits([keyUnit(JOBS_KEY, 'null')]);
+
+      expect(applied).toBe(0);
+      expect(storedIdsOrNothing(JOBS_KEY)).toEqual([mine]);
+      expect(initJobDescriptions().map((j) => j.id)).toEqual([mine]);
     });
   });
 
@@ -921,6 +983,169 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
 
       expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
       expect(loadThreads().threads.map((t) => t.id)).toEqual(['thread-iphone']);
+    });
+
+    it('never lets a unit it cannot read reach the KEY', () => {
+      // The worst of the four, and the only one that needs no restart to bite:
+      // loadThreads does not merely fall back to an empty list on garbage, it
+      // MANUFACTURES a single fresh 'New Chat'. So a `null` allowed onto the key
+      // is adopted as an empty conversation history, and the next send persists
+      // that and pushes it up as a clean, uncontested update.
+      const chat = liveChat();
+
+      const { applied } = applyUnits([keyUnit(THREADS_KEY, 'null')]);
+
+      expect(applied).toBe(0);
+      expect(storedIdsOrNothing(THREADS_KEY)).toEqual(['thread-mine']);
+      expect(loadThreads().threads.map((t) => t.id)).toEqual(['thread-mine']);
+      expect(chat.threads.map((t) => t.id)).toEqual(['thread-mine']);
+    });
+
+    it('does not let a departing holder deregister its successor', () => {
+      // One call site today, so the unconditional clear this replaces was
+      // correct today — and silently stopped being correct the moment a second
+      // holder registered. React mounts a replacement BEFORE unmounting the one
+      // it replaces, so the departing holder's cleanup would deregister the
+      // SURVIVOR, and an unreachable holder is the revert bug back with no
+      // symptom until another device's threads went missing.
+      const first = { isBusy: () => false, adopt: vi.fn() };
+      const second = { isBusy: () => false, adopt: vi.fn() };
+      const releaseFirst = registerThreadHolder(first);
+      registerThreadHolder(second);
+      releaseFirst();
+
+      expect(applyUnits([keyUnit(THREADS_KEY, JSON.stringify(theirs))]).applied).toBe(1);
+      expect(second.adopt).toHaveBeenCalled();
+      expect(first.adopt).not.toHaveBeenCalled();
+    });
+  });
+
+  // The fourth instance, and the simplest ownership shape of the four: a module
+  // array, and no reader of it anywhere but the companion bridge, which asks per
+  // request. No subscribers to notify and no live draft to interrupt.
+  describe('learned answers — a cache the companion bridge reads per request', () => {
+    beforeEach(() => { disk.set(physical(LEARNED_KEY), '[]'); });
+
+    const theirAnswer = [{
+      id: 'ans-iphone',
+      question: 'Notice period?',
+      normalized: 'notice period',
+      answer: '4 weeks',
+      createdAt: AT,
+      updatedAt: AT,
+    }];
+
+    it('survives the next local write through the module', () => {
+      initLearnedAnswers();
+
+      expect(applyUnits([keyUnit(LEARNED_KEY, JSON.stringify(theirAnswer))]).applied).toBe(1);
+      // One answer learned while filling a form is enough: `save()` serializes
+      // the whole cache back over the key.
+      saveLearnedAnswer('Work authorization?', 'US citizen');
+
+      expect(storedIds(LEARNED_KEY)).toContain('ans-iphone');
+      expect(getAllLearnedAnswers().map((a) => a.id)).toContain('ans-iphone');
+    });
+
+    it('never lets a unit it cannot read reach the KEY — the restart chain', () => {
+      initLearnedAnswers();
+      saveLearnedAnswer('Pronouns?', 'they/them');
+      const mine = getAllLearnedAnswers()[0].id;
+
+      const { applied } = applyUnits([keyUnit(LEARNED_KEY, 'null')]);
+
+      expect(applied).toBe(0);
+      expect(storedIdsOrNothing(LEARNED_KEY)).toEqual([mine]);
+      expect(initLearnedAnswers().map((a) => a.id)).toEqual([mine]);
+    });
+  });
+
+  // The fifth instance, and the only one that is NOT a `key:` unit: the user
+  // profile is a FIELD of the data blob (`data:userProfile`), and ProfileDialog
+  // holds a whole-object working copy of it that `saveUserProfile` writes back
+  // wholesale. Everything above it in the ownership argument is identical.
+  describe('the user profile — a working copy in an always-mounted dialog', () => {
+    const dataUnit = (field, value, modifiedAt = AT) => ({
+      id: `data:${field}`, kind: 'plain', payload: JSON.stringify(value), modifiedAt,
+    });
+
+    const MINE = { contactInfo: { fullName: 'Ada Lovelace' }, workExperience: [] };
+    const THEIRS = {
+      contactInfo: { fullName: 'Ada Lovelace' },
+      workExperience: [{ company: 'Added on the iPhone' }],
+    };
+
+    // Stands in for ProfileDialog — the same take-a-copy-and-write-it-back-whole
+    // shape without a React tree, exactly as `liveChat` stands in for useChat.
+    // `busy` stands in for its debounce timer / failed-save refs.
+    const liveProfileDialog = () => {
+      const dialog = {
+        busy: false,
+        profile: getUserProfile(),
+        isBusy: () => dialog.busy,
+        adopt: () => { dialog.profile = getUserProfile(); },
+      };
+      registerUserProfileHolder(dialog);
+      return dialog;
+    };
+
+    const storedProfile = () => JSON.parse(disk.get(physical(DATA))).userProfile;
+
+    beforeEach(() => {
+      disk.set(physical(DATA), JSON.stringify({
+        variants: { 'v-1': { name: 'Design Engineer' } },
+        currentVariantId: 'v-1',
+        settings: { pageSize: 'letter' },
+        userProfile: MINE,
+      }));
+      registerUserProfileHolder(null);
+    });
+
+    it('survives the next debounced save through the dialog', () => {
+      const dialog = liveProfileDialog();
+
+      expect(applyUnits([dataUnit('userProfile', THEIRS)]).applied).toBe(1);
+      // One keystroke in any field of the open dialog: ProfileTabs mutates the
+      // working copy in place and the 500 ms debounce writes the WHOLE object
+      // back over `storage.userProfile`.
+      dialog.profile.contactInfo.email = 'ada@example.com';
+      saveUserProfile(dialog.profile);
+
+      expect(storedProfile().workExperience).toEqual(THEIRS.workExperience);
+      expect(storedProfile().contactInfo.email).toBe('ada@example.com');
+    });
+
+    it('refuses a profile while an edit is in flight, rather than overwriting it', () => {
+      // The edit lives ONLY in that ref until the debounce fires — no DOM copy,
+      // no history — so adopting mid-edit drops the typing with nothing holding
+      // it. Same rule as the chat's, same refusal.
+      const dialog = liveProfileDialog();
+      dialog.busy = true;
+
+      const { applied } = applyUnits([dataUnit('userProfile', THEIRS)]);
+
+      expect(applied).toBe(0);
+      // Refused on disk too: landing there and not in the dialog is the
+      // disagreement the refusal exists to stop.
+      expect(storedProfile()).toEqual(MINE);
+
+      // And nothing is lost by refusing — the short count forfeits the change
+      // tag, and the unit the transport re-offers lands once the edit is saved.
+      dialog.busy = false;
+      expect(applyUnits([dataUnit('userProfile', THEIRS)]).applied).toBe(1);
+      expect(storedProfile()).toEqual(THEIRS);
+    });
+
+    it('leaves `data:settings` alone, which nobody holds a whole copy of', () => {
+      // Every writer of settings calls saveSettings with the ONE field it
+      // changed, merged into a freshly-read blob — so the busy rule must not
+      // spread to it, and a settings unit lands whatever the profile editor is
+      // doing.
+      const dialog = liveProfileDialog();
+      dialog.busy = true;
+
+      expect(applyUnits([dataUnit('settings', { pageSize: 'a4' })]).applied).toBe(1);
+      expect(JSON.parse(disk.get(physical(DATA))).settings.pageSize).toBe('a4');
     });
   });
 });

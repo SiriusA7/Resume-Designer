@@ -360,6 +360,26 @@ describe('the notification is coalesced, not one per write', () => {
     logged.mockRestore();
   });
 
+  it('keeps an id queued DURING the notification instead of clearing it with the batch', async () => {
+    // The notifier reaches the native shell, so anything it drives that writes a
+    // synced key queues an id THIS drain never announced. A blanket clear()
+    // dropped exactly those, and a dropped id is not named again until that unit
+    // is edited again.
+    setStorageDirtyNotifier(() => {
+      // Swapped back first: the write below must not re-enter this notifier.
+      setStorageDirtyNotifier(notify);
+      appStorage.setItem('resume-designer-job-descriptions', '[{"id":"jd-1"}]');
+    });
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+
+    // The window the re-entrant write opened.
+    await settle();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0]).toEqual(['key:resume-designer-job-descriptions']);
+  });
+
   it('holds ids written before the shell installed a notifier', async () => {
     // The interceptor is live from module load; the shell wires the notifier
     // during init(). A boot-time migration writing in between must not have its

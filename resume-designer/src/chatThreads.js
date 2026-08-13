@@ -134,15 +134,46 @@ export function withContextMarker(messages, activeVariantId, activeVariantName) 
 }
 
 /**
+ * The thread list inside a stored or fetched value, or `null` when it is not
+ * one. A list is the only shape this module reads back; anything else is a
+ * value it has nothing to say about, which the two callers below answer
+ * differently — see landsAsThreads.
+ */
+function threadsIn(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (e) {
+    console.error('Failed to read chat threads:', e);
+    return null;
+  }
+}
+
+/**
+ * Whether a fetched payload is one the holder could adopt — asked by the sync
+ * layer BEFORE it writes the key (src/sync/syncModel.js, KEY_OWNERS).
+ *
+ * The same reader `loadThreads` uses, so the write and the adoption cannot
+ * disagree about what "readable" means. That agreement matters more here than
+ * anywhere else on this key: `loadThreads` does not merely fall back to an
+ * empty list on garbage, it MANUFACTURES a single fresh 'New Chat' thread — so
+ * a payload allowed onto disk would be adopted as, and then persisted and
+ * pushed up as, an empty conversation history. Refusing before the write is
+ * what keeps absence from becoming deletion.
+ */
+export function landsAsThreads(payload) {
+  return threadsIn(payload) !== null;
+}
+
+/**
  * Load all threads and decide which is current. Migrates legacy single-thread
  * history on first run, guarantees at least one thread, and selects the
  * most-recently-updated thread as current. Mirrors the old loadChatHistory().
  */
 export function loadThreads() {
   try {
-    const saved = appStorage.getItem(THREADS_KEY);
-    let threads = saved ? JSON.parse(saved) : [];
-    if (!Array.isArray(threads)) threads = [];
+    const threads = threadsIn(appStorage.getItem(THREADS_KEY)) ?? [];
 
     if (threads.length === 0) {
       // Migrate any old single-thread history into a fresh thread — in memory
@@ -153,8 +184,7 @@ export function loadThreads() {
       const oldHistory = appStorage.getItem(STORAGE_KEY);
       const oldMessages = oldHistory ? JSON.parse(oldHistory) : [];
       const thread = makeThread('New Chat', Array.isArray(oldMessages) ? oldMessages : []);
-      threads = [thread];
-      return { threads, currentThreadId: thread.id };
+      return { threads: [thread], currentThreadId: thread.id };
     }
 
     const mostRecent = [...threads].sort(
@@ -228,9 +258,21 @@ let holder = null;
  * adopt() }`. useChat registers itself while mounted; ChatPanel drives both the
  * desktop panel and the native iOS chat sheet from it, so this is one holder on
  * both platforms.
+ *
+ * Returns a deregistration that clears the slot ONLY while this holder is still
+ * the one in it. There is a single call site today, so the unconditional clear
+ * it replaces was correct today — and silently stopped being correct the moment
+ * a second holder registered: React mounts the replacement before unmounting the
+ * old one, so the departing holder's cleanup would deregister the SURVIVOR and
+ * leave the live copy unreachable, which is the revert bug back with no symptom
+ * until another device's threads went missing.
  */
 export function registerThreadHolder(next) {
-  holder = next && typeof next.adopt === 'function' ? next : null;
+  const installed = next && typeof next.adopt === 'function' ? next : null;
+  holder = installed;
+  return () => {
+    if (holder === installed) holder = null;
+  };
 }
 
 /**

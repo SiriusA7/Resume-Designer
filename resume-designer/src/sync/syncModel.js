@@ -14,11 +14,15 @@ import { getActiveProfileId } from '../profiles.js';
 // key from it on every edit, so parking a loser for that variant has to go
 // through it — see parkLoser.
 import { store, CHANGE_TYPES } from '../store.js';
-// The three modules that hold their whole key in memory the way the store holds
+// The four modules that hold their whole key in memory the way the store holds
 // the loaded document — see KEY_OWNERS below.
-import { adoptStoredApplications } from '../applications.js';
-import { adoptStoredJobDescriptions } from '../jobDescriptions.js';
-import { adoptStoredThreads, threadHolderBusy } from '../chatThreads.js';
+import { adoptStoredApplications, landsAsApplications } from '../applications.js';
+import { adoptStoredJobDescriptions, landsAsJobDescriptions } from '../jobDescriptions.js';
+import { adoptStoredThreads, threadHolderBusy, landsAsThreads } from '../chatThreads.js';
+import { adoptStoredLearnedAnswers, landsAsLearnedAnswers } from '../learnedAnswers.js';
+// The same ownership, one field further in: `data:userProfile` is a unit too,
+// and ProfileDialog holds a working copy of it. See the leaf for why it is one.
+import { adoptStoredUserProfile, userProfileHolderBusy } from '../userProfileHolder.js';
 import { classifyKey } from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
 import { mergeTokenUsage, mergeHistory, resolveConflict } from './syncMerge.js';
@@ -36,6 +40,12 @@ const KEY_UNIT_PREFIX = 'key:';
 // `landsAsDataField` asks mergeData what it accepts rather than repeating the
 // list of fields.
 const DATA_UNIT_PREFIX = 'data:';
+// The one `data:` unit something holds a whole in-memory copy of — see
+// ../userProfileHolder.js. `data:settings` needs no such treatment: every writer
+// of it calls persistence.js's saveSettings with the ONE field it changed, and
+// that merges into a freshly-read blob, so nothing ever writes a whole settings
+// object back from a copy taken earlier.
+const USER_PROFILE_UNIT_ID = `${DATA_UNIT_PREFIX}userProfile`;
 // Undo/redo history key prefix. Re-exported from profileKeys.js rather than
 // re-declared, same as store.js's own HISTORY_KEY_PREFIX: it has to stay
 // byte-identical to what store.js reads (HISTORY_KEY_PREFIX + variantId), or
@@ -218,24 +228,48 @@ function interruptsLiveEditing(unit) {
 }
 
 /**
+ * The same question for the one `data:` unit somebody holds a copy of.
+ *
+ * Asked in the filter beside `landsAsDataField`, so it is decided BEFORE the
+ * blob write like every other refusal here — a unit that reaches storage is on
+ * disk whatever the holder then does with it. See ../userProfileHolder.js.
+ */
+function interruptsProfileEditing(unit) {
+  return unit.id === USER_PROFILE_UNIT_ID && userProfileHolderBusy();
+}
+
+/**
  * The keys something holds a whole in-memory copy of.
  *
  * A `key:` unit lands by overwriting its key — which is enough only while the
- * key is nobody's cache. These three are somebody's: applications.js and
- * jobDescriptions.js each keep the parsed list in a module array and serialize
- * THAT array back over the key on every local change, and the chat's thread
- * list lives in useChat's React state, which `persistThreads` writes back the
- * same way. So content this device applied lasted exactly until that module's
- * next ordinary write, which put the stale copy back, stamped the unit, and —
- * this device legitimately holding the record's change tag, because the page
- * had confirmed the apply — pushed the revert up as a clean, uncontested
- * update. No conflict was raised and nothing was parked: the other device's
- * content was simply gone. The résumé had exactly this bug and
+ * key is nobody's cache. These four are somebody's: applications.js,
+ * jobDescriptions.js and learnedAnswers.js each keep the parsed list in a module
+ * array and serialize THAT array back over the key on every local change, and
+ * the chat's thread list lives in useChat's React state, which `persistThreads`
+ * writes back the same way. So content this device applied lasted exactly until
+ * that module's next ordinary write, which put the stale copy back, stamped the
+ * unit, and — this device legitimately holding the record's change tag, because
+ * the page had confirmed the apply — pushed the revert up as a clean,
+ * uncontested update. No conflict was raised and nothing was parked: the other
+ * device's content was simply gone. The résumé had exactly this bug and
  * `store.adoptDocument` is exactly this answer.
  *
  * `adopt()` re-reads storage rather than being handed the payload, so the
  * module's copy is by construction the bytes that reached the key — one source
  * of truth, and no second parser to disagree with the module's own.
+ *
+ * `lands()` is `landsAsResume` for these keys, and it exists because refusing in
+ * `adopt()` alone protects only MEMORY. A payload the owner cannot read was
+ * still written, and still counted — so the bad bytes sat on the key while the
+ * cache quietly kept the good list. That is survivable exactly as long as the
+ * process lives: restart before that module's next local write and its init
+ * reads the garbage, degrades it to `[]` — every one of these owners degrades
+ * the same way, and loadThreads goes further and manufactures a fresh empty
+ * conversation — and the first save afterwards persists the empty list and
+ * pushes it up as a clean, uncontested update. Absence became deletion one
+ * restart later. So the question is asked BEFORE the write, on the owner's own
+ * reader, and a refusal shortens `applied` the way every other refusal here
+ * does: the transport forfeits the change tag and re-offers the unit.
  *
  * `isBusy()` is the résumé's `interruptsLiveEditing` rule for a different
  * screen, and only the chat needs one: adopting there replaces the thread list
@@ -249,9 +283,16 @@ function interruptsLiveEditing(unit) {
  * all, and nothing caches it.
  */
 const KEY_OWNERS = new Map([
-  ['resume-designer-applications', { adopt: adoptStoredApplications }],
-  ['resume-designer-job-descriptions', { adopt: adoptStoredJobDescriptions }],
-  ['resume-designer-chat-threads', { isBusy: threadHolderBusy, adopt: adoptStoredThreads }],
+  ['resume-designer-applications', { lands: landsAsApplications, adopt: adoptStoredApplications }],
+  ['resume-designer-job-descriptions', {
+    lands: landsAsJobDescriptions, adopt: adoptStoredJobDescriptions,
+  }],
+  ['resume-designer-chat-threads', {
+    lands: landsAsThreads, isBusy: threadHolderBusy, adopt: adoptStoredThreads,
+  }],
+  ['resume-designer-learned-answers', {
+    lands: landsAsLearnedAnswers, adopt: adoptStoredLearnedAnswers,
+  }],
 ]);
 
 /**
@@ -491,9 +532,15 @@ function onStorageFlush() {
   // notifier is guarded and effectively cannot throw; this ordering is what
   // makes that fact not load-bearing. A throw leaves the ids in place and they
   // ride the next drain.
+  //
+  // Only the SNAPSHOT's ids are removed, never `clear()`: notifying can reach
+  // the native shell, and anything that writes a synced key while it runs — a
+  // re-entrant drain, a shell callback that saves — queues an id this drain
+  // never announced. A blanket clear dropped exactly those, and a dropped id is
+  // not re-announced until that unit is edited again.
   const unitIds = [...pendingDirty];
   dirtyNotifier(unitIds);
-  pendingDirty.clear();
+  for (const unitId of unitIds) pendingDirty.delete(unitId);
 }
 
 /** Wire the interceptor onto the storage facade. main.js owns this edge too. */
@@ -655,7 +702,9 @@ function landFetchedUnits(units) {
     const id = typeof unit?.id === 'string' ? unit.id : '';
     if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) return false;
     if (!parsesAsJSON(unit.payload)) return false;
-    if (!id.startsWith(RESUME_UNIT_PREFIX)) return landsAsDataField(unit);
+    if (!id.startsWith(RESUME_UNIT_PREFIX)) {
+      return landsAsDataField(unit) && !interruptsProfileEditing(unit);
+    }
     return landsAsResume(unit)
       && !interruptsLiveEditing(unit)
       && outranksLocalResume(unit, recorded);
@@ -666,9 +715,13 @@ function landFetchedUnits(units) {
     applied += landing.length;
     // AFTER the storage write, never before: the store is what the screen
     // reads, and putting a résumé there that the write then failed to persist
-    // (quota) would show the user content this device does not hold.
+    // (quota) would show the user content this device does not hold. The user
+    // profile is handed to its holder on the same terms and for the same reason
+    // — it is a whole-field copy in the always-mounted editor, which would
+    // otherwise write the pre-landing snapshot straight back.
     for (const unit of landing) {
       if (unit.id.startsWith(RESUME_UNIT_PREFIX)) adoptLoadedDocument(unit);
+      else if (unit.id === USER_PROFILE_UNIT_ID) adoptStoredUserProfile();
     }
   }
 
@@ -682,11 +735,13 @@ function landFetchedUnits(units) {
     // guards résumé payloads the same way (syncUnits.js).
     if (typeof unit.payload !== 'string') continue;
 
-    // Decided BEFORE the write, exactly as the résumé's guards are, and for the
-    // same reason: a unit that reaches storage is on disk whatever its owner
-    // then does with it. See KEY_OWNERS, and interruptsLiveEditing for where a
-    // refused unit goes.
+    // Both decided BEFORE the write, exactly as the résumé's guards are, and for
+    // the same reason: a unit that reaches storage is on disk whatever its owner
+    // then does with it, and every one of these owners turns garbage on its key
+    // into an empty list on the next boot. See KEY_OWNERS, and
+    // interruptsLiveEditing for where a refused unit goes.
     const owner = KEY_OWNERS.get(key);
+    if (owner && !owner.lands(unit.payload)) continue;
     if (owner?.isBusy?.()) continue;
 
     if (key === TOKEN_KEY) {
