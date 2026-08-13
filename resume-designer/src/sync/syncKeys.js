@@ -13,7 +13,7 @@
  * synced `currentVariantId` makes one device change documents because
  * another did); defaulting to local loses content silently.
  */
-import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX } from '../profileKeys.js';
+import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX, PROFILES_KEY } from '../profileKeys.js';
 
 /** Never leaves the machine. Each entry has a reason, because none is obvious. */
 export const DEVICE_LOCAL_KEYS = [
@@ -45,10 +45,12 @@ export const DEVICE_LOCAL_KEYS = [
   'resume-designer-sync-enabled',
 ];
 
-// The profile registry's logical key. Defined once here — SYNCED_SHARED_KEYS
-// below is built from it, and syncModel.js imports this rather than writing
-// the string a second time, so PROFILES_KEY there is this constant.
-export const PROFILES_KEY = 'resume-designer-profiles';
+// The profile registry's logical key. Re-exported from profileKeys.js rather
+// than written again: that file already owns it, this one already imports from
+// it, and a second literal is a second key the moment one of them is edited.
+// SYNCED_SHARED_KEYS below is built from this, and syncModel.js imports it from
+// here, so all three names are the same constant.
+export { PROFILES_KEY };
 
 // SHARED_KEYS members that DO sync — the exception to DEVICE_LOCAL_KEYS
 // above. `resume-designer-profiles` is a SHARED_KEYS member, so

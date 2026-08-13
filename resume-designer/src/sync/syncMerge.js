@@ -290,11 +290,15 @@ export function mergeRegistry(a, b) {
  * Whether `candidate` should replace `held`. An unstamped entry cannot win a
  * claim it never made, which is the same reading `resolveConflict` gives an
  * absent `modifiedAt`. When the stamps tie (including both absent), a
- * tombstoned side still wins. Per the spec, `deleteProfile` sets `deletedAt`
- * alone, not `updatedAt`, so a plain updatedAt comparison ties a deletion
- * against the untouched entry it deleted, and letting that tie fall through
- * to the rule below would discard the tombstone whenever the deleting
- * device's own copy happened to be `held`.
+ * tombstoned side still wins.
+ *
+ * `deleteProfile` does stamp `updatedAt` alongside `deletedAt`, so its own
+ * tombstone normally wins on the stamp alone and never reaches this rule. The
+ * rule is for the tombstones that arrive unstamped anyway: an entry written
+ * before this feature existed, or a partial write. Without it, such a tombstone
+ * would fall through to the content tie-break and be discarded roughly half the
+ * time — resurrecting the workspace the other device deleted, purely on which
+ * argument position it landed in.
  *
  * Below that — stamps tied AND tombstone-ness tied — the entries are broken
  * on content, deterministically. "Keep the held entry" looks like a safe
