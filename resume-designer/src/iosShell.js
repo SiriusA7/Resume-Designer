@@ -982,7 +982,15 @@ export function createCommandDispatcher(actions) {
     // A dropped thenable still RAN — the handler was called and its side effects
     // happened; only its answer is unavailable here. Every caller that needs the
     // answer goes through `dispatch.async`.
-    return run(command).reply ?? { ok: true };
+    const { reply, pending } = run(command);
+    // Dropping it leaves nobody attached, so a handler that rejected on this
+    // route would raise an unhandled rejection — in a webview, where there is no
+    // console anyone is reading. `syncApply` is the only async handler today and
+    // it never comes through here, so this is closing the door rather than
+    // fixing a live fault. `Promise.resolve` because a thenable is not
+    // necessarily a promise: `isThenable` asks only for `.then`.
+    if (pending) Promise.resolve(pending).catch(() => {});
+    return reply ?? { ok: true };
   }
 
   dispatch.async = async (command) => {

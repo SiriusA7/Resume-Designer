@@ -22,7 +22,6 @@ const PROFILE = 'ptest';
 const disk = new Map();
 let failDataWrites = false;
 let failSyncStateWrites = false;
-let restoreGuardArmed = false;
 const physical = (k) => mapKey(PROFILE, k);
 vi.mock('../src/appStorage.js', () => ({
   appStorage: {
@@ -46,7 +45,13 @@ vi.mock('../src/appStorage.js', () => ({
     // and a backend whose writes can fail. These tests are about what lands, not
     // about when it is safe to say so.
     flush: async () => true,
-    isRestoreGuardActive: () => restoreGuardArmed,
+    // ALWAYS false, and there is no switch for it on purpose. A `true` from
+    // here would only prove that applyUnits reads the flag it was handed; the
+    // refusal that matters is that a landing during a restore writes NOTHING
+    // and must not be confirmed anyway, and that is only visible against the
+    // real appStorage — see syncDurableApply.test.js, which arms the real
+    // guard with `beginRestoreGuard` and asserts the disk.
+    isRestoreGuardActive: () => false,
   },
   // profiles.js imports this beside appStorage; syncModel reaches profiles.js
   // for getActiveProfileId. Never called here — the active profile is set by
@@ -92,7 +97,6 @@ beforeEach(() => {
   disk.clear();
   failDataWrites = false;
   failSyncStateWrites = false;
-  restoreGuardArmed = false;
   disk.set(physical('resume-designer-active-profile'), PROFILE);
   disk.set(physical(DATA), JSON.stringify({
     variants: { 'v-1': { name: 'Design Engineer' } },
