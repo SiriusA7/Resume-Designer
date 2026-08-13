@@ -7,7 +7,7 @@ import {
   loadRegistry, listProfiles, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile, exportProfileBackup,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
-  activateProfileMappingForPrint,
+  activateProfileMappingForPrint, isUntouchedWorkspace,
 } from '../src/profiles.js';
 import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 import { getSettings, saveSettings, saveApiKey } from '../src/persistence.js';
@@ -1061,5 +1061,317 @@ describe('saveSettings blob-credential fallback', () => {
     expect(blob.settings.openrouterKey).toBe('sk-legacy');
     // And the overlay masks it — reads still see the shared value.
     expect(getSettings().openrouterKey).toBe('sk-new');
+  });
+});
+
+// The predicate is the ONLY thing in the sync-bootstrap feature that can
+// discard a workspace, so every clause gets a test proving that violating THAT
+// clause alone keeps the workspace. See
+// docs/superpowers/specs/2026-08-13-sync-bootstrap-design.md §4.
+describe('isUntouchedWorkspace', () => {
+  // The predicate only ever judges the ACTIVE profile, so the harness activates
+  // it and writes through ordinary appStorage — the same path production takes.
+  // A helper that hand-built namespaced keys would be a parallel implementation
+  // of the mapping and could pass while production read somewhere else.
+  function activate(profileId) {
+    appStorage.setItem(ACTIVE_PROFILE_KEY, profileId);
+    setProfileMapping(profileId);
+  }
+
+  function startWorkspace(name = 'Starter') {
+    const profile = createProfile({ name });
+    activate(profile.id);
+    return profile;
+  }
+
+  function writeProfileKey(profileId, logicalKey, value) {
+    activate(profileId);
+    appStorage.setItem(logicalKey, value);
+  }
+
+  it('is true for a workspace straight out of init', () => {
+    const fresh = startWorkspace('Fresh');
+    expect(isUntouchedWorkspace(fresh.id)).toBe(true);
+  });
+
+  it('is true with only the single résumé init leaves behind', () => {
+    const p = startWorkspace();
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({ variants: { only: {} } }));
+    expect(isUntouchedWorkspace(p.id)).toBe(true);
+  });
+
+  it('is false once renamed', () => {
+    const p = startWorkspace('P');
+    renameProfile(p.id, { name: 'Renamed' });
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  it('is false when any version history exists', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-history-v1', JSON.stringify({ history: [{}] }));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  it('is false when a second résumé exists', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({ variants: { a: {}, b: {} } }));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  it('is false when any list has content', () => {
+    for (const key of [
+      'resume-designer-applications',
+      'resume-designer-job-descriptions',
+      'resume-designer-chat-threads',
+      'resume-designer-chat-history',
+      'resume-designer-learned-answers',
+    ]) {
+      const p = startWorkspace(key);
+      writeProfileKey(p.id, key, JSON.stringify([{ id: 'x' }]));
+      expect(isUntouchedWorkspace(p.id), `${key} must count`).toBe(false);
+    }
+  });
+
+  it('is false when tokens were spent', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-token-usage', JSON.stringify({ events: [{ total: 1 }] }));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  it('keeps the workspace when a key cannot be read', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-applications', '{ not json');
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  // ADDED beyond the brief. The Profile screen writes straight into the data
+  // blob and records NO version history, so a person who filled in their
+  // contact details and work history but never opened a résumé passes every
+  // other clause — and this is the one step in the feature that would then
+  // delete what they typed.
+  it('is false when the user profile holds authored content', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({
+      variants: {},
+      userProfile: { contactInfo: { fullName: 'Ash Shah', email: '' }, workExperience: [] },
+    }));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  it('is true for the empty user-profile skeleton a fresh save writes', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({
+      variants: {},
+      userProfile: { contactInfo: { fullName: '', email: '   ' }, workExperience: [], skills: [] },
+    }));
+    expect(isUntouchedWorkspace(p.id)).toBe(true);
+  });
+
+  // ADDED beyond the brief, and the most dangerous case of all: the active
+  // POINTER names this profile but the key mapping is inactive (a degraded
+  // init runs exactly like that), so every ordinary read resolves to the
+  // unprefixed keys and a full workspace reads back as empty.
+  it('keeps the workspace when key mapping is not active for it', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-history-v1', JSON.stringify({ history: [{}] }));
+    setProfileMapping(null); // pointer still says p.id; reads no longer namespace
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  it('refuses a profile that is not the active one', () => {
+    const active = startWorkspace('Active');
+    const other = createProfile({ name: 'Other' });
+    expect(isUntouchedWorkspace(other.id)).toBe(false);
+    expect(isUntouchedWorkspace(active.id)).toBe(true); // the guard, not the data
+  });
+
+  it('refuses a profile with no registry entry', () => {
+    const p = startWorkspace('P');
+    appStorage.setItem(PROFILES_KEY, JSON.stringify(
+      loadRegistry().filter((entry) => entry.id !== p.id).concat(
+        [{ id: 'pother', name: 'Other', emoji: '🙂', createdAt: 'x' }],
+      ),
+    ));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  // The other direction: another workspace's history must not be read as this
+  // one's, or the feature never fires on a device that holds several profiles.
+  it('ignores another profile’s version history', () => {
+    const p = startWorkspace('P');
+    const other = createProfile({ name: 'Other' });
+    localStorage.setItem(`resume-p--${other.id}--resume-designer-history-v1`, '{"history":[{}]}');
+    expect(isUntouchedWorkspace(p.id)).toBe(true);
+  });
+});
+
+// The bootstrap flow: a clean install that has since unioned the account's
+// registry into its own absorbs its starter workspace and opens one of the
+// adopted ones. Spec §4.
+describe('fresh-device adoption', () => {
+  const STARTER_KEY = 'resume-profile-starter';
+
+  function seedAccount({ starterTouched = false, starterMarker = true } = {}) {
+    // Deliberately unsorted, so the "least-recently-created" choice cannot be
+    // "whatever sits at index 0".
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([
+      { id: 'plater', name: 'iPad', emoji: '🙂', createdAt: '2026-07-15T00:00:00.000Z' },
+      { id: 'pstarter', name: 'My profile', emoji: '🙂', createdAt: '2026-08-01T00:00:00.000Z' },
+      { id: 'pfirst', name: 'iPhone', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z' },
+    ]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'pstarter');
+    if (starterMarker) localStorage.setItem(STARTER_KEY, 'pstarter');
+    localStorage.setItem('resume-p--pstarter--resume-designer-data', '{"variants":{"v1":{}}}');
+    if (starterTouched) {
+      localStorage.setItem('resume-p--pstarter--resume-designer-history-v1', '{"history":[{}]}');
+    }
+    setProfileMapping(null); // a fresh boot
+  }
+
+  it('records the starter workspace init created for itself', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+
+    const id = await ensureProfilesInitialized();
+
+    // On DISK with the registry it names — a marker that never lands simply
+    // means this install can never adopt, which is the safe direction.
+    expect(backend.files.get(STARTER_KEY)).toBe(id);
+  });
+
+  it('tombstones the untouched starter and opens the least-recently-created workspace', async () => {
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify([
+        { id: 'plater', name: 'iPad', emoji: '🙂', createdAt: '2026-07-15T00:00:00.000Z' },
+        { id: 'pstarter', name: 'My profile', emoji: '🙂', createdAt: '2026-08-01T00:00:00.000Z' },
+        { id: 'pfirst', name: 'iPhone', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z' },
+      ]),
+      [ACTIVE_PROFILE_KEY]: 'pstarter',
+      [STARTER_KEY]: 'pstarter',
+      'resume-p--pstarter--resume-designer-data': '{"variants":{"v1":{}}}',
+      'resume-p--pstarter--resume-designer-sync-state': '{}',
+    });
+    await initAppStorage({ backend });
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('pfirst');
+    expect(getActiveProfileId()).toBe('pfirst');
+    // TOMBSTONED, not dropped: a bare removal is undone by the next union merge
+    // if this device's own registry ever reached the server first.
+    const disk = JSON.parse(backend.files.get(PROFILES_KEY));
+    expect(disk.find((p) => p.id === 'pstarter').deletedAt).toEqual(expect.any(String));
+    expect(disk.map((p) => p.id).sort()).toEqual(['pfirst', 'plater', 'pstarter']);
+    expect(listProfiles().map((p) => p.id).sort()).toEqual(['pfirst', 'plater']);
+    // The namespace is gone from DISK, and so is the marker it named.
+    expect([...backend.files.keys()].filter((k) => k.startsWith('resume-p--pstarter--'))).toEqual([]);
+    expect(backend.files.has(STARTER_KEY)).toBe(false);
+    expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe('pfirst');
+  });
+
+  it('keeps a starter workspace that has been touched', async () => {
+    seedAccount({ starterTouched: true });
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('pstarter');
+    expect(getActiveProfileId()).toBe('pstarter');
+    expect(loadRegistry().find((p) => p.id === 'pstarter').deletedAt).toBeUndefined();
+    expect(localStorage.getItem('resume-p--pstarter--resume-designer-data')).toBe('{"variants":{"v1":{}}}');
+  });
+
+  // A workspace the PERSON created is empty and unstamped at the moment they
+  // make it, exactly like the one init creates — only the marker tells them
+  // apart, and creating a workspace and relaunching before putting anything in
+  // it must not delete it.
+  it('never absorbs a workspace this install did not create for itself', async () => {
+    seedAccount({ starterMarker: false });
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('pstarter');
+    expect(loadRegistry().find((p) => p.id === 'pstarter').deletedAt).toBeUndefined();
+  });
+
+  it('does nothing when the account has no other workspace', async () => {
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([
+      { id: 'pstarter', name: 'My profile', emoji: '🙂', createdAt: '2026-08-01T00:00:00.000Z' },
+    ]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'pstarter');
+    localStorage.setItem(STARTER_KEY, 'pstarter');
+    setProfileMapping(null);
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('pstarter');
+    expect(loadRegistry()).toHaveLength(1);
+    expect(loadRegistry()[0].deletedAt).toBeUndefined();
+  });
+
+  it('ignores tombstoned workspaces when choosing what to open', async () => {
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([
+      { id: 'pdead', name: 'Deleted', emoji: '🙂', createdAt: '2026-06-01T00:00:00.000Z', deletedAt: '2026-07-02T00:00:00.000Z', updatedAt: '2026-07-02T00:00:00.000Z' },
+      { id: 'pstarter', name: 'My profile', emoji: '🙂', createdAt: '2026-08-01T00:00:00.000Z' },
+      { id: 'pfirst', name: 'iPhone', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z' },
+    ]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'pstarter');
+    localStorage.setItem(STARTER_KEY, 'pstarter');
+    setProfileMapping(null);
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('pfirst'); // not pdead, which is older still
+  });
+
+  it('keeps the starter workspace when the adoption cannot reach disk', async () => {
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify([
+        { id: 'pstarter', name: 'My profile', emoji: '🙂', createdAt: '2026-08-01T00:00:00.000Z' },
+        { id: 'pfirst', name: 'iPhone', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z' },
+      ]),
+      [ACTIVE_PROFILE_KEY]: 'pstarter',
+      [STARTER_KEY]: 'pstarter',
+      'resume-p--pstarter--resume-designer-data': '{"variants":{"v1":{}}}',
+    });
+    backend.write.mockImplementation(async (key, value) => {
+      if (key === PROFILES_KEY) throw new Error('disk full');
+      backend.files.set(key, value);
+    });
+    await initAppStorage({ backend });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const id = await ensureProfilesInitialized();
+
+      // A tombstone that landed without its pointer would leave the app active
+      // in a workspace nothing lists and no later boot could adopt out of, so
+      // BOTH are restored and the starter workspace stays.
+      expect(id).toBe('pstarter');
+      expect(getActiveProfileId()).toBe('pstarter');
+      expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe('pstarter');
+      expect(loadRegistry().find((p) => p.id === 'pstarter').deletedAt).toBeUndefined();
+      // And the namespace it would have deleted is untouched, on disk.
+      expect(backend.files.get('resume-p--pstarter--resume-designer-data')).toBe('{"variants":{"v1":{}}}');
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  // The tombstone is the one thing in this feature that can name the ACTIVE
+  // profile — through a half-durable adoption, or through another device
+  // deleting the workspace this one is sitting in. Either way boot must move to
+  // a workspace the switcher can actually show.
+  it('moves off an active profile another device deleted', async () => {
+    localStorage.setItem(PROFILES_KEY, JSON.stringify([
+      { id: 'pgone', name: 'Gone', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z', deletedAt: '2026-08-02T00:00:00.000Z', updatedAt: '2026-08-02T00:00:00.000Z' },
+      { id: 'plive', name: 'Live', emoji: '🙂', createdAt: '2026-07-05T00:00:00.000Z' },
+    ]));
+    localStorage.setItem(ACTIVE_PROFILE_KEY, 'pgone');
+    setProfileMapping(null);
+
+    const id = await ensureProfilesInitialized();
+
+    expect(id).toBe('plive');
+    expect(getActiveProfileId()).toBe('plive');
   });
 });

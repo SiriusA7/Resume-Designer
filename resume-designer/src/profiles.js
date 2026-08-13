@@ -3,9 +3,9 @@
  * facade and pure key helpers, no DOM and no React, so vitest imports it
  * directly. The switch/reload orchestration lives in the UI (AccountSection).
  */
-import { appStorage, setProfileMapping } from './appStorage.js';
+import { appStorage, setProfileMapping, getProfileMapping } from './appStorage.js';
 import {
-  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
+  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, BACKUP_HISTORY_PREFIX,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
   withoutDeadProviderCredentials, withoutStoredCredentials, withoutDeviceIdentity,
 } from './profileKeys.js';
@@ -18,6 +18,21 @@ import {
 // not a history key), so isOwnedKey is false → backups never carry it and the
 // key mapping never namespaces it.
 const PROFILE_ADOPTION_MARKER = 'resume-profile-adoption-pending';
+
+// The profile THIS install created for itself because there was no registry at
+// all (see resolveActiveProfile). Held because the bootstrap adoption below is
+// allowed to discard exactly that one workspace and nothing else: a workspace
+// the person deliberately created is empty and unstamped at the moment they
+// make it, indistinguishable from the starter by every other clause, and
+// "create a workspace, relaunch before putting anything in it, find it gone"
+// is not a thing this feature may do.
+//
+// Same two properties as the marker above, for the same reasons: it starts
+// with `resume-` so appStorage's one-time localStorage→disk adoption carries
+// it, and it is NOT an owned key, so backups never carry it, the key mapping
+// never namespaces it, and it never syncs. An install that predates this key
+// simply never adopts — the conservative direction.
+const STARTER_PROFILE_KEY = 'resume-profile-starter';
 
 // Fired on the window after a registry mutation that stays on the current page
 // (rename; the switch/create paths reload instead). Header chrome that reads
@@ -347,6 +362,196 @@ function rebuildRegistryFromKeys() {
   return registry;
 }
 
+// The per-profile lists a person fills by using the app. Every one of them is
+// written as a JSON array by its own module (applications.js,
+// jobDescriptions.js, chatThreads.js, learnedAnswers.js) and every reader of
+// them demands an array, so anything else stored here is a shape this cannot
+// vouch for. `resume-designer-chat-history` is the pre-threads chat, migrated
+// into threads on load and listed here for the window in between.
+const WORKSPACE_LISTS = [
+  'resume-designer-applications',
+  'resume-designer-job-descriptions',
+  'resume-designer-chat-threads',
+  'resume-designer-chat-history',
+  'resume-designer-learned-answers',
+];
+
+/**
+ * Whether anything inside a stored structure was authored by a person.
+ *
+ * The user profile is a fixed skeleton of empty strings and empty arrays
+ * (DEFAULT_STORAGE, persistence.js), so "anything at all in it" is the honest
+ * test rather than a field-by-field one that a new field would silently escape.
+ * A number or a boolean where the skeleton has neither counts as content: this
+ * answers a question whose wrong answer deletes a workspace, so an unrecognised
+ * value is content.
+ */
+function holdsAuthoredContent(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.values(value).some(holdsAuthoredContent);
+  return true;
+}
+
+/**
+ * Whether this workspace is the throwaway one `resolveActiveProfile` creates at
+ * init and nothing has touched since.
+ *
+ * THE ONLY PLACE IN SYNC THAT CAN DISCARD ANYTHING, so it is deliberately
+ * paranoid: any read that fails, any key that will not parse, and any doubt at
+ * all answers false. A stray empty workspace is an annoyance someone can
+ * delete; absorbing real work is the failure this whole feature exists to
+ * prevent.
+ *
+ * Version history is the load-bearing clause — the store records an entry on
+ * every change, so an absent history is the strongest evidence available that
+ * nothing was ever edited. Comparing the résumé to the default template was
+ * considered and rejected: the template changes between releases, so a byte
+ * comparison would silently start absorbing every workspace the moment the
+ * default changed.
+ */
+export function isUntouchedWorkspace(profileId) {
+  // Only ever asked of the ACTIVE profile — the one init just created — so
+  // ordinary `appStorage` reads resolve to its namespace. Refusing anything
+  // else keeps this from being pointed at a workspace whose keys it would
+  // silently read from the wrong namespace and judge empty.
+  if (!profileId || profileId !== getActiveProfileId()) return false;
+  // And the pointer is not enough on its own. It says which workspace the app
+  // is IN; the key mapping says which namespace a read LANDS in, and the two
+  // come apart in every degraded state this module has (an adoption that could
+  // not finish runs mapping-off on the unprefixed keys). With them apart, every
+  // read below returns null and a full workspace reads back as untouched.
+  if (getProfileMapping() !== profileId) return false;
+
+  try {
+    const entry = (loadRegistry() || []).find((p) => p.id === profileId);
+    if (!entry || entry.updatedAt) return false;
+
+    // Any version history at all. The load-bearing clause: the store records an
+    // entry on every change. An UNPREFIXED history key counts too (`split` is
+    // null for it) — with mapping active it should not exist, and one that does
+    // is a half-finished adoption, which is doubt.
+    for (const physical of appStorage.keys()) {
+      const split = splitPhysicalKey(physical);
+      const logical = split?.logicalKey ?? physical;
+      if (split && split.profileId !== profileId) continue;
+      if (logical.startsWith(BACKUP_HISTORY_PREFIX)) return false;
+    }
+
+    // At most the one résumé init created — "at most", because a device nobody
+    // has given a résumé to yet has no blob at all, and that is the state this
+    // feature exists for. Absence is only readable as emptiness because the
+    // mapping was proven above.
+    const rawBlob = appStorage.getItem('resume-designer-data');
+    if (rawBlob !== null) {
+      const blob = JSON.parse(rawBlob);
+      if (!blob || typeof blob !== 'object') return false;
+      const variants = blob.variants ?? {};
+      if (!variants || typeof variants !== 'object') return false;
+      if (Object.keys(variants).length > 1) return false;
+      // The Profile screen writes straight into this blob and records NO
+      // version history, so someone who filled in their contact details and
+      // work history without ever opening a résumé passes every other clause.
+      if (holdsAuthoredContent(blob.userProfile)) return false;
+    }
+
+    // Every list empty or absent.
+    for (const key of WORKSPACE_LISTS) {
+      const raw = appStorage.getItem(key);
+      if (raw === null) continue;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list) || list.length > 0) return false;
+    }
+
+    // No tokens spent.
+    const usageRaw = appStorage.getItem('resume-designer-token-usage');
+    if (usageRaw !== null) {
+      const usage = JSON.parse(usageRaw);
+      if (Array.isArray(usage?.events) ? usage.events.length > 0 : usage != null) return false;
+    }
+
+    return true;
+  } catch {
+    // A key that will not parse is a key this cannot vouch for.
+    return false;
+  }
+}
+
+/**
+ * Absorb this install's starter workspace into the account it has since
+ * discovered, and return the workspace to open instead — or null to keep what
+ * is already active, which is every path but one.
+ *
+ * The registry it reads has already been unioned with the account's by a
+ * landing (landRegistry, syncModel.js) in an earlier session: the shared zone
+ * is fetched at start, and this runs at the next boot's resolve, which is the
+ * one moment the active profile can still be changed without a reload.
+ *
+ * THE TOMBSTONE IS NOT AN IMPLEMENTATION DETAIL. If this device's own registry
+ * ever reached the server ahead of that shared fetch — a retry, a reordering, a
+ * future change to the enable path — a bare local removal is undone by the next
+ * union merge and the empty workspace comes back for good. The tombstone is
+ * harmless when the starter never reached the server and correct when it did.
+ * See the spec's §4 ordering rules.
+ */
+async function adoptAccountWorkspaces(activeId) {
+  // Only the workspace init created for itself, never one the person made.
+  if (appStorage.getItem(STARTER_PROFILE_KEY) !== activeId) return null;
+  const others = listProfiles().filter((p) => p.id !== activeId);
+  if (!others.length) return null;
+  // A restore is mid-flight, so both writes below would be recorded and skipped
+  // while flush() still answered true — see activateProfileDurably.
+  if (appStorage.isRestoreGuardActive()) return null;
+  if (!isUntouchedWorkspace(activeId)) return null;
+
+  // Least-recently-created, with the id breaking a tie: the same order
+  // mergeRegistry sorts by, so two devices bootstrapping against one account
+  // open the same workspace. `<` on strings compares by code unit —
+  // localeCompare calls Unicode-equivalent strings equal, which has already
+  // cost this feature one ordering bug (syncMerge.js).
+  const next = others.reduce((best, p) => {
+    const a = String(p.createdAt ?? '');
+    const b = String(best.createdAt ?? '');
+    if (a !== b) return a < b ? p : best;
+    return p.id < best.id ? p : best;
+  });
+
+  const registryBefore = loadRegistry() || [];
+  const stamp = new Date().toISOString();
+  saveRegistry(registryBefore.map((p) => (p.id === activeId
+    ? { ...p, deletedAt: stamp, updatedAt: stamp }
+    : p)));
+  appStorage.setItem(ACTIVE_PROFILE_KEY, next.id);
+  setProfileMapping(next.id);
+
+  if (!(await appStorage.flush())) {
+    // Restore BOTH. The pair has to move together: a tombstone that reached
+    // disk without its pointer leaves the next boot active in a workspace
+    // nothing lists, and no later boot can adopt out of it either — the
+    // tombstone stamps `updatedAt`, which the predicate above refuses for ever.
+    console.error('[profiles] workspace adoption did not reach disk; keeping the starter workspace');
+    setProfileMapping(activeId);
+    appStorage.setItem(ACTIVE_PROFILE_KEY, activeId);
+    try { saveRegistry(registryBefore); } catch { /* keep going */ }
+    await appStorage.flush();
+    return null;
+  }
+
+  // Only now the namespace, and only its own keys. Nothing in it is content —
+  // that is exactly what the predicate proved — so unlike deleteProfileDurably
+  // there is nothing here worth snapshotting for a rollback, and a delete that
+  // does not reach disk costs some empty files.
+  const prefix = physicalKey(activeId, '');
+  for (const k of appStorage.keys()) {
+    if (k && k.startsWith(prefix)) appStorage.removeItem(k);
+  }
+  // The marker named a workspace that no longer exists.
+  appStorage.removeItem(STARTER_PROFILE_KEY);
+  await appStorage.flush();
+  return next.id;
+}
+
 /**
  * Boot entry point. Wraps the resolver so that ANY unexpected storage failure
  * during adoption (e.g. a passthrough QuotaExceededError thrown synchronously by
@@ -387,6 +592,12 @@ async function resolveActiveProfile() {
     const profile = { id, name: adoptionProfileName(), emoji: '🙂', createdAt: new Date().toISOString() };
     saveRegistry([profile]);
     appStorage.setItem(ACTIVE_PROFILE_KEY, id);
+    // THIS is the workspace nobody asked for — the one a later boot may absorb
+    // into the account, once a landing has shown there is an account to absorb
+    // it into. Written with the registry it names and crossing the same
+    // durability barrier; a marker that does not land only costs this install
+    // its ability to adopt, which is the safe direction.
+    appStorage.setItem(STARTER_PROFILE_KEY, id);
     if (!(await appStorage.flush())) {
       // No migration has run yet, so aborting leaves sources untouched. The
       // queued registry/marker writes either land later (next boot resumes
@@ -408,7 +619,14 @@ async function resolveActiveProfile() {
   }
 
   let active = getActiveProfileId();
-  if (!registry.some((p) => p.id === active)) {
+  // A TOMBSTONED entry does not count as membership, which is not the same
+  // check as "is it in the array": the entry is still physically there (see
+  // deleteProfile), and the app would map into a workspace no listing shows and
+  // no switcher can leave. Two things reach that state — another device
+  // deleting the workspace this one is sitting in, and the adoption below
+  // landing its tombstone without its pointer — and the heal below is what gets
+  // out of both.
+  if (!registry.some((p) => p.id === active && !p?.deletedAt)) {
     // Prefer the first NON-tombstoned entry: registry[0] can itself be a
     // tombstone now (deleteProfile no longer drops entries), and this branch
     // fires exactly when the membership check above already failed — landing
@@ -427,6 +645,27 @@ async function resolveActiveProfile() {
     return active;
   }
   setProfileMapping(active);
+  // The account's own workspaces, if a landing has unioned them into this
+  // device's registry since the last boot and this device's starter workspace
+  // is provably untouched. AFTER the mapping is active, because the predicate
+  // reads through it and answers "untouched" to everything while it is off;
+  // BEFORE extractSharedApiKey, so the sweep runs over the namespace the app is
+  // actually going to spend the session in.
+  try {
+    const adopted = await adoptAccountWorkspaces(active);
+    if (adopted) active = adopted;
+  } catch (err) {
+    // Its own catch, not ensureProfilesInitialized's: that one degrades the
+    // whole boot to mapping-off, which for a workspace that IS namespaced looks
+    // like every résumé disappearing. Nothing here is worth that. Re-read the
+    // pointer rather than assuming which side of the writes the throw landed
+    // on, so the mapping matches the workspace that is actually stored, and let
+    // the next boot try again — a tombstone that landed without its pointer is
+    // healed by the membership check above.
+    console.error('[profiles] workspace adoption failed; keeping the stored active profile:', err);
+    active = getActiveProfileId() || active;
+    setProfileMapping(active);
+  }
   await extractSharedApiKey();
   return active;
 }

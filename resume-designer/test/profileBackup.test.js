@@ -234,10 +234,14 @@ describe('format-2 export/restore', () => {
     const readDownload = captureDownload();
     exportFullBackup();
     const envelope = await readDownload();
-    // Every stored key EXCEPT the credential, which the wipe deliberately
-    // spares — nothing would restore it, so wiping it would let an import
-    // silently destroy a working key.
-    const wipeable = localStorage.length - 1;
+    // Every stored key EXCEPT the two the wipe deliberately spares: the
+    // credential (nothing would restore it, so wiping it would let an import
+    // silently destroy a working key) and the starter-workspace marker, which
+    // is machine-local state no backup carries — the same class as the adoption
+    // marker, and spared by the same "owned keys only" rule.
+    const spared = [OPENROUTER_KEY_KEY, 'resume-profile-starter'];
+    for (const k of spared) expect(localStorage.getItem(k)).not.toBeNull();
+    const wipeable = localStorage.length - spared.length;
 
     const result = importFullBackupFromEnvelope(envelope);
 
