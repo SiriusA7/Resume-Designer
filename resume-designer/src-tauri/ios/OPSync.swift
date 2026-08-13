@@ -406,11 +406,15 @@ extension OPSyncEngine {
         // `deliver` decides its tag, once the page has answered.
         arrivals.append(Arrival(record: record, unit: unit))
       }
-      await deliver(arrivals)
       // Reported, not swallowed: the engine's change token has already advanced
       // past these and there is no public way to rewind it, so the only thing
       // that can bring the record back down is something acting on this.
+      //
+      // Ahead of `deliver` rather than after it: `deliver` awaits the page, and
+      // a page that is gone takes the full timeout to say so. Reporting first
+      // costs nothing and keeps an unrelated failure from waiting behind it.
       report(unreadable)
+      await deliver(arrivals)
 
     case .sentRecordZoneChanges(let sent):
       // The saved records come back carrying their NEW change tags. Recording
@@ -641,6 +645,14 @@ extension OPSyncEngine {
   /// either — it would spend this session's one recovery attempt (see
   /// `syncDidFail` in OPShell.swift) on a webview that is still gone. The tag is
   /// forfeited, so the next save of these units meets the conflict path.
+  ///
+  /// Awaiting the page suspends the event this runs inside. `nextRecordZoneChangeBatch`
+  /// is not an event, so it is NOT serialized against that suspension and a send
+  /// batch can be built from tags this call has not settled yet. That is safe and
+  /// is not worth closing: `recordToSend` only READS the tag map, so the worst it
+  /// can do is quote a stale tag or none — which CloudKit answers
+  /// `serverRecordChanged`, routing it down the conflict path where both copies
+  /// are compared. It fails toward an extra round trip, never toward an overwrite.
   private func deliver(_ arrivals: [Arrival]) async {
     guard !arrivals.isEmpty else { return }
     let applied = await host?.syncDidFetch(arrivals.map(\.unit)) ?? false
