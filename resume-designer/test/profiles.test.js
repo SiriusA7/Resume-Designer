@@ -129,7 +129,12 @@ describe('registry CRUD', () => {
     expect(loadRegistry()).toHaveLength(2);
     expect(loadRegistry().find((p) => p.id === b.id).deletedAt).toEqual(expect.any(String));
     expect(listProfiles()).toHaveLength(1);
-    expect(() => deleteProfile(a.id)).toThrow(); // last remaining
+    // Names the guard, not merely "something threw". A bare toThrow() here
+    // survived the guard changing from counting raw entries to counting
+    // visible ones — the branch that fires and the message both changed, and
+    // the assertion could not tell. Raw count is 2 and visible is 1 at this
+    // point, so this is exactly where the two guards disagree.
+    expect(() => deleteProfile(a.id)).toThrow(/last profile/i);
   });
 });
 
