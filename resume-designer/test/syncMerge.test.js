@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  mergeTokenUsage, mergeHistory, resolveConflict, canonicalJSON,
+  mergeTokenUsage, mergeHistory, resolveConflict, canonicalJSON, mergeRegistry,
 } from '../src/sync/syncMerge.js';
 // From the neutral leaf, not from syncMerge.js: the constant lives outside both
 // the store and the sync layer so neither has to import the other for it.
@@ -257,5 +257,58 @@ describe('resolveConflict', () => {
     const broken = { payload: '{}', modifiedAt: 'not a date' };
     expect(resolveConflict(broken, local).winner).toBe(local);
     expect(resolveConflict(local, broken).winner).toBe(local);
+  });
+});
+
+describe('mergeRegistry', () => {
+  const A = { id: 'pa', name: 'Work', emoji: '🙂', createdAt: '2026-01-01T00:00:00.000Z' };
+  const B = { id: 'pb', name: 'Side', emoji: '🚀', createdAt: '2026-02-01T00:00:00.000Z' };
+
+  it('unions entries neither side has alone', () => {
+    expect(mergeRegistry([A], [B]).map((p) => p.id)).toEqual(['pa', 'pb']);
+  });
+
+  it('is order-independent', () => {
+    expect(mergeRegistry([A], [B])).toEqual(mergeRegistry([B], [A]));
+  });
+
+  it('takes the entry with the newer updatedAt', () => {
+    const renamed = { ...A, name: 'Renamed', updatedAt: '2026-03-01T00:00:00.000Z' };
+    expect(mergeRegistry([A], [renamed])[0].name).toBe('Renamed');
+    expect(mergeRegistry([renamed], [A])[0].name).toBe('Renamed');
+  });
+
+  it('prefers a stamped entry over an unstamped one', () => {
+    const stamped = { ...A, name: 'Stamped', updatedAt: '2026-03-01T00:00:00.000Z' };
+    expect(mergeRegistry([A], [stamped])[0].name).toBe('Stamped');
+    expect(mergeRegistry([stamped], [A])[0].name).toBe('Stamped');
+  });
+
+  it('keeps the local entry when neither is stamped', () => {
+    const other = { ...A, name: 'Other' };
+    expect(mergeRegistry([A], [other])[0].name).toBe('Work');
+  });
+
+  it('retains a tombstone rather than resurrecting the entry', () => {
+    const deleted = { ...A, deletedAt: '2026-03-01T00:00:00.000Z' };
+    const merged = mergeRegistry([A], [deleted]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].deletedAt).toBe('2026-03-01T00:00:00.000Z');
+  });
+
+  it('lets a rename after a deletion win, since it is newer', () => {
+    const deleted = { ...A, deletedAt: '2026-03-01T00:00:00.000Z', updatedAt: '2026-03-01T00:00:00.000Z' };
+    const revived = { ...A, name: 'Back', updatedAt: '2026-04-01T00:00:00.000Z' };
+    expect(mergeRegistry([deleted], [revived])[0].deletedAt).toBeUndefined();
+  });
+
+  it('ignores non-arrays and non-entries', () => {
+    expect(mergeRegistry(null, undefined)).toEqual([]);
+    expect(mergeRegistry([A, null, 7, { name: 'no id' }], [])).toEqual([A]);
+  });
+
+  it('orders by createdAt then id, by code unit', () => {
+    const sameDay = { id: 'pz', name: 'Z', emoji: '🙂', createdAt: A.createdAt };
+    expect(mergeRegistry([sameDay], [A]).map((p) => p.id)).toEqual(['pa', 'pz']);
   });
 });

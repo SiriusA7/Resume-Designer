@@ -253,6 +253,63 @@ function summarize(events) {
 }
 
 /**
+ * Union two profile registries.
+ *
+ * The registry is APPEND-SHAPED for creation and SNAPSHOT-SHAPED per entry, so
+ * it takes neither rule wholesale: entries union by id, and a collision is
+ * settled by `updatedAt`. Under plain newer-wins a profile created offline on
+ * one device disappeared when the other device's registry won, and its résumés
+ * were orphaned in a zone nothing listed.
+ *
+ * A tombstoned entry is RETAINED, not dropped — dropping it lets the other
+ * side's copy resurrect it on the next merge. See the spec: this is the one
+ * deliberate tombstone in the feature, and it hides a listing rather than
+ * destroying content.
+ */
+export function mergeRegistry(a, b) {
+  const entries = new Map();
+  for (const registry of [a, b]) {
+    for (const entry of Array.isArray(registry) ? registry : []) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (typeof entry.id !== 'string' || !entry.id) continue;
+      const existing = entries.get(entry.id);
+      if (!existing || outranks(entry, existing)) entries.set(entry.id, entry);
+    }
+  }
+
+  // Stable across devices: `createdAt` never changes after creation, and the id
+  // breaks a tie. Both comparisons are by code unit — `localeCompare` returns 0
+  // for Unicode-equivalent strings, which has already cost this feature one
+  // ordering bug.
+  return [...entries.values()].sort((x, y) =>
+    byCodeUnit(String(x.createdAt ?? ''), String(y.createdAt ?? ''))
+    || byCodeUnit(x.id, y.id));
+}
+
+/**
+ * Whether `candidate` should replace `held`. An unstamped entry cannot win a
+ * claim it never made, which is the same reading `resolveConflict` gives an
+ * absent `modifiedAt`. Equal stamps keep the held entry, so the result does not
+ * depend on which registry was read first — with one exception: when the
+ * stamps tie (including both absent), a tombstoned side still wins. Per the
+ * spec, `deleteProfile` sets `deletedAt` alone, not `updatedAt`, so a plain
+ * updatedAt comparison ties a deletion against the untouched entry it deleted —
+ * and an untimed tie that fell back to "keep whichever arrived first" would
+ * discard the tombstone half the time, resurrecting the entry the other
+ * device deleted purely because of which argument position it landed in.
+ */
+function outranks(candidate, held) {
+  const at = (entry) => (typeof entry.updatedAt === 'string' ? entry.updatedAt : '');
+  const byStamp = byCodeUnit(at(candidate), at(held));
+  if (byStamp !== 0) return byStamp > 0;
+
+  const isTombstone = (entry) => typeof entry.deletedAt === 'string';
+  if (isTombstone(candidate) !== isTombstone(held)) return isTombstone(candidate);
+
+  return false;
+}
+
+/**
  * Newer wins.
  *
  * Both devices run this, so the tie-break has to be one both sides compute the
