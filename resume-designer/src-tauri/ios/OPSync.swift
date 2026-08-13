@@ -168,6 +168,23 @@ protocol OPSyncHost: AnyObject {
   /// Sends and fetches that did not land. See `OPSyncFailure`.
   func syncDidFail(_ failures: [OPSyncFailure])
 
+  /// Sends and fetches that DID land, named the way `OPSyncFailure` names the
+  /// ones that did not: a unit id, or nil for the ZONE or a fetch — which covers
+  /// every unit in it.
+  ///
+  /// The counterpart to `syncDidFail`, and it exists because a warning raised by
+  /// a failure otherwise has nothing that could ever take it down again. The
+  /// good news is all on events this file already handles: `savedRecords` names
+  /// the units a send landed, `savedZones` the zones, and a
+  /// `didFetchRecordZoneChanges` carrying no error is a fetch that reached the
+  /// server — Apple's header says so in as many words ("A nil value indicates a
+  /// successful fetch").
+  ///
+  /// It says only that THESE names got through, never that sync is healthy. A
+  /// caller that cleared every warning on any success would hide a unit that
+  /// still cannot reach iCloud behind a unit that just did.
+  func syncDidLand(_ unitIds: [String?])
+
   /// A DIFFERENT iCloud account is underneath the transport than the one this
   /// device last synced against — switched in Settings, or signed out and back
   /// in as somebody else.
@@ -435,6 +452,12 @@ extension OPSyncEngine {
       // them is what makes the next save of the same unit a clean update rather
       // than a conflict.
       for record in sent.savedRecords { remember(record) }
+      // A unit that saved is a unit that reached iCloud, which is the only thing
+      // that can honestly take down a warning raised against THAT unit. Ahead of
+      // the failures below so that a batch which both saved and failed ends with
+      // the failure standing — the two lists name different records, so this is
+      // an ordering rule rather than a conflict.
+      land(sent.savedRecords.map(\.recordID.recordName))
       await handleFailedSaves(sent.failedRecordSaves, engine: engine)
 
     case .sentDatabaseChanges(let sent):
@@ -446,16 +469,28 @@ extension OPSyncEngine {
       for failure in sent.failedZoneSaves {
         engine.state.add(pendingDatabaseChanges: [.saveZone(failure.zone)])
       }
+      // A zone that saved is the good news that matches a failure reported
+      // against no unit in particular, and it is named the same way — nil, the
+      // whole zone. Before the report for the same reason as above.
+      if !sent.savedZones.isEmpty { land([nil]) }
       report(sent.failedZoneSaves.map { failure in
         OPSyncFailure(unitId: nil, willRetry: true, code: failure.error.code,
                       reason: failure.error.localizedDescription)
       })
 
     case .didFetchRecordZoneChanges(let done):
+      guard let error = done.error else {
+        // The other zone-wide good news: this fetch reached the server and got
+        // everything it asked for.
+        land([nil])
+        break
+      }
       // A zone that is not there is not a failure: it is the first sync, before
-      // anything has been sent. Everything else the caller should hear about.
-      if let error = done.error, error.code != .zoneNotFound,
-         error.code != .userDeletedZone {
+      // anything has been sent. It is not success either — a zone save that is
+      // still queued is exactly the failure a nil unit id stands for, and this
+      // is the server agreeing it has not happened yet — so it neither reports
+      // nor lands. Everything else the caller should hear about.
+      if error.code != .zoneNotFound, error.code != .userDeletedZone {
         report([OPSyncFailure(unitId: nil, willRetry: true, code: error.code,
                               reason: error.localizedDescription)])
       }
@@ -727,11 +762,22 @@ extension OPSyncEngine {
   /// compared and the loser is parked, so nothing is lost either way.
   /// Under-forgetting is the silent overwrite above.
   ///
-  /// Nothing is reported: `syncDidFail`'s recovery re-queues a SEND, and a page
-  /// that could not be reached to apply cannot be reached to be asked for a unit
+  /// Nothing is reported, and that is not the same as nothing happening.
+  /// `syncDidFail`'s recovery re-queues a SEND immediately, and a page that
+  /// could not be reached to apply cannot be reached to be asked for a unit
   /// either — it would spend this session's one recovery attempt (see
-  /// `syncDidFail` in OPShell.swift) on a webview that is still gone. The tag is
-  /// forfeited, so the next save of these units meets the conflict path.
+  /// `syncDidFail` in OPShell.swift) on a webview that is still gone. The unit
+  /// ids are held by the HOST instead, in the same set an edit made while the
+  /// transport was down waits in, and offered again at the next start — which is
+  /// a foreground or an activation, by which time the page is back. See
+  /// `syncDidFetch` in OPShell.swift, which does that on its own answer rather
+  /// than being told to from here: it is the side that knows the apply failed.
+  ///
+  /// Either way the tag is forfeited, so the next save of these units meets the
+  /// conflict path. That is what makes the re-offer safe as well as useful: the
+  /// send quotes no tag, CloudKit answers `serverRecordChanged`, both copies are
+  /// compared and the loser is parked in version history. It costs one round
+  /// trip and cannot lose content whichever copy wins.
   ///
   /// Awaiting the page suspends the event this runs inside. `nextRecordZoneChangeBatch`
   /// is not an event, so it is NOT serialized against that suspension and a send
@@ -751,6 +797,13 @@ extension OPSyncEngine {
   private func report(_ failures: [OPSyncFailure]) {
     guard !failures.isEmpty else { return }
     host?.syncDidFail(failures)
+  }
+
+  /// `report`'s opposite, and deliberately as small: what got through, by the
+  /// same name a failure would have carried. See `syncDidLand`.
+  private func land(_ unitIds: [String?]) {
+    guard !unitIds.isEmpty else { return }
+    host?.syncDidLand(unitIds)
   }
 }
 

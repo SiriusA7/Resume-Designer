@@ -690,9 +690,34 @@ final class ShellModel: ObservableObject {
   /// not an error, and it gets no alert.
   @Published private(set) var syncAccountState: OPSyncAccountState?
 
-  /// The most recent failure this device is NOT already acting on — see
+  /// ONE of the failures this device is not already acting on — see
   /// `syncDidFail`. Also only ever a line in Settings.
+  ///
+  /// WHICH one is not meaningful and deliberately not promised: `syncStatus`
+  /// asks whether this is nil and nothing else, because no `CKError` is ever
+  /// shown to a person. What IS promised is the bit — non-nil exactly while
+  /// `syncOutstanding` holds something.
   @Published private(set) var syncFailure: OPSyncFailure?
+
+  /// Every failure the status line is still standing behind, keyed the way
+  /// `OPSyncFailure` names what failed: a unit id, or nil for the zone or a
+  /// fetch, which applies to every unit in it. `Optional<String>` is a perfectly
+  /// good key, so the key IS `failure.unitId` — no sentinel to explain and no
+  /// second property to keep in step.
+  ///
+  /// This exists so the warning can come DOWN. It used to be one value cleared
+  /// only by switching sync off, so a network blip left "some changes haven't
+  /// reached iCloud yet" up until relaunch, long after the change had reached
+  /// iCloud. The engine says when something lands (`syncDidLand`), and the only
+  /// honest reading of that is per-name: unit A failing permanently while unit B
+  /// saves fine is still a problem, so clearing on any success would hide A
+  /// behind B.
+  ///
+  /// A SET of ids would have been smaller and is not enough — `syncFailure` has
+  /// to publish an `OPSyncFailure`, and synthesising one to stand for an id is a
+  /// worse lie than keeping the one that was reported. A dictionary is the same
+  /// set with the reported value still attached.
+  private var syncOutstanding: [String?: OPSyncFailure] = [:]
 
   /// Whether the person has turned iCloud sync on, as the page last reported
   /// it. `nil` until the first report, and that distinction is load-bearing:
@@ -714,7 +739,12 @@ final class ShellModel: ObservableObject {
   /// recovery loop; see `syncDidFail` for why there has to be one.
   private var syncRecovered: Set<String> = []
 
-  /// Unit ids named while the transport was down. See `sendSync`.
+  /// Unit ids this device still owes the server a send of, drained by every
+  /// start. Three things put one here and they are the same thing: the send
+  /// could not be made (`sendSync`), the page could not be asked for the unit
+  /// (`syncUnit(withId:)`), or the page could not APPLY what arrived and its
+  /// change tag was forfeited, so only a send can bring that record back down
+  /// the conflict path (`syncDidFetch`).
   private var syncDeferred: Set<String> = []
 
   /// Device-local transport bookkeeping, beside OPSync's own
@@ -1005,7 +1035,7 @@ extension ShellModel {
       // The status line is about a transport that is now down; keeping the last
       // account state or failure would leave it describing a stopped engine.
       self?.syncAccountState = nil
-      self?.syncFailure = nil
+      self?.forgetSyncFailures()
     }
     syncStart = task
     await task.value
@@ -1057,6 +1087,13 @@ extension ShellModel {
       // carry over — the latter name units in a zone this engine will not open.
       syncRecovered.removeAll()
       syncDeferred.removeAll()
+      // Its outstanding failures go with them, for the same reason and one more:
+      // an outstanding failure comes down when the thing it names next reaches
+      // iCloud, and nothing in another profile's zone can ever be that. Held, it
+      // would be a warning with no way left to clear it — which is the sticky
+      // line this whole arrangement exists to stop. Anything still wrong there
+      // is reported again by that profile's own next send.
+      forgetSyncFailures()
       syncProfileId = profileId
     }
 
@@ -1120,9 +1157,12 @@ extension ShellModel {
       return
     }
 
-    // Anything edited while the transport was down goes up before the pull, so
-    // a unit changed on both sides meets the conflict path rather than being
-    // quietly overwritten by what arrives.
+    // Anything this device still owes a send of goes up before the pull, so a
+    // unit changed on both sides meets the conflict path rather than being
+    // quietly overwritten by what arrives. That is also the only thing that can
+    // recover a batch the page would not apply: the pull cannot re-deliver it —
+    // the change token has moved past it — but a send with no tag brings it back
+    // down that same conflict path. See `syncDeferred`.
     let deferred = syncDeferred
     syncDeferred.removeAll()
     await sendSync(unitIds: Array(deferred))
@@ -1244,6 +1284,33 @@ extension ShellModel {
     NSLog("[OPShell] a full upload is owed again for \(keys.count) considered profile(s)")
   }
 
+  /// Stand behind one more failure. The published value is the one just
+  /// reported, which is the closest thing to "most recent" this keeps.
+  private func recordSyncFailure(_ failure: OPSyncFailure) {
+    syncOutstanding[failure.unitId] = failure
+    syncFailure = failure
+  }
+
+  /// `key` — a unit id, or nil for the zone-and-fetch entry — reached iCloud, so
+  /// whatever was outstanding against it is not outstanding any more.
+  ///
+  /// Republishing from what is LEFT is the whole point: the line stays up while
+  /// anything remains, and `values.first` is an arbitrary survivor because the
+  /// line does not name one. Cheap by construction — the guard means this runs
+  /// only when something actually cleared, not on every successful save.
+  private func resolveSyncFailure(_ key: String?) {
+    guard syncOutstanding.removeValue(forKey: key) != nil else { return }
+    syncFailure = syncOutstanding.values.first
+  }
+
+  /// Stop standing behind any of it. For the two moments when nothing reported
+  /// so far can still be observed: the transport going down, and the profile —
+  /// and therefore the zone — changing under it.
+  private func forgetSyncFailures() {
+    syncOutstanding.removeAll()
+    syncFailure = nil
+  }
+
   /// The one line Settings shows under the switch — or "", which draws no row
   /// at all, because saying nothing is better than saying nothing useful.
   ///
@@ -1295,11 +1362,11 @@ extension ShellModel {
 /// payload — a unit is `{ id, kind, payload, modifiedAt }` with the payload an
 /// opaque string, and all decomposition stays in JS.
 ///
-/// The two non-async methods are called from inside the engine's event
-/// handling, so they stay cheap and neither re-enters the engine directly. The
-/// async pair suspends on the bridge, and the engine awaits them: the whole
-/// point of `syncDidFetch`'s answer is that the transport must not move on
-/// before it has one.
+/// The non-async methods are called from inside the engine's event handling, so
+/// they stay cheap and none of them re-enters the engine directly. The async
+/// pair suspends on the bridge, and the engine awaits them: the whole point of
+/// `syncDidFetch`'s answer is that the transport must not move on before it has
+/// one.
 extension ShellModel: OPSyncHost {
   /// The unit as the page holds it RIGHT NOW, asked at send time.
   func syncUnit(withId id: String) async -> SyncUnit? {
@@ -1339,7 +1406,51 @@ extension ShellModel: OPSyncHost {
   /// answered, the reply carried no usable count, or the count came back short.
   /// A wrong `true` is a silent overwrite of the server's newer copy; a wrong
   /// `false` costs one extra round trip the next time this unit is saved.
+  ///
+  /// A `false` also OWES THESE UNITS ANOTHER GO, and this is the only place that
+  /// can record that. Forfeiting the change tags keeps the next save honest, but
+  /// it does not bring the content down: the engine's change token has already
+  /// advanced past these records and there is no public way to rewind it, so
+  /// without this they arrive again only when this device happens to EDIT the
+  /// same units — which, for a résumé the person is finished with, is never.
+  ///
+  /// So the ids join the set an edit made while the transport was down waits in,
+  /// and every start drains it (`runStartSync`) — an activation, a return to the
+  /// foreground, a profile switch. Sending is the recovery: the tag is gone, so
+  /// the save quotes none, CloudKit answers `serverRecordChanged`, and the
+  /// record comes back down the conflict path where both copies are compared and
+  /// the loser is parked in version history. One round trip, and nothing is lost
+  /// whichever copy wins — which is the same argument `deliver` makes for
+  /// forfeiting the tag in the first place.
+  ///
+  /// NOT `syncDidFail`, which would re-queue the send in the same breath and
+  /// spend this session's one recovery attempt on the webview that just failed
+  /// to answer. Waiting for a start is the difference: a start is a moment the
+  /// page is back.
+  ///
+  /// DELIBERATELY UNBOUNDED, unlike `syncDidFail`'s. A turn of this loop costs
+  /// one activation, not one engine event, and every turn is a real attempt that
+  /// can succeed — a page that refused because an edit was in flight, or because
+  /// the arriving copy was older, is a page that will take it or overrule it
+  /// later. A bound could only drop the id, and this same set is where local
+  /// edits that never reached iCloud wait, so dropping one is dropping content.
+  /// The one case that would loop for ever ends itself: a page that answers "I
+  /// have nothing under that id" makes `recordToSend` take the change off the
+  /// queue for good.
   func syncDidFetch(_ units: [SyncUnit]) async -> Bool {
+    guard await applyFetched(units) else {
+      syncDeferred.formUnion(units.map(\.id))
+      NSLog("[OPShell] \(units.count) fetched unit(s) were not applied; "
+            + "they are offered again at the next start")
+      return false
+    }
+    return true
+  }
+
+  /// The ask itself, split out so that no answer of `false` can reach the
+  /// transport without the ids being held — the two would otherwise have to be
+  /// kept in step at three separate returns.
+  private func applyFetched(_ units: [SyncUnit]) async -> Bool {
     guard let data = try? JSONEncoder().encode(units),
           let json = String(data: data, encoding: .utf8) else {
       NSLog("[OPShell] could not encode \(units.count) fetched unit(s)")
@@ -1406,14 +1517,14 @@ extension ShellModel: OPSyncHost {
       // engine is already handling the first and there is no unit to re-queue
       // for the second. Both are for the status line.
       guard let unitId = failure.unitId, !failure.willRetry else {
-        syncFailure = failure
+        recordSyncFailure(failure)
         continue
       }
       // `insert` reports whether this is the first time. A second failure for
       // the same unit is where the loop would have been, so it is held for the
       // status line instead — this device has now stopped trying.
       guard syncRecovered.insert(unitId).inserted else {
-        syncFailure = failure
+        recordSyncFailure(failure)
         continue
       }
       recover.append(unitId)
@@ -1424,6 +1535,22 @@ extension ShellModel: OPSyncHost {
     // `send` re-enters the engine. The task puts it on a later main-actor turn,
     // once the event these failures belong to has been fully handled.
     Task { @MainActor [weak self] in await self?.sendSync(unitIds: recover) }
+  }
+
+  /// Sends and fetches that landed, which is how a warning comes back DOWN.
+  ///
+  /// Nothing here is a claim that sync is well — only that these names got
+  /// through, which is exactly as much as is needed to stop standing behind a
+  /// failure reported against one of them. A failure this device never recorded,
+  /// or already cleared, resolves to nothing: `resolveSyncFailure` is a lookup,
+  /// so every ordinary successful save costs one.
+  ///
+  /// A unit id that reached iCloud after failing is settled and says nothing
+  /// about any other unit. A nil is the zone or a fetch — the same scope the
+  /// failure had, because the failure that names no unit is a failure of
+  /// everything in the zone.
+  func syncDidLand(_ unitIds: [String?]) {
+    for unitId in unitIds { resolveSyncFailure(unitId) }
   }
 
   /// A different iCloud account is underneath the transport now.
