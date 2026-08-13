@@ -699,6 +699,26 @@ final class ShellModel: ObservableObject {
   /// `syncOutstanding` holds something.
   @Published private(set) var syncFailure: OPSyncFailure?
 
+  /// The one thing sync says while the app is in USE, rather than in Settings: a
+  /// conflict was resolved underneath the person, and the version it replaced is
+  /// still there to be restored. `nil` draws nothing. See `announceParked`.
+  ///
+  /// The design spec asks for "one non-blocking notice per resolution — not per
+  /// record", and this is the whole of that. Non-blocking is not a style
+  /// preference: sync is background reconciliation, nothing in the app waits on
+  /// it, and an alert would take the keyboard away from someone mid-sentence to
+  /// report something that has already been handled correctly.
+  ///
+  /// It lives on the model rather than in the chrome because the CLOCK that
+  /// takes it back down is the model's. A notice raised while a sheet is up must
+  /// not be cut short — or restarted — by that sheet closing and remounting the
+  /// bar.
+  @Published private(set) var conflictNotice: String?
+
+  /// Counts notices so a stale hide cannot cut a newer one short — the same
+  /// clock `keepZoomOpen` runs in the chrome, for the same reason.
+  private var conflictNoticeGeneration = 0
+
   /// Every failure the status line is still standing behind, keyed the way
   /// `OPSyncFailure` names what failed: a unit id, or nil for the zone or a
   /// fetch, which applies to every unit in it. `Optional<String>` is a perfectly
@@ -1355,6 +1375,59 @@ extension ShellModel {
       return "On Paper couldn't check your iCloud account just now. It will try again."
     }
   }
+
+  /// Long enough to read two clauses and decide whether to tap, short enough
+  /// that it is gone before it becomes furniture. The same ten seconds the
+  /// migration notice on the desktop already uses (`showMigrationToast` in
+  /// src/main.js).
+  private static let conflictNoticeSeconds = 10.0
+
+  /// Raise the one notice for a resolution, and start the clock that takes it
+  /// back down.
+  ///
+  /// A second resolution arriving while the first is still up REPLACES it and
+  /// restarts the clock: one notice on screen at a time is the same rule as one
+  /// notice per batch, applied across batches.
+  private func announceParked(_ parked: Int) {
+    guard parked > 0 else { return }
+    conflictNotice = Self.conflictNoticeText(parked)
+    conflictNoticeGeneration += 1
+    let generation = conflictNoticeGeneration
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .seconds(Self.conflictNoticeSeconds))
+      guard let self, generation == self.conflictNoticeGeneration else { return }
+      self.conflictNotice = nil
+    }
+  }
+
+  /// Read, or acted on. Bumps the generation so the pending hide belongs to
+  /// nothing and cannot take a LATER notice down early.
+  func dismissConflictNotice() {
+    conflictNoticeGeneration += 1
+    conflictNotice = nil
+  }
+
+  /// What the notice says. The rules behind the words:
+  ///
+  /// - **The source device is not named**, though the spec's example sentence
+  ///   named one. The record carries an opaque device id and nothing else, and
+  ///   since iOS 16 `UIDevice.current.name` is a generic model string anyway —
+  ///   so "from your iPhone" would be a guess printed as a fact. The parked
+  ///   entry is already labelled "From another device"
+  ///   (src/historyEntryLabels.js) and this agrees with it, word for word.
+  /// - **It names no résumé.** History is per-résumé, a batch can hold several,
+  ///   and the unit id is the page's to decompose, not this side's — a unit is
+  ///   `{ id, kind, payload, modifiedAt }` here and stays opaque. Saying "one of
+  ///   your resumes" is less than the person would like and all that is true.
+  /// - **Nothing suggests loss**, because there is none: the sentence exists to
+  ///   say where the previous version went.
+  private static func conflictNoticeText(_ parked: Int) -> String {
+    parked == 1
+      ? "A newer version from another device replaced one of your resumes. "
+        + "The previous one is in Version history."
+      : "Newer versions from another device replaced \(parked) of your resumes. "
+        + "The previous ones are in Version history."
+  }
 }
 
 /// Where the transport meets the page. Every one of these is a command on the
@@ -1477,16 +1550,50 @@ extension ShellModel: OPSyncHost {
   }
 
   /// The older side of a conflict, parked in that résumé's version history
-  /// rather than discarded. One command each: `parkLoser` takes one unit, and
-  /// batching them here would only move the loop across the bridge.
+  /// rather than discarded — and the one moment sync has anything to SAY.
+  ///
+  /// Deferred onto a later main-actor turn rather than run inline: this is
+  /// called from inside the engine's event handling and the bridge re-enters the
+  /// engine, which is the same reason `syncDidFail` defers.
   func syncDidLoseConflict(_ losers: [SyncUnit]) {
+    Task { @MainActor [weak self] in await self?.park(losers) }
+  }
+
+  /// Park each loser, then tell the person ONCE.
+  ///
+  /// One command per unit — `parkLoser` takes one, and batching them here would
+  /// only move the loop across the bridge — but one NOTICE for the batch, which
+  /// is the spec's rule and not a nicety: a device that has been away comes back
+  /// owing a full upload, so several résumés conflicting in a single push is an
+  /// ordinary shape, and a stack of notices about something that resolved
+  /// correctly reads as an alarm.
+  ///
+  /// The count is what actually LANDED, never `losers.count`. `parkLoser`
+  /// answers false for a payload with no document in it and for every non-résumé
+  /// unit, which has no history to park in — and a notice pointing at Version
+  /// history for a version that is not in it would be worse than silence. Zero
+  /// parks, no notice; the log lines are then the only record, which is right,
+  /// because there is nothing the person could do about either case.
+  private func park(_ losers: [SyncUnit]) async {
+    var parked = 0
     for loser in losers {
-      // Refusing to park is the one way a version disappears in this design, so
-      // it is said out loud rather than assumed away.
-      send("syncParkLoser", ["unitId": loser.id, "payload": loser.payload]) { ok in
-        if !ok { NSLog("[OPShell] the page would not park the older \(loser.id)") }
+      // The HANDLER's own return value, off the dispatcher's `{ ok, result }`
+      // envelope. `send` collapses that to `ok`, which is only whether the
+      // command ran — a refusal comes back as `{ ok: true, result: false }`, so
+      // the log line below could never fire and this side could not have told a
+      // parked version from a discarded one.
+      let reply = await sendForResult(
+        "syncParkLoser", ["unitId": loser.id, "payload": loser.payload]
+      )
+      guard case .answered(let value) = reply, (value as? Bool) == true else {
+        // Refusing to park is the one way a version disappears in this design,
+        // so it is said out loud rather than assumed away.
+        NSLog("[OPShell] the page would not park the older \(loser.id)")
+        continue
       }
+      parked += 1
     }
+    announceParked(parked)
   }
 
   /// Sends and fetches that did not land.
@@ -2121,6 +2228,28 @@ private struct ShellView: View {
     .overlay(alignment: .bottom) {
       if !snapshot.modalOpen { bottomBar }
     }
+    // A SECOND overlay rather than a stack with the bar inside the first one:
+    // stacked, the bar would jump upwards by the notice's height the moment a
+    // background reconciliation finished, and a control moving out from under a
+    // reaching finger is exactly what "non-blocking" is supposed to rule out.
+    // Held clear of the bar by a fixed inset instead, so nothing already on
+    // screen moves at all.
+    //
+    // Withdrawn while a web dialog is up for the same reason the bar is — it
+    // floats above the webview and would cover the dialog's own buttons. The
+    // cost is a notice that expires unseen behind one, which is the right way
+    // round: the dialog is what the person is doing, and the parked version is
+    // in Version history either way.
+    .overlay(alignment: .bottom) {
+      ZStack(alignment: .bottom) {
+        if let notice = model.conflictNotice, !snapshot.modalOpen {
+          conflictNotice(notice)
+            .padding(.bottom, Self.conflictNoticeInset)
+            .transition(.opacity)
+        }
+      }
+      .animation(.snappy(duration: 0.3), value: model.conflictNotice)
+    }
     // Pull whatever another device changed while this one was away. Nothing
     // waits on it and no failure surfaces — sync is background reconciliation.
     //
@@ -2285,6 +2414,55 @@ private struct ShellView: View {
     barRow
       .padding(.horizontal, 12)
       .padding(.bottom, 4)
+  }
+
+  /// Clears the bottom bar: its 44pt capsules (`BarCapsule`), the 4pt that holds
+  /// them off the home indicator, and 8pt of air between the two.
+  private static let conflictNoticeInset: CGFloat = 56
+
+  /// What sync says when it has resolved a conflict — see
+  /// `ShellModel.conflictNotice` for the rule and the copy.
+  ///
+  /// A button, because the sentence ends at Version history and that sheet is
+  /// one tap away from here: the notice is then a route rather than a statement
+  /// about somewhere else in the app. It opens the history of the résumé ON
+  /// SCREEN, which is the one that produces very nearly every conflict — the
+  /// copy names no résumé precisely so that this is a shortcut and not a claim.
+  ///
+  /// Glass on a rounded rect rather than `BarCapsule`: it is the same floating
+  /// chrome as the bar below it, but a capsule around three lines of text draws
+  /// a lozenge with enormous empty ends.
+  private func conflictNotice(_ text: String) -> some View {
+    Button {
+      model.send("setHistoryOpen", ["value": "true"])
+      sheet = .history
+      model.dismissConflictNotice()
+    } label: {
+      HStack(alignment: .top, spacing: 10) {
+        // The icon the "Version history" menu item already carries, so the two
+        // read as the same destination.
+        Image(systemName: "clock.arrow.circlepath")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+          // Optical alignment with the first line of text rather than its box.
+          .padding(.top, 1)
+        Text(text)
+          .font(.footnote)
+          .foregroundStyle(.primary)
+          .multilineTextAlignment(.leading)
+          // Without this the text truncates instead of wrapping inside an
+          // overlay that is free to be as tall as it likes.
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
+    }
+    .buttonStyle(.plain)
+    .padding(.horizontal, 12)
+    .accessibilityHint("Opens Version history")
   }
 
   private var barRow: some View {

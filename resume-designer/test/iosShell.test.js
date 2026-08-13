@@ -1104,6 +1104,29 @@ describe('the Design sheet commands', () => {
     expect(parkLoser).toHaveBeenCalledWith('resume:v-1', '{"name":"lost"}');
   });
 
+  it('answers whether the loser was actually parked', async () => {
+    // The conflict notice is raised on this bit and on nothing else: Swift
+    // counts the losers that LANDED in a batch and says one thing about them
+    // (`park` in OPShell.swift). Discarding the answer here would leave that
+    // side unable to tell a parked version from a discarded one, and a notice
+    // pointing at Version history for a version that never reached it is worse
+    // than saying nothing at all.
+    const { send } = await mount({ parkLoser: () => true });
+    expect(send({ type: 'syncParkLoser', unitId: 'resume:v-1', payload: '{"data":{}}' }))
+      .toEqual({ ok: true, result: true });
+  });
+
+  it('carries a REFUSAL to park as a result, not as a failed command', async () => {
+    // `parkLoser` returns false for a payload with no document in it and for
+    // every non-résumé unit, which has no history to park in. Both are the
+    // handler answering, so the envelope is `ok: true` with a false RESULT —
+    // `ok` is only whether the command ran. Swift reads the result, having
+    // previously read `ok` and therefore counted every refusal as a park.
+    const { send } = await mount({ parkLoser: () => false });
+    expect(send({ type: 'syncParkLoser', unitId: 'key:resume-designer-applications', payload: '[]' }))
+      .toEqual({ ok: true, result: false });
+  });
+
   it('answers with the count applyUnits actually landed', async () => {
     // Swift decides whether to keep the server's change tags for this batch on
     // this number, so it has to cross the bridge rather than be discarded: a
