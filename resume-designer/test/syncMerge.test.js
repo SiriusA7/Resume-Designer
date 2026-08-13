@@ -269,6 +269,10 @@ describe('mergeRegistry', () => {
   });
 
   it('is order-independent', () => {
+    // A and B have DISTINCT ids, so this never collides and never reaches
+    // `outranks` — it covers the union/sort, not the tie-break. See "resolves
+    // an untimed tie the same way regardless of argument order" below for the
+    // collision path.
     expect(mergeRegistry([A], [B])).toEqual(mergeRegistry([B], [A]));
   });
 
@@ -284,16 +288,25 @@ describe('mergeRegistry', () => {
     expect(mergeRegistry([stamped], [A])[0].name).toBe('Stamped');
   });
 
-  it('keeps the local entry when neither is stamped', () => {
+  it('resolves an untimed tie the same way regardless of argument order', () => {
+    // Same id, equal stamps (both absent), different content — the collision
+    // path `outranks` exists for. This is not exotic: every registry entry
+    // written before this feature has no `updatedAt` at all, so a profile
+    // renamed on one device pre-upgrade and not on the other produces exactly
+    // this. Both devices call this as `merge(local, remote)`, so "keep the
+    // held (first) entry" would mean each device keeps its OWN copy forever —
+    // the two never converge. Which side wins is an implementation choice and
+    // deliberately NOT asserted here; only that both argument orders agree.
     const other = { ...A, name: 'Other' };
-    expect(mergeRegistry([A], [other])[0].name).toBe('Work');
+    expect(mergeRegistry([A], [other])).toEqual(mergeRegistry([other], [A]));
   });
 
-  it('retains a tombstone rather than resurrecting the entry', () => {
+  it('retains a tombstone rather than resurrecting the entry, in either order', () => {
     const deleted = { ...A, deletedAt: '2026-03-01T00:00:00.000Z' };
-    const merged = mergeRegistry([A], [deleted]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].deletedAt).toBe('2026-03-01T00:00:00.000Z');
+    for (const merged of [mergeRegistry([A], [deleted]), mergeRegistry([deleted], [A])]) {
+      expect(merged).toHaveLength(1);
+      expect(merged[0].deletedAt).toBe('2026-03-01T00:00:00.000Z');
+    }
   });
 
   it('lets a rename after a deletion win, since it is newer', () => {
@@ -310,5 +323,14 @@ describe('mergeRegistry', () => {
   it('orders by createdAt then id, by code unit', () => {
     const sameDay = { id: 'pz', name: 'Z', emoji: '🙂', createdAt: A.createdAt };
     expect(mergeRegistry([sameDay], [A]).map((p) => p.id)).toEqual(['pa', 'pz']);
+  });
+
+  it('sorts by createdAt before id, so an id-only sort would get this wrong', () => {
+    // Every other fixture in this file has id order agreeing with createdAt
+    // order, so a sort keyed on `id` alone would pass the rest of the suite.
+    // Here they contradict: 'pz' sorts after A's 'pa' by id, but was created
+    // first.
+    const earlyButHighId = { id: 'pz', name: 'Early', emoji: '🙂', createdAt: '2025-01-01T00:00:00.000Z' };
+    expect(mergeRegistry([A], [earlyButHighId]).map((p) => p.id)).toEqual(['pz', 'pa']);
   });
 });

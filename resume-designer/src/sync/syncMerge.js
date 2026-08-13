@@ -289,14 +289,26 @@ export function mergeRegistry(a, b) {
 /**
  * Whether `candidate` should replace `held`. An unstamped entry cannot win a
  * claim it never made, which is the same reading `resolveConflict` gives an
- * absent `modifiedAt`. Equal stamps keep the held entry, so the result does not
- * depend on which registry was read first — with one exception: when the
- * stamps tie (including both absent), a tombstoned side still wins. Per the
- * spec, `deleteProfile` sets `deletedAt` alone, not `updatedAt`, so a plain
- * updatedAt comparison ties a deletion against the untouched entry it deleted —
- * and an untimed tie that fell back to "keep whichever arrived first" would
- * discard the tombstone half the time, resurrecting the entry the other
- * device deleted purely because of which argument position it landed in.
+ * absent `modifiedAt`. When the stamps tie (including both absent), a
+ * tombstoned side still wins. Per the spec, `deleteProfile` sets `deletedAt`
+ * alone, not `updatedAt`, so a plain updatedAt comparison ties a deletion
+ * against the untouched entry it deleted, and letting that tie fall through
+ * to the rule below would discard the tombstone whenever the deleting
+ * device's own copy happened to be `held`.
+ *
+ * Below that — stamps tied AND tombstone-ness tied — the entries are broken
+ * on content, deterministically. "Keep the held entry" looks like a safe
+ * default here but is argument-order dependence wearing a reasonable-looking
+ * disguise: both devices call this as `merge(local, remote)`, so `held` is
+ * always the LOCAL entry, and "keep held" means each device keeps its own
+ * copy of every tied entry forever — the two never converge, which is the
+ * single property this whole file exists to guarantee. This is not exotic:
+ * every registry entry written before this feature has no `updatedAt` at
+ * all, so a profile renamed on one device pre-upgrade and not on the other
+ * gives exactly two unstamped, non-tombstoned entries with different names.
+ * `canonicalJSON` + `byCodeUnit` — already used in `mergeTokenUsage` for the
+ * identical reason — give a comparison both devices compute the same way, so
+ * which side wins is arbitrary but consistent.
  */
 function outranks(candidate, held) {
   const at = (entry) => (typeof entry.updatedAt === 'string' ? entry.updatedAt : '');
@@ -306,7 +318,7 @@ function outranks(candidate, held) {
   const isTombstone = (entry) => typeof entry.deletedAt === 'string';
   if (isTombstone(candidate) !== isTombstone(held)) return isTombstone(candidate);
 
-  return false;
+  return byCodeUnit(canonicalJSON(candidate), canonicalJSON(held)) > 0;
 }
 
 /**

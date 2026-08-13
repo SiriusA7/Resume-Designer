@@ -76,9 +76,20 @@ Merge rule, given two registries:
 
 - Union by profile `id`.
 - Where both sides carry the same `id`, take the entry with the newer
-  `updatedAt`; if only one side has an `updatedAt`, that side wins; if neither
-  does, take the local one (an unstamped entry cannot win a claim it never made,
-  matching `resolveConflict`'s treatment of an absent stamp).
+  `updatedAt`; if only one side has an `updatedAt`, that side wins (an unstamped
+  entry cannot win a claim it never made, matching `resolveConflict`'s treatment
+  of an absent stamp).
+- **If the stamps tie, a tombstoned entry wins** — resurrecting a deletion is
+  the failure this merge exists to prevent, and a wrongly-winning tombstone
+  merely hides a listing that a later stamped rename revives.
+- **If those tie too, break on content**: `byCodeUnit(canonicalJSON(a), canonicalJSON(b))`.
+  This clause is load-bearing and was wrong in the first draft of this spec,
+  which said "take the local one". **That is argument-order dependence wearing
+  a reasonable-looking disguise** — both devices call this as
+  `merge(local, remote)`, so "the local one" is a different entry on each, and
+  the two would disagree permanently with no further write to break the tie.
+  It is reachable in the ordinary post-upgrade state, because every entry
+  written before this feature has no `updatedAt` at all.
 - Order the result by `createdAt` ascending, then by `id` using code-unit
   comparison, so two devices merging the same inputs produce byte-identical
   output. **Not `localeCompare`** — it returns 0 for Unicode-equivalent strings,
