@@ -97,6 +97,72 @@ const deferredDuringRestore = new Map(); // mapped key -> { op: 'write'|'delete'
 // committed; reads should see the restored cache and no rollback follows).
 let preRestoreSnapshot = null;
 
+// ── the sync stamping seam ─────────────────────────────────────────────────
+//
+// A write to a key the sync layer syncs has to mark that unit locally modified,
+// or the unit is uploaded once by the full sweep that runs when sync is first
+// switched on and NEVER again. The hook lives here, at the one function every
+// owned write already funnels through, rather than at the ~14 call sites that
+// write a synced key: the list of synced keys is `classifyKey`'s
+// (src/sync/syncKeys.js), an interceptor that asks it cannot drift from it, and
+// a call site added later is simply forgotten — which is exactly how the gap
+// this closes opened in the first place.
+//
+// This file cannot import the sync layer (the sync layer imports THIS file), so
+// main.js installs the observer, the same graph edge it already owns for
+// registerPersistedSaveHandler.
+//
+// `onWrite(logicalKey, value, previous)` is handed the LOGICAL key, because
+// that is what `classifyKey` takes — a physical, profile-namespaced key comes
+// back 'unknown' there and would sync nothing. `previous` is the value the
+// write replaced, and it is what lets the observer tell a `resume-designer-data`
+// write that changed `settings` from one that only touched a résumé.
+//
+// `onFlush()` is called from the write-behind drain — the coalescing window
+// this file already runs on, and the one every durability barrier forces
+// through flush(). The observer accumulates ids in onWrite and notifies ONCE
+// per window there. That matters: the application-notes field writes on every
+// keystroke ON PURPOSE (see DetailPane.jsx), on the understanding that this
+// layer collapses the burst into one write — a sync notification per character
+// would be a CloudKit send per character.
+let writeObserver = null;
+
+/** Install (or, with null, remove) the sync stamping observer. */
+export function setStorageWriteObserver(observer) {
+  writeObserver = observer && typeof observer.onWrite === 'function' ? observer : null;
+}
+
+/** The stored value for a MAPPED key, read the same way getItem's tail does. */
+function readStored(mappedKey) {
+  if (mode === 'passthrough') return localStorage.getItem(mappedKey);
+  return cache.has(mappedKey) ? cache.get(mappedKey) : null;
+}
+
+/**
+ * Both observer calls swallow and log a throw, deliberately: the bytes are
+ * already stored by the time either runs, and letting a bookkeeping failure
+ * propagate would surface at whichever call site happened to be writing and
+ * read there as a lost edit. persistence.js guards its own stamping the same
+ * way, for the same reason.
+ */
+function observeWrite(logicalKey, value, previous) {
+  if (!writeObserver) return;
+  try {
+    writeObserver.onWrite(logicalKey, value, previous);
+  } catch (err) {
+    console.error(`[appStorage] sync stamping failed for "${logicalKey}":`, err);
+  }
+}
+
+function observeFlush() {
+  if (!writeObserver?.onFlush) return;
+  try {
+    writeObserver.onFlush();
+  } catch (err) {
+    console.error('[appStorage] sync notification failed:', err);
+  }
+}
+
 // Readiness signal for the React chrome. App.jsx gates every storage-reading
 // child on this so their mount-time facade reads can never execute before the
 // BOOT DATA is in place — that means initAppStorage() has picked a mode AND
@@ -222,6 +288,12 @@ function drain() {
       }
     });
   }
+  // The coalescing window just closed: one sync notification for everything
+  // stamped since the last drain (see setStorageWriteObserver). Outside the
+  // per-key chain on purpose — the notification says WHAT changed, and the
+  // transport decides when it goes up; making it wait on the disk chain would
+  // hold it behind an unrelated key's retry.
+  observeFlush();
 }
 
 export const appStorage = {
@@ -245,24 +317,43 @@ export const appStorage = {
   },
 
   setItem(key, value) {
+    // Kept before the mapping: `classifyKey` — the sync layer's authority on
+    // which keys travel — is defined over LOGICAL keys (see setStorageWriteObserver).
+    const logicalKey = key;
     key = mapKey(activeProfileId, key);
     const v = String(value);
     // Blocked mid-restore: record the latest write and skip cache+disk (see the
     // restoreGuardActive note). The import's own writes ran before the guard armed.
+    // No observer call either — nothing was stored, so nothing changed yet.
     if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'write', value: v }); return; }
+    // Read BEFORE the write lands, and only when someone is listening. In cached
+    // mode — every shipped desktop and iOS build — this is a Map lookup.
+    const previous = writeObserver ? readStored(key) : null;
     if (mode === 'passthrough') {
       // readOnly passthrough (print window whose disk load failed): there is
       // no separate cache here, and it must never touch localStorage — no-op.
       if (readOnly) return;
       localStorage.setItem(key, v); // may throw on quota — callers guard
+      // AFTER the store, so a quota throw above leaves no unit claiming a
+      // change that never landed.
+      observeWrite(logicalKey, v, previous);
+      // Passthrough has no drain to coalesce on — this call IS the durable
+      // write, so the notification window opens and closes with it.
+      observeFlush();
       return;
     }
     cache.set(key, v);
     if (readOnly) return; // print window: cache-only, never queued to disk
     dirty.set(key, 'write');
     scheduleDrain();
+    observeWrite(logicalKey, v, previous);
   },
 
+  // Deliberately NOT observed. `collectKeyUnit` (syncModel.js) answers null for
+  // an absent key — "absent is not empty", since an empty payload would CLEAR
+  // that key on every receiving device — so a stamped removal names a unit the
+  // model would then decline to build. Deletion does not propagate in this
+  // design; nothing here is a tombstone.
   removeItem(key) {
     key = mapKey(activeProfileId, key);
     if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'delete' }); return; }
@@ -561,6 +652,7 @@ export function __resetAppStorageForTests() {
   chain = Promise.resolve();
   failureToastShown = false;
   writeFailures = 0;
+  writeObserver = null;
   restoreGuardActive = false;
   deferredDuringRestore.clear();
   preRestoreSnapshot = null;

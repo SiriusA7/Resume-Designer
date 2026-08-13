@@ -37,8 +37,7 @@ const DATA_UNIT_PREFIX = 'data:';
 // a parked loser lands at a key the version-history dialog never reads from.
 const HISTORY_PREFIX = BACKUP_HISTORY_PREFIX;
 
-const readJSON = (key, fallback) => {
-  const raw = appStorage.getItem(key);
+const parseJSON = (raw, fallback) => {
   if (raw == null) return fallback;
   try {
     return JSON.parse(raw);
@@ -46,6 +45,8 @@ const readJSON = (key, fallback) => {
     return fallback;
   }
 };
+
+const readJSON = (key, fallback) => parseJSON(appStorage.getItem(key), fallback);
 
 const state = () => readJSON(STATE_KEY, {});
 
@@ -262,19 +263,41 @@ function adoptLoadedDocument(unit) {
 }
 
 /**
+ * Stamp several units as changed locally, in ONE read-modify-write of the
+ * bookkeeping key.
+ *
+ * One call rather than one per unit because the whole key is re-serialized
+ * every time: two units stamped separately parse and stringify the same object
+ * twice, and either write can fail on its own, leaving half a save stamped.
+ * The single write is also atomic against that.
+ *
+ * Every unit stamped together gets the SAME instant, which is the honest
+ * reading — they were made dirty by one storage write.
+ */
+function touchUnits(unitIds) {
+  if (unitIds.length === 0) return;
+  const next = state();
+  const modifiedAt = new Date().toISOString();
+  for (const unitId of unitIds) next[unitId] = { modifiedAt };
+  appStorage.setItem(STATE_KEY, JSON.stringify(next));
+}
+
+/**
  * Stamp a unit as changed locally. Called when the app writes something the
  * sync layer cares about; without it, units other than résumés have no
  * timestamp anywhere in storage and conflicts could not be resolved.
  */
 export function touchUnit(unitId) {
-  const next = state();
-  next[unitId] = { modifiedAt: new Date().toISOString() };
-  appStorage.setItem(STATE_KEY, JSON.stringify(next));
+  touchUnits([unitId]);
 }
 
 /**
  * Install the successful-save callback without importing persistence here or
  * importing this module from persistence. main.js owns that graph edge.
+ *
+ * This path knows what the storage layer cannot: WHICH variant a
+ * `resume-designer-data` write was for. The storage interceptor below therefore
+ * leaves both of these unit kinds — `resume:<id>` and its history key — alone.
  */
 export function registerPersistedSaveHandler(register) {
   register((variantId) => {
@@ -282,9 +305,144 @@ export function registerPersistedSaveHandler(register) {
       `${RESUME_UNIT_PREFIX}${variantId}`,
       `${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`,
     ];
-    for (const unitId of unitIds) touchUnit(unitId);
+    touchUnits(unitIds);
     return unitIds;
   });
+}
+
+// ── the storage-write interceptor ──────────────────────────────────────────
+//
+// Everything below serves one rule: a write to a key `classifyKey` calls
+// 'synced' stamps its unit and names it to the transport. It is installed on
+// `appStorage.setItem` (see setStorageWriteObserver there) rather than at the
+// individual call sites, so the set of stamped keys is `classifyKey`'s list by
+// construction and cannot drift from it.
+
+/**
+ * True while `applyUnits` is landing content that came FROM another device.
+ *
+ * `applyUnits` writes through the same `setItem` the interceptor sits on, so
+ * without this an apply would stamp everything it landed and push it straight
+ * back — an echo, and worse than a wasted round trip: the echo would carry a
+ * modifiedAt minted HERE, newer than the origin device's, so this device would
+ * then win the next conflict over content it never authored and park the real
+ * author's edit.
+ */
+let applying = false;
+
+/** Unit ids stamped since the last notification — see `onStorageFlush`. */
+const pendingDirty = new Set();
+
+let dirtyNotifier = null;
+
+/**
+ * Install the "tell the native shell what changed" callback. main.js owns this
+ * graph edge, and hands over the same notifier persistence.js gets. Nothing is
+ * registered on desktop or in the browser, where there is no native shell, so
+ * the notification is a no-op there.
+ */
+export function setStorageDirtyNotifier(notify) {
+  dirtyNotifier = typeof notify === 'function' ? notify : null;
+}
+
+/**
+ * The `data:` unit payloads inside a raw `resume-designer-data` blob.
+ *
+ * `splitData` is ASKED which non-résumé fields become units rather than that
+ * list being repeated here — a field added to it later is covered without this
+ * function changing, which is the same anti-drift argument that put the
+ * interceptor at the choke point at all. The variants are dropped before the
+ * call so it never re-serializes every résumé just to answer this.
+ */
+function dataFieldPayloads(raw) {
+  const payloads = new Map();
+  const blob = parseJSON(raw, null);
+  if (!blob || typeof blob !== 'object') return payloads;
+  for (const unit of splitData({ ...blob, variants: undefined })) {
+    payloads.set(unit.id, unit.payload);
+  }
+  return payloads;
+}
+
+/**
+ * The `data:` units a blob write actually changed.
+ *
+ * Compared rather than stamped unconditionally, because `resume-designer-data`
+ * is rewritten whole on every résumé auto-save. Stamping `data:settings` there
+ * would give an UNCHANGED settings record a fresh time on every keystroke's
+ * save — and that record would then beat a real settings edit made on another
+ * device, which is a silent loss, not just wasted traffic.
+ *
+ * A field that vanished is not stamped: absence is not deletion here either.
+ */
+function changedDataUnits(previous, next) {
+  const before = dataFieldPayloads(previous);
+  const changed = [];
+  for (const [id, payload] of dataFieldPayloads(next)) {
+    if (before.get(id) !== payload) changed.push(id);
+  }
+  return changed;
+}
+
+/**
+ * Which units a write to `logicalKey` makes locally modified.
+ *
+ * The blob and the history keys are the two the persistence path already
+ * covers, and each is handled here by exactly the half it does NOT:
+ *
+ * - `resume-designer-data` holds every résumé plus `settings` and
+ *   `userProfile`. Its `resume:<id>` units are stamped by
+ *   registerPersistedSaveHandler, which knows the variant id this layer never
+ *   sees, so they are left to it — stamping them here as well would name every
+ *   résumé on every save. There is no `key:resume-designer-data` unit at all
+ *   (`collectKeyUnit` refuses the blob), so the write maps to its `data:`
+ *   fields or to nothing.
+ * - `HISTORY_PREFIX + variantId` is written by store.js's saveHistory for the
+ *   LOADED variant only, and that same save stamps it through the persistence
+ *   path. Stamping it again here would be the same unit twice.
+ */
+function unitsFor(logicalKey, value, previous) {
+  if (classifyKey(logicalKey) !== 'synced') return [];
+  if (logicalKey === DATA_KEY) return changedDataUnits(previous, value);
+  if (logicalKey.startsWith(HISTORY_PREFIX)) return [];
+  return [`${KEY_UNIT_PREFIX}${logicalKey}`];
+}
+
+function onStorageWrite(logicalKey, value, previous) {
+  if (applying) return;
+  const unitIds = unitsFor(logicalKey, value, previous);
+  // Stamped BEFORE it is queued for notification: a unit named to the transport
+  // but never stamped goes up with no modification time, and `resolveConflict`
+  // reads that as -Infinity — it would lose every conflict it met. If the stamp
+  // throws, nothing is queued and appStorage logs it.
+  touchUnits(unitIds);
+  for (const unitId of unitIds) pendingDirty.add(unitId);
+}
+
+/**
+ * One notification per storage coalescing window, carrying every unit stamped
+ * in it. Called from appStorage's drain, which every durability barrier forces
+ * — so nothing sits here unannounced across a close.
+ */
+function onStorageFlush() {
+  if (pendingDirty.size === 0) return;
+  // HELD, not dropped, until there is somewhere to send them. The interceptor is
+  // installed at module load and the shell installs the notifier during init(),
+  // so the boot steps that write real content in between — the legacy Electron
+  // migration, a profile adoption's source restore — land in that window. Their
+  // ids are the only record that those bytes changed; persistence names a unit
+  // once and will not name it again until it is edited again. The set is bounded
+  // by the number of units, so holding costs nothing.
+  if (!dirtyNotifier) return;
+  const unitIds = [...pendingDirty];
+  pendingDirty.clear();
+  dirtyNotifier(unitIds);
+}
+
+/** Wire the interceptor onto the storage facade. main.js owns this edge too. */
+export function installStorageStamping(setObserver) {
+  pendingDirty.clear();
+  setObserver({ onWrite: onStorageWrite, onFlush: onStorageFlush });
 }
 
 function withModifiedAt(unit, recorded) {
@@ -389,8 +547,25 @@ export function collectUnit(unitId) {
  * union rule; everything else is a snapshot and is written as it arrived. A
  * unit naming a device-local key is refused: nothing should have sent it, and
  * honouring it would let one device's zoom overwrite another's.
+ *
+ * Every write below goes through the storage interceptor, so the whole landing
+ * runs with stamping suppressed — see `applying` for what an echo would cost.
+ * The flag is restored in a `finally`: this reaches store.js, which can throw,
+ * and suppression left on would silently stop every later local edit from ever
+ * being uploaded — a failure with no symptom until another device is missing
+ * a day's work.
  */
 export function applyUnits(units) {
+  const wasApplying = applying;
+  applying = true;
+  try {
+    return landFetchedUnits(units);
+  } finally {
+    applying = wasApplying;
+  }
+}
+
+function landFetchedUnits(units) {
   const incoming = Array.isArray(units) ? units : [];
   let applied = 0;
 

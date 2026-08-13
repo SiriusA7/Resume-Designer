@@ -5,7 +5,9 @@
 
 import { store, generateId } from './store.js';
 import { getByPath, diffResumeData } from './diffEngine.js';
-import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
+import {
+  appStorage, initAppStorage, markStorageReady, setStorageWriteObserver,
+} from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
@@ -39,6 +41,7 @@ import {
 import {
   collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler, touchUnit,
   registerEditingProbe, isSyncEnabled, setSyncEnabled,
+  installStorageStamping, setStorageDirtyNotifier,
 } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
@@ -86,6 +89,16 @@ import { initPhotoService } from './photoService.js';
 // Keep persistence below the sync model in the import graph: main owns the
 // callback wiring between them, so neither feature module imports the other.
 registerPersistedSaveHandler(setPersistedSaveHandler);
+
+// Same edge, one layer down: the sync model stamps every OTHER synced unit from
+// appStorage.setItem itself. Only the résumé and its history are named by the
+// save handler above (it alone knows the variant id); everything else — job
+// descriptions, applications, chat threads, token usage, learned answers, the
+// design settings, the profile registry, and the blob's `settings` /
+// `userProfile` — was written straight to storage and named to nobody, so it
+// went up once on the first full sweep and never again. appStorage cannot
+// import the sync layer, so the wiring lands here, before anything can write.
+installStorageStamping(setStorageWriteObserver);
 
 // Same edge, same reason. A fetched résumé for the open variant is adopted by
 // the store, which repaints #resume from scratch — and an inline edit exists
@@ -602,7 +615,16 @@ export async function init() {
     // CloudKit sync. The model owns what a unit is; the shell only carries it.
     // `getActiveProfileId` is here rather than imported by the shell because
     // the zone is per-profile and Swift has no way to read the pointer.
-    collectUnit, collectUnits, applyUnits, parkLoser, touchUnit, setSyncDirtyNotifier,
+    collectUnit, collectUnits, applyUnits, parkLoser, touchUnit,
+    // ONE notifier, handed to both things that name a dirty unit: persistence
+    // (the résumé and its history, on the save that wrote them) and the sync
+    // model's storage interceptor (every other synced key). The shell installs
+    // it once at mount, and it stays silent on desktop, where the postMessage
+    // it wraps is guarded by isNativeShellAvailable().
+    setSyncDirtyNotifier: (notify) => {
+      setSyncDirtyNotifier(notify);
+      setStorageDirtyNotifier(notify);
+    },
     getActiveProfileId,
     // The iCloud switch, off until the person turns it on. Read on every
     // snapshot so the native toggle shows what is stored rather than what it
