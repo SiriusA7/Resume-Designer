@@ -952,11 +952,18 @@ extension ShellModel {
     // `runStartSync` does — it offers a profile exactly once, because its
     // trigger is an activation rather than a choice.
     //
-    // The ACTIVE profile only, and that is a real limit rather than an oversight
-    // this hides: the shell has no list of the others. It learns a profile
-    // exists when the page activates it, which is exactly why `runStartSync` is
-    // where every profile's first offer has to be made.
+    // EVERY profile this device has considered, not only the active one. The
+    // shell still has no workspace list — it learns a profile exists when the
+    // page activates it — but it does not need one: the markers ARE that list,
+    // one key per profile that has ever reached a gated start, and nothing
+    // removes them. `runStartSync` is still where a profile this device has
+    // never seen gets its first offer, because that is the moment it is first
+    // named to this side at all.
     if previous == false {
+      oweFullUploadForEveryConsideredProfile()
+      // The active profile can be exactly such a profile: a flip before any
+      // gated start leaves no marker for it, and the sweep can only re-owe keys
+      // that exist.
       setSyncFullUploadOwed(true, profileId: syncProfileId)
     }
     await startSync(profileId: syncProfileId)
@@ -1209,6 +1216,34 @@ extension ShellModel {
     UserDefaults.standard.set(owed, forKey: Self.syncFullUploadKey(profileId))
   }
 
+  /// Owe a full upload again for every profile this device has ever considered.
+  ///
+  /// THE MARKER KEYS ARE THE LIST. This side never sees a workspace list — a
+  /// profile is named to it by the page's `activated` message and no other way —
+  /// but `runStartSync` leaves one key per profile it has gated, and nothing
+  /// removes one, so the keys enumerate every profile this device has ever
+  /// started sync for. That is the second thing recording a settled debt as
+  /// `false` instead of deleting the key bought.
+  ///
+  /// Re-owing is a WRITE of `true`, never a delete. Absence means "never
+  /// considered", and turning a settled profile back into a never-considered one
+  /// would make its next activation look like its first for reasons that have
+  /// nothing to do with why it is being re-offered here.
+  ///
+  /// A profile with no key is not reached and does not need to be: its first
+  /// gated start creates its debt from absent, which is the same offer arriving
+  /// by the other route.
+  ///
+  /// Owed, not sent — as everywhere else in this feature. The next start for a
+  /// profile is what asks the page to collect it.
+  private func oweFullUploadForEveryConsideredProfile() {
+    let defaults = UserDefaults.standard
+    let prefix = Self.syncFullUploadKey("")
+    let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(prefix) }
+    for key in keys { defaults.set(true, forKey: key) }
+    NSLog("[OPShell] a full upload is owed again for \(keys.count) considered profile(s)")
+  }
+
   /// The one line Settings shows under the switch — or "", which draws no row
   /// at all, because saying nothing is better than saying nothing useful.
   ///
@@ -1389,6 +1424,22 @@ extension ShellModel: OPSyncHost {
     // `send` re-enters the engine. The task puts it on a later main-actor turn,
     // once the event these failures belong to has been fully handled.
     Task { @MainActor [weak self] in await self?.sendSync(unitIds: recover) }
+  }
+
+  /// A different iCloud account is underneath the transport now.
+  ///
+  /// Every profile this device has considered owes its full upload again. A
+  /// settled debt is a claim about the account it settled against, and the new
+  /// account has none of these units: nothing in its container was ever named
+  /// for send. Left alone, everything not edited since the switch would be
+  /// silently absent from it — the same failure the marker exists to close.
+  ///
+  /// Nothing local changes and nothing is sent from here. The markers are what
+  /// the next start reads, and coming back from the Settings app, where an
+  /// account is switched, IS a start (`resumeSync`).
+  func syncDidSwitchAccounts() {
+    NSLog("[OPShell] the iCloud account changed — re-offering every profile's full upload")
+    oweFullUploadForEveryConsideredProfile()
   }
 }
 

@@ -167,6 +167,20 @@ protocol OPSyncHost: AnyObject {
 
   /// Sends and fetches that did not land. See `OPSyncFailure`.
   func syncDidFail(_ failures: [OPSyncFailure])
+
+  /// A DIFFERENT iCloud account is underneath the transport than the one this
+  /// device last synced against — switched in Settings, or signed out and back
+  /// in as somebody else.
+  ///
+  /// Nothing local is touched and nothing is deleted: a résumé belongs to the
+  /// person, not to the account. What is true is that the new account has none
+  /// of them — a unit reaches an account only when `send(unitIds:)` names it —
+  /// so whatever the caller does about a full upload, it owes one again.
+  ///
+  /// NOT called for a sign-out, which has no account to owe anything to, or for
+  /// the same account signing back in. See `handleAccountChange` for how those
+  /// are told apart.
+  func syncDidSwitchAccounts()
 }
 
 private let opSyncRecordType = "SyncUnit"
@@ -466,18 +480,67 @@ extension OPSyncEngine {
   /// describes a record the new one cannot see, and offering it would turn every
   /// first save under the new account into an unwinnable conflict.
   ///
+  /// A different account also OWES A FULL UPLOAD, for the same reason turning
+  /// sync on does: a unit reaches an account only when `send(unitIds:)` names
+  /// it, and only a local edit names one, so everything not edited since the
+  /// switch would simply never appear in the new container. That is the same
+  /// failure the full-upload marker exists to close, one dimension over, and it
+  /// is the host's to record because the host owns the debt.
+  ///
+  /// Told apart from a plain sign-out and back in BY NAME, which is the whole
+  /// reason the last account's record name is persisted here: signing back into
+  /// the same account owes nothing, and re-uploading every workspace for it
+  /// would be pure waste. The event cannot answer that on its own — a `signIn`
+  /// carries no `previousUser`, by documentation — and the sign-out that
+  /// preceded it can be a launch or a week earlier, so an in-memory answer would
+  /// be no answer at all. Free, though: both names arrive ON the events, so
+  /// nothing here asks CloudKit for `userRecordID` or touches the network.
+  ///
+  /// A name this device never recorded counts as DIFFERENT. That is the one
+  /// guess in here and it is deliberately the wasteful direction: an unneeded
+  /// full upload costs bandwidth once, a skipped one is a workspace that is
+  /// silently not in iCloud.
+  ///
+  /// `switchAccounts` does not consult the name at all — CloudKit is asserting
+  /// the account changed, and no comparison this side makes is more
+  /// authoritative than that.
+  ///
+  /// The debt is recorded, never paid, here: nothing in this file re-enters the
+  /// engine from an event, and the next start offers the collection. Coming back
+  /// from the Settings app — the only place an account is switched — is a start.
+  ///
   /// The engine's own state serialization is left to the engine, which reissues
   /// it through `stateUpdate`.
   private func handleAccountChange(_ change: CKSyncEngine.Event.AccountChange.ChangeType) {
     switch change {
-    case .signIn:
-      break
-    case .signOut, .switchAccounts:
-      systemFields = [:]
-      systemFieldsDirty = true
+    case .signIn(let currentUser):
+      let last = Self.lastAccount()
+      Self.rememberAccount(currentUser)
+      // The same account coming back. Its tags went with the sign-out and its
+      // records are exactly where this device left them, so there is nothing to
+      // drop and nothing to re-offer.
+      guard last != currentUser.recordName else { break }
+      dropChangeTags()
+      host?.syncDidSwitchAccounts()
+    case .signOut(let previousUser):
+      // WHICH account this device was synced against, for the sign-in that
+      // eventually follows it.
+      Self.rememberAccount(previousUser)
+      dropChangeTags()
+    case .switchAccounts(_, let currentUser):
+      Self.rememberAccount(currentUser)
+      dropChangeTags()
+      host?.syncDidSwitchAccounts()
     @unknown default:
       break
     }
+  }
+
+  /// Bookkeeping about one account's server, dropped when that account is no
+  /// longer the one underneath. Written out by `handle`'s `defer`.
+  private func dropChangeTags() {
+    systemFields = [:]
+    systemFieldsDirty = true
   }
 
   private func handleFailedSaves(
@@ -867,6 +930,25 @@ extension OPSyncEngine {
 extension OPSyncEngine {
   private static func stateKey(_ profileId: String) -> String { "op-sync-state-\(profileId)" }
   private static func recordsKey(_ profileId: String) -> String { "op-sync-records-\(profileId)" }
+  /// NOT per profile: an iCloud account is a property of the device, and every
+  /// profile's zone lives in whichever one is signed in.
+  private static let accountKey = "op-sync-icloud-account"
+
+  /// The record name of the iCloud user this device last synced against, or nil
+  /// if it has never recorded one. See `handleAccountChange`: nil is read as a
+  /// different account, not as the same one.
+  ///
+  /// A user record id is per container and per account, so it is exactly the
+  /// identity being asked about. It is stored as its `recordName` because that
+  /// is the whole of it that is compared, and a String is what `UserDefaults`
+  /// holds without an archiver.
+  fileprivate static func lastAccount() -> String? {
+    UserDefaults.standard.string(forKey: accountKey)
+  }
+
+  fileprivate static func rememberAccount(_ user: CKRecord.ID) {
+    UserDefaults.standard.set(user.recordName, forKey: accountKey)
+  }
 
   /// Absent state is normal — the first launch for a profile. Absent state
   /// because it would not DECODE is not, and it is not a small thing either: the
