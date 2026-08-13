@@ -309,16 +309,24 @@ export function buildOnboarding({
  * read it out, so nothing does.
  *
  * @param {object} state
+ * `syncEnabled` is the only thing about sync that crosses in this direction.
+ * The STATUS is not projected: what the iCloud account is doing is knowable
+ * only in Swift, where the transport already holds it.
+ *
  * @param {string} [state.theme] 'system' | 'light' | 'dark'
  * @param {boolean} [state.hasApiKey]
  * @param {boolean} [state.autoFallback]
+ * @param {boolean} [state.syncEnabled]
  * @param {string} [state.version]
  */
-export function buildSettings({ theme, hasApiKey = false, autoFallback = false, version = '' } = {}) {
+export function buildSettings({
+  theme, hasApiKey = false, autoFallback = false, syncEnabled = false, version = '',
+} = {}) {
   return {
     theme: theme === 'light' || theme === 'dark' ? theme : 'system',
     hasApiKey: !!hasApiKey,
     autoFallback: !!autoFallback,
+    syncEnabled: !!syncEnabled,
     version: typeof version === 'string' ? version : '',
   };
 }
@@ -1486,6 +1494,14 @@ export function initIOSShell(deps) {
       deps.saveSettings({ autoFallback: value === 'true' });
       publish();
     },
+    // The iCloud switch. This side only persists the answer and republishes;
+    // starting and stopping the transport is Swift's, off the snapshot it gets
+    // back — a boolean in storage that nothing acts on is the worst outcome
+    // here, and it is the one that looks fine from JS.
+    setSyncEnabled: ({ value }) => {
+      deps.setSyncEnabled(value === 'true');
+      publish();
+    },
     setApiKey: ({ value }) => {
       // Fire-and-forget by design: the keychain write is async and the sheet
       // learns the outcome from the next snapshot's `hasApiKey`, not from a
@@ -1541,6 +1557,9 @@ export function initIOSShell(deps) {
       theme: deps.getTheme(),
       hasApiKey: !!s.openrouterKey,
       autoFallback: !!s.autoFallback,
+      // Optional like the other sync deps: this module is wired on desktop too,
+      // where nothing calls it and there is no iCloud switch to read.
+      syncEnabled: !!deps.getSyncEnabled?.(),
       version,
     };
   };

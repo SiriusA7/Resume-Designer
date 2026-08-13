@@ -38,6 +38,7 @@ import {
 } from './iosShell.js';
 import {
   collectUnit, collectUnits, applyUnits, parkLoser, registerPersistedSaveHandler, touchUnit,
+  isSyncEnabled, setSyncEnabled,
 } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
@@ -595,6 +596,10 @@ export async function init() {
     // the zone is per-profile and Swift has no way to read the pointer.
     collectUnit, collectUnits, applyUnits, parkLoser, touchUnit, setSyncDirtyNotifier,
     getActiveProfileId,
+    // The iCloud switch, off until the person turns it on. Read on every
+    // snapshot so the native toggle shows what is stored rather than what it
+    // last set.
+    getSyncEnabled: isSyncEnabled, setSyncEnabled,
     generateId,
     subscribeDocument: (cb) => store.subscribe(cb),
     // AI change review, routed to the live session rather than a copy of it.

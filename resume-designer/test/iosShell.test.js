@@ -72,7 +72,9 @@ describe('buildSnapshot', () => {
       zoomPercent: 100,
       pdfBusy: false,
       modalOpen: false,
-      settings: { theme: 'system', hasApiKey: false, autoFallback: false, version: '' },
+      settings: {
+        theme: 'system', hasApiKey: false, autoFallback: false, syncEnabled: false, version: '',
+      },
       document: null,
       chat: null,
       library: null,
@@ -321,14 +323,32 @@ describe('buildSettings', () => {
     expect(projected.hasApiKey).toBe(true);
     expect(JSON.stringify(projected)).not.toContain('sk-or');
     expect(Object.keys(projected).sort()).toEqual(
-      ['autoFallback', 'hasApiKey', 'theme', 'version']
+      ['autoFallback', 'hasApiKey', 'syncEnabled', 'theme', 'version']
     );
   });
 
   it('defaults to a shape Swift can decode when given nothing', () => {
     expect(buildSettings()).toEqual({
-      theme: 'system', hasApiKey: false, autoFallback: false, version: '',
+      theme: 'system', hasApiKey: false, autoFallback: false, syncEnabled: false, version: '',
     });
+  });
+
+  it('leaves iCloud sync off unless something says otherwise', () => {
+    // Off is the product decision, not a placeholder: turning it on writes a
+    // person's resumes into their iCloud account. A missing or junk value must
+    // land on off, never on on.
+    expect(buildSettings({}).syncEnabled).toBe(false);
+    expect(buildSettings({ syncEnabled: undefined }).syncEnabled).toBe(false);
+    expect(buildSettings({ syncEnabled: true }).syncEnabled).toBe(true);
+    // Coerced, because Swift decodes this into a Bool and a string there is a
+    // whole-snapshot decode failure.
+    expect(buildSettings({ syncEnabled: 'true' }).syncEnabled).toBe(true);
+  });
+
+  it('never projects a sync status, which only Swift can know', () => {
+    // The account state lives in the transport. A status projected from here
+    // would be a second, always-stale copy of something JS cannot observe.
+    expect('syncStatus' in buildSettings({ syncEnabled: true })).toBe(false);
   });
 });
 
@@ -942,6 +962,38 @@ describe('the Design sheet commands', () => {
     const { send } = await mount({ collectUnits });
     expect(send({ type: 'syncCollect' })).toEqual({ ok: true });
     expect(collectUnits).toHaveBeenCalled();
+  });
+
+  it('projects the stored iCloud switch, and leaves it off when nothing stored it', async () => {
+    const off = await mount();
+    await settled();
+    expect(lastSnapshot(off.postMessage).settings.syncEnabled).toBe(false);
+
+    const on = await mount({ getSyncEnabled: () => true });
+    await settled();
+    expect(lastSnapshot(on.postMessage).settings.syncEnabled).toBe(true);
+  });
+
+  it('persists the switch and republishes what landed, not what was asked', async () => {
+    // The toggle reads from the next snapshot, so a write that did not land
+    // springs the control back rather than leaving it lying.
+    let stored = false;
+    const setSyncEnabled = vi.fn((value) => { stored = value; });
+    const { postMessage, send } = await mount({
+      setSyncEnabled, getSyncEnabled: () => stored,
+    });
+
+    expect(send({ type: 'setSyncEnabled', value: 'true' })).toEqual({ ok: true });
+    expect(setSyncEnabled).toHaveBeenCalledWith(true);
+    await settled();
+    expect(lastSnapshot(postMessage).settings.syncEnabled).toBe(true);
+
+    // This bridge carries strings. Anything that is not 'true' is off, which is
+    // the direction a garbled value has to fail in.
+    send({ type: 'setSyncEnabled', value: 'false' });
+    expect(setSyncEnabled).toHaveBeenLastCalledWith(false);
+    await settled();
+    expect(lastSnapshot(postMessage).settings.syncEnabled).toBe(false);
   });
 
   it('returns one opaque unit to Swift through the command reply', async () => {

@@ -50,6 +50,14 @@ describe('classifyKey', () => {
     expect(classifyKey('resume-designer-model-catalog')).toBe('local');
   });
 
+  it('keeps the sync switch itself on the device that owns it', () => {
+    // Whether this device syncs is this device's business. Syncing the flag
+    // would also let one device turn sync ON for another, which is the one
+    // decision this preference exists to leave with the person holding the
+    // phone.
+    expect(classifyKey('resume-designer-sync-enabled')).toBe('local');
+  });
+
   it('keeps the OpenRouter credential off CloudKit', () => {
     // A credential must never reach CloudKit, so this must stay 'local' even
     // though it is a SHARED_KEYS member like the synced profile registry.

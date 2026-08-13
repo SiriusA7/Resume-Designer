@@ -455,13 +455,21 @@ struct ShellSnapshot: Decodable, Equatable {
   ///
   /// `hasApiKey`, not the key. The key lives in the OS keychain; the sheet can
   /// write a new one but nothing needs to read it back, so nothing does.
+  ///
+  /// `syncEnabled` is the person's answer about iCloud, and the only half of
+  /// sync that crosses in this direction. The STATUS is computed here (see
+  /// `ShellModel.syncStatus`): the account state lives in the transport, and JS
+  /// has no way to observe it.
   struct Settings: Decodable, Equatable {
     var theme: String
     var hasApiKey: Bool
     var autoFallback: Bool
+    var syncEnabled: Bool
     var version: String
 
-    static let empty = Settings(theme: "system", hasApiKey: false, autoFallback: false, version: "")
+    static let empty = Settings(
+      theme: "system", hasApiKey: false, autoFallback: false, syncEnabled: false, version: ""
+    )
   }
 
   /// What the chrome shows before the first snapshot arrives — a fraction of a
@@ -633,7 +641,17 @@ enum ShellReply {
 @MainActor
 final class ShellModel: ObservableObject {
   @Published var snapshot: ShellSnapshot = .empty {
-    didSet { reply.update(to: Self.liveReplyText(in: snapshot)) }
+    didSet {
+      reply.update(to: Self.liveReplyText(in: snapshot))
+      // The switch in Settings writes to storage and republishes; this is where
+      // that answer becomes a running or a stopped transport. Without it the
+      // toggle would move, the preference would persist, and sync would carry
+      // on exactly as before — which looks correct from every side but the
+      // account's.
+      let enabled = snapshot.settings.syncEnabled
+      guard enabled != syncEnabled else { return }
+      Task { [weak self] in await self?.syncPreference(enabled) }
+    }
   }
 
   /// Paces the live reply's text. Lives here rather than in the chat sheet so
@@ -667,18 +685,26 @@ final class ShellModel: ObservableObject {
   /// constructor this class does not otherwise need.
   private lazy var sync = OPSyncEngine(host: self)
 
-  /// What the transport last said about the iCloud account, for the status line
-  /// Task 9 draws. Nothing reads it yet, and nothing here draws it: signed out
-  /// is a normal state, not an error, and it gets no alert.
+  /// What the transport last said about the iCloud account. Drawn as a line in
+  /// Settings (`syncStatus`) and nowhere else: signed out is a normal state,
+  /// not an error, and it gets no alert.
   @Published private(set) var syncAccountState: OPSyncAccountState?
 
   /// The most recent failure this device is NOT already acting on — see
-  /// `syncDidFail`. Also Task 9's, also undrawn here.
+  /// `syncDidFail`. Also only ever a line in Settings.
   @Published private(set) var syncFailure: OPSyncFailure?
 
-  /// The profile the engine is running for, so a switch (which reloads the
-  /// window) can be told apart from the same document coming back after WebKit
-  /// reclaimed its content process.
+  /// Whether the person has turned iCloud sync on, as the page last reported
+  /// it. `nil` until the first report, and that distinction is load-bearing:
+  /// "this device already had sync on" and "they just turned it on" reach here
+  /// identically, and only the second uploads everything (see `syncPreference`).
+  private var syncEnabled: Bool?
+
+  /// The profile the page last activated with. The engine may not be running
+  /// for it — sync switched off, or no iCloud account — but it is what a later
+  /// start has to name, so it is recorded before that gate rather than after.
+  /// A switch (which reloads the window) can then be told apart from the same
+  /// document coming back after WebKit reclaimed its content process.
   private var syncProfileId: String?
 
   /// Unit ids `syncDidFail` has already re-queued once. The bound on the
@@ -687,6 +713,10 @@ final class ShellModel: ObservableObject {
 
   /// Unit ids named while the transport was down. See `sendSync`.
   private var syncDeferred: Set<String> = []
+
+  /// Set when sync is switched ON, cleared by the start that acts on it. See
+  /// `runStartSync` for why the upload is owed rather than sent from the toggle.
+  private var syncFullUploadOwed = false
 
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
   private var syncStart: Task<Void, Never>?
@@ -852,11 +882,82 @@ final class ShellModel: ObservableObject {
 
 // MARK: - Sync
 
-/// Driving the transport. Three lifecycle moments — a document coming up, a
-/// save landing, a return to the foreground — and nothing else: sync is
-/// background reconciliation, so nothing in the UI waits on any of it and no
-/// failure becomes a dialog.
+/// Driving the transport. Four lifecycle moments — the switch in Settings, a
+/// document coming up, a save landing, a return to the foreground — and nothing
+/// else: sync is background reconciliation, so nothing in the UI waits on any of
+/// it and no failure becomes a dialog.
 extension ShellModel {
+  /// Make the transport match the answer the page just reported.
+  ///
+  /// The switch writes to storage in JS and republishes; the snapshot's `didSet`
+  /// lands here. That round trip is deliberate — the preference has ONE home,
+  /// and it is the same storage every other setting lives in — but it means this
+  /// is the only place the toggle actually does anything, so it has to do all of
+  /// it.
+  ///
+  /// Idempotent: two snapshots carrying the same answer are one change.
+  func syncPreference(_ enabled: Bool) async {
+    let previous = syncEnabled
+    guard previous != enabled else { return }
+    syncEnabled = enabled
+
+    guard enabled else {
+      // Off means off, and off means QUIET — not gone. Stopping tears down the
+      // engine and nothing else: every résumé stays exactly where it is, on
+      // this device and in the account. Someone will eventually ask whether
+      // turning sync off deletes the cloud copy. It does not, and deleting it
+      // is a separate feature that is not built.
+      //
+      // A start can be IN FLIGHT while this runs: the toggle is reachable during
+      // the account check a foreground or an activation kicked off. Stopping
+      // ahead of it would tear down an engine that is then built a moment later,
+      // and the switch would read off with the transport up. So it waits its
+      // turn, the same serialization `startSync` uses on itself — and the gate
+      // in `runStartSync` reads the `false` set just above, so a start that has
+      // not reached it yet gives up on its own.
+      await syncStart?.value
+      await sync.stop()
+      // The status line is about a transport that is now down; keeping the last
+      // account state or failure would leave it describing a machine that
+      // stopped running.
+      syncAccountState = nil
+      syncFailure = nil
+      // Only a real change earns a line. The first report of "off" is this
+      // device's stored answer arriving at launch, not a decision just made.
+      if previous == true {
+        NSLog("[OPShell] iCloud sync switched off — the transport is down, local data untouched")
+      }
+      return
+    }
+
+    // `previous == nil` is the first report of a preference that was already on
+    // — a launch, not a decision — and a launch must not put the whole device on
+    // the wire. See `runStartSync`.
+    syncFullUploadOwed = previous == false
+    guard let syncProfileId else {
+      // No document has come up yet. Its activation starts the engine, and it
+      // will find the switch already on.
+      return
+    }
+    await startSync(profileId: syncProfileId)
+  }
+
+  /// The page's answer to `syncCollect`: the id of every unit this device would
+  /// push, at the moment sync was turned on.
+  ///
+  /// The switch can go off during that round trip, and a batch that arrives
+  /// after it did must not be sent — this is the whole device, not one save.
+  /// A transport that is merely DOWN needs no guard here: `sendSync` holds the
+  /// ids for the next start, which is exactly what they are for.
+  func sendAllUnits(_ unitIds: [String]) async {
+    guard syncEnabled == true else {
+      NSLog("[OPShell] iCloud sync is off; \(unitIds.count) unit(s) not sent")
+      return
+    }
+    NSLog("[OPShell] offering \(unitIds.count) unit(s) after iCloud sync was switched on")
+    await sendSync(unitIds: unitIds)
+  }
+
   /// Bring sync up for the profile the webview just loaded, and pull once.
   ///
   /// Called from the `activated` message, which is posted once per document —
@@ -904,6 +1005,23 @@ extension ShellModel {
       syncProfileId = profileId
     }
 
+    // THE GATE. Every way the transport comes up runs through here — the
+    // activation of a document, a return to the foreground (`resumeSync`), and
+    // the switch itself — so this one check is what makes the toggle mean
+    // something. It sits below the bookkeeping above on purpose: a person who
+    // turns sync on mid-session needs a profile to start with, and this is
+    // where the page said what it is.
+    //
+    // `nil` is the preference not yet reported, which happens on every launch:
+    // the activation beats the first snapshot by a frame. Sync stays down until
+    // that snapshot lands, and `syncPreference` starts it if the answer is yes.
+    guard syncEnabled == true else {
+      NSLog(syncEnabled == nil
+            ? "[OPShell] the sync preference has not been reported yet — waiting for the snapshot"
+            : "[OPShell] iCloud sync is off for this device — the transport stays down")
+      return
+    }
+
     let state = await sync.start(profileId: profileId)
     syncAccountState = state
     guard state == .available else {
@@ -921,6 +1039,21 @@ extension ShellModel {
     syncDeferred.removeAll()
     await sendSync(unitIds: Array(deferred))
     try? await sync.fetch()
+
+    // Turning sync on is the one moment this device has to offer everything it
+    // already holds. A unit reaches the account only when `send(unitIds:)` names
+    // it, and persistence names a unit once — on the save that wrote it — so a
+    // résumé the person never edits again would otherwise never arrive at all.
+    // The page answers `syncCollect` with a `syncUnits` message.
+    //
+    // OWED rather than sent from the toggle, because turning it on while signed
+    // out starts nothing: the upload waits for whichever start does come up.
+    // Cleared here, so it happens once per switch-on rather than on every
+    // activation — the whole device on the wire at every launch is not this.
+    if syncFullUploadOwed {
+      syncFullUploadOwed = false
+      send("syncCollect")
+    }
   }
 
   /// Back in the foreground: another device may have moved on while this one
@@ -934,6 +1067,10 @@ extension ShellModel {
   ///
   /// Backgrounding needs no counterpart: the save debounce has already posted
   /// `syncDirty` for anything that changed.
+  ///
+  /// Gated like every other way up, because it goes through `startSync`: a
+  /// device whose switch is off must not quietly start syncing the first time
+  /// the app comes back to the foreground.
   func resumeSync() async {
     // No activation yet means no profile and no engine; that path fetches for
     // itself the moment the document comes up.
@@ -964,6 +1101,51 @@ extension ShellModel {
       // of being dropped.
       syncDeferred.formUnion(unitIds)
       NSLog("[OPShell] sync is down; \(unitIds.count) unit(s) held for the next start")
+    }
+  }
+
+  /// The one line Settings shows under the switch — or "", which draws no row
+  /// at all, because saying nothing is better than saying nothing useful.
+  ///
+  /// Computed here rather than projected from JS: both halves of it, the iCloud
+  /// account's state and the last failure, exist only in the transport, and the
+  /// page has no way to observe either.
+  ///
+  /// The rules the wording follows matter more than the words:
+  ///
+  /// - **Signed out is not an error.** It is an ordinary state — the app works
+  ///   exactly as well without an account — so the line says what to do, not
+  ///   what went wrong.
+  /// - **No `CKError` ever reaches a person.** `OPSyncFailure.reason` is
+  ///   diagnostic text for a log line; it is never shown.
+  /// - **Nothing claims success it cannot back.** "Synced" is a claim about a
+  ///   server this device cannot see inside, so it is not made.
+  /// - **Nothing blames the person, and nothing suggests their résumés are at
+  ///   risk.** They are on this device whatever iCloud is doing.
+  var syncStatus: String {
+    // The switch itself says sync is off; a second line saying so is a row that
+    // tells the reader nothing they did not just set.
+    guard snapshot.settings.syncEnabled else { return "" }
+    // On, but the transport has not reported yet — a moment at launch, and the
+    // whole time before the workspace has adopted a profile. Nothing to say.
+    guard let syncAccountState else { return "" }
+
+    switch syncAccountState {
+    case .available:
+      guard syncFailure == nil else {
+        return "Some changes haven't reached iCloud yet. Your resumes are still here."
+      }
+      return "Connected to iCloud. New changes go up in the background."
+    case .signedOut:
+      return "Sign in to iCloud in the Settings app to sync this device."
+    case .restricted:
+      return "iCloud isn't available to On Paper on this device. Your resumes stay here."
+    case .temporarilyUnavailable:
+      return "iCloud isn't ready just now. On Paper will try again."
+    case .undetermined:
+      return "iCloud can't be reached right now. Your changes will go up when it is."
+    case .checkFailed:
+      return "On Paper couldn't check your iCloud account just now. It will try again."
     }
   }
 }
@@ -1166,6 +1348,22 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
         return
       }
       Task { @MainActor in await self.model?.sendSync(unitIds: unitIds) }
+    case "syncUnits":
+      // The answer to `syncCollect`: everything this device would push, asked
+      // for once when the person switches sync on.
+      //
+      // Only the ID of each unit is read. The payloads are right there in the
+      // message and they are deliberately left alone — the engine re-asks for
+      // each unit's bytes at send time through `syncUnit(withId:)`, which is
+      // the whole point of that callback, and decoding a payload here would be
+      // the first place Swift knew what is inside one.
+      guard let units = body["units"] as? [[String: Any]] else {
+        NSLog("[OPShell] syncUnits with no units: \(body)")
+        return
+      }
+      let unitIds = units.compactMap { $0["id"] as? String }
+      guard !unitIds.isEmpty else { return }
+      Task { @MainActor in await self.model?.sendAllUnits(unitIds) }
     default:
       guard let snapshot = try? JSONDecoder().decode(ShellSnapshot.self, from: data) else {
         NSLog("[OPShell] undecodable snapshot: \(message.body)")
@@ -2130,6 +2328,27 @@ private struct SettingsSheet: View {
           )
         }
 
+        Section {
+          Toggle("iCloud sync", isOn: syncBinding)
+          // No row at all when there is nothing to say — see `syncStatus`.
+          if !model.syncStatus.isEmpty {
+            Text(model.syncStatus)
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+          }
+        } header: {
+          Text("Sync")
+        } footer: {
+          // The question the switch raises is "where do my resumes go", and it
+          // is answered where the switch is rather than in a policy nobody
+          // opens. Both halves matter: whose account they land in, and that On
+          // Paper is not a party to any of it.
+          Text(
+            "Your resumes are copied to your own iCloud account, so the devices you "
+            + "use stay in step. Nothing is sent to On Paper."
+          )
+        }
+
         Section("Data") {
           Button("Export backup…") { model.send("exportBackup") }
           Button("Import backup…") { model.send("importBackup") }
@@ -2175,6 +2394,18 @@ private struct SettingsSheet: View {
     Binding(
       get: { settings.autoFallback },
       set: { model.send("setAutoFallback", ["value": $0 ? "true" : "false"]) }
+    )
+  }
+
+  /// Same read-from-the-snapshot rule, and here it is what makes the switch
+  /// honest: the write persists the preference in JS, the next snapshot brings
+  /// it back, and only THEN does the transport start or stop (see
+  /// `ShellModel.syncPreference`). A toggle that moved on its own would be
+  /// showing a state nothing had acted on.
+  private var syncBinding: Binding<Bool> {
+    Binding(
+      get: { settings.syncEnabled },
+      set: { model.send("setSyncEnabled", ["value": $0 ? "true" : "false"]) }
     )
   }
 }

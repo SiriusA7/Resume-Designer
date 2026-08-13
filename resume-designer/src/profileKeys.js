@@ -25,6 +25,11 @@ export const OPENROUTER_KEY_KEY = 'resume-designer-openrouter-key';
 // syncModel.js already imports store.js, so the constant has to come from below
 // both. A second literal is how the two would drift apart into two keys.
 export const SYNC_STATE_KEY = 'resume-designer-sync-state';
+// Whether this install syncs to iCloud at all. Machine-level rather than
+// per-profile — the answer is about this device, not about one workspace — and
+// deliberately NOT in BACKUP_FIXED_KEYS: a backup carried to another device
+// must not be able to turn that device's sync on.
+export const SYNC_ENABLED_KEY = 'resume-designer-sync-enabled';
 export const PHYSICAL_PREFIX = 'resume-p--';
 const PHYSICAL_SEPARATOR = '--';
 
@@ -36,6 +41,7 @@ const SHARED_KEYS = new Set([
   'resume-designer-model-catalog',
   'resume-designer-electron-migration-attempted',
   'resume-designer-bridge-token', // one loopback server per install, not per profile
+  SYNC_ENABLED_KEY, // one answer per device, and it covers every profile on it
   PROFILES_KEY,
   ACTIVE_PROFILE_KEY,
   OPENROUTER_KEY_KEY,

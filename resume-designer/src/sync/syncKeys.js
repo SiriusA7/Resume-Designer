@@ -38,6 +38,11 @@ export const DEVICE_LOCAL_KEYS = [
   'resume-designer-openrouter-key',
   // This device's view of what it has synced.
   'resume-designer-sync-state',
+  // Whether this device syncs at all. Its own switch is the last thing that
+  // should travel: syncing it would let one device turn sync ON for another,
+  // and the whole point of the preference is that the answer belongs to the
+  // person holding this device.
+  'resume-designer-sync-enabled',
 ];
 
 // SHARED_KEYS members that DO sync — the exception to DEVICE_LOCAL_KEYS

@@ -6,7 +6,9 @@
  * crosses as `{ id, kind, payload, modifiedAt }` with an opaque payload.
  */
 import { appStorage } from '../appStorage.js';
-import { splitPhysicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY } from '../profileKeys.js';
+import {
+  splitPhysicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY, SYNC_ENABLED_KEY,
+} from '../profileKeys.js';
 import { getActiveProfileId } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
 // key from it on every edit, so parking a loser for that variant has to go
@@ -46,6 +48,25 @@ const readJSON = (key, fallback) => {
 };
 
 const state = () => readJSON(STATE_KEY, {});
+
+/**
+ * Whether this device syncs at all.
+ *
+ * **Off until the person turns it on**, and that is a product decision, not a
+ * default nobody got round to changing: turning it on writes their resumes into
+ * their iCloud account, and that is not a thing to assume on someone's behalf.
+ *
+ * Anything other than the string `'true'` reads as off, so an absent or garbled
+ * value fails closed — the direction that never puts data somewhere unasked.
+ */
+export function isSyncEnabled() {
+  return appStorage.getItem(SYNC_ENABLED_KEY) === 'true';
+}
+
+/** Record the answer. The transport is started or stopped by whoever asked. */
+export function setSyncEnabled(enabled) {
+  appStorage.setItem(SYNC_ENABLED_KEY, enabled ? 'true' : 'false');
+}
 
 /**
  * The recorded modification time, or `null` when this device never stamped one.
