@@ -162,6 +162,27 @@ describe('registry entry stamps', () => {
     expect(ids).not.toContain(gone.id);
   });
 
+  // Regression: the last-profile guard used to count the raw registry array,
+  // which was equivalent to "visible profiles" before tombstones stuck
+  // around. With a tombstone present the raw count no longer reflects what a
+  // person can see, so it must count listProfiles() instead — otherwise the
+  // guard stops firing once any tombstone exists and the last visible profile
+  // becomes deletable, leaving listProfiles() empty with no path back.
+  //
+  // Neither profile here is active, so the active-profile guard cannot be
+  // what blocks the second delete — only the last-VISIBLE-profile guard can.
+  it('still refuses to delete the last visible profile when a tombstone is present', () => {
+    const ghost = createProfile({ name: 'Ghost' });
+    const solo = createProfile({ name: 'Solo' });
+    deleteProfile(ghost.id); // 2 live profiles at this point -> guard allows it
+    expect(loadRegistry()).toHaveLength(2); // ghost's tombstone still occupies a slot
+    expect(listProfiles()).toHaveLength(1); // but only solo is visible
+
+    expect(() => deleteProfile(solo.id)).toThrow(/last profile/i);
+    expect(listProfiles()).toHaveLength(1);
+    expect(listProfiles()[0].id).toBe(solo.id);
+  });
+
   // Regression: before tombstoning, a deleted profile's entry was gone from
   // the registry outright, so setActiveProfile could never target it. Now the
   // entry still physically exists (deletedAt set) — validation must check
@@ -572,6 +593,33 @@ describe('adoption migration', () => {
     const healed = await ensureProfilesInitialized();
     expect(healed).toBe(first);
     expect(getActiveProfileId()).toBe(first);
+  });
+
+  // Regression: the dangling-pointer heal above used to fall back to
+  // registry[0], which is safe only because a deleted profile could never
+  // occupy that slot — its entry was dropped outright. Tombstoning changed
+  // that: a deleted-but-not-last profile now stays in the raw array and can
+  // sit at index 0. Reachable with no sync involved: two profiles, delete the
+  // non-active one (both guards allow it), then lose the active pointer — the
+  // exact state this fallback exists to absorb. Boot must land on the live
+  // profile, not the tombstoned one at registry[0].
+  it('heals a dangling active pointer onto the live profile, never a tombstoned one', async () => {
+    const a = createProfile({ name: 'A' });
+    const b = createProfile({ name: 'B' });
+    setActiveProfile(b.id); // b active
+    deleteProfile(a.id); // a not active, not last -> both guards allow; a is tombstoned
+    // Sanity: the tombstoned entry really is sitting at registry[0], which is
+    // exactly the slot the boot fallback reads.
+    expect(loadRegistry()[0].id).toBe(a.id);
+    expect(loadRegistry()[0].deletedAt).toEqual(expect.any(String));
+
+    appStorage.removeItem(ACTIVE_PROFILE_KEY); // active pointer lost/corrupted
+    setProfileMapping(null); // simulate fresh boot
+
+    const resolved = await ensureProfilesInitialized();
+
+    expect(resolved).toBe(b.id); // the live profile, not a's tombstone
+    expect(getActiveProfileId()).toBe(b.id);
   });
 
   it('rebuilds a lost registry from existing namespaced data (no data loss)', async () => {

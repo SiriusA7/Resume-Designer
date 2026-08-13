@@ -409,7 +409,14 @@ async function resolveActiveProfile() {
 
   let active = getActiveProfileId();
   if (!registry.some((p) => p.id === active)) {
-    active = registry[0].id;
+    // Prefer the first NON-tombstoned entry: registry[0] can itself be a
+    // tombstone now (deleteProfile no longer drops entries), and this branch
+    // fires exactly when the membership check above already failed — landing
+    // on a deleted profile would map the app onto an empty namespace and hide
+    // the active id from listProfiles(). Fall back to registry[0] only if
+    // every entry is somehow tombstoned, matching the prior unconditional
+    // behavior rather than leaving `active` unset.
+    active = (registry.find((p) => !p?.deletedAt) || registry[0]).id;
     appStorage.setItem(ACTIVE_PROFILE_KEY, active);
   }
   if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) {
@@ -587,7 +594,12 @@ export async function renameProfileDurably(id, patch) {
 
 export function deleteProfile(id) {
   const registry = loadRegistry() || [];
-  if (registry.length <= 1) throw new Error('Cannot delete the last profile.');
+  // listProfiles(), not the raw array: a tombstone still occupies a slot in
+  // `registry` (see below), so counting it here stops this guard from firing
+  // once any tombstone exists — silently handing protection of the last
+  // VISIBLE profile to the active-profile guard, which only holds while the
+  // active id is itself a listed profile.
+  if (listProfiles().length <= 1) throw new Error('Cannot delete the last profile.');
   if (id === getActiveProfileId()) throw new Error('Cannot delete the active profile — switch away first.');
   const prefix = physicalKey(id, '');
   for (const k of appStorage.keys()) {
