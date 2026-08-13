@@ -79,9 +79,37 @@ export function isSyncEnabled() {
   return appStorage.getItem(SYNC_ENABLED_KEY) === 'true';
 }
 
-/** Record the answer. The transport is started or stopped by whoever asked. */
-export function setSyncEnabled(enabled) {
+/**
+ * Record the answer, and report whether it reached the DISK. The transport is
+ * started or stopped by whoever asked.
+ *
+ * The answer means here what it means for `applyUnits`, and for the same
+ * reason: `appStorage.setItem` is a write-behind cache (appStorage.js), so a
+ * bare set is true of a Map and says nothing about the file the next launch
+ * reads. One caller acts on it and it is the one that cannot be wrong — an
+ * iCloud purge holds a persisted refusal open until this answers `true`
+ * (`tellPageSyncIsOff`, OPShell.swift). Answering off the cache let a process
+ * death inside the drain window relaunch into a stored preference still saying
+ * ON with the refusal already cleared, and the next start put the workspace
+ * back into the account whose owner had just deleted it.
+ *
+ * `false` is never "the write was lost": the value is in the cache and stays
+ * there. It means "not durable yet", and the only caller reading it treats that
+ * as "keep the flag and ask again at the next start".
+ *
+ * The switch in the native sheet ignores the answer, as it did before, and pays
+ * one drain it would have paid 250ms later anyway.
+ */
+export async function setSyncEnabled(enabled) {
   appStorage.setItem(SYNC_ENABLED_KEY, enabled ? 'true' : 'false');
+  // A restore is mid-flight, so the write above reached NEITHER the cache nor
+  // the disk — it was recorded and skipped (beginRestoreGuard) — while
+  // `flush()` would still answer `true`, because nothing is dirty. That is the
+  // hole `applyUnits` refuses at its top, in the one shape where the disk
+  // cannot be asked: the restore ends in a reload from the backup, whose own
+  // copy of this preference is whatever it was when the backup was taken.
+  if (appStorage.isRestoreGuardActive()) return false;
+  return appStorage.flush();
 }
 
 /**

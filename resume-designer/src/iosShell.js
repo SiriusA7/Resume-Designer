@@ -985,10 +985,11 @@ export function createCommandDispatcher(actions) {
     const { reply, pending } = run(command);
     // Dropping it leaves nobody attached, so a handler that rejected on this
     // route would raise an unhandled rejection — in a webview, where there is no
-    // console anyone is reading. `syncApply` is the only async handler today and
-    // it never comes through here, so this is closing the door rather than
-    // fixing a live fault. `Promise.resolve` because a thenable is not
-    // necessarily a promise: `isThenable` asks only for `.then`.
+    // console anyone is reading. `setSyncEnabled` comes through here every time
+    // the switch in the sheet moves, and its promise is a disk write, so this is
+    // a live route and not a door being closed early. `Promise.resolve` because
+    // a thenable is not necessarily a promise: `isThenable` asks only for
+    // `.then`.
     if (pending) Promise.resolve(pending).catch(() => {});
     return reply ?? { ok: true };
   }
@@ -1546,9 +1547,20 @@ export function initIOSShell(deps) {
     // starting and stopping the transport is Swift's, off the snapshot it gets
     // back — a boolean in storage that nothing acts on is the worst outcome
     // here, and it is the one that looks fine from JS.
+    //
+    // RETURNED, like `syncApply`'s count and for the same reason: the answer is
+    // `true` only once the preference is on DISK (setSyncEnabled, syncModel.js).
+    // An iCloud purge keeps a persisted refusal until it hears that — a purge
+    // confirmed against the write-behind cache leaves the next launch reading a
+    // stored `true` with nothing left to stop it, and the workspace goes back
+    // into the account whose owner had just emptied it (`tellPageSyncIsOff`,
+    // OPShell.swift). The toggle in the sheet asks through `command`, which
+    // drops the promise; the write and the republish below are synchronous
+    // either way, so nothing on screen waits for a disk.
     setSyncEnabled: ({ value }) => {
-      deps.setSyncEnabled(value === 'true');
+      const durable = deps.setSyncEnabled(value === 'true');
       publish();
+      return durable;
     },
     setApiKey: ({ value }) => {
       // Fire-and-forget by design: the keychain write is async and the sheet
@@ -1576,7 +1588,8 @@ export function initIOSShell(deps) {
       });
     },
     syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
-    // The ONE command whose answer is a promise, and the one Swift asks for
+    // One of the two commands whose answer is a promise — `setSyncEnabled` is
+    // the other, for the same durability reason — and both are asked for
     // through `callAsyncJavaScript` (see `dispatch.async`). A malformed batch
     // still throws SYNCHRONOUSLY — this handler is not `async` on purpose — so
     // it is a refusal on either entry point rather than an answer on one.

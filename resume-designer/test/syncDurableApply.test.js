@@ -24,12 +24,15 @@ import {
 } from '../src/appStorage.js';
 import {
   applyUnits, collectUnit, installStorageStamping, registerEditingProbe,
+  isSyncEnabled, setSyncEnabled,
 } from '../src/sync/syncModel.js';
+import { initIOSShell, SHELL_HANDLER } from '../src/iosShell.js';
 
 const DATA = 'resume-designer-data';
 const APPS = 'resume-designer-applications';
 const TOKENS = 'resume-designer-token-usage';
 const STATE = 'resume-designer-sync-state';
+const ENABLED = 'resume-designer-sync-enabled';
 const AT = '2026-08-09T00:00:00.000Z';
 // Older and newer than a stamp minted by `new Date()` while the test runs,
 // which is what a local edit gets.
@@ -314,5 +317,114 @@ describe('waiting for the disk does not widen the echo-suppression window', () =
     // ...and the applied unit is not, which is the suppression still working.
     expect(stamps['data:settings']).toBeUndefined();
     setStorageWriteObserver(null);
+  });
+});
+
+/**
+ * THE SAME RULE, ON THE OTHER THING THE TRANSPORT CONFIRMS.
+ *
+ * When the account's owner deletes this app's data from iCloud, Swift records a
+ * persisted refusal, tears down everything describing the server, and asks the
+ * page to switch sync off — clearing that flag only once the page answers
+ * (`tellPageSyncIsOff`, OPShell.swift). The preference is the ONLY state in
+ * which "not resent" survives a launch: `start` queues its zone creation
+ * unconditionally, so a launch that reads a stored `true` puts the whole
+ * workspace back into the account the person had just emptied.
+ *
+ * So the answer has to be about the DISK, exactly as an apply's count is.
+ * Answered off the write-behind cache, a process death inside the 250ms drain
+ * left the flag cleared and the stored preference still saying ON, and the
+ * purge undid itself at the next launch.
+ *
+ * These run the REAL shell dispatcher — `window.__opShell.commandAsync` is what
+ * Swift's `sendForResult` reaches through `callAsyncJavaScript` — over the REAL
+ * appStorage, because the durable answer has to survive the whole chain: the
+ * model may await the disk and the bridge handler still drop the promise.
+ */
+describe('an iCloud purge is confirmed against the disk, not the cache', () => {
+  const mountShell = () => {
+    const postMessage = vi.fn();
+    // Installed and never removed: `publish` re-arms a timer whenever the
+    // handler is missing, so tearing it down between tests would leave those
+    // retries running past the end of the file.
+    globalThis.webkit = { messageHandlers: { [SHELL_HANDLER]: { postMessage } } };
+    initIOSShell({
+      subscribeVariants: vi.fn(),
+      subscribeDocument: vi.fn(),
+      getVariantsSnapshot: () => ({ currentId: null, list: [] }),
+      getZoom: () => 1,
+      getSettings: () => ({}),
+      getTheme: () => 'system',
+      getPendingChanges: () => [],
+      getAppInfo: () => Promise.resolve({ version: '2.1.0' }),
+      // The two under test, and the real ones: the point of this file is that
+      // the disk is asked, and a stub for either would answer from memory.
+      setSyncEnabled,
+      getSyncEnabled: isSyncEnabled,
+    });
+    return (command) => window.__opShell.commandAsync(command);
+  };
+
+  beforeEach(async () => {
+    // Sync is on, and that answer is on disk — the state a purge arrives in.
+    backend.files.set(ENABLED, 'true');
+    await initAppStorage({ backend });
+  });
+
+  it('answers only once the switched-off preference has reached the disk', async () => {
+    const sendAsync = mountShell();
+    const pending = sendAsync({ type: 'setSyncEnabled', value: 'false' });
+
+    // The write itself is synchronous, so the CACHE is already off while the
+    // disk still says on. THIS is the window the old code answered in, and the
+    // window Swift cleared its persisted purge flag in: a kill here relaunched
+    // into a stored `true` with nothing left to stop the zone being recreated.
+    expect(appStorage.getItem(ENABLED)).toBe('false');
+    expect(backend.files.get(ENABLED)).toBe('true');
+
+    // The answer waits for the drain, so the flag is cleared against a file
+    // that already says off. THE DISK IS ASSERTED FIRST, deliberately: it is
+    // the claim the fix makes, and reading the answer's shape first would let a
+    // regression be reported as a bridge-envelope mismatch instead.
+    const answer = await pending;
+    expect(backend.files.get(ENABLED)).toBe('false');
+    expect(answer).toEqual({ ok: true, result: true });
+  });
+
+  it('refuses to confirm when the disk write fails, whatever the cache holds', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    backend.fail.add(ENABLED);
+    const sendAsync = mountShell();
+
+    expect(await sendAsync({ type: 'setSyncEnabled', value: 'false' }))
+      .toEqual({ ok: true, result: false });
+
+    // The disk still says sync is on, so Swift's refusal flag has to stand: it
+    // asks again at the next start and the transport stays down until it does
+    // land. Nothing spins — the ask is once per start, and bounded.
+    expect(backend.files.get(ENABLED)).toBe('true');
+    // The cache keeps the value, as it does for every failed write; asserting
+    // THIS is what a memory-shaped test would have called a pass.
+    expect(appStorage.getItem(ENABLED)).toBe('false');
+    spy.mockRestore();
+  });
+
+  it('refuses to confirm while a backup restore holds the storage guard', async () => {
+    // The guard records the write and skips both the cache and the disk, and
+    // `flush()` alone would still answer `true` because nothing is dirty — the
+    // same hole `applyUnits` refuses at its top. Worse here: a successful
+    // restore DISCARDS the recorded write and reloads, and this key is not in a
+    // backup, so the disk keeps saying sync is on.
+    const sendAsync = mountShell();
+    appStorage.beginRestoreGuard();
+
+    expect(await sendAsync({ type: 'setSyncEnabled', value: 'false' }))
+      .toEqual({ ok: true, result: false });
+
+    expect(backend.files.get(ENABLED)).toBe('true');
+    expect(appStorage.getItem(ENABLED)).toBe('true');
+
+    appStorage.endRestoreGuard();
+    appStorage.discardDeferredWrites();
   });
 });

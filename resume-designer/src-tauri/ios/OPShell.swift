@@ -798,9 +798,16 @@ final class ShellModel: ObservableObject {
   /// Device-wide rather than per profile, matching the switch: a purge empties
   /// the container, and the switch is one answer per device covering all of it.
   ///
-  /// Cleared ONLY by the page confirming the write, after which the switch reads
-  /// off and the person turning it back on is a new, explicit instruction that
-  /// takes the ordinary path — which re-owes every profile's full upload.
+  /// Set SYNCHRONOUSLY the moment the engine reports the purge, so that no
+  /// crash between that event and the recovery work leaves the instruction
+  /// unrecorded — see `syncDidPurgeFromICloud`.
+  ///
+  /// Cleared ONLY by the page confirming the preference reached DISK, after
+  /// which the switch reads off and the person turning it back on is a new,
+  /// explicit instruction that takes the ordinary path — which re-owes every
+  /// profile's full upload. Cleared against the page's write-behind cache
+  /// instead, it left the flag gone and the stored preference still saying ON
+  /// whenever the process died inside the drain — see `tellPageSyncIsOff`.
   private static let syncPurgeKey = "op-sync-icloud-purged"
 
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
@@ -885,8 +892,10 @@ final class ShellModel: ObservableObject {
   /// and `syncApply` in iosShell.js). `evaluateJavaScript` cannot serialize a
   /// promise, so the dispatcher's synchronous entry point drops one — and an
   /// apply is not confirmed until the bytes are on disk, which is a promise.
-  /// Every other caller here answers synchronously and is unaffected: an already
-  /// settled value crosses this path exactly as it crossed the other one.
+  /// The same is true of the sync preference a purge switches off
+  /// (`tellPageSyncIsOff`). Every other caller here answers synchronously and is
+  /// unaffected: an already settled value crosses this path exactly as it
+  /// crossed the other one.
   func sendForResult(_ type: String, _ extra: [String: String] = [:]) async -> ShellReply {
     await withCheckedContinuation { continuation in
       // Resumed exactly once, from whichever of the two paths below arrives
@@ -1393,9 +1402,11 @@ extension ShellModel {
   /// ICLOUD — change tags, change tokens, the pending queue, the staged assets —
   /// and nothing that describes them.
   private func applyICloudPurge() async {
-    // FIRST, so that a crash anywhere below still leaves the refusal on record.
-    // Everything after this is recovery that the next start repeats.
-    UserDefaults.standard.set(true, forKey: Self.syncPurgeKey)
+    // The refusal is ALREADY on record: `syncDidPurgeFromICloud` writes it
+    // synchronously, before this turn was even scheduled, so a crash anywhere
+    // from the engine's event onward still leaves it. Everything here is
+    // recovery that the next start repeats.
+    //
     // The transport goes down through the same path the switch takes, so the
     // account state and any outstanding failure lines go with it.
     await syncPreference(false)
@@ -1406,7 +1417,7 @@ extension ShellModel {
   }
 
   /// Ask the page to persist the switch as off, and keep owing it until the page
-  /// says it did.
+  /// says the bytes are ON DISK.
   ///
   /// The answer is the point: `send` is fire-and-forget, and the one moment this
   /// runs is a moment the webview may be reloading — WebKit reclaims the content
@@ -1414,10 +1425,26 @@ extension ShellModel {
   /// own. A lost write would leave the page's stored preference saying ON, and
   /// the next launch would recreate the zone. So the flag stands until a
   /// confirmed answer, and every start asks again.
+  ///
+  /// AND THE ANSWER IS ABOUT THE DISK, not the page's cache. `setSyncEnabled`
+  /// used to reply the instant the value reached `appStorage`, which is a
+  /// write-behind cache that drains 250ms later — so a purge plus a process
+  /// death inside that window cleared this flag against a stored preference
+  /// that still said ON, and the next start passed both gates and re-uploaded
+  /// the workspace into the account whose owner had just emptied it. It is the
+  /// same confirmed-before-durable mistake `syncApply` was fixed for, and the
+  /// page answers it the same way: the write lands synchronously, the drain is
+  /// awaited, and `true` crosses back only once the file is written.
+  ///
+  /// It cannot spin. Nothing here retries: one ask per purge and one per start
+  /// (`runStartSync`'s gate), and `sendForResult` bounds each at ten seconds, so
+  /// a page that never answers costs one bounded wait per start and leaves the
+  /// transport exactly where it already was — down.
   private func tellPageSyncIsOff() async {
     guard Self.syncPurged() else { return }
-    guard case .answered = await sendForResult("setSyncEnabled", ["value": "false"]) else {
-      NSLog("[OPShell] the page could not be told that iCloud sync is off; "
+    guard case .answered(let durable) = await sendForResult("setSyncEnabled", ["value": "false"]),
+          (durable as? Bool) == true else {
+      NSLog("[OPShell] the page could not durably record that iCloud sync is off; "
             + "the transport stays down and it is asked again at the next start")
       return
     }
@@ -1884,6 +1911,14 @@ extension ShellModel: OPSyncHost {
   /// re-enters the transport: this is called from inside the engine's event
   /// handling and the work below cancels the engine's operations.
   func syncDidPurgeFromICloud() {
+    // BEFORE the hop, not inside `applyICloudPurge`, and this is the whole of
+    // why it is written here: a kill between the engine's event and that later
+    // turn would otherwise leave no record of the purge at all. The next launch
+    // would then queue its unconditional `.saveZone` against a change token that
+    // is still stale, and if the zone save wins that race the token's own
+    // answer comes back as an expired token rather than as `.userDeletedZone` —
+    // the account owner's instruction read as ordinary staleness, and undone.
+    UserDefaults.standard.set(true, forKey: Self.syncPurgeKey)
     Task { @MainActor [weak self] in await self?.applyICloudPurge() }
   }
 }
