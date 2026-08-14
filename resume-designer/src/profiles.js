@@ -691,6 +691,42 @@ export async function ensureProfilesInitialized() {
   }
 }
 
+function firstByRegistryOrder(entries) {
+  return entries.reduce((best, entry) => {
+    const entryCreatedAt = String(entry.createdAt ?? '');
+    const bestCreatedAt = String(best.createdAt ?? '');
+    if (entryCreatedAt !== bestCreatedAt) return entryCreatedAt < bestCreatedAt ? entry : best;
+    return entry.id < best.id ? entry : best;
+  });
+}
+
+function chooseTombstoneToRevive(registry, activeId) {
+  const previouslyActive = registry.find((entry) => entry.id === activeId);
+  if (previouslyActive) return previouslyActive;
+
+  const withLocalData = registry.filter((entry) => appStorage.keys().some((key) => {
+    const split = splitPhysicalKey(key);
+    return split?.profileId === entry.id && isOwnedKey(split.logicalKey);
+  }));
+  if (withLocalData.length) return firstByRegistryOrder(withLocalData);
+
+  const newestStamp = registry.reduce((newest, entry) => {
+    const entryStamp = String(entry.updatedAt ?? '');
+    const newestValue = String(newest.updatedAt ?? '');
+    return entryStamp > newestValue ? entry : newest;
+  });
+  const tied = registry.filter((entry) => String(entry.updatedAt ?? '') === String(newestStamp.updatedAt ?? ''));
+  return firstByRegistryOrder(tied);
+}
+
+function revivalStamp(entry) {
+  const parsed = [entry.deletedAt, entry.updatedAt]
+    .map((stamp) => Date.parse(stamp ?? ''))
+    .filter(Number.isFinite);
+  const prior = parsed.length ? Math.max(...parsed) : 0;
+  return new Date(Math.max(Date.now(), prior + 1)).toISOString();
+}
+
 async function resolveActiveProfile() {
   let registry = loadRegistry() || rebuildRegistryFromKeys();
 
@@ -745,14 +781,30 @@ async function resolveActiveProfile() {
   // landing its tombstone without its pointer — and the heal below is what gets
   // out of both.
   if (!registry.some((p) => p.id === active && !p?.deletedAt)) {
-    // Prefer the first NON-tombstoned entry: registry[0] can itself be a
-    // tombstone now (deleteProfile no longer drops entries), and this branch
-    // fires exactly when the membership check above already failed — landing
-    // on a deleted profile would map the app onto an empty namespace and hide
-    // the active id from listProfiles(). Fall back to registry[0] only if
-    // every entry is somehow tombstoned, matching the prior unconditional
-    // behavior rather than leaving `active` unset.
-    active = (registry.find((p) => !p?.deletedAt) || registry[0]).id;
+    const firstLive = registry.find((p) => !p?.deletedAt);
+    if (firstLive) {
+      active = firstLive.id;
+    } else {
+      // No single device permits deleting its last visible workspace. An empty
+      // live set can only be the merge of individually legal deletes, so revive
+      // one entry rather than map the app into a tombstone nothing lists.
+      const registryBefore = registry;
+      const revive = chooseTombstoneToRevive(registry, active);
+      registry = registry.map((entry) => (entry.id === revive.id
+        ? { ...entry, deletedAt: undefined, updatedAt: revivalStamp(entry) }
+        : entry));
+      saveRegistry(registry);
+      if (!(await appStorage.flush())) {
+        try { saveRegistry(registryBefore); } catch { /* keep going */ }
+        await appStorage.flush();
+        console.error('[profiles] all-tombstoned recovery did not reach disk; running with profile mapping disabled');
+        initDegraded = true;
+        setProfileMapping(null);
+        return null;
+      }
+      active = revive.id;
+      console.warn(`[profiles] all profiles were tombstoned; revived profile "${active}"`);
+    }
     appStorage.setItem(ACTIVE_PROFILE_KEY, active);
   }
   if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) {

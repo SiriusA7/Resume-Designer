@@ -629,6 +629,84 @@ describe('adoption migration', () => {
     expect(getActiveProfileId()).toBe(b.id);
   });
 
+  it('durably revives a local workspace when every registry entry is tombstoned', async () => {
+    const tombstoneStamp = '2099-08-02T00:00:00.000Z';
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify([
+        { id: 'pempty', name: 'Empty', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z', deletedAt: '2099-08-01T00:00:00.000Z', updatedAt: '2099-08-01T00:00:00.000Z' },
+        { id: 'plocal', name: 'Local', emoji: '🙂', createdAt: '2026-07-02T00:00:00.000Z', deletedAt: tombstoneStamp, updatedAt: tombstoneStamp },
+      ]),
+      [ACTIVE_PROFILE_KEY]: 'pmissing',
+      [physicalKey('plocal', 'resume-designer-data')]: '{"variants":{"keep":{}}}',
+    });
+    await initAppStorage({ backend });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const resolved = await ensureProfilesInitialized();
+      const listed = listProfiles();
+
+      expect(resolved).toBe('plocal');
+      expect(listed).not.toHaveLength(0);
+      expect(listed.map((p) => p.id)).toContain(resolved);
+      const diskRegistry = JSON.parse(backend.files.get(PROFILES_KEY));
+      const revived = diskRegistry.find((p) => p.id === resolved);
+      expect(revived.deletedAt).toBeUndefined();
+      expect(new Date(revived.updatedAt).getTime()).toBeGreaterThan(new Date(tombstoneStamp).getTime());
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('revives the workspace this device was last in, ahead of any other candidate', async () => {
+    // The branch a real device almost always takes: its own active id IS in the
+    // registry, just tombstoned by the other device. Both candidates below hold
+    // local data, so only the preference order can decide — which is what pins
+    // it. Without that first preference the device would revive a workspace it
+    // was not using and had no reason to open.
+    const stamp = '2026-08-02T00:00:00.000Z';
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify([
+        { id: 'pother', name: 'Other', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z', deletedAt: stamp, updatedAt: stamp },
+        { id: 'pmine', name: 'Mine', emoji: '🙂', createdAt: '2026-07-02T00:00:00.000Z', deletedAt: stamp, updatedAt: stamp },
+      ]),
+      [ACTIVE_PROFILE_KEY]: 'pmine',
+      [physicalKey('pother', 'resume-designer-data')]: '{"variants":{"theirs":{}}}',
+      [physicalKey('pmine', 'resume-designer-data')]: '{"variants":{"mine":{}}}',
+    });
+    await initAppStorage({ backend });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      // 'pother' is first in the registry and equally eligible, so this fails if
+      // the choice ever falls back to registry order.
+      expect(await ensureProfilesInitialized()).toBe('pmine');
+      const diskRegistry = JSON.parse(backend.files.get(PROFILES_KEY));
+      expect(diskRegistry.find((p) => p.id === 'pmine').deletedAt).toBeUndefined();
+      expect(diskRegistry.find((p) => p.id === 'pother').deletedAt).toBe(stamp);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('keeps the ordinary live-profile fallback unchanged without reviving a tombstone', async () => {
+    const registry = [
+      { id: 'pdead', name: 'Deleted', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z', deletedAt: '2026-08-02T00:00:00.000Z', updatedAt: '2026-08-02T00:00:00.000Z' },
+      { id: 'plive', name: 'Live', emoji: '🙂', createdAt: '2026-07-02T00:00:00.000Z' },
+    ];
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify(registry),
+      [ACTIVE_PROFILE_KEY]: 'pdead',
+    });
+    await initAppStorage({ backend });
+
+    const resolved = await ensureProfilesInitialized();
+
+    expect(resolved).toBe('plive');
+    expect(listProfiles().map((p) => p.id)).toEqual(['plive']);
+    expect(JSON.parse(backend.files.get(PROFILES_KEY))).toEqual(registry);
+  });
+
   it('rebuilds a lost registry from existing namespaced data (no data loss)', async () => {
     // Corrupt/missing registry while workspaces exist on disk: recovery must
     // re-list the observed namespaces, never adopt-as-new (which would orphan
