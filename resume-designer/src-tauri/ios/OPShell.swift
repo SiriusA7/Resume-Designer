@@ -1427,7 +1427,11 @@ extension ShellModel {
     var deferred = syncDeferred(key: key)
     deferred.formUnion(unitIds)
     setSyncDeferred(deferred, key: key)
-    if syncDeferredDrainKey == key {
+    if syncDeferredDrainKey != nil {
+      // Any fallback while a queue is draining may owe one of that queue's
+      // offered ids again, even when the durable destination is another key.
+      // Over-recording is safe: ids outside `offered` change no settlement,
+      // while missing one here would silently settle debt that is owed again.
       syncDeferredReowed.formUnion(unitIds)
     }
   }
@@ -1453,14 +1457,28 @@ extension ShellModel {
     addSyncDeferred(shared, key: Self.syncDeferredSharedKey)
   }
 
-  /// Reclassify the active profile's durable snapshot once the page is back.
-  /// This repairs shared ids parked there by the `nil` fallback. The shared
-  /// queue is written first; only then are those ids removed from the profile
-  /// queue, so a process death between the writes can duplicate debt but cannot
-  /// lose it.
-  private func hoistSharedSyncDeferred(profileId: String) async {
-    let profileKey = OPSyncEngine.deferredKey(profileId)
-    let offered = syncDeferred(key: profileKey)
+  /// Reclassify every profile queue's durable snapshot once the page is back.
+  /// This repairs shared ids parked by the `nil` fallback even when their old
+  /// profile is inactive or tombstoned. Enumerating these device-local keys is
+  /// bookkeeping only; `syncScopes` remains the sole scope authority.
+  ///
+  /// The shared queue is written first; only then are those ids removed from
+  /// any profile queue, so a process death between writes can duplicate debt
+  /// but cannot lose it.
+  private func hoistSharedSyncDeferred() async {
+    let defaults = UserDefaults.standard
+    let prefix = OPSyncEngine.deferredKey("")
+    var profileQueues: [String: Set<String>] = [:]
+    var offered: Set<String> = []
+
+    for key in defaults.dictionaryRepresentation().keys
+    where key.hasPrefix(prefix) && key != Self.syncDeferredSharedKey {
+      let deferred = syncDeferred(key: key)
+      guard !deferred.isEmpty else { continue }
+      profileQueues[key] = deferred
+      offered.formUnion(deferred)
+    }
+
     guard !offered.isEmpty,
           let scopes = await syncScopes(forUnitIds: Array(offered).sorted()) else { return }
 
@@ -1468,16 +1486,18 @@ extension ShellModel {
     guard !shared.isEmpty else { return }
     addSyncDeferred(shared, key: Self.syncDeferredSharedKey)
 
-    var deferred = syncDeferred(key: profileKey)
-    deferred.subtract(shared)
-    setSyncDeferred(deferred, key: profileKey)
+    for key in profileQueues.keys {
+      var deferred = syncDeferred(key: key)
+      deferred.subtract(shared)
+      setSyncDeferred(deferred, key: key)
+    }
   }
 
   /// Hoist first so a shared id parked by the `nil` fallback reaches the queue
   /// that every profile drains. `fetchShared` has already run before this call,
   /// preserving the shared-zone fetch-before-send order.
   private func drainSyncDeferred(profileId: String) async {
-    await hoistSharedSyncDeferred(profileId: profileId)
+    await hoistSharedSyncDeferred()
     await drainSyncDeferred(key: Self.syncDeferredSharedKey)
     await drainSyncDeferred(key: OPSyncEngine.deferredKey(profileId))
   }
