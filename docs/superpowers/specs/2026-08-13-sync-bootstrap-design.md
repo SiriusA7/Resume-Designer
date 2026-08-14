@@ -170,11 +170,21 @@ anything, and is defined conservatively.** X qualifies only when ALL hold:
   allowlist a history key refuses simply by not being on it; it is called out
   here because it is the reasoning the whole predicate rests on.) And
 - `resume-designer-applications`, `resume-designer-job-descriptions`,
-  `resume-designer-chat-threads` and `resume-designer-learned-answers` are each
-  absent or an empty collection, and
+  `resume-designer-chat-threads`, `resume-designer-chat-history` (the
+  pre-threads chat, live only during the migration window) and
+  `resume-designer-learned-answers` are each absent or an empty collection, and
 - `resume-designer-token-usage` is absent or records no usage, and
-- the data blob parses to the object shape this app writes — an array is not one,
-  and a corrupt blob is doubt.
+- **the data blob holds no top-level field outside a short allowlist:**
+  `variants`, `currentVariantId`, `settings` and `userProfile`. It must first
+  parse to a plain object — an array is not one, and a corrupt blob is doubt.
+  `variants` must be empty; `currentVariantId` is a pointer and needs no
+  further check; `settings` is allowed outright — every field in it is a
+  design/AI/view preference, and the credential it might once have carried now
+  lives in the OS keychain, never in this blob. And
+- **`userProfile` holds no authored content.** The Profile screen writes
+  straight into this blob and records no version history of its own, so
+  someone who filled in contact details or work history without ever opening a
+  résumé would otherwise pass every other clause.
 
 Any read that fails, any key that cannot be parsed, or any doubt whatsoever
 keeps X. A stray empty workspace is an annoyance the person can delete;

@@ -1187,6 +1187,37 @@ describe('isUntouchedWorkspace', () => {
     expect(isUntouchedWorkspace(p.id)).toBe(true);
   });
 
+  // THE field-level twin of the unknown-KEY test below, and the one that makes
+  // this inversion worth doing. The blob clause only ever examined `variants`
+  // and `userProfile`; `settings` and `currentVariantId` passed unexamined, and
+  // so would any field a later release adds to this blob — a `coverLetters`
+  // field would be silently vouched for exactly the way an unenumerated key
+  // used to be, one level up.
+  it('is false for a top-level blob field it has never heard of', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({
+      variants: {},
+      coverLetters: { a: {} },
+    }));
+    expect(isUntouchedWorkspace(p.id)).toBe(false);
+  });
+
+  // The allowlist's other side: `settings` is a decided allowance, not an
+  // oversight (every field in DEFAULT_STORAGE.settings is a design/AI/view
+  // preference, and no credential can reach it — saveSettings strips
+  // `openrouterKey` and the key lives in the OS keychain), and
+  // `currentVariantId` is a pointer, not content. Refusing either would fail
+  // adoption on every ordinary settings interaction.
+  it('is true with settings and currentVariantId present alongside empty variants', () => {
+    const p = startWorkspace('P');
+    writeProfileKey(p.id, 'resume-designer-data', JSON.stringify({
+      variants: {},
+      currentVariantId: null,
+      settings: { colorPalette: 'terracotta', customModels: ['openrouter/some-model'] },
+    }));
+    expect(isUntouchedWorkspace(p.id)).toBe(true);
+  });
+
   // The most dangerous case of all: the active POINTER names this profile but
   // the key mapping is inactive (a degraded init runs exactly like that), so
   // every ordinary read resolves to the unprefixed keys and a full workspace

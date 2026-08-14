@@ -391,14 +391,20 @@ const WORKSPACE_LISTS = [
 // refuses: a known content key, a key this predicate has never heard of, and
 // any key a later release adds without touching this file.
 //
-// `resume-designer-bridge-token` is deliberately absent. It is a shared key, so
-// mapKey can never put it in a namespace; one sitting there was written by
-// something this predicate does not understand, and doubt refuses.
+// `resume-designer-bridge-token`, `resume-designer-theme`,
+// `resume-designer-update-channel` and `resume-designer-auto-update-check` are
+// deliberately absent, though all four are genuinely harmless. All four are
+// SHARED keys (SHARED_KEYS, profileKeys.js) — `mapKey` never namespaces a
+// shared key — so their ordinary, unprefixed form never reaches this list at
+// all; it passes through the shared-key clause in the walk below instead. One
+// of them showing up PREFIXED here did not arrive through the ordinary write
+// path: it was written by something this predicate does not understand, and an
+// unexplained key is doubt. (This list held the other three until they were
+// found sitting here on a different rationale than bridge-token's, for no
+// stated reason — same shared-key argument, opposite treatment. Moving them
+// out costs nothing: their normal unprefixed form is unaffected.)
 const STARTER_HARMLESS_KEYS = new Set([
   SYNC_STATE_KEY, // per-unit sync stamps + this device's id — written by sync, never by a person
-  'resume-designer-theme',
-  'resume-designer-update-channel',
-  'resume-designer-auto-update-check',
   'resume-designer-onboarding-complete',
   'resume-edit-hint-dismissed',
   'resume-header-style',
@@ -416,6 +422,31 @@ const STARTER_INSPECTED_KEYS = new Set([
   'resume-designer-token-usage',
   ...WORKSPACE_LISTS,
 ]);
+
+// The top-level fields `resume-designer-data` may hold and still describe a
+// starter workspace. Same argument as STARTER_HARMLESS_KEYS, one level down:
+// the blob clause used to examine exactly `variants` and `userProfile` and let
+// everything else — `settings`, `currentVariantId`, and any field a later
+// release adds — pass unexamined. That is the defaults-to-innocent shape this
+// module already eliminated at the key level; a field it has never heard of
+// now refuses too.
+//
+// `settings` is a decided allowance, not an oversight. Every field in it
+// (DEFAULT_STORAGE.settings, persistence.js) is a design/AI/view preference —
+// palette, layout, page size, model choices, reasoning efforts, panel width.
+// The most "authored" of them, `customModels`, is typed-in model ids:
+// recreatable configuration, the same class as `resume-accent-settings` on
+// STARTER_HARMLESS_KEYS. No credential can reach it on this platform:
+// saveSettings strips `openrouterKey` before it is ever written here, and the
+// key itself lives in the OS keychain on iOS. Refusing a field every settings
+// interaction writes would fail adoption in ordinary use and strand people on
+// the starter workspace — the confusion this feature exists to remove.
+//
+// `variants` and `userProfile` keep the treatment they already had below this
+// clause (variants must be empty; userProfile must be unauthored).
+// `currentVariantId` is a pointer, not content, so its presence needs no
+// further check.
+const BLOB_ALLOWED_FIELDS = new Set(['variants', 'currentVariantId', 'settings', 'userProfile']);
 
 /**
  * Whether anything inside a stored structure was authored by a person.
@@ -448,7 +479,8 @@ function holdsAuthoredContent(value) {
  * It is an ALLOWLIST over the workspace's keys, not a list of content keys to
  * check: a key it has never heard of refuses, so the next content key added to
  * this app is safe from it without anyone having to remember this file exists.
- * See STARTER_HARMLESS_KEYS.
+ * See STARTER_HARMLESS_KEYS. The same allowlist shape applies one level down,
+ * to the FIELDS of the `resume-designer-data` blob — see BLOB_ALLOWED_FIELDS.
  *
  * Version history is the load-bearing clause — the store records an entry on
  * every change, so an absent history is the strongest evidence available that
@@ -517,6 +549,11 @@ export function isUntouchedWorkspace(profileId) {
       // through this entire clause. A blob shaped like nothing this app writes
       // is a corrupt blob, and a corrupt blob is doubt.
       if (!blob || typeof blob !== 'object' || Array.isArray(blob)) return false;
+      // A field this predicate has never heard of refuses, same as an unknown
+      // physical key one level up. See BLOB_ALLOWED_FIELDS.
+      for (const field of Object.keys(blob)) {
+        if (!BLOB_ALLOWED_FIELDS.has(field)) return false;
+      }
       const { variants } = blob;
       if (variants !== undefined) {
         if (!variants || typeof variants !== 'object' || Array.isArray(variants)) return false;
