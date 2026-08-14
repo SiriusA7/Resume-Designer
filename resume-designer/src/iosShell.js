@@ -1589,11 +1589,10 @@ export function initIOSShell(deps) {
     },
     syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
     // The shared-zone fetch may have just introduced this account's real
-    // workspaces into a clean install. Adoption answers with a promise because
-    // the id is not safe to act on until its tombstone, active pointer and
-    // namespace cleanup are durable. Swift therefore asks through
-    // `callAsyncJavaScript` / `dispatch.async`, like `syncApply` below.
-    syncAdoptAccountWorkspaces: () => deps.adoptAccountWorkspaces(),
+    // workspaces into a clean install. This is a pure, synchronous question:
+    // Swift reloads on yes, and the fresh boot performs the durable adoption
+    // before React mounts or this sync engine starts again.
+    syncShouldAdoptAccountWorkspaces: () => deps.shouldAdoptAccountWorkspaces(),
     // Which zone each named unit belongs in, asked when the transport QUEUES a
     // save: a CloudKit record id carries its zone, and all Swift holds at that
     // moment is the id it was handed. Answered here rather than derived there

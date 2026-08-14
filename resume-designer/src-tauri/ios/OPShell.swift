@@ -826,6 +826,11 @@ final class ShellModel: ObservableObject {
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
   private var syncStart: Task<Void, Never>?
 
+  /// Backstop against a predicate/boot disagreement. Process-local on purpose:
+  /// one bad answer may cost one reload this launch, but cannot make the app
+  /// unusable; a genuine adoption is allowed to try again after a new launch.
+  private static var didReloadForAccountWorkspaceAdoption = false
+
   /// What the last `setZoom` said, so a finger resting still does not fire a
   /// command per touch event. Everything a frame carries is in here, because
   /// dropping a frame whose SCALE was unchanged would also drop the pan a
@@ -1312,15 +1317,15 @@ extension ShellModel {
     try? await sync.fetchShared()
 
     // The shared landing may have introduced this account's real workspaces to
-    // a clean install whose boot knew only its starter. Adoption answers only
-    // after the tombstone and active pointer are durable; if it chose another
-    // workspace, this engine is still bound to the starter's zone, so nothing
-    // else from this start may drain, fetch or upload. Reload and let normal
-    // boot activate the adopted workspace before starting a fresh engine.
-    if case .answered(let value) = await sendForResult("syncAdoptAccountWorkspaces"),
-       let adoptedProfileId = value as? String,
-       !adoptedProfileId.isEmpty {
-      NSLog("[OPShell] adopted account workspace \(adoptedProfileId); reloading before profile-zone sync")
+    // a clean install whose boot knew only its starter. Ask only the shared pure
+    // decision here: adoption itself must run during the fresh boot, before
+    // React can write and before a sync engine can transmit an uncommitted
+    // registry. Nothing else from this start may drain, fetch or upload.
+    if case .answered(let value) = await sendForResult("syncShouldAdoptAccountWorkspaces"),
+       (value as? Bool) == true,
+       !Self.didReloadForAccountWorkspaceAdoption {
+      Self.didReloadForAccountWorkspaceAdoption = true
+      NSLog("[OPShell] account workspace adoption applies; reloading for boot-time adoption")
       webView?.reload()
       return
     }

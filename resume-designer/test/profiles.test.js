@@ -8,6 +8,7 @@ import {
   createProfile, renameProfile, deleteProfile, exportProfileBackup,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
   activateProfileMappingForPrint, isUntouchedWorkspace, adoptAccountWorkspaces,
+  shouldAdoptAccountWorkspaces,
 } from '../src/profiles.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, SYNC_STATE_KEY, physicalKey,
@@ -1399,16 +1400,24 @@ describe('fresh-device adoption', () => {
     expect(landed).toEqual({ applied: 1 });
   }
 
-  function seedAccount({ starterTouched = false, starterMarker = true } = {}) {
+  function seedAccount({
+    starterTouched = false,
+    starterMarker = true,
+    otherWorkspaces = true,
+    adoptionPending = false,
+  } = {}) {
     // Deliberately unsorted, so the "least-recently-created" choice cannot be
     // "whatever sits at index 0".
     localStorage.setItem(PROFILES_KEY, JSON.stringify([
-      { id: 'plater', name: 'iPad', emoji: '🙂', createdAt: '2026-07-15T00:00:00.000Z' },
+      ...(otherWorkspaces ? [
+        { id: 'plater', name: 'iPad', emoji: '🙂', createdAt: '2026-07-15T00:00:00.000Z' },
+        { id: 'pfirst', name: 'iPhone', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z' },
+      ] : []),
       { id: 'pstarter', name: 'My profile', emoji: '🙂', createdAt: '2026-08-01T00:00:00.000Z' },
-      { id: 'pfirst', name: 'iPhone', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z' },
     ]));
     localStorage.setItem(ACTIVE_PROFILE_KEY, 'pstarter');
     if (starterMarker) localStorage.setItem(STARTER_KEY, 'pstarter');
+    if (adoptionPending) localStorage.setItem('resume-profile-adoption-pending', '1');
     // No variant: init seeds none on the platforms this runs on, and one that
     // is there was authored (isUntouchedWorkspace). A seed with a résumé in it
     // would make every case below refuse for that reason instead of the one
@@ -1440,13 +1449,46 @@ describe('fresh-device adoption', () => {
     };
 
     await landAccountRegistry([accountProfile]);
-    const adoptedId = await adoptAccountWorkspaces();
+    const adoptedId = await ensureProfilesInitialized();
 
     expect(adoptedId).toBe(accountProfile.id);
     const diskRegistry = JSON.parse(backend.files.get(PROFILES_KEY));
     expect(diskRegistry.find((p) => p.id === starterId).deletedAt).toEqual(expect.any(String));
     expect(diskRegistry.find((p) => p.id === accountProfile.id).deletedAt).toBeUndefined();
     expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe(accountProfile.id);
+  });
+
+  it('answers that adoption applies without writing or deleting anything', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    await ensureProfilesInitialized();
+    await landAccountRegistry([{
+      id: 'paccount', name: 'Account', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z',
+    }]);
+    backend.write.mockClear();
+    backend.delete.mockClear();
+
+    expect(shouldAdoptAccountWorkspaces()).toBe(true);
+    expect(backend.write).not.toHaveBeenCalled();
+    expect(backend.delete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an untouched starter', {}, true],
+    ['authored starter content', { starterTouched: true }, false],
+    ['no other workspace', { otherWorkspaces: false }, false],
+    ['an adoption marker', { adoptionPending: true }, false],
+  ])('keeps the predicate and adoption in agreement with %s', async (_case, options, expected) => {
+    seedAccount(options);
+    setProfileMapping('pstarter');
+
+    const predicateAnswer = shouldAdoptAccountWorkspaces();
+    const adoptionAnswer = await adoptAccountWorkspaces();
+
+    expect({ predicate: predicateAnswer, adoption: !!adoptionAnswer }).toEqual({
+      predicate: expected,
+      adoption: expected,
+    });
   });
 
   it('refuses mid-session adoption after the starter gains authored content', async () => {
@@ -1600,6 +1642,7 @@ describe('fresh-device adoption', () => {
       expect(loadRegistry().find((p) => p.id === 'pstarter').deletedAt).toBeUndefined();
       // And the namespace it would have deleted is untouched, on disk.
       expect(backend.files.get('resume-p--pstarter--resume-designer-data')).toBe('{"variants":{}}');
+      expect(backend.delete).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
     }
