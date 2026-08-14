@@ -1294,7 +1294,10 @@ extension ShellModel {
       setSyncFullUploadOwed(true, profileId: profileId)
     }
 
-    let state = await sync.start(profileId: profileId)
+    // Deliberate Phase 0 stub: this shell has no workspace list of its own yet.
+    // Pass only the active profile until Plan 2 supplies the page-owned list;
+    // Swift must not invent one by classifying unit ids or reading the registry.
+    let state = await sync.start(profileId: profileId, knownProfileIds: [profileId])
     syncAccountState = state
     guard state == .available else {
       // Signed out, restricted, or iCloud not reachable. All normal, none an
@@ -1802,7 +1805,7 @@ extension ShellModel {
 
 /// Where the transport meets the page. Every one of these is a command on the
 /// same bridge the rest of the chrome uses, and not one of them looks inside a
-/// payload — a unit is `{ id, kind, payload, modifiedAt }` with the payload an
+/// payload — a unit is `{ id, kind, payload, modifiedAt, profileId }` with the payload an
 /// opaque string, and all decomposition stays in JS.
 ///
 /// The non-async methods are called from inside the engine's event handling, so
@@ -1934,6 +1937,9 @@ extension ShellModel: OPSyncHost {
   /// transport without the ids being held — the two would otherwise have to be
   /// kept in step at three separate returns.
   private func applyFetched(_ units: [SyncUnit]) async -> Bool {
+    // `SyncUnit`'s encoding includes `profileId`, reporting which record zone
+    // each fetched unit arrived in. It does not classify the unit or choose a
+    // destination; outbound zone selection still comes from `syncScopes`.
     guard let data = try? JSONEncoder().encode(units),
           let json = String(data: data, encoding: .utf8) else {
       NSLog("[OPShell] could not encode \(units.count) fetched unit(s)")

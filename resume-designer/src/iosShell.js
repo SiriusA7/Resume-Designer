@@ -1609,6 +1609,9 @@ export function initIOSShell(deps) {
     // through `callAsyncJavaScript` (see `dispatch.async`). A malformed batch
     // still throws SYNCHRONOUSLY — this handler is not `async` on purpose — so
     // it is a refusal on either entry point rather than an answer on one.
+    // Each unit now names the profile whose zone it arrived in — `''` for the
+    // shared zone. Swift is reporting a fact about the record's zone, not
+    // deciding what the unit is; see `syncScopes` for the same seam in reverse.
     syncApply: ({ units }) => {
       const parsed = JSON.parse(String(units ?? '[]'));
       if (!Array.isArray(parsed)) throw new Error('syncApply needs an array of units');

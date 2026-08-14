@@ -1,7 +1,7 @@
 // CloudKit transport. Zones, records, conflicts — driven by `CKSyncEngine`.
 //
 // **This file never parses a payload.** A unit crosses as
-// `{ id, kind, payload, modifiedAt }` with `payload` an opaque JSON string,
+// `{ id, kind, payload, modifiedAt, profileId }` with `payload` an opaque JSON string,
 // because decomposing the résumé document is schema knowledge and the native
 // side does not hold any. That is also what makes a future Mac client a
 // transport-only job: it reimplements this file and nothing below it.
@@ -66,6 +66,43 @@ struct SyncUnit: Codable, Equatable {
   /// and an explicit `null` the same way, as -Infinity, which is what "unknown"
   /// has to score at both ends.
   let modifiedAt: String?
+  /// The profile zone a FETCHED record arrived in, or `""` for the account's
+  /// shared zone. This reports a fact carried by `CKRecord.ID`; it does not
+  /// interpret the unit id or decide where an outbound unit belongs. That
+  /// decision remains the page's answer through `syncScopes`.
+  let profileId: String
+
+  init(id: String, kind: String, payload: String, modifiedAt: String?, profileId: String = "") {
+    self.id = id
+    self.kind = kind
+    self.payload = payload
+    self.modifiedAt = modifiedAt
+    self.profileId = profileId
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id, kind, payload, modifiedAt, profileId
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    id = try values.decode(String.self, forKey: .id)
+    kind = try values.decode(String.self, forKey: .kind)
+    payload = try values.decode(String.self, forKey: .payload)
+    modifiedAt = try values.decodeIfPresent(String.self, forKey: .modifiedAt)
+    // Units asked from the page are outbound and predate this arrival-only
+    // field. Their zone is still chosen exclusively from `syncScopes`.
+    profileId = try values.decodeIfPresent(String.self, forKey: .profileId) ?? ""
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var values = encoder.container(keyedBy: CodingKeys.self)
+    try values.encode(id, forKey: .id)
+    try values.encode(kind, forKey: .kind)
+    try values.encode(payload, forKey: .payload)
+    try values.encodeIfPresent(modifiedAt, forKey: .modifiedAt)
+    try values.encode(profileId, forKey: .profileId)
+  }
 }
 
 /// A save conflict as it crosses to the model: the version this device tried to
@@ -353,9 +390,9 @@ final class OPSyncEngine {
   private var engine: CKSyncEngine?
   private var delegate: OPSyncDelegate?
   private var profileId: String?
-  private var zoneID: CKRecordZone.ID?
-  /// `opSharedZoneName`'s zone, alongside the profile's for the whole life of an
-  /// engine session. Held rather than rebuilt at each use so the two zones are
+  private var profileZoneIDs: [CKRecordZone.ID] = []
+  /// `opSharedZoneName`'s zone, alongside every profile's for the whole life of
+  /// an engine session. Held rather than rebuilt at each use so all zones are
   /// always set and cleared together.
   private var sharedZoneID: CKRecordZone.ID?
 
@@ -405,28 +442,27 @@ final class OPSyncEngine {
     }
   }
 
-  /// Bring the engine up for one profile, and say why it did not when it did
-  /// not.
-  ///
-  /// Idempotent for the profile already running, so a caller may call it on
-  /// every foreground without tearing the engine down and losing its in-memory
-  /// queue.
+  /// Every profile's zone, not only the open one: a profile's résumés are user
+  /// data whichever profile happens to be active, and a device that fetched only
+  /// the open one could never mirror the account. Saved on every start because
+  /// saving an existing zone is a no-op, and a "have I made it yet" flag is a
+  /// second piece of state that can disagree with the server.
   @discardableResult
-  func start(profileId: String) async -> OPSyncAccountState {
+  func start(profileId: String, knownProfileIds: [String]) async -> OPSyncAccountState {
     let state = await accountState()
     guard case .available = state else { return state }
     if self.profileId == profileId, engine != nil { return state }
     await stop()
 
-    // One zone per profile: atomic per-profile fetches, and a clean per-profile
-    // delete. The zone name is the profile id, which is already a stable
-    // identifier on disk.
-    let zone = CKRecordZone(zoneName: profileId)
+    var seenProfileIds = Set<String>()
+    let profileZones = (knownProfileIds + [profileId])
+      .filter { seenProfileIds.insert($0).inserted }
+      .map { CKRecordZone(zoneName: $0) }
     // And ONE zone for every profile, which is what a device that has never
     // heard of this account's profiles can still name. See `opSharedZoneName`.
     let sharedZone = CKRecordZone(zoneName: opSharedZoneName)
     self.profileId = profileId
-    self.zoneID = zone.zoneID
+    self.profileZoneIDs = profileZones.map(\.zoneID)
     self.sharedZoneID = sharedZone.zoneID
     // Per profile even for the shared zone's records, because the map belongs to
     // an ENGINE's conversation with the server and each profile runs its own.
@@ -447,11 +483,9 @@ final class OPSyncEngine {
     self.delegate = delegate
     self.engine = engine
 
-    // Saving a zone that already exists is a no-op, so these are queued on every
-    // start rather than tracked. It is the only thing that creates either zone,
-    // and the alternative — a "have I made it yet" flag — is a second piece of
-    // state that can disagree with the server.
-    engine.state.add(pendingDatabaseChanges: [.saveZone(zone), .saveZone(sharedZone)])
+    let pendingZoneSaves: [CKSyncEngine.PendingDatabaseChange] =
+      profileZones.map { .saveZone($0) } + [.saveZone(sharedZone)]
+    engine.state.add(pendingDatabaseChanges: pendingZoneSaves)
 
     // Nothing staged for an earlier run can be uploaded now: every record is
     // rebuilt from `syncUnit(withId:)` at send time. Clearing the outbox here is
@@ -467,7 +501,7 @@ final class OPSyncEngine {
     engine = nil
     delegate = nil
     profileId = nil
-    zoneID = nil
+    profileZoneIDs = []
     sharedZoneID = nil
     systemFields = [:]
     systemFieldsDirty = false
@@ -487,7 +521,9 @@ final class OPSyncEngine {
   /// A refused answer refuses the whole send rather than routing on a guess.
   func send(unitIds: [String]) async throws {
     try refuseSendDuringDelegateEvent()
-    guard let engine, let zoneID, let sharedZoneID else { throw OPSyncError.notStarted }
+    guard let engine, let profileId, let sharedZoneID,
+          let profileZoneID = profileZoneIDs.first(where: { $0.zoneName == profileId })
+    else { throw OPSyncError.notStarted }
     guard let scopes = await host?.syncScopes(forUnitIds: unitIds) else {
       throw OPSyncError.scopeUnknown
     }
@@ -500,7 +536,7 @@ final class OPSyncEngine {
       // that zone ever queued.
       CKSyncEngine.PendingRecordZoneChange.saveRecord(
         CKRecord.ID(recordName: id,
-                    zoneID: scopes[id] == opSharedScope ? sharedZoneID : zoneID)
+                    zoneID: scopes[id] == opSharedScope ? sharedZoneID : profileZoneID)
       )
     }
     engine.state.add(pendingRecordZoneChanges: changes)
@@ -601,29 +637,25 @@ private final class OPSyncDelegate: CKSyncEngineDelegate {
   func nextFetchChangesOptions(
     _ context: CKSyncEngine.FetchChangesContext, syncEngine: CKSyncEngine
   ) async -> CKSyncEngine.FetchChangesOptions {
-    // Narrowed to the zones this device actually handles: this profile's, and
-    // the shared one. The private database holds a zone per profile, and this
-    // engine's persisted state carries only this profile's change tokens — so
-    // fetching ANOTHER profile's zone here would advance a token for records
-    // that are then dropped on the floor, which is the "pull advanced past
-    // records it discarded" bug one level up. That reasoning is untouched by the
-    // shared zone joining the scope: its records are genuinely handled, landing
-    // through the same `deliver` every other unit does, so its token never
-    // advances past anything discarded either. Another profile's zone is still
-    // fetched by another profile's engine, from its own state.
+    // Narrowed to every zone this device actually handles: every known profile's
+    // and the shared one. A change token must never advance past records that are
+    // then dropped. Every zone in this widened set is genuinely handled: its
+    // records land through the same `deliver` path, carrying the zone they
+    // arrived in so the page can apply them without Swift classifying unit ids.
     //
     // INTERSECTED with what was asked for rather than replacing it, so a caller
     // that wanted LESS keeps it: `fetchShared` pulls the registry on its own,
     // ahead of the first upload, and handing back a widened scope would quietly
-    // undo that. A zone outside these two is dropped from the scope either way.
+    // undo that. A zone outside the handled set is dropped from the scope either
+    // way.
     //
-    // An EMPTY intersection falls back to both zones, because "no zones" is not
-    // a scope CloudKit can be handed: `CKSyncEngineFetchChangesScope` documents
-    // a nil zone-id set as meaning EVERY zone, and an empty one is too close to
-    // that to bet the invariant above on. It is unreachable from this file —
-    // the only narrowed ask names a zone that is in this list — and a request
-    // naming none of them gets exactly the answer this delegate gave before it
-    // honoured a narrower ask at all.
+    // An EMPTY intersection falls back to every handled zone, because "no zones"
+    // is not a scope CloudKit can be handed: `CKSyncEngineFetchChangesScope`
+    // documents a nil zone-id set as meaning EVERY zone, and an empty one is too
+    // close to that to bet the invariant above on. It is unreachable from this
+    // file — the only narrowed ask names a zone that is in this list — and a
+    // request naming none of them gets exactly the answer this delegate gave
+    // before it honoured a narrower ask at all.
     guard let zoneIDs = owner?.currentZoneIDs, !zoneIDs.isEmpty else { return context.options }
     let asked = zoneIDs.filter { context.options.scope.contains($0) }
     var options = context.options
@@ -637,7 +669,11 @@ private final class OPSyncDelegate: CKSyncEngineDelegate {
 extension OPSyncEngine {
   /// Every zone this engine session handles. Empty when it is not running,
   /// which is the one case `nextFetchChangesOptions` must not narrow on.
-  fileprivate var currentZoneIDs: [CKRecordZone.ID] { [zoneID, sharedZoneID].compactMap { $0 } }
+  fileprivate var currentZoneIDs: [CKRecordZone.ID] {
+    guard let sharedZoneID else { return [] }
+    let zoneIDs = profileZoneIDs + [sharedZoneID]
+    return zoneIDs
+  }
 
   /// Async because delivering fetched records is: `deliver` waits for the page
   /// to say whether it applied them, and the answer decides what happens to
@@ -1310,17 +1346,21 @@ extension OPSyncEngine {
     // JS side sends; `?? ""` parsed as no date at all and reached the same
     // answer by accident, through a value that means "the epoch of nothing".
     let modifiedAt = record["modifiedAt"] as? String
+    let arrivedZoneID = record.recordID.zoneID
+    // ARRIVAL, not routing: the record says which zone it came from. Outbound
+    // routing remains the page's `syncScopes` answer and never inspects an id.
+    let profileId = arrivedZoneID == sharedZoneID ? "" : arrivedZoneID.zoneName
 
     if let payload = record["payload"] as? String {
       return SyncUnit(id: record.recordID.recordName, kind: kind,
-                      payload: payload, modifiedAt: modifiedAt)
+                      payload: payload, modifiedAt: modifiedAt, profileId: profileId)
     }
     if let asset = record["asset"] as? CKAsset,
        let url = asset.fileURL,
        let data = try? Data(contentsOf: url),
        let payload = String(data: data, encoding: .utf8) {
       return SyncUnit(id: record.recordID.recordName, kind: kind,
-                      payload: payload, modifiedAt: modifiedAt)
+                      payload: payload, modifiedAt: modifiedAt, profileId: profileId)
     }
     return nil
   }
