@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { classifyKey, keyScope, DEVICE_LOCAL_KEYS } from '../src/sync/syncKeys.js';
+import {
+  classifyKey,
+  keyScope,
+  DEVICE_LOCAL_KEYS,
+  SYNC_SUSPENDED_KEY,
+} from '../src/sync/syncKeys.js';
 import {
   BACKUP_FIXED_KEYS,
   BACKUP_HISTORY_PREFIX,
@@ -50,12 +55,15 @@ describe('classifyKey', () => {
     expect(classifyKey('resume-designer-model-catalog')).toBe('local');
   });
 
-  it('keeps the sync switch itself on the device that owns it', () => {
-    // Whether this device syncs is this device's business. Syncing the flag
-    // would also let one device turn sync ON for another, which is the one
-    // decision this preference exists to leave with the person holding the
-    // phone.
-    expect(classifyKey('resume-designer-sync-enabled')).toBe('local');
+  it('classifies the purge-suspension marker as device-local', () => {
+    // Suspension is a fact about THIS device's relationship with the account —
+    // syncing it would suspend every other device over one person's deletion.
+    expect(classifyKey(SYNC_SUSPENDED_KEY)).toBe('local');
+  });
+
+  it('no longer knows the removed sync preference', () => {
+    // The toggle is gone; an unclassified key must refuse rather than sync.
+    expect(classifyKey('resume-designer-sync-enabled')).toBe('unknown');
   });
 
   it('keeps the OpenRouter credential off CloudKit', () => {
@@ -86,11 +94,14 @@ describe('classifyKey', () => {
   it('catches a typo in DEVICE_LOCAL_KEYS rather than letting it silently miss classification', () => {
     // DEVICE_LOCAL_KEYS mixes keys from two sources: BACKUP_FIXED_KEYS (the
     // backup/restore system) and SHARED_KEYS (machine-level keys in
-    // profileKeys.js). A misspelled entry belongs to neither list — that is
-    // not a new category of key, it is a typo, and this is the guard that
-    // catches it.
+    // profileKeys.js), plus the native purge-suspension marker. A misspelled
+    // entry belongs to none of those sources — that is not a new category of
+    // key, it is a typo, and this is the guard that catches it.
     for (const key of DEVICE_LOCAL_KEYS) {
-      expect(BACKUP_FIXED_KEYS.includes(key) || isSharedKey(key), key).toBe(true);
+      expect(
+        BACKUP_FIXED_KEYS.includes(key) || isSharedKey(key) || key === SYNC_SUSPENDED_KEY,
+        key
+      ).toBe(true);
     }
   });
 });

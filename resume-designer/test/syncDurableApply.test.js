@@ -33,7 +33,9 @@ const DATA = 'resume-designer-data';
 const APPS = 'resume-designer-applications';
 const TOKENS = 'resume-designer-token-usage';
 const STATE = 'resume-designer-sync-state';
-const ENABLED = 'resume-designer-sync-enabled';
+// Sync is no longer a preference. What remains is a suspension set by an
+// iCloud purge, with the inverted sense: suspended 'true' is sync stopped.
+const SUSPENDED = 'resume-designer-sync-suspended';
 const PROFILES = 'resume-designer-profiles';
 const ACTIVE_PROFILE = 'resume-designer-active-profile';
 const ACTIVE_PROFILE_ID = 'pactive';
@@ -392,7 +394,7 @@ describe('an iCloud purge is confirmed against the disk, not the cache', () => {
 
   beforeEach(async () => {
     // Sync is on, and that answer is on disk — the state a purge arrives in.
-    backend.files.set(ENABLED, 'true');
+    backend.files.set(SUSPENDED, 'false');
     await initAppStorage({ backend });
   });
 
@@ -404,21 +406,21 @@ describe('an iCloud purge is confirmed against the disk, not the cache', () => {
     // disk still says on. THIS is the window the old code answered in, and the
     // window Swift cleared its persisted purge flag in: a kill here relaunched
     // into a stored `true` with nothing left to stop the zone being recreated.
-    expect(appStorage.getItem(ENABLED)).toBe('false');
-    expect(backend.files.get(ENABLED)).toBe('true');
+    expect(appStorage.getItem(SUSPENDED)).toBe('true');
+    expect(backend.files.get(SUSPENDED)).toBe('false');
 
     // The answer waits for the drain, so the flag is cleared against a file
     // that already says off. THE DISK IS ASSERTED FIRST, deliberately: it is
     // the claim the fix makes, and reading the answer's shape first would let a
     // regression be reported as a bridge-envelope mismatch instead.
     const answer = await pending;
-    expect(backend.files.get(ENABLED)).toBe('false');
+    expect(backend.files.get(SUSPENDED)).toBe('true');
     expect(answer).toEqual({ ok: true, result: true });
   });
 
   it('refuses to confirm when the disk write fails, whatever the cache holds', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    backend.fail.add(ENABLED);
+    backend.fail.add(SUSPENDED);
     const sendAsync = mountShell();
 
     expect(await sendAsync({ type: 'setSyncEnabled', value: 'false' }))
@@ -427,10 +429,10 @@ describe('an iCloud purge is confirmed against the disk, not the cache', () => {
     // The disk still says sync is on, so Swift's refusal flag has to stand: it
     // asks again at the next start and the transport stays down until it does
     // land. Nothing spins — the ask is once per start, and bounded.
-    expect(backend.files.get(ENABLED)).toBe('true');
+    expect(backend.files.get(SUSPENDED)).toBe('false');
     // The cache keeps the value, as it does for every failed write; asserting
     // THIS is what a memory-shaped test would have called a pass.
-    expect(appStorage.getItem(ENABLED)).toBe('false');
+    expect(appStorage.getItem(SUSPENDED)).toBe('true');
     spy.mockRestore();
   });
 
@@ -446,8 +448,8 @@ describe('an iCloud purge is confirmed against the disk, not the cache', () => {
     expect(await sendAsync({ type: 'setSyncEnabled', value: 'false' }))
       .toEqual({ ok: true, result: false });
 
-    expect(backend.files.get(ENABLED)).toBe('true');
-    expect(appStorage.getItem(ENABLED)).toBe('true');
+    expect(backend.files.get(SUSPENDED)).toBe('false');
+    expect(appStorage.getItem(SUSPENDED)).toBe('false');
 
     appStorage.endRestoreGuard();
     appStorage.discardDeferredWrites();

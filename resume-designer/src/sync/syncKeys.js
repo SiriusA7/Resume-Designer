@@ -15,6 +15,8 @@
  */
 import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX, PROFILES_KEY } from '../profileKeys.js';
 
+export const SYNC_SUSPENDED_KEY = 'resume-designer-sync-suspended';
+
 /** Never leaves the machine. Each entry has a reason, because none is obvious. */
 export const DEVICE_LOCAL_KEYS = [
   // A zoom that suits a phone is wrong on a Mac.
@@ -38,11 +40,11 @@ export const DEVICE_LOCAL_KEYS = [
   'resume-designer-openrouter-key',
   // This device's view of what it has synced.
   'resume-designer-sync-state',
-  // Whether this device syncs at all. Its own switch is the last thing that
-  // should travel: syncing it would let one device turn sync ON for another,
-  // and the whole point of the preference is that the answer belongs to the
-  // person holding this device.
-  'resume-designer-sync-enabled',
+  // Set when iCloud data was purged, so this device stops rather than
+  // immediately re-uploading what the person just deleted. NOT a preference:
+  // there is no longer a switch, and the two facts must not share a key —
+  // "does not want sync" is permanent, "the server was emptied" is a prompt.
+  SYNC_SUSPENDED_KEY,
 ];
 
 // The profile registry's logical key. Re-exported from profileKeys.js rather

@@ -456,10 +456,10 @@ struct ShellSnapshot: Decodable, Equatable {
   /// `hasApiKey`, not the key. The key lives in the OS keychain; the sheet can
   /// write a new one but nothing needs to read it back, so nothing does.
   ///
-  /// `syncEnabled` is the person's answer about iCloud, and the only half of
-  /// sync that crosses in this direction. The STATUS is computed here (see
-  /// `ShellModel.syncStatus`): the account state lives in the transport, and JS
-  /// has no way to observe it.
+  /// `syncEnabled` remains in the Phase 0 snapshot shape while the web bridge
+  /// still projects it, but native sync is automatic and does not read it. The
+  /// STATUS is computed here (see `ShellModel.syncStatus`): the account state
+  /// lives in the transport, and JS has no way to observe it.
   struct Settings: Decodable, Equatable {
     var theme: String
     var hasApiKey: Bool
@@ -643,15 +643,17 @@ final class ShellModel: ObservableObject {
   @Published var snapshot: ShellSnapshot = .empty {
     didSet {
       reply.update(to: Self.liveReplyText(in: snapshot))
-      // The switch in Settings writes to storage and republishes; this is where
-      // that answer becomes a running or a stopped transport. Without it the
-      // toggle would move, the preference would persist, and sync would carry
-      // on exactly as before — which looks correct from every side but the
-      // account's.
-      let enabled = snapshot.settings.syncEnabled
-      guard enabled != syncEnabled else { return }
-      Task { [weak self] in await self?.syncPreference(enabled) }
     }
+  }
+
+  /// A purge is an instruction not to recreate what the account owner removed.
+  /// Published so Settings can explain the pause and offer the only action that
+  /// clears it. The durable marker is loaded before any activation can start
+  /// the transport.
+  @Published private(set) var syncSuspended: Bool
+
+  init() {
+    syncSuspended = UserDefaults.standard.bool(forKey: Self.syncSuspendedKey)
   }
 
   /// Paces the live reply's text. Lives here rather than in the chat sheet so
@@ -739,18 +741,9 @@ final class ShellModel: ObservableObject {
   /// set with the reported value still attached.
   private var syncOutstanding: [String?: OPSyncFailure] = [:]
 
-  /// Whether the person has turned iCloud sync on, as the page last reported
-  /// it. `nil` until the first report, and that distinction is load-bearing:
-  /// "this device already had sync on" and "they just turned it on" reach here
-  /// identically, and only the second CREATES a full-upload debt for the profile
-  /// that happens to be active. An existing debt survives either one (see
-  /// `syncPreference`); a profile this device has never offered one for gets its
-  /// own on the first gated start (see `runStartSync`).
-  private var syncEnabled: Bool?
-
   /// The profile the page last activated with. The engine may not be running
-  /// for it — sync switched off, or no iCloud account — but it is what a later
-  /// start has to name, so it is recorded before that gate rather than after.
+  /// for it — sync suspended, or no iCloud account — but it is what a later
+  /// start has to name, so it is recorded before those gates rather than after.
   /// A switch (which reloads the window) can then be told apart from the same
   /// document coming back after WebKit reclaimed its content process.
   private var syncProfileId: String?
@@ -795,33 +788,24 @@ final class ShellModel: ObservableObject {
     "op-sync-full-upload-owed-\(profileId)"
   }
 
-  /// Set when the account's owner deleted this app's data from iCloud and the
-  /// PAGE has not yet recorded that sync is off.
+  /// Set when the account's owner deleted this app's data from iCloud. This is a
+  /// prompt, not a preference: sync is otherwise automatic, while this marker
+  /// keeps the engine down until the person explicitly asks this device to put
+  /// its local data back. It must never reuse the removed preference's key —
+  /// "does not want sync" is permanent, while "the server was emptied" waits
+  /// for one decision and then clears.
   ///
-  /// One flag doing two jobs, deliberately, because they are the same job: it is
-  /// the retry flag for a write the page may not have heard, and it is the gate
-  /// that keeps any engine from coming up in the meantime. The preference itself
-  /// lives in the page's storage — it is the person's answer and Settings reads
-  /// it from there — so until the page has written it, the only thing standing
-  /// between an explicit purge and a whole workspace being uploaded back into
-  /// the account is this key. `start` queues the zone creation unconditionally,
-  /// so "the next launch just starts as usual" IS the resend Apple's header
-  /// forbids (CKSyncEngineEvent.h).
-  ///
-  /// Device-wide rather than per profile, matching the switch: a purge empties
-  /// the container, and the switch is one answer per device covering all of it.
+  /// Device-wide rather than per profile because a purge empties the container,
+  /// and resuming re-offers every profile this device knows about.
   ///
   /// Set SYNCHRONOUSLY the moment the engine reports the purge, so that no
   /// crash between that event and the recovery work leaves the instruction
   /// unrecorded — see `syncDidPurgeFromICloud`.
   ///
-  /// Cleared ONLY by the page confirming the preference reached DISK, after
-  /// which the switch reads off and the person turning it back on is a new,
-  /// explicit instruction that takes the ordinary path — which re-owes every
-  /// profile's full upload. Cleared against the page's write-behind cache
-  /// instead, it left the flag gone and the stored preference still saying ON
-  /// whenever the process died inside the drain — see `tellPageSyncIsOff`.
-  private static let syncPurgeKey = "op-sync-icloud-purged"
+  /// Cleared ONLY by `resumeSyncing`, after it has durably re-owed every known
+  /// profile's full upload. Nothing at startup, on a timer, or in account-state
+  /// handling clears it.
+  private static let syncSuspendedKey = "resume-designer-sync-suspended"
 
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
   private var syncStart: Task<Void, Never>?
@@ -910,10 +894,9 @@ final class ShellModel: ObservableObject {
   /// and `syncApply` in iosShell.js). `evaluateJavaScript` cannot serialize a
   /// promise, so the dispatcher's synchronous entry point drops one — and an
   /// apply is not confirmed until the bytes are on disk, which is a promise.
-  /// The same is true of the sync preference a purge switches off
-  /// (`tellPageSyncIsOff`). Every other caller here answers synchronously and is
-  /// unaffected: an already settled value crosses this path exactly as it
-  /// crossed the other one.
+  /// Every other caller here answers synchronously and is unaffected: an
+  /// already settled value crosses this path exactly as it crossed the other
+  /// one.
   func sendForResult(_ type: String, _ extra: [String: String] = [:]) async -> ShellReply {
     await withCheckedContinuation { continuation in
       // Resumed exactly once, from whichever of the two paths below arrives
@@ -1056,98 +1039,28 @@ final class ShellModel: ObservableObject {
 
 // MARK: - Sync
 
-/// Driving the transport. Four lifecycle moments — the switch in Settings, a
-/// document coming up, a save landing, a return to the foreground — and nothing
-/// else: sync is background reconciliation, so nothing in the UI waits on any of
-/// it and no failure becomes a dialog.
+/// Driving the transport. A document coming up, a save landing, and a return to
+/// the foreground drive automatic reconciliation. The one UI action is an
+/// explicit resume after a purge; no failure becomes a dialog.
 extension ShellModel {
-  /// Make the transport match the answer the page just reported.
-  ///
-  /// The switch writes to storage in JS and republishes; the snapshot's `didSet`
-  /// lands here. That round trip is deliberate — the preference has ONE home,
-  /// and it is the same storage every other setting lives in — but it means this
-  /// is the only place the toggle actually does anything, so it has to do all of
-  /// it.
-  ///
-  /// Idempotent: two snapshots carrying the same answer are one change.
-  func syncPreference(_ enabled: Bool) async {
-    let previous = syncEnabled
-    guard previous != enabled else { return }
-    syncEnabled = enabled
-
-    guard enabled else {
-      // Off means off, and off means QUIET — not gone. Stopping tears down the
-      // engine and nothing else: every résumé stays exactly where it is, on
-      // this device and in the account. Someone will eventually ask whether
-      // turning sync off deletes the cloud copy. It does not, and deleting it
-      // is a separate feature that is not built.
-      //
-      // A start can be IN FLIGHT while this runs, and another start can be
-      // enqueued by a quick ON flick after this one. The stop joins that same
-      // chain: it lands after everything already queued and before everything
-      // queued later, including `stop()`'s `cancelOperations` suspension.
-      await stopSync()
-      // Only a real change earns a line. The first report of "off" is this
-      // device's stored answer arriving at launch, not a decision just made.
-      if previous == true {
-        NSLog("[OPShell] iCloud sync switched off — the transport is down, local data untouched")
-      }
-      return
-    }
-
-    guard let syncProfileId else {
-      // No document has come up yet. Its activation starts the engine, and it
-      // will find the switch already on — and, this being that profile's first
-      // start past the gate, will create its debt there (see `runStartSync`).
-      return
-    }
-    // `previous == nil` is the first report of a preference that was already on
-    // — a launch, not a decision — so it does not CREATE a new debt. Any debt
-    // created before process death is already in UserDefaults and remains owed.
-    //
-    // `previous == false` is a decision just made, and it re-offers the whole
-    // workspace even for a profile that settled a debt long ago: off-then-on
-    // means "put this device's contents in the account", and the account may
-    // have been emptied while the switch was down. That is deliberately NOT what
-    // `runStartSync` does — it offers a profile exactly once, because its
-    // trigger is an activation rather than a choice.
-    //
-    // EVERY profile this device has considered, not only the active one. The
-    // shell still has no workspace list — it learns a profile exists when the
-    // page activates it — but it does not need one: the markers ARE that list,
-    // one key per profile that has ever reached a gated start, and nothing
-    // removes them. `runStartSync` is still where a profile this device has
-    // never seen gets its first offer, because that is the moment it is first
-    // named to this side at all.
-    if previous == false {
-      oweFullUploadForEveryConsideredProfile()
-      // The active profile can be exactly such a profile: a flip before any
-      // gated start leaves no marker for it, and the sweep can only re-owe keys
-      // that exist.
-      setSyncFullUploadOwed(true, profileId: syncProfileId)
-    }
-    await startSync(profileId: syncProfileId)
-  }
-
   /// The page's answer to `syncCollect`: the id of every unit this device would
-  /// push, at the moment sync was turned on.
+  /// push when this profile first starts or resumes after a purge.
   ///
-  /// The switch can go off during that round trip, and a batch that arrives
-  /// after it did must not be sent — this is the whole device, not one save.
-  /// A transport that is merely DOWN keeps the persisted debt: `sendSync` may
-  /// also hold the ids for the next start, but a profile switch drops that
-  /// process-local set because the ids belong to another zone. Re-collecting
-  /// from the persisted marker is what closes that hole.
+  /// A purge can suspend sync during that round trip, and a batch that arrives
+  /// afterward must not be sent. A transport that is merely DOWN keeps the
+  /// persisted debt: `sendSync` may also hold the ids for the next start, but a
+  /// profile switch drops that process-local set because the ids belong to
+  /// another zone. Re-collecting from the persisted marker closes that hole.
   func sendAllUnits(_ unitIds: [String]) async {
-    guard syncEnabled == true else {
-      NSLog("[OPShell] iCloud sync is off; \(unitIds.count) unit(s) not sent")
+    guard !syncSuspended else {
+      NSLog("[OPShell] iCloud sync is suspended; \(unitIds.count) unit(s) not sent")
       return
     }
     guard let profileId = syncProfileId, syncFullUploadOwed(profileId: profileId) else {
       NSLog("[OPShell] no full upload is owed; \(unitIds.count) collected unit(s) ignored")
       return
     }
-    NSLog("[OPShell] offering \(unitIds.count) unit(s) after iCloud sync was switched on")
+    NSLog("[OPShell] offering \(unitIds.count) unit(s) for a full upload")
     let sent = await sendSync(unitIds: unitIds)
     if sent {
       setSyncFullUploadOwed(false, profileId: profileId)
@@ -1155,9 +1068,11 @@ extension ShellModel {
   }
 
   /// Stop through the same ONE-AT-A-TIME chain as `startSync`. Capturing the
-  /// current tail before installing this task is what orders a later ON flick
+  /// current tail before installing this task is what orders an explicit resume
   /// behind the stop instead of letting its start enter `cancelOperations`.
-  private func stopSync() async {
+  /// Server cleanup stays inside this task too, so resume cannot recreate an
+  /// engine between teardown and forgetting the purged server's bookkeeping.
+  private func stopSync(forgettingServer: Bool = false) async {
     let previous = syncStart
     let task = Task { @MainActor [weak self] in
       await previous?.value
@@ -1166,6 +1081,9 @@ extension ShellModel {
       // account state or failure would leave it describing a stopped engine.
       self?.syncAccountState = nil
       self?.forgetSyncFailures()
+      if forgettingServer {
+        OPSyncEngine.forgetEverythingAboutTheServer()
+      }
     }
     syncStart = task
     await task.value
@@ -1229,56 +1147,28 @@ extension ShellModel {
       syncProfileId = profileId
     }
 
-    // THE OTHER GATE, and it sits above the switch's because it outranks it:
-    // the account's owner deleted this app's data from iCloud, and the page has
-    // not recorded that yet, so its copy of the preference may still say ON.
-    // Starting on that answer would recreate the zone and upload the workspace
-    // back into the account they just emptied. Asking the page again is the
-    // whole of the recovery — a start is a moment the page is back — and it is
-    // asked here rather than on a timer for the same reason `syncDeferred` is
-    // drained here.
-    if Self.syncPurged() {
+    // THE GATE. Every way the transport comes up runs through here — document
+    // activation, a return to the foreground, and the explicit resume action.
+    // A purge means the account owner emptied this app's iCloud data, so an
+    // automatic start would recreate the zone and put this device's workspace
+    // back. Nothing clears this marker except `resumeSyncing`.
+    if syncSuspended {
       NSLog("[OPShell] this app's iCloud data was deleted by the account's owner — "
             + "the transport stays down and nothing is re-sent")
-      await tellPageSyncIsOff()
-      return
-    }
-
-    // THE GATE. Every way the transport comes up runs through here — the
-    // activation of a document, a return to the foreground (`resumeSync`), and
-    // the switch itself — so this one check is what makes the toggle mean
-    // something. It sits below the bookkeeping above on purpose: a person who
-    // turns sync on mid-session needs a profile to start with, and this is
-    // where the page said what it is.
-    //
-    // `nil` is the preference not yet reported, which happens on every launch:
-    // the activation beats the first snapshot by a frame. Sync stays down until
-    // that snapshot lands, and `syncPreference` starts it if the answer is yes.
-    guard syncEnabled == true else {
-      NSLog(syncEnabled == nil
-            ? "[OPShell] the sync preference has not been reported yet — waiting for the snapshot"
-            : "[OPShell] iCloud sync is off for this device — the transport stays down")
       return
     }
 
     // THIS profile's debt, if this device has never offered it one.
     //
-    // `syncPreference` creates a debt when the switch is flipped, but only for
-    // the profile that was active at that moment — and workspaces are a shipped
-    // feature, so there are usually several. Every other profile's PRE-EXISTING
-    // résumés therefore never reached iCloud at all: a unit arrives in the
-    // account only when `send(unitIds:)` names it, and persistence names a unit
-    // once, on the save that wrote it, so a second workspace trickled up one
-    // résumé at a time as each happened to be edited again. Turning sync on is
-    // the moment this device offers everything it holds, and it holds every
-    // profile.
+    // Workspaces are a shipped feature, so there are usually several. Every
+    // profile's pre-existing resumes must be offered when it first starts: a
+    // unit arrives in the account only when `send(unitIds:)` names it, and
+    // persistence names a unit once, on the save that wrote it.
     //
     // Created on the profile's first start PAST THE GATE, which is the same
-    // moment `syncPreference` represents for the active profile — "sync is on
-    // and this workspace has come up" — generalised to all of them. Above the
-    // account check for the same reason `syncPreference` is: a debt is OWED, not
-    // sent, so turning sync on (or switching profile) while signed out still
-    // records it, and whichever start does come up pays it.
+    // moment this profile is eligible to sync. Above the account check because a
+    // debt is OWED, not sent, so a start while signed out still records it and
+    // whichever later start reaches iCloud pays it.
     //
     // ONCE per profile per install, and the marker is what guarantees that
     // rather than a guess about when activations happen. An `activated` message
@@ -1342,14 +1232,13 @@ extension ShellModel {
     await drainSyncDeferred(profileId: profileId)
     try? await sync.fetch()
 
-    // Turning sync on is the one moment this device has to offer everything it
-    // already holds. A unit reaches the account only when `send(unitIds:)` names
-    // it, and persistence names a unit once — on the save that wrote it — so a
-    // résumé the person never edits again would otherwise never arrive at all.
-    // The page answers `syncCollect` with a `syncUnits` message.
+    // The first automatic start, and an explicit resume after a purge, are the
+    // moments this device offers everything it already holds. A unit reaches the
+    // account only when `send(unitIds:)` names it, and persistence names a unit
+    // once — on the save that wrote it — so a resume the person never edits again
+    // would otherwise never arrive at all. The page answers `syncCollect` with a
+    // `syncUnits` message.
     //
-    // OWED rather than sent from the toggle, because turning it on while signed
-    // out starts nothing: the upload waits for whichever start does come up.
     // Requesting the collection does NOT clear the debt. The process can die,
     // the page can reload, or `sendSync` can defer these ids; only a successful
     // send in `sendAllUnits` clears it.
@@ -1371,8 +1260,8 @@ extension ShellModel {
   /// `syncDirty` for anything that changed.
   ///
   /// Gated like every other way up, because it goes through `startSync`: a
-  /// device whose switch is off must not quietly start syncing the first time
-  /// the app comes back to the foreground.
+  /// device suspended after a purge must not quietly start syncing the first
+  /// time the app comes back to the foreground.
   func resumeSync() async {
     // No activation yet means no profile and no engine; that path fetches for
     // itself the moment the document comes up.
@@ -1387,6 +1276,10 @@ extension ShellModel {
   /// that queue and would otherwise wait for its own next edit.
   @discardableResult
   func sendSync(unitIds: [String]) async -> Bool {
+    guard !syncSuspended else {
+      NSLog("[OPShell] iCloud sync is suspended; \(unitIds.count) changed unit(s) not sent")
+      return false
+    }
     // An answered collection can legitimately be empty. There is no transport
     // work to do, and treating that as sent lets its persisted debt settle.
     guard !unitIds.isEmpty else { return true }
@@ -1529,10 +1422,10 @@ extension ShellModel {
 
   /// Retry debt created by a send the transport refused during `handleEvent`.
   /// OPSync schedules this only after that delegate call has returned. A profile
-  /// switch or the preference turning off leaves the debt durable for its next
-  /// ordinary start rather than sending it through the wrong engine session.
+  /// switch or purge suspension leaves the debt durable for its next ordinary
+  /// start rather than sending it through the wrong engine session.
   func syncRetryDeferred(profileId: String) async {
-    guard syncEnabled == true, syncProfileId == profileId else { return }
+    guard !syncSuspended, syncProfileId == profileId else { return }
     await drainSyncDeferred(profileId: profileId)
   }
 
@@ -1555,8 +1448,13 @@ extension ShellModel {
     UserDefaults.standard.set(owed, forKey: Self.syncFullUploadKey(profileId))
   }
 
-  private static func syncPurged() -> Bool {
-    UserDefaults.standard.bool(forKey: syncPurgeKey)
+  private func setSyncSuspended(_ suspended: Bool) {
+    if suspended {
+      UserDefaults.standard.set(true, forKey: Self.syncSuspendedKey)
+    } else {
+      UserDefaults.standard.removeObject(forKey: Self.syncSuspendedKey)
+    }
+    syncSuspended = suspended
   }
 
   /// Everything an iCloud purge changes on this side, in the order that survives
@@ -1579,49 +1477,30 @@ extension ShellModel {
     // from the engine's event onward still leaves it. Everything here is
     // recovery that the next start repeats.
     //
-    // The transport goes down through the same path the switch takes, so the
-    // account state and any outstanding failure lines go with it.
-    await syncPreference(false)
-    // Only now: `stop()` has torn the engine down, so nothing is left to write
-    // these keys back on its next event.
-    OPSyncEngine.forgetEverythingAboutTheServer()
-    await tellPageSyncIsOff()
+    // Stop and cleanup live in the same serialized task, so nothing can restart
+    // between the engine going down and its server bookkeeping being removed.
+    await stopSync(forgettingServer: true)
   }
 
-  /// Ask the page to persist the switch as off, and keep owing it until the page
-  /// says the bytes are ON DISK.
+  /// The only path that clears suspension. Re-owe and finish purge cleanup
+  /// before clearing, so a process death at any later line cannot leave
+  /// automatic sync running without the full upload this explicit action
+  /// requested or with stale bookkeeping from the server that was emptied.
   ///
-  /// The answer is the point: `send` is fire-and-forget, and the one moment this
-  /// runs is a moment the webview may be reloading — WebKit reclaims the content
-  /// process of a backgrounded app while the engine fetches on a schedule of its
-  /// own. A lost write would leave the page's stored preference saying ON, and
-  /// the next launch would recreate the zone. So the flag stands until a
-  /// confirmed answer, and every start asks again.
-  ///
-  /// AND THE ANSWER IS ABOUT THE DISK, not the page's cache. `setSyncEnabled`
-  /// used to reply the instant the value reached `appStorage`, which is a
-  /// write-behind cache that drains 250ms later — so a purge plus a process
-  /// death inside that window cleared this flag against a stored preference
-  /// that still said ON, and the next start passed both gates and re-uploaded
-  /// the workspace into the account whose owner had just emptied it. It is the
-  /// same confirmed-before-durable mistake `syncApply` was fixed for, and the
-  /// page answers it the same way: the write lands synchronously, the drain is
-  /// awaited, and `true` crosses back only once the file is written.
-  ///
-  /// It cannot spin. Nothing here retries: one ask per purge and one per start
-  /// (`runStartSync`'s gate), and `sendForResult` bounds each at ten seconds, so
-  /// a page that never answers costs one bounded wait per start and leaves the
-  /// transport exactly where it already was — down.
-  private func tellPageSyncIsOff() async {
-    guard Self.syncPurged() else { return }
-    guard case .answered(let durable) = await sendForResult("setSyncEnabled", ["value": "false"]),
-          (durable as? Bool) == true else {
-      NSLog("[OPShell] the page could not durably record that iCloud sync is off; "
-            + "the transport stays down and it is asked again at the next start")
-      return
+  /// The marker keys enumerate every profile this device has considered. The
+  /// active profile is written explicitly too because it may be the first one
+  /// seen on this install and therefore have no marker yet.
+  func resumeSyncing() async {
+    guard syncSuspended else { return }
+    oweFullUploadForEveryConsideredProfile()
+    if let syncProfileId {
+      setSyncFullUploadOwed(true, profileId: syncProfileId)
     }
-    UserDefaults.standard.set(false, forKey: Self.syncPurgeKey)
-    NSLog("[OPShell] the iCloud purge is recorded: the sync switch is off")
+    await stopSync(forgettingServer: true)
+    setSyncSuspended(false)
+    NSLog("[OPShell] iCloud sync resumed after a purge; full uploads are owed")
+    guard let syncProfileId else { return }
+    await startSync(profileId: syncProfileId)
   }
 
   /// Owe a full upload again for every profile this device has ever considered.
@@ -1630,7 +1509,7 @@ extension ShellModel {
   /// profile is named to it by the page's `activated` message and no other way —
   /// but `runStartSync` leaves one key per profile it has gated, and nothing
   /// removes one, so the keys enumerate every profile this device has ever
-  /// started sync for. That is the second thing recording a settled debt as
+  /// started syncing. That is the second thing recording a settled debt as
   /// `false` instead of deleting the key bought.
   ///
   /// Re-owing is a WRITE of `true`, never a delete. Absence means "never
@@ -1679,8 +1558,8 @@ extension ShellModel {
     syncFailure = nil
   }
 
-  /// The one line Settings shows under the switch — or "", which draws no row
-  /// at all, because saying nothing is better than saying nothing useful.
+  /// The one status line Settings shows — or "", which draws no row at all,
+  /// because saying nothing is better than saying nothing useful.
   ///
   /// Computed here rather than projected from JS: both halves of it, the iCloud
   /// account's state and the last failure, exist only in the transport, and the
@@ -1698,11 +1577,11 @@ extension ShellModel {
   /// - **Nothing blames the person, and nothing suggests their résumés are at
   ///   risk.** They are on this device whatever iCloud is doing.
   var syncStatus: String {
-    // The switch itself says sync is off; a second line saying so is a row that
-    // tells the reader nothing they did not just set.
-    guard snapshot.settings.syncEnabled else { return "" }
-    // On, but the transport has not reported yet — a moment at launch, and the
-    // whole time before the workspace has adopted a profile. Nothing to say.
+    // Suspension has its own actionable row in Settings. Showing the transport's
+    // last account state beside it would describe an engine that is now down.
+    guard !syncSuspended else { return "" }
+    // The transport has not reported yet — a moment at launch, and the whole
+    // time before the workspace has adopted a profile. Nothing to say.
     guard let syncAccountState else { return "" }
 
     switch syncAccountState {
@@ -2129,12 +2008,9 @@ extension ShellModel: OPSyncHost {
 
   /// The account's owner deleted this app's data from iCloud.
   ///
-  /// Sync switches off — the app's own, visible answer to "do not put my
-  /// résumés in iCloud", and the only state in which "not resent" stays true
-  /// across a launch. The switch moving on its own is not a surprise here, which
-  /// is the usual objection to it: the person is coming back from the Settings
-  /// app where they just asked for exactly this. Turning it on again is a new
-  /// instruction and takes the ordinary path, full upload and all.
+  /// Sync suspends on this device, and the marker is the only state in which
+  /// "not resent" stays true across a launch. Settings explains why and offers
+  /// the explicit action that re-owes every full upload before clearing it.
   ///
   /// Deferred onto a later main-actor turn, like every other host callback that
   /// re-enters the transport: this is called from inside the engine's event
@@ -2147,7 +2023,7 @@ extension ShellModel: OPSyncHost {
     // is still stale, and if the zone save wins that race the token's own
     // answer comes back as an expired token rather than as `.userDeletedZone` —
     // the account owner's instruction read as ordinary staleness, and undone.
-    UserDefaults.standard.set(true, forKey: Self.syncPurgeKey)
+    setSyncSuspended(true)
     Task { @MainActor [weak self] in await self?.applyICloudPurge() }
   }
 }
@@ -2215,7 +2091,7 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
       Task { @MainActor in await self.model?.sendSync(unitIds: unitIds) }
     case "syncUnits":
       // The answer to `syncCollect`: everything this device would push, asked
-      // for once when the person switches sync on.
+      // for on a profile's first automatic start and after a purge is resumed.
       //
       // Only the ID of each unit is read. The payloads are right there in the
       // message and they are deliberately left alone — the engine re-asks for
@@ -3266,7 +3142,17 @@ private struct SettingsSheet: View {
         }
 
         Section {
-          Toggle("iCloud sync", isOn: syncBinding)
+          if model.syncSuspended {
+            Text(
+              "iCloud data for On Paper was removed. This device stopped syncing "
+              + "so it does not put it back."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            Button("Resume syncing") {
+              Task { await model.resumeSyncing() }
+            }
+          }
           // No row at all when there is nothing to say — see `syncStatus`.
           if !model.syncStatus.isEmpty {
             Text(model.syncStatus)
@@ -3276,10 +3162,10 @@ private struct SettingsSheet: View {
         } header: {
           Text("Sync")
         } footer: {
-          // The question the switch raises is "where do my resumes go", and it
-          // is answered where the switch is rather than in a policy nobody
-          // opens. Both halves matter: whose account they land in, and that On
-          // Paper is not a party to any of it.
+          // The question sync raises is "where do my resumes go", and it is
+          // answered here rather than in a policy nobody opens. Both halves
+          // matter: whose account they land in, and that On Paper is not a party
+          // to any of it.
           Text(
             "Your resumes are copied to your own iCloud account, so the devices you "
             + "use stay in step. Nothing is sent to On Paper."
@@ -3331,18 +3217,6 @@ private struct SettingsSheet: View {
     Binding(
       get: { settings.autoFallback },
       set: { model.send("setAutoFallback", ["value": $0 ? "true" : "false"]) }
-    )
-  }
-
-  /// Same read-from-the-snapshot rule, and here it is what makes the switch
-  /// honest: the write persists the preference in JS, the next snapshot brings
-  /// it back, and only THEN does the transport start or stop (see
-  /// `ShellModel.syncPreference`). A toggle that moved on its own would be
-  /// showing a state nothing had acted on.
-  private var syncBinding: Binding<Bool> {
-    Binding(
-      get: { settings.syncEnabled },
-      set: { model.send("setSyncEnabled", ["value": $0 ? "true" : "false"]) }
     )
   }
 }

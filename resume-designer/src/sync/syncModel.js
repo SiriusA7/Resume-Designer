@@ -7,7 +7,7 @@
  */
 import { appStorage } from '../appStorage.js';
 import {
-  splitPhysicalKey, physicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY, SYNC_ENABLED_KEY,
+  splitPhysicalKey, physicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY,
 } from '../profileKeys.js';
 import { getActiveProfileId, listProfiles } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
@@ -23,7 +23,9 @@ import { adoptStoredLearnedAnswers, landsAsLearnedAnswers } from '../learnedAnsw
 // The same ownership, one field further in: `data:userProfile` is a unit too,
 // and ProfileDialog holds a working copy of it. See the leaf for why it is one.
 import { adoptStoredUserProfile, userProfileHolderBusy } from '../userProfileHolder.js';
-import { classifyKey, keyScope, PROFILES_KEY } from './syncKeys.js';
+import {
+  classifyKey, keyScope, PROFILES_KEY, SYNC_SUSPENDED_KEY,
+} from './syncKeys.js';
 import { splitData, mergeData, RESUME_UNIT_PREFIX } from './syncUnits.js';
 import {
   mergeTokenUsage, mergeHistory, mergeRegistry, resolveConflict,
@@ -97,15 +99,24 @@ function groupByProfile(units) {
 /**
  * Whether this device syncs at all.
  *
- * **Off until the person turns it on**, and that is a product decision, not a
- * default nobody got round to changing: turning it on writes their resumes into
- * their iCloud account, and that is not a thing to assume on someone's behalf.
+ * **On unless this device was suspended**, which inverts what this used to be.
+ * There is no switch any more: Apple's guidance is that sync is automatic and
+ * the OS already offers a system-level opt-out, and the switch was unreachable
+ * anyway — it sat in Settings, behind an onboarding cover that filled the
+ * workspace before you could get to it.
  *
- * Anything other than the string `'true'` reads as off, so an absent or garbled
- * value fails closed — the direction that never puts data somewhere unasked.
+ * The one thing that stops sync is an iCloud purge, which suspends THIS device
+ * so it does not immediately put back what the person just deleted. That is a
+ * different fact from a preference and lives on its own key: a preference is
+ * permanent, a suspension is a prompt, and code reading one flag for both gets
+ * one of them wrong.
+ *
+ * Only the exact string `'true'` suspends, so an absent or garbled value reads
+ * as running — which is now the safe direction, because the failure it prevents
+ * is a device that silently never syncs at all.
  */
 export function isSyncEnabled() {
-  return appStorage.getItem(SYNC_ENABLED_KEY) === 'true';
+  return appStorage.getItem(SYNC_SUSPENDED_KEY) !== 'true';
 }
 
 /**
@@ -130,7 +141,7 @@ export function isSyncEnabled() {
  * one drain it would have paid 250ms later anyway.
  */
 export async function setSyncEnabled(enabled) {
-  appStorage.setItem(SYNC_ENABLED_KEY, enabled ? 'true' : 'false');
+  appStorage.setItem(SYNC_SUSPENDED_KEY, enabled ? 'false' : 'true');
   // A restore is mid-flight, so the write above reached NEITHER the cache nor
   // the disk — it was recorded and skipped (beginRestoreGuard) — while
   // `flush()` would still answer `true`, because nothing is dirty. That is the
