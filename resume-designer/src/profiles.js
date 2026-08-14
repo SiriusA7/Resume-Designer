@@ -436,11 +436,20 @@ const STARTER_INSPECTED_KEYS = new Set([
 // palette, layout, page size, model choices, reasoning efforts, panel width.
 // The most "authored" of them, `customModels`, is typed-in model ids:
 // recreatable configuration, the same class as `resume-accent-settings` on
-// STARTER_HARMLESS_KEYS. No credential can reach it on this platform:
-// saveSettings strips `openrouterKey` before it is ever written here, and the
-// key itself lives in the OS keychain on iOS. Refusing a field every settings
-// interaction writes would fail adoption in ordinary use and strand people on
-// the starter workspace — the confusion this feature exists to remove.
+// STARTER_HARMLESS_KEYS.
+//
+// No credential can reach it on this platform, though the mechanism is not
+// quite "stripped": `saveSettings` THROWS on `openrouterKey` rather than
+// removing it, and a legacy pre-extraction blob deliberately KEEPS its
+// `settings.openrouterKey` until `extractSharedApiKey` flushes successfully
+// (persistence.js). What makes the allowance airtight here is the platform: no
+// iOS release ever wrote the credential into the blob, the key lives in the OS
+// keychain, and `withoutLegacyCredential` sanitises a desktop backup at the
+// export boundary, so an imported one arrives clean.
+//
+// Refusing a field every settings interaction writes would fail adoption in
+// ordinary use and strand people on the starter workspace — the confusion this
+// feature exists to remove.
 //
 // `variants` and `userProfile` keep the treatment they already had below this
 // clause (variants must be empty; userProfile must be unauthored).
