@@ -678,6 +678,23 @@ describe('applyUnits and the variant the app has OPEN', () => {
     expect(resumeStore.isDirty()).toBe(false);
   });
 
+  it('does not adopt a foreign résumé into the open profile or echo it back', async () => {
+    open({ name: 'Mine' });
+    disk.set(physical('resume-designer-profiles'), JSON.stringify([
+      { id: PROFILE, name: 'Personal' },
+      { id: 'pother', name: 'Other' },
+    ]));
+
+    expect((await applyUnits([{
+      ...resumeUnit('v-open', { name: 'Theirs' }), profileId: 'pother',
+    }])).applied).toBe(1);
+
+    expect(resumeStore.getData()).toEqual({ name: 'Mine' });
+    expect(resumeStore.isDirty()).toBe(false);
+    expect(JSON.parse(disk.get('resume-p--pother--resume-designer-data'))
+      .variants['v-open'].data).toEqual({ name: 'Theirs' });
+  });
+
   it('leaves the replaced document one restore away in that résumé’s history', async () => {
     // Newer wins, and the loser is never discarded silently. Every edit path
     // records its result in history before the save debounce runs, so the

@@ -30,12 +30,17 @@ import {
   resolveConflicts, collectUnit, installStorageStamping,
 } from '../src/sync/syncModel.js';
 import { initIOSShell, SHELL_HANDLER } from '../src/iosShell.js';
+import { physicalKey } from '../src/profileKeys.js';
 
 const DATA = 'resume-designer-data';
 const TOKENS = 'resume-designer-token-usage';
 const HISTORY = 'resume-designer-history-v-1';
 const APPS = 'resume-designer-applications';
 const STATE = 'resume-designer-sync-state';
+const PROFILES = 'resume-designer-profiles';
+const ACTIVE_PROFILE = 'resume-designer-active-profile';
+const ACTIVE_PROFILE_ID = 'pactive';
+const FOREIGN_PROFILE_ID = 'pother';
 
 const OLD = '2026-08-01T00:00:00.000Z';
 const NEW = '2026-08-09T00:00:00.000Z';
@@ -163,6 +168,37 @@ describe('an append-shaped unit unions on the save-conflict path', () => {
 });
 
 describe('a snapshot still takes newer-wins, and its loser is still parked', () => {
+  it('parks a foreign profile loser and its stamp in that profile namespace', async () => {
+    setProfileMapping(ACTIVE_PROFILE_ID);
+    backend.files.set(ACTIVE_PROFILE, ACTIVE_PROFILE_ID);
+    backend.files.set(PROFILES, JSON.stringify([
+      { id: ACTIVE_PROFILE_ID, name: 'Active' },
+      { id: FOREIGN_PROFILE_ID, name: 'Other' },
+    ]));
+    backend.files.set(physicalKey(FOREIGN_PROFILE_ID, DATA), SEEDED_BLOB);
+    await initAppStorage({ backend });
+
+    const id = 'resume:v-1';
+    const local = {
+      ...unit(id, { id: 'v-1', name: 'Design Engineer', data: { name: 'Ada' } }, OLD, 'resume'),
+      profileId: FOREIGN_PROFILE_ID,
+    };
+    const server = {
+      ...unit(id, { id: 'v-1', name: 'Design Engineer', data: { name: 'Ada (phone)' } }, NEW, 'resume'),
+      profileId: FOREIGN_PROFILE_ID,
+    };
+
+    expect(await resolveConflicts([{ local, server }]))
+      .toEqual({ resolved: [{ id, retry: false }], parked: 1 });
+    expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, DATA)))
+      .variants['v-1'].data).toEqual({ name: 'Ada (phone)' });
+    expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, HISTORY)))
+      .history[0].data).toEqual({ name: 'Ada' });
+    expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, STATE)))[`key:${HISTORY}`])
+      .toBeTruthy();
+    expect(backend.files.has(physicalKey(ACTIVE_PROFILE_ID, HISTORY))).toBe(false);
+  });
+
   it('keeps the local copy and parks the SERVER version when ours is newer', async () => {
     const id = 'resume:v-1';
     const local = unit(id, { id: 'v-1', name: 'Design Engineer', data: { name: 'Ada' } }, NEW, 'resume');
@@ -249,6 +285,35 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
 });
 
 describe('a conflict this device cannot resolve forfeits rather than proceeds', () => {
+  it('rechecks a foreign winner against that profile recency stamp', async () => {
+    setProfileMapping(ACTIVE_PROFILE_ID);
+    backend.files.set(ACTIVE_PROFILE, ACTIVE_PROFILE_ID);
+    backend.files.set(PROFILES, JSON.stringify([
+      { id: ACTIVE_PROFILE_ID, name: 'Active' },
+      { id: FOREIGN_PROFILE_ID, name: 'Other' },
+    ]));
+    backend.files.set(physicalKey(FOREIGN_PROFILE_ID, DATA), SEEDED_BLOB);
+    backend.files.set(physicalKey(FOREIGN_PROFILE_ID, STATE), JSON.stringify({
+      'resume:v-1': { modifiedAt: '2099-01-01T00:00:00.000Z' },
+    }));
+    await initAppStorage({ backend });
+
+    const id = 'resume:v-1';
+    const local = {
+      ...unit(id, { id: 'v-1', name: 'Design Engineer', data: { name: 'Ada' } }, OLD, 'resume'),
+      profileId: FOREIGN_PROFILE_ID,
+    };
+    const server = {
+      ...unit(id, { id: 'v-1', name: 'Design Engineer', data: { name: 'Stale server' } }, NEW, 'resume'),
+      profileId: FOREIGN_PROFILE_ID,
+    };
+
+    expect(await resolveConflicts([{ local, server }]))
+      .toEqual({ resolved: [], parked: 0 });
+    expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, DATA)))
+      .variants['v-1'].data).toEqual({ name: 'Ada' });
+  });
+
   it('refuses a device-local snapshot even when the local copy is newer', async () => {
     const id = 'key:resume-zoom';
     const local = unit(id, 1.5, NEW);

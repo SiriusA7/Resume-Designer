@@ -7,9 +7,9 @@
  */
 import { appStorage } from '../appStorage.js';
 import {
-  splitPhysicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY, SYNC_ENABLED_KEY,
+  splitPhysicalKey, physicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY, SYNC_ENABLED_KEY,
 } from '../profileKeys.js';
-import { getActiveProfileId } from '../profiles.js';
+import { getActiveProfileId, listProfiles } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
 // key from it on every edit, so parking a loser for that variant has to go
 // through it — see parkLoser.
@@ -65,7 +65,34 @@ const parseJSON = (raw, fallback) => {
 
 const readJSON = (key, fallback) => parseJSON(appStorage.getItem(key), fallback);
 
-const state = () => readJSON(STATE_KEY, {});
+/**
+ * The storage key a fetched unit's bytes belong under.
+ *
+ * A unit names the profile whose ZONE it arrived in. For the open profile that
+ * is the ordinary logical key, which `appStorage` maps as usual. For any other
+ * it is that profile's PHYSICAL key: `mapKey` short-circuits on an already
+ * physical key, so this writes exactly there rather than through the active
+ * mapping — which would put another person's résumé in the open workspace and
+ * lose it from its own, neither visible until somebody switches.
+ */
+function storageKeyFor(profileId, logicalKey) {
+  if (!profileId || profileId === getActiveProfileId()) return logicalKey;
+  return physicalKey(profileId, logicalKey);
+}
+
+const stateFor = (profileId) => readJSON(storageKeyFor(profileId, STATE_KEY), {});
+const state = () => stateFor('');
+
+/** Fetched units bucketed by the profile whose zone each arrived in. */
+function groupByProfile(units) {
+  const groups = new Map();
+  for (const unit of units) {
+    const id = typeof unit?.profileId === 'string' ? unit.profileId : '';
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(unit);
+  }
+  return groups;
+}
 
 /**
  * Whether this device syncs at all.
@@ -449,14 +476,15 @@ function accumulatorFor(key) {
  * `false` when the payload will not parse, which shortens `applied` exactly as
  * every other refusal here does.
  */
-function landTokenUsage(key, unit) {
+function landTokenUsage(key, unit, profileId) {
   let remote;
   try {
     remote = JSON.parse(unit.payload);
   } catch {
     return false;
   }
-  appStorage.setItem(key, JSON.stringify(mergeTokenUsage(readJSON(key, null), remote)));
+  const storageKey = storageKeyFor(profileId, key);
+  appStorage.setItem(storageKey, JSON.stringify(mergeTokenUsage(readJSON(storageKey, null), remote)));
   return true;
 }
 
@@ -474,16 +502,17 @@ function landTokenUsage(key, unit) {
  * same answer: hand it to the store, which is the only thing that can tell
  * (currentVariantId is private to it).
  */
-function landHistory(key, unit) {
+function landHistory(key, unit, profileId) {
   let remote;
   try {
     remote = JSON.parse(unit.payload);
   } catch {
     return false;
   }
+  const storageKey = storageKeyFor(profileId, key);
   const variantId = key.slice(HISTORY_PREFIX.length);
-  if (!store.adoptHistory(variantId, remote)) {
-    appStorage.setItem(key, JSON.stringify(mergeHistory(readJSON(key, null), remote)));
+  if (storageKey !== key || !store.adoptHistory(variantId, remote)) {
+    appStorage.setItem(storageKey, JSON.stringify(mergeHistory(readJSON(storageKey, null), remote)));
   }
   return true;
 }
@@ -496,7 +525,7 @@ function landHistory(key, unit) {
  * deletion, and a registry that cannot be read is one this device has nothing
  * to say about.
  */
-function landRegistry(key, unit) {
+function landRegistry(key, unit, profileId) {
   let incoming;
   try {
     incoming = JSON.parse(unit.payload);
@@ -504,7 +533,8 @@ function landRegistry(key, unit) {
     return false;
   }
   if (!Array.isArray(incoming)) return false;
-  appStorage.setItem(key, JSON.stringify(mergeRegistry(readJSON(key, null), incoming)));
+  const storageKey = storageKeyFor(profileId, key);
+  appStorage.setItem(storageKey, JSON.stringify(mergeRegistry(readJSON(storageKey, null), incoming)));
   return true;
 }
 
@@ -544,12 +574,16 @@ function adoptLoadedDocument(unit) {
  * Every unit stamped together gets the SAME instant, which is the honest
  * reading — they were made dirty by one storage write.
  */
-function touchUnits(unitIds) {
+function touchUnitsForProfile(profileId, unitIds) {
   if (unitIds.length === 0) return;
-  const next = state();
+  const next = stateFor(profileId);
   const modifiedAt = new Date().toISOString();
   for (const unitId of unitIds) next[unitId] = { modifiedAt };
-  appStorage.setItem(STATE_KEY, JSON.stringify(next));
+  appStorage.setItem(storageKeyFor(profileId, STATE_KEY), JSON.stringify(next));
+}
+
+function touchUnits(unitIds) {
+  touchUnitsForProfile('', unitIds);
 }
 
 /**
@@ -984,31 +1018,41 @@ function landFetchedUnits(units) {
   // that field holds (landsAsDataField) and must not land on top of an open
   // profile edit (interruptsProfileEditing). BOTH kinds are snapshots, so both
   // must also be newer than the copy this device holds (outranksLocalCopy).
-  const recorded = state();
   const landing = incoming.filter((unit) => {
     const id = typeof unit?.id === 'string' ? unit.id : '';
     if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) return false;
     if (!parsesAsJSON(unit.payload)) return false;
+    const profileId = typeof unit?.profileId === 'string' ? unit.profileId : '';
+    // A profile the registry does not list cannot be opened or listed, so its
+    // namespace would be unreachable bytes. The registry lands from opShared and
+    // this unit comes back on the next fetch.
+    if (profileId && !listProfiles().some((p) => p.id === profileId)) return false;
+    const dataKey = storageKeyFor(profileId, DATA_KEY);
+    const recordedForUnit = stateFor(profileId);
     if (!id.startsWith(RESUME_UNIT_PREFIX)) {
       return landsAsDataField(unit)
-        && !interruptsProfileEditing(unit)
-        && outranksLocalCopy(unit, recorded);
+        && (dataKey !== DATA_KEY || !interruptsProfileEditing(unit))
+        && outranksLocalCopy(unit, recordedForUnit);
     }
     return landsAsResume(unit)
-      && !interruptsLiveEditing(unit)
-      && outranksLocalCopy(unit, recorded);
+      && (dataKey !== DATA_KEY || !interruptsLiveEditing(unit))
+      && outranksLocalCopy(unit, recordedForUnit);
   });
-  if (landing.length > 0) {
-    const blob = readJSON(DATA_KEY, {});
-    appStorage.setItem(DATA_KEY, JSON.stringify(mergeData(blob, landing)));
-    applied += landing.length;
+  for (const [profileId, group] of groupByProfile(landing)) {
+    const dataKey = storageKeyFor(profileId, DATA_KEY);
+    const blob = readJSON(dataKey, {});
+    appStorage.setItem(dataKey, JSON.stringify(mergeData(blob, group)));
+    applied += group.length;
     // AFTER the storage write, never before: the store is what the screen
     // reads, and putting a résumé there that the write then failed to persist
-    // (quota) would show the user content this device does not hold. The user
-    // profile is handed to its holder on the same terms and for the same reason
-    // — it is a whole-field copy in the always-mounted editor, which would
-    // otherwise write the pre-landing snapshot straight back.
-    for (const unit of landing) {
+    // (quota) would show the user content this device does not hold.
+    //
+    // Only for the OPEN profile. Another profile has no mounted editor and no
+    // loaded document, so there is nothing to hand these bytes to — and
+    // handing them over anyway would show one workspace's résumé inside
+    // another.
+    if (dataKey !== DATA_KEY) continue;
+    for (const unit of group) {
       if (unit.id.startsWith(RESUME_UNIT_PREFIX)) adoptLoadedDocument(unit);
       else if (unit.id === USER_PROFILE_UNIT_ID) adoptStoredUserProfile();
     }
@@ -1018,6 +1062,12 @@ function landFetchedUnits(units) {
     if (!unit?.id?.startsWith(KEY_UNIT_PREFIX)) continue;
     const key = unit.id.slice(KEY_UNIT_PREFIX.length);
     if (classifyKey(key) !== 'synced') continue;
+    const profileId = typeof unit?.profileId === 'string' ? unit.profileId : '';
+    // A profile the registry does not list cannot be opened or listed, so its
+    // namespace would be unreachable bytes. The registry lands from opShared and
+    // this unit comes back on the next fetch.
+    if (profileId && !listProfiles().some((p) => p.id === profileId)) continue;
+    const storageKey = storageKeyFor(profileId, key);
     // `appStorage.setItem` does `String(value)`, so a malformed unit off the
     // native bridge would write the literal text `undefined` into a real
     // storage key — data that looks valid and parses nowhere. `mergeData`
@@ -1031,24 +1081,25 @@ function landFetchedUnits(units) {
     // interruptsLiveEditing for where a refused unit goes.
     const owner = KEY_OWNERS.get(key);
     if (owner && !owner.lands(unit.payload)) continue;
-    if (owner?.isBusy?.()) continue;
+    if (storageKey === key && owner?.isBusy?.()) continue;
 
     const accumulate = accumulatorFor(key);
     if (accumulate) {
-      if (!accumulate(key, unit)) continue;
+      if (!accumulate(key, unit, profileId)) continue;
     } else {
       // A snapshot, so newer wins — decided BEFORE the write like every other
       // refusal here, and by the same `resolveConflict` the résumés and the
       // save-time conflict path use. See `outranksLocalCopy` for the race an
       // unguarded write loses, which destroys the local edit AND promotes the
       // stale copy to newest.
-      if (!outranksLocalCopy(unit, recorded)) continue;
-      appStorage.setItem(key, unit.payload);
+      const recordedForUnit = stateFor(profileId);
+      if (!outranksLocalCopy(unit, recordedForUnit)) continue;
+      appStorage.setItem(storageKey, unit.payload);
     }
     // AFTER the write, never before — the same ordering adoptLoadedDocument
     // takes: a module told to adopt bytes the write then failed to persist
     // (quota) would show the user content this device does not hold.
-    owner?.adopt();
+    if (storageKey === key) owner?.adopt();
     applied += 1;
   }
 
@@ -1205,7 +1256,7 @@ function resolveOneConflict(local, server) {
     if (classifyKey(key) !== 'synced') return null;
     // A payload that will not parse is refused rather than written: absence is
     // never deletion, and half a merge is not a merge.
-    if (!accumulate(key, server)) return null;
+    if (!accumulate(key, server, server.profileId)) return null;
     return { retry: true, parked: false };
   }
 
@@ -1221,7 +1272,7 @@ function resolveOneConflict(local, server) {
     // is discarded. Refusing the whole resolution over that would be worse than
     // the discard: the tag would be forfeited, the same record would come back,
     // and this device's newer content would never reach iCloud.
-    const wasParked = parkLoser(server.id, server.payload);
+    const wasParked = parkLoser(server.id, server.payload, server.profileId);
     return { retry: true, parked: wasParked };
   }
 
@@ -1238,7 +1289,7 @@ function resolveOneConflict(local, server) {
   // device has just stopped holding. Nothing is retried — the server already
   // holds the winner, and sending our copy back would push this device's stamp
   // over the version it has only just taken.
-  return { retry: false, parked: parkLoser(local.id, local.payload) };
+  return { retry: false, parked: parkLoser(local.id, local.payload, local.profileId) };
 }
 
 /**
@@ -1294,7 +1345,7 @@ function resolveOneConflict(local, server) {
  * the whole key from that array, which never saw this entry. So the loaded
  * variant is handed to the store instead of written here.
  */
-export function parkLoser(unitId, payload) {
+export function parkLoser(unitId, payload, profileId = '') {
   if (typeof unitId !== 'string' || !unitId.startsWith(RESUME_UNIT_PREFIX)) return false;
   const variantId = unitId.slice(RESUME_UNIT_PREFIX.length);
   if (!variantId) return false;
@@ -1328,20 +1379,23 @@ export function parkLoser(unitId, payload) {
   // time, which resolveConflict reads as -Infinity: the parked loser, which is
   // the whole reason newer-wins destroys nothing, would lose every conflict it
   // ever met and be overwritten by any device that had not seen the park.
-  const stampParked = () => touchUnit(`${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`);
+  const stampParked = () => touchUnitsForProfile(
+    profileId, [`${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`],
+  );
 
   // The loaded variant: only the store can make this stick (see above). It
   // reports false for any other variant, and this is the one call that can tell
   // — `currentVariantId` is private to store.js.
-  if (store.adoptHistoryEntry(variantId, entry)) {
+  const key = `${HISTORY_PREFIX}${variantId}`;
+  const storageKey = storageKeyFor(profileId, key);
+  if (storageKey === key && store.adoptHistoryEntry(variantId, entry)) {
     stampParked();
     return true;
   }
 
   // Any other variant: nothing holds its history in memory, so the key is ours
   // to write.
-  const key = `${HISTORY_PREFIX}${variantId}`;
-  const raw = readJSON(key, null);
+  const raw = readJSON(storageKey, null);
   const existingHistory = raw && typeof raw === 'object' && Array.isArray(raw.history)
     ? raw.history
     : [];
@@ -1360,7 +1414,7 @@ export function parkLoser(unitId, payload) {
   const at = Math.max(0, current - 1);
 
   const history = [...existingHistory.slice(0, at), entry, ...existingHistory.slice(at)];
-  appStorage.setItem(key, JSON.stringify({ history, historyIndex: Math.max(0, current + 1) }));
+  appStorage.setItem(storageKey, JSON.stringify({ history, historyIndex: Math.max(0, current + 1) }));
   // AFTER the write, so a quota throw above leaves no unit claiming a change
   // that never landed — the same ordering appStorage's own observer takes.
   stampParked();

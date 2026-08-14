@@ -27,12 +27,17 @@ import {
   isSyncEnabled, setSyncEnabled,
 } from '../src/sync/syncModel.js';
 import { initIOSShell, SHELL_HANDLER } from '../src/iosShell.js';
+import { physicalKey } from '../src/profileKeys.js';
 
 const DATA = 'resume-designer-data';
 const APPS = 'resume-designer-applications';
 const TOKENS = 'resume-designer-token-usage';
 const STATE = 'resume-designer-sync-state';
 const ENABLED = 'resume-designer-sync-enabled';
+const PROFILES = 'resume-designer-profiles';
+const ACTIVE_PROFILE = 'resume-designer-active-profile';
+const ACTIVE_PROFILE_ID = 'pactive';
+const FOREIGN_PROFILE_ID = 'pother';
 const AT = '2026-08-09T00:00:00.000Z';
 // Older and newer than a stamp minted by `new Date()` while the test runs,
 // which is what a local edit gets.
@@ -101,6 +106,26 @@ beforeEach(async () => {
 });
 
 describe('an apply is not confirmed until the bytes are on disk', () => {
+  it('refuses a failed flush when the fetched unit belongs to a foreign profile', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setProfileMapping(ACTIVE_PROFILE_ID);
+    backend.files.set(ACTIVE_PROFILE, ACTIVE_PROFILE_ID);
+    backend.files.set(PROFILES, JSON.stringify([
+      { id: ACTIVE_PROFILE_ID, name: 'Active' },
+      { id: FOREIGN_PROFILE_ID, name: 'Other' },
+    ]));
+    backend.files.set(physicalKey(FOREIGN_PROFILE_ID, DATA), SEEDED_BLOB);
+    await initAppStorage({ backend });
+    backend.fail.add(physicalKey(FOREIGN_PROFILE_ID, DATA));
+
+    expect(await applyUnits([{
+      ...settingsUnit({ pageSize: 'a4' }), profileId: FOREIGN_PROFILE_ID,
+    }])).toEqual({ applied: 0 });
+    expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, DATA))).settings)
+      .toEqual({ pageSize: 'letter' });
+    spy.mockRestore();
+  });
+
   it('answers AFTER the disk has taken the fetched unit, not when the cache has', async () => {
     const pending = applyUnits([settingsUnit({ pageSize: 'a4' })]);
 
