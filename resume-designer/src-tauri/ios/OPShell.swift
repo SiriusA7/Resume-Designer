@@ -759,12 +759,26 @@ final class ShellModel: ObservableObject {
   /// recovery loop; see `syncDidFail` for why there has to be one.
   private var syncRecovered: Set<String> = []
 
-  /// Ids re-deferred while the persisted set is being offered. The durable set
-  /// stays intact during the await — a kill there must leave every id owed — so
-  /// this is what distinguishes an id the completed send settled from one that
-  /// a refusal inside that same send owed again.
-  private var syncDeferredDrainProfileId: String?
+  /// Ids re-deferred while one persisted queue is being offered. The durable
+  /// set stays intact during the await — a kill there must leave every id owed
+  /// — so this is what distinguishes an id the completed send settled from one
+  /// that a refusal inside that same send owed again. The key identifies either
+  /// a profile queue or the device-wide shared queue.
+  private var syncDeferredDrainKey: String?
   private var syncDeferredReowed: Set<String> = []
+
+  /// The shared zone belongs to the account rather than whichever profile is
+  /// active, so its deferred work does too. This remains under the deferred-key
+  /// prefix so an explicit account purge clears it with the profile queues.
+  ///
+  /// The leading underscore is why this can never be a profile's key rather
+  /// than merely unlikely to be: `isValidProfileId` is `/^[A-Za-z0-9]+$/`, so
+  /// it REJECTS this string, while it would happily accept a profile whose id
+  /// was literally `shared`. Relying on `generateProfileId` never emitting that
+  /// would rest this on a different function's format — and a shared key
+  /// colliding with a profile's would offer that profile's units from every
+  /// other profile, sending them to the wrong zone.
+  private static let syncDeferredSharedKey = OPSyncEngine.deferredKey("_\(opSharedScope)")
 
   /// Device-local transport bookkeeping, beside OPSync's own
   /// `op-sync-state-<profile>` and `op-sync-records-<profile>` UserDefaults.
@@ -1195,10 +1209,10 @@ extension ShellModel {
     if syncProfileId != profileId {
       // A different profile is a different zone and a different engine session,
       // so the previous session's process-local recovery attempts do not carry
-      // over. Deferred ids stay under that profile's persisted key; loading only
-      // the active profile below is what prevents them crossing zones.
+      // over. Profile-scoped deferred ids stay under that profile's persisted
+      // key; the account-scoped shared queue is safe to carry across sessions.
       syncRecovered.removeAll()
-      syncDeferredDrainProfileId = nil
+      syncDeferredDrainKey = nil
       syncDeferredReowed.removeAll()
       // Its outstanding failures go with them, for the same reason and one more:
       // an outstanding failure comes down when the thing it names next reaches
@@ -1372,62 +1386,102 @@ extension ShellModel {
       // names a unit once, on the save that wrote it, and will not name it
       // again until it is edited again. So they wait for the next start instead
       // of being dropped.
-      deferSync(unitIds)
+      await deferSync(unitIds)
       NSLog("[OPShell] sync is down; \(unitIds.count) unit(s) held for the next start")
       return false
     }
   }
 
-  /// Unit ids this device still owes the server a send of, persisted per profile
-  /// and drained by every start. A send that could not be made, a page that
-  /// could not be asked for a unit, or an apply/conflict refusal all mean the
-  /// same thing: the id must be offered again without crossing into another
-  /// profile's zone.
-  private func syncDeferred(profileId: String) -> Set<String> {
-    Set(UserDefaults.standard.stringArray(forKey: OPSyncEngine.deferredKey(profileId)) ?? [])
+  /// Unit ids this device still owes the server a send of. Profile-scoped ids
+  /// remain confined to their profile's key; shared ids use one device-wide key
+  /// because their zone belongs to the account, not the active profile.
+  private func syncDeferred(key: String) -> Set<String> {
+    Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
   }
 
-  private func setSyncDeferred(_ unitIds: Set<String>, profileId: String) {
-    UserDefaults.standard.set(
-      Array(unitIds).sorted(), forKey: OPSyncEngine.deferredKey(profileId)
-    )
+  private func setSyncDeferred(_ unitIds: Set<String>, key: String) {
+    UserDefaults.standard.set(Array(unitIds).sorted(), forKey: key)
+  }
+
+  private func addSyncDeferred(_ unitIds: Set<String>, key: String) {
+    guard !unitIds.isEmpty else { return }
+    var deferred = syncDeferred(key: key)
+    deferred.formUnion(unitIds)
+    setSyncDeferred(deferred, key: key)
+    if syncDeferredDrainKey == key {
+      syncDeferredReowed.formUnion(unitIds)
+    }
   }
 
   /// Additive only. In particular, offering an id never removes it first in the
   /// hope that this function will put it back: the process can die between
   /// those operations, which is the durability hole this bookkeeping closes.
-  private func deferSync(_ unitIds: [String]) {
+  /// Every id is first made durable under the active profile, before the scope
+  /// ask can suspend. A shared answer adds a second, device-wide copy; the
+  /// start-time hoist removes the fallback only after that copy is durable.
+  private func deferSync(_ unitIds: [String]) async {
     guard let profileId = syncProfileId else {
       NSLog("[OPShell] no active profile for \(unitIds.count) deferred sync unit(s)")
       return
     }
-    var deferred = syncDeferred(profileId: profileId)
-    deferred.formUnion(unitIds)
-    setSyncDeferred(deferred, profileId: profileId)
-    if syncDeferredDrainProfileId == profileId {
-      syncDeferredReowed.formUnion(unitIds)
-    }
+    let ids = Array(Set(unitIds)).sorted()
+    guard !ids.isEmpty else { return }
+    let profileKey = OPSyncEngine.deferredKey(profileId)
+    addSyncDeferred(Set(ids), key: profileKey)
+    guard let scopes = await syncScopes(forUnitIds: ids) else { return }
+
+    let shared = Set(ids.filter { scopes[$0] == opSharedScope })
+    addSyncDeferred(shared, key: Self.syncDeferredSharedKey)
   }
 
-  /// Offer the durable snapshot without clearing it first. Only a completed send
-  /// settles ids, and anything refused again during that send stays owed. If the
-  /// process dies before settlement, the whole snapshot is harmlessly offered
-  /// again on the next start.
+  /// Reclassify the active profile's durable snapshot once the page is back.
+  /// This repairs shared ids parked there by the `nil` fallback. The shared
+  /// queue is written first; only then are those ids removed from the profile
+  /// queue, so a process death between the writes can duplicate debt but cannot
+  /// lose it.
+  private func hoistSharedSyncDeferred(profileId: String) async {
+    let profileKey = OPSyncEngine.deferredKey(profileId)
+    let offered = syncDeferred(key: profileKey)
+    guard !offered.isEmpty,
+          let scopes = await syncScopes(forUnitIds: Array(offered).sorted()) else { return }
+
+    let shared = Set(offered.filter { scopes[$0] == opSharedScope })
+    guard !shared.isEmpty else { return }
+    addSyncDeferred(shared, key: Self.syncDeferredSharedKey)
+
+    var deferred = syncDeferred(key: profileKey)
+    deferred.subtract(shared)
+    setSyncDeferred(deferred, key: profileKey)
+  }
+
+  /// Hoist first so a shared id parked by the `nil` fallback reaches the queue
+  /// that every profile drains. `fetchShared` has already run before this call,
+  /// preserving the shared-zone fetch-before-send order.
   private func drainSyncDeferred(profileId: String) async {
-    let offered = syncDeferred(profileId: profileId)
+    await hoistSharedSyncDeferred(profileId: profileId)
+    await drainSyncDeferred(key: Self.syncDeferredSharedKey)
+    await drainSyncDeferred(key: OPSyncEngine.deferredKey(profileId))
+  }
+
+  /// Offer one durable snapshot without clearing it first. Only a completed
+  /// send settles ids, and anything refused again during that send stays owed.
+  /// If the process dies before settlement, the whole snapshot is harmlessly
+  /// offered again on the next start.
+  private func drainSyncDeferred(key: String) async {
+    let offered = syncDeferred(key: key)
     guard !offered.isEmpty else { return }
 
-    syncDeferredDrainProfileId = profileId
+    syncDeferredDrainKey = key
     syncDeferredReowed.removeAll()
     let sent = await sendSync(unitIds: Array(offered))
     let reowed = syncDeferredReowed
-    syncDeferredDrainProfileId = nil
+    syncDeferredDrainKey = nil
     syncDeferredReowed.removeAll()
 
     guard sent else { return }
-    var deferred = syncDeferred(profileId: profileId)
+    var deferred = syncDeferred(key: key)
     deferred.subtract(offered.subtracting(reowed))
-    setSyncDeferred(deferred, profileId: profileId)
+    setSyncDeferred(deferred, key: key)
   }
 
   private func syncFullUploadOwed(profileId: String) -> Bool {
@@ -1718,7 +1772,7 @@ extension ShellModel: OPSyncHost {
       // real local edit until the unit happened to be edited again. The id
       // waits for the next start instead, in the same set an edit made while
       // the transport was down waits in.
-      deferSync([id])
+      await deferSync([id])
       NSLog("[OPShell] no answer for unit \(id); held for the next start")
       return nil
     }
@@ -1819,7 +1873,7 @@ extension ShellModel: OPSyncHost {
   /// queue for good.
   func syncDidFetch(_ units: [SyncUnit]) async -> Bool {
     guard await applyFetched(units) else {
-      deferSync(units.map(\.id))
+      await deferSync(units.map(\.id))
       NSLog("[OPShell] \(units.count) fetched unit(s) were not applied; "
             + "they are offered again at the next start")
       return false
@@ -1888,7 +1942,7 @@ extension ShellModel: OPSyncHost {
     let resolved = Set(outcome.resolved.map(\.id))
     let unresolved = conflicts.map(\.server.id).filter { !resolved.contains($0) }
     if !unresolved.isEmpty {
-      deferSync(unresolved)
+      await deferSync(unresolved)
       NSLog("[OPShell] \(unresolved.count) of \(conflicts.count) conflict(s) were not "
             + "resolved; they are offered again at the next start")
     }
