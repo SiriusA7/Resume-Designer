@@ -21,6 +21,11 @@
 //! distinction; do not "simplify" it away on either side.
 
 use keyring::{Entry, Error as KeyringError};
+#[cfg(target_vendor = "apple")]
+use security_framework::{
+    base::Error as SecurityFrameworkError,
+    passwords::{generic_password, set_generic_password_options, PasswordOptions},
+};
 
 /// Keychain service name. This is the frozen bundle identifier, matching the
 /// address `app_data_dir()` already derives for this app — the credential
@@ -46,19 +51,82 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn entry(name: &str) -> Result<Entry, String> {
+fn local_entry(name: &str) -> Result<Entry, String> {
     validate_name(name)?;
     Entry::new(SERVICE, name).map_err(|e| format!("keychain entry {name}: {e}"))
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn synchronizable_entry(name: &str) -> Result<Entry, String> {
+    local_entry(name)
+}
+
+#[cfg(target_vendor = "apple")]
+struct SynchronizableEntry {
+    name: String,
+}
+
+#[cfg(target_vendor = "apple")]
+impl SynchronizableEntry {
+    fn options(&self) -> PasswordOptions {
+        let mut options = PasswordOptions::new_generic_password(SERVICE, &self.name);
+        options.set_access_synchronized(Some(true));
+        options
+    }
+
+    fn get_password(&self) -> keyring::Result<String> {
+        let bytes = generic_password(self.options()).map_err(decode_apple_error)?;
+        String::from_utf8(bytes).map_err(|e| KeyringError::BadEncoding(e.into_bytes()))
+    }
+
+    fn set_password(&self, password: &str) -> keyring::Result<()> {
+        set_generic_password_options(password.as_bytes(), self.options())
+            .map_err(decode_apple_error)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+fn synchronizable_entry(name: &str) -> Result<SynchronizableEntry, String> {
+    validate_name(name)?;
+    Ok(SynchronizableEntry {
+        name: name.to_owned(),
+    })
+}
+
+#[cfg(target_vendor = "apple")]
+fn decode_apple_error(error: SecurityFrameworkError) -> KeyringError {
+    match error.code() {
+        -25291 | -25292 | -25294 | -25295 => KeyringError::NoStorageAccess(Box::new(error)),
+        -25300 => KeyringError::NoEntry,
+        _ => KeyringError::PlatformFailure(Box::new(error)),
+    }
 }
 
 /// Read a secret.
 ///
 /// `Ok(Some(v))` stored, `Ok(None)` no such entry, `Err` keychain unreachable.
 /// See the module note — these three are load-bearing and distinct.
+///
+/// A synchronizable item and a local one are DIFFERENT items to the keychain: a
+/// query for one never matches the other. So a miss here is not proof of
+/// absence until the legacy local item has been looked for too, and finding one
+/// upgrades it in place — once, because the next read matches the first branch.
 #[tauri::command(async)]
 pub fn secret_get(name: String) -> Result<Option<String>, String> {
-    match entry(&name)?.get_password() {
-        Ok(v) => Ok(Some(v)),
+    match synchronizable_entry(&name)?.get_password() {
+        Ok(v) => return Ok(Some(v)),
+        Err(KeyringError::NoEntry) => {}
+        Err(e) => return Err(format!("keychain read {name}: {e}")),
+    }
+    match local_entry(&name)?.get_password() {
+        Ok(v) => {
+            // Best effort: a failed upgrade must not hide a key the person has.
+            let _ = synchronizable_entry(&name).and_then(|e| {
+                e.set_password(&v)
+                    .map_err(|e| format!("keychain upgrade {name}: {e}"))
+            });
+            Ok(Some(v))
+        }
         Err(KeyringError::NoEntry) => Ok(None),
         Err(e) => Err(format!("keychain read {name}: {e}")),
     }
@@ -71,7 +139,7 @@ pub fn secret_get(name: String) -> Result<Option<String>, String> {
 /// silent failure here would lose the credential.
 #[tauri::command(async)]
 pub fn secret_set(name: String, value: String) -> Result<(), String> {
-    entry(&name)?
+    synchronizable_entry(&name)?
         .set_password(&value)
         .map_err(|e| format!("keychain write {name}: {e}"))
 }
@@ -92,6 +160,12 @@ mod tests {
         assert!(validate_name("resume-designer-openrouter-key").is_ok());
         assert!(validate_name("a").is_ok());
         assert!(validate_name("with.dots_and-dashes.9").is_ok());
+    }
+
+    #[test]
+    fn both_entry_builders_reject_a_bad_name() {
+        assert!(synchronizable_entry("bad name").is_err());
+        assert!(local_entry("bad name").is_err());
     }
 
     #[test]

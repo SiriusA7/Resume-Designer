@@ -91,6 +91,9 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSString", "NSGeometry"] }
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2"] }
 block2 = "0.6"
+# keyring 3.6.3 cannot set kSecAttrSynchronizable, so Apple secret storage
+# uses PasswordOptions directly while other targets keep keyring.
+security-framework = "3.7.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS only: WKWebView is an NSView there, so its bindings need AppKit. Cargo
