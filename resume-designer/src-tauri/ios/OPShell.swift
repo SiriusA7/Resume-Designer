@@ -1311,6 +1311,20 @@ extension ShellModel {
     // the registry it has and tries again at the next start.
     try? await sync.fetchShared()
 
+    // The shared landing may have introduced this account's real workspaces to
+    // a clean install whose boot knew only its starter. Adoption answers only
+    // after the tombstone and active pointer are durable; if it chose another
+    // workspace, this engine is still bound to the starter's zone, so nothing
+    // else from this start may drain, fetch or upload. Reload and let normal
+    // boot activate the adopted workspace before starting a fresh engine.
+    if case .answered(let value) = await sendForResult("syncAdoptAccountWorkspaces"),
+       let adoptedProfileId = value as? String,
+       !adoptedProfileId.isEmpty {
+      NSLog("[OPShell] adopted account workspace \(adoptedProfileId); reloading before profile-zone sync")
+      webView?.reload()
+      return
+    }
+
     // Anything this device still owes a send of goes up before the pull, so a
     // unit changed on both sides meets the conflict path rather than being
     // quietly overwritten by what arrives. That is also the only thing that can

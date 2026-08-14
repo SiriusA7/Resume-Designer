@@ -12,6 +12,7 @@ import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
   hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId,
+  adoptAccountWorkspaces,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -619,6 +620,7 @@ export async function init() {
     // `unitScopes` is here for the same reason: which zone a unit belongs in
     // follows from what the unit is, so the transport asks instead of deciding.
     collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts, touchUnit,
+    adoptAccountWorkspaces,
     // ONE notifier, handed to both things that name a dirty unit: persistence
     // (the résumé and its history, on the save that wrote them) and the sync
     // model's storage interceptor (every other synced key). The shell installs

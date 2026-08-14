@@ -7,12 +7,13 @@ import {
   loadRegistry, listProfiles, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile, exportProfileBackup,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
-  activateProfileMappingForPrint, isUntouchedWorkspace,
+  activateProfileMappingForPrint, isUntouchedWorkspace, adoptAccountWorkspaces,
 } from '../src/profiles.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, SYNC_STATE_KEY, physicalKey,
 } from '../src/profileKeys.js';
 import { getSettings, saveSettings, saveApiKey } from '../src/persistence.js';
+import { applyUnits } from '../src/sync/syncModel.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
@@ -1388,6 +1389,16 @@ describe('isUntouchedWorkspace', () => {
 describe('fresh-device adoption', () => {
   const STARTER_KEY = 'resume-profile-starter';
 
+  async function landAccountRegistry(registry) {
+    const landed = await applyUnits([{
+      id: `key:${PROFILES_KEY}`,
+      kind: 'plain',
+      payload: JSON.stringify(registry),
+      modifiedAt: '2026-08-14T00:00:00.000Z',
+    }]);
+    expect(landed).toEqual({ applied: 1 });
+  }
+
   function seedAccount({ starterTouched = false, starterMarker = true } = {}) {
     // Deliberately unsorted, so the "least-recently-created" choice cannot be
     // "whatever sits at index 0".
@@ -1418,6 +1429,60 @@ describe('fresh-device adoption', () => {
     // On DISK with the registry it names — a marker that never lands simply
     // means this install can never adopt, which is the safe direction.
     expect(backend.files.get(STARTER_KEY)).toBe(id);
+  });
+
+  it('adopts an account workspace discovered after first-session init', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    const starterId = await ensureProfilesInitialized();
+    const accountProfile = {
+      id: 'paccount', name: 'Account', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z',
+    };
+
+    await landAccountRegistry([accountProfile]);
+    const adoptedId = await adoptAccountWorkspaces();
+
+    expect(adoptedId).toBe(accountProfile.id);
+    const diskRegistry = JSON.parse(backend.files.get(PROFILES_KEY));
+    expect(diskRegistry.find((p) => p.id === starterId).deletedAt).toEqual(expect.any(String));
+    expect(diskRegistry.find((p) => p.id === accountProfile.id).deletedAt).toBeUndefined();
+    expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe(accountProfile.id);
+  });
+
+  it('refuses mid-session adoption after the starter gains authored content', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    const starterId = await ensureProfilesInitialized();
+    appStorage.setItem('resume-designer-data', JSON.stringify({
+      variants: { authored: { id: 'authored', name: 'My Resume', data: {} } },
+      currentVariantId: 'authored',
+    }));
+    expect(await appStorage.flush()).toBe(true);
+    const accountProfile = {
+      id: 'paccount', name: 'Account', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z',
+    };
+
+    await landAccountRegistry([accountProfile]);
+    const adoptedId = await adoptAccountWorkspaces();
+
+    expect(adoptedId).toBeNull();
+    const diskRegistry = JSON.parse(backend.files.get(PROFILES_KEY));
+    expect(diskRegistry.find((p) => p.id === starterId).deletedAt).toBeUndefined();
+    expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe(starterId);
+    expect(backend.files.get(physicalKey(starterId, 'resume-designer-data'))).not.toBeNull();
+  });
+
+  it('writes nothing when there is no account workspace to adopt', async () => {
+    const backend = makeBackend();
+    await initAppStorage({ backend });
+    await ensureProfilesInitialized();
+    backend.write.mockClear();
+    backend.delete.mockClear();
+
+    expect(await adoptAccountWorkspaces()).toBeNull();
+
+    expect(backend.write).not.toHaveBeenCalled();
+    expect(backend.delete).not.toHaveBeenCalled();
   });
 
   it('tombstones the untouched starter and opens the least-recently-created workspace', async () => {

@@ -1082,6 +1082,17 @@ describe('the Design sheet commands', () => {
     expect(unitScopes).toHaveBeenCalledWith(['key:resume-designer-profiles']);
   });
 
+  it('returns the durably adopted workspace id through the async sync command', async () => {
+    const adoptAccountWorkspaces = vi.fn(async () => 'paccount');
+    const { sendAsync } = await mount({ adoptAccountWorkspaces });
+
+    await expect(sendAsync({ type: 'syncAdoptAccountWorkspaces' })).resolves.toEqual({
+      ok: true,
+      result: 'paccount',
+    });
+    expect(adoptAccountWorkspaces).toHaveBeenCalledOnce();
+  });
+
   it('refuses a zone lookup that is not an array of ids', async () => {
     // The same contract the two batch routes have: a malformed request is a
     // refusal, not an answer Swift could route a save on.

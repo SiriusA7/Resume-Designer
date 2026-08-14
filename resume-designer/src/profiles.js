@@ -602,9 +602,9 @@ export function isUntouchedWorkspace(profileId) {
  * is already active, which is every path but one.
  *
  * The registry it reads has already been unioned with the account's by a
- * landing (landRegistry, syncModel.js) in an earlier session: the shared zone
- * is fetched at start, and this runs at the next boot's resolve, which is the
- * one moment the active profile can still be changed without a reload.
+ * landing (landRegistry, syncModel.js). Boot calls this for a registry landed
+ * in an earlier session; iOS also calls it immediately after fetchShared lands
+ * one in the current session, then reloads if this returns a different id.
  *
  * THE TOMBSTONE IS NOT AN IMPLEMENTATION DETAIL. If this device's own registry
  * ever reached the server ahead of that shared fetch — a retry, a reordering, a
@@ -613,7 +613,11 @@ export function isUntouchedWorkspace(profileId) {
  * harmless when the starter never reached the server and correct when it did.
  * See the spec's §4 ordering rules.
  */
-async function adoptAccountWorkspaces(activeId) {
+export async function adoptAccountWorkspaces(activeId = getActiveProfileId()) {
+  // An interrupted initial adoption belongs to finishAdoption at boot. Starting
+  // another adoption against its mapping-off recovery state would race its
+  // copy-before-delete protocol and could point at an incomplete namespace.
+  if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) return null;
   // Only the workspace init created for itself, never one the person made.
   if (appStorage.getItem(STARTER_PROFILE_KEY) !== activeId) return null;
   const others = listProfiles().filter((p) => p.id !== activeId);
@@ -636,6 +640,11 @@ async function adoptAccountWorkspaces(activeId) {
   });
 
   const registryBefore = loadRegistry() || [];
+  const prefix = physicalKey(activeId, '');
+  const namespaceBefore = new Map();
+  for (const k of appStorage.keys()) {
+    if (k && k.startsWith(prefix)) namespaceBefore.set(k, appStorage.getItem(k));
+  }
   const stamp = new Date().toISOString();
   saveRegistry(registryBefore.map((p) => (p.id === activeId
     ? { ...p, deletedAt: stamp, updatedAt: stamp }
@@ -643,31 +652,31 @@ async function adoptAccountWorkspaces(activeId) {
   appStorage.setItem(ACTIVE_PROFILE_KEY, next.id);
   setProfileMapping(next.id);
 
-  if (!(await appStorage.flush())) {
-    // Restore BOTH. The pair has to move together: a tombstone that reached
-    // disk without its pointer leaves the next boot active in a workspace
-    // nothing lists, and no later boot can adopt out of it either — the
-    // tombstone stamps `updatedAt`, which the predicate above refuses for ever.
-    console.error('[profiles] workspace adoption did not reach disk; keeping the starter workspace');
-    setProfileMapping(activeId);
-    appStorage.setItem(ACTIVE_PROFILE_KEY, activeId);
-    try { saveRegistry(registryBefore); } catch { /* keep going */ }
-    await appStorage.flush();
-    return null;
-  }
-
-  // Only now the namespace, and only its own keys. Nothing in it is content —
-  // that is exactly what the predicate proved — so unlike deleteProfileDurably
-  // there is nothing here worth snapshotting for a rollback, and a delete that
-  // does not reach disk costs some empty files.
-  const prefix = physicalKey(activeId, '');
+  // The untouched check above and every namespace delete below stay in this
+  // ONE synchronous turn. Mid-session the page is live: an await between them
+  // would let a user's write land after the check and then be deleted. Mapping
+  // moves first, so a write after this turn lands in the workspace that will be
+  // active after the reload rather than recreating the tombstoned namespace.
   for (const k of appStorage.keys()) {
     if (k && k.startsWith(prefix)) appStorage.removeItem(k);
   }
   // The marker named a workspace that no longer exists.
   appStorage.removeItem(STARTER_PROFILE_KEY);
+  if (await appStorage.flush()) return next.id;
+
+  // Restore the whole decision. The tombstone and pointer have to move
+  // together, and the namespace snapshot keeps a failed durability attempt
+  // from turning a harmless refusal into a partial local deletion.
+  console.error('[profiles] workspace adoption did not reach disk; keeping the starter workspace');
+  setProfileMapping(activeId);
+  appStorage.setItem(ACTIVE_PROFILE_KEY, activeId);
+  try { saveRegistry(registryBefore); } catch { /* keep going */ }
+  for (const [k, v] of namespaceBefore) {
+    try { appStorage.setItem(k, v); } catch { /* keep going */ }
+  }
+  try { appStorage.setItem(STARTER_PROFILE_KEY, activeId); } catch { /* keep going */ }
   await appStorage.flush();
-  return next.id;
+  return null;
 }
 
 /**
