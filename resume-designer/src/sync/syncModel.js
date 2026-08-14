@@ -1137,25 +1137,27 @@ export async function resolveConflicts(conflicts) {
 
   const wasApplying = applying;
   applying = true;
-  let outcome;
+  let answer;
   try {
-    outcome = resolveEachConflict(conflicts);
+    answer = resolveEachConflict(conflicts);
   } finally {
     applying = wasApplying;
   }
 
-  // Nothing was written, so there is no disk to wait for — that is the ordinary
-  // newer-wins case where this device already holds the winner and the server
-  // simply owes an update. Forcing a drain here would only push somebody else's
-  // coalescing window early.
-  if (!outcome.wrote) return outcome.answer;
-  return (await appStorage.flush()) ? outcome.answer : nothingResolved();
+  // Every acknowledged resolution waits for the disk, including a local winner
+  // that wrote nothing while resolving: the winner may exist only in the
+  // write-behind cache. A failed flush forfeits the WHOLE batch because which
+  // units reached disk is not knowable. UNCONDITIONALLY — there is deliberately
+  // no "did this resolution write anything" flag to branch on, because the
+  // version that had one skipped the barrier for exactly the case that needed
+  // it: a local winner with nowhere to park writes nothing and can still be
+  // cache-only.
+  return (await appStorage.flush()) ? answer : nothingResolved();
 }
 
 function resolveEachConflict(conflicts) {
   const resolved = [];
   let parked = 0;
-  let wrote = false;
 
   for (const conflict of Array.isArray(conflicts) ? conflicts : []) {
     const local = conflict?.local;
@@ -1170,10 +1172,9 @@ function resolveEachConflict(conflicts) {
     if (!outcome) continue;
     resolved.push({ id: server.id, retry: outcome.retry });
     if (outcome.parked) parked += 1;
-    if (outcome.wrote) wrote = true;
   }
 
-  return { answer: { resolved, parked }, wrote };
+  return { resolved, parked };
 }
 
 /**
@@ -1205,7 +1206,7 @@ function resolveOneConflict(local, server) {
     // A payload that will not parse is refused rather than written: absence is
     // never deletion, and half a merge is not a merge.
     if (!accumulate(key, server)) return null;
-    return { retry: true, parked: false, wrote: true };
+    return { retry: true, parked: false };
   }
 
   // A snapshot. Newer wins, by the same `resolveConflict` the fetch path
@@ -1221,7 +1222,7 @@ function resolveOneConflict(local, server) {
     // the discard: the tag would be forfeited, the same record would come back,
     // and this device's newer content would never reach iCloud.
     const wasParked = parkLoser(server.id, server.payload);
-    return { retry: true, parked: wasParked, wrote: wasParked };
+    return { retry: true, parked: wasParked };
   }
 
   // Theirs is newer, or the two tie and the tie goes to the server so both
@@ -1237,7 +1238,7 @@ function resolveOneConflict(local, server) {
   // device has just stopped holding. Nothing is retried — the server already
   // holds the winner, and sending our copy back would push this device's stamp
   // over the version it has only just taken.
-  return { retry: false, parked: parkLoser(local.id, local.payload), wrote: true };
+  return { retry: false, parked: parkLoser(local.id, local.payload) };
 }
 
 /**

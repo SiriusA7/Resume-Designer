@@ -210,7 +210,41 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
 
     expect(await resolveConflicts([{ local, server }]))
       .toEqual({ resolved: [{ id, retry: true }], parked: 0 });
-    expect(onDisk(APPS)).toEqual([]);
+  });
+
+  it('forfeits a local-winner snapshot when its cached winner cannot reach disk', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const winner = [{ id: 'app-1' }];
+    backend.fail.add(APPS);
+    appStorage.setItem(APPS, JSON.stringify(winner));
+
+    // The failed drain leaves the new bytes in the cache and the old bytes on
+    // disk. This is the persistent state in which acknowledging the server's
+    // change tag would let a relaunch send stale disk content under that tag.
+    expect(await appStorage.flush()).toBe(false);
+
+    const id = `key:${APPS}`;
+    const answer = await resolveConflicts([{
+      local: unit(id, winner, NEW),
+      server: unit(id, [{ id: 'app-0' }], OLD),
+    }]);
+    const diskValue = onDisk(APPS);
+    spy.mockRestore();
+
+    expect(answer).toEqual({ resolved: [], parked: 0 });
+    expect(diskValue).toEqual([]);
+  });
+
+  it('flushes a cached local winner to disk before acknowledging resolution', async () => {
+    const winner = [{ id: 'app-1' }];
+    appStorage.setItem(APPS, JSON.stringify(winner));
+
+    const id = `key:${APPS}`;
+    expect(await resolveConflicts([{
+      local: unit(id, winner, NEW),
+      server: unit(id, [{ id: 'app-0' }], OLD),
+    }])).toEqual({ resolved: [{ id, retry: true }], parked: 0 });
+    expect(onDisk(APPS)).toEqual(winner);
   });
 });
 
