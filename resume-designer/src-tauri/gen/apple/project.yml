@@ -68,7 +68,10 @@ targets:
       path: resume-designer_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
-        UILaunchStoryboardName: LaunchScreen
+        UILaunchScreen:
+          UIImageName: LaunchLogo
+          UIColorName: LaunchBackground
+          UIImageRespectsSafeAreaInsets: false
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

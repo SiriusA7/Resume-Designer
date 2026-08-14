@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		06374AE0C0946D2AB07C94AC /* OPShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFDC81558432D9A46C5B9FFB /* OPShell.swift */; };
 		06AF95A5701BC1D586B4A815 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4ED538225C2B89B0B74B9238 /* QuartzCore.framework */; };
+		0986FA3E1B05E0539D37196E /* OPLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF99E3F7909AC98070B4BC79 /* OPLaunch.swift */; };
 		183BDC2AC585FBFBC1B8EC3C /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0941D4F19255C0F1089055FF /* CoreGraphics.framework */; };
 		3C7969A8468941C590381228 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 129E38387B051F17EF9D53E5 /* LaunchScreen.storyboard */; };
 		447291C0C4E20538A16B13EE /* OPOnboardingSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730496408BF41500E3916FA4 /* OPOnboardingSteps.swift */; };
@@ -58,6 +59,7 @@
 		BDC7AE925FF8A5E78E4092E3 /* resume-designer_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "resume-designer_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3298D515A47F34CE46B1895 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		C665389A04CB90B3400E715B /* OPJobs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPJobs.swift; sourceTree = "<group>"; };
+		CF99E3F7909AC98070B4BC79 /* OPLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPLaunch.swift; sourceTree = "<group>"; };
 		D0B324E3BDB2150B1FCB4350 /* resume-designer_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "resume-designer_iOS.entitlements"; sourceTree = "<group>"; };
 		D9B406120356F983B00F5FF4 /* OPSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OPSync.swift; sourceTree = "<group>"; };
 		DCF643378505CF59EB076023 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
@@ -104,6 +106,7 @@
 			isa = PBXGroup;
 			children = (
 				C665389A04CB90B3400E715B /* OPJobs.swift */,
+				CF99E3F7909AC98070B4BC79 /* OPLaunch.swift */,
 				95C60F24079644F4668ACC33 /* OPOnboarding.swift */,
 				730496408BF41500E3916FA4 /* OPOnboardingSteps.swift */,
 				047806FF26AAFE76BECD9C42 /* OPProfile.swift */,
@@ -209,14 +212,14 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_05C6B881-8B1D-45E0-97EF-83525959D084" /* x86_64 */ = {
+		"TEMP_10EBD4F6-8D32-4FAC-BD6A-11285DA0FB1A" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = x86_64;
 			sourceTree = "<group>";
 		};
-		"TEMP_10D1C48C-9E11-46CB-A2A4-3C392A2E3061" /* arm64 */ = {
+		"TEMP_5BECD9A1-CCDB-4476-8007-F194F2EF9D21" /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -322,6 +325,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8E62FE24B5DB3826FEE18744 /* OPJobs.swift in Sources */,
+				0986FA3E1B05E0539D37196E /* OPLaunch.swift in Sources */,
 				9B2052C0C9C332D0224EF0E5 /* OPOnboarding.swift in Sources */,
 				447291C0C4E20538A16B13EE /* OPOnboardingSteps.swift in Sources */,
 				4B1E68FD7C05B6ED7630813C /* OPProfile.swift in Sources */,
