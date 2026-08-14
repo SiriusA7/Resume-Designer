@@ -188,6 +188,11 @@ struct OPSyncFailure: Equatable {
 /// ran. They are `throws` functions; this is what they throw.
 enum OPSyncError: Error, LocalizedError {
   case notStarted
+  /// `CKSyncEngine` delivers delegate events serially and forbids methods that
+  /// can generate another event while `handleEvent` is still in flight. The
+  /// caller durably holds the ids and the delegate wrapper retries them after
+  /// the current event has returned.
+  case eventInFlight
   /// The model could not be asked which zone these units belong in — the page is
   /// gone, or still reloading. NOT the same as "they are all profile-scoped":
   /// the shared zone exists so that a device which knows nothing can still find
@@ -199,6 +204,7 @@ enum OPSyncError: Error, LocalizedError {
   var errorDescription: String? {
     switch self {
     case .notStarted: return "Sync is not running."
+    case .eventInFlight: return "Sync postponed a send until the current event finishes."
     case .scopeUnknown: return "The page did not say which zone these units belong in."
     }
   }
@@ -269,6 +275,11 @@ protocol OPSyncHost: AnyObject {
   /// `syncDidFetch` answers, in the same terms. Anything less, including not
   /// being able to ask, is an empty answer.
   func syncDidConflict(_ conflicts: [SyncConflict]) async -> SyncConflictOutcome
+
+  /// A send was refused while a delegate event was in flight and its ids are
+  /// now durable. Called on a later main-actor turn, after `handleEvent` has
+  /// returned, so the host can drain that profile's deferred queue safely.
+  func syncRetryDeferred(profileId: String) async
 
   /// Sends and fetches that did not land. See `OPSyncFailure`.
   func syncDidFail(_ failures: [OPSyncFailure])
@@ -362,6 +373,16 @@ final class OPSyncEngine {
   /// the map reaches `UserDefaults` once per engine event instead of once per
   /// record — see `flushSystemFields`.
   private var systemFieldsDirty = false
+
+  /// True from the delegate wrapper's entry until its `handleEvent` returns.
+  /// CKSyncEngine guarantees serial delivery, so this cannot nest and is a
+  /// boolean rather than a counter.
+  private var delegateEventInFlight = false
+
+  /// Set only when `send` refuses work because of the marker above. All refused
+  /// ids are made durable by the host before the delegate call can finish; this
+  /// bit coalesces them into one post-event drain.
+  private var sendPostponedDuringEvent = false
 
   init(host: OPSyncHost) {
     self.host = host
@@ -465,10 +486,14 @@ final class OPSyncEngine {
   /// choose. Nothing about the id is inspected on this side; see `syncScopes`.
   /// A refused answer refuses the whole send rather than routing on a guess.
   func send(unitIds: [String]) async throws {
+    try refuseSendDuringDelegateEvent()
     guard let engine, let zoneID, let sharedZoneID else { throw OPSyncError.notStarted }
     guard let scopes = await host?.syncScopes(forUnitIds: unitIds) else {
       throw OPSyncError.scopeUnknown
     }
+    // The scope ask suspends. An event may have begun while it was waiting, so
+    // check again at the last possible point before anything enters the engine.
+    try refuseSendDuringDelegateEvent()
     let changes = unitIds.map { id in
       // No answer for an id is profile-scoped, which is what every unit was
       // before the shared zone existed — including every unit a build older than
@@ -480,6 +505,38 @@ final class OPSyncEngine {
     }
     engine.state.add(pendingRecordZoneChanges: changes)
     try await engine.sendChanges()
+  }
+
+  private func refuseSendDuringDelegateEvent() throws {
+    guard !delegateEventInFlight else {
+      sendPostponedDuringEvent = true
+      throw OPSyncError.eventInFlight
+    }
+  }
+
+  /// The delegate methods are intentionally the only callers: their entry and
+  /// exit are the exact boundary Apple's CKSyncEngine contract describes.
+  fileprivate func beginDelegateEvent() {
+    assert(!delegateEventInFlight, "CKSyncEngine delegate events must not nest")
+    delegateEventInFlight = true
+  }
+
+  fileprivate func finishDelegateEvent() {
+    assert(delegateEventInFlight, "a CKSyncEngine delegate event must begin before it finishes")
+    delegateEventInFlight = false
+    guard sendPostponedDuringEvent else { return }
+    sendPostponedDuringEvent = false
+    guard let profileId else { return }
+
+    Task { @MainActor [weak self] in
+      // This must be the task's first action. The current main-actor job has no
+      // suspension between scheduling this task and returning from handleEvent;
+      // yielding here therefore puts the drain after that delegate call has
+      // unwound, never merely at the end of its implementation.
+      await Task.yield()
+      guard let self, self.profileId == profileId else { return }
+      await self.host?.syncRetryDeferred(profileId: profileId)
+    }
   }
 
   /// Pull what changed.
@@ -528,7 +585,10 @@ private final class OPSyncDelegate: CKSyncEngineDelegate {
   }
 
   func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
-    await owner?.handle(event, engine: syncEngine)
+    guard let owner else { return }
+    owner.beginDelegateEvent()
+    defer { owner.finishDelegateEvent() }
+    await owner.handle(event, engine: syncEngine)
   }
 
   func nextRecordZoneChangeBatch(

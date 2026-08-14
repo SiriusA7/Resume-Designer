@@ -1391,12 +1391,13 @@ extension ShellModel {
       try await sync.send(unitIds: unitIds)
       return true
     } catch {
-      // Three things reach here, and two of them queued nothing at all before
+      // Four things reach here, and three of them queued nothing at all before
       // throwing: `notStarted` — signed out, or an edit that beat the first
-      // activation — and `scopeUnknown`, the page not saying which zone these
-      // units belong in, which is refused rather than routed on a guess. Holding
-      // the ids is the whole of what those two need. The third is anything
-      // `engine.sendChanges()` itself throws, and holding costs it nothing:
+      // activation; `scopeUnknown`, the page not saying which zone these units
+      // belong in, which is refused rather than routed on a guess; and
+      // `eventInFlight`, which must wait until the delegate call has returned.
+      // Holding the ids is the whole of what those three need. The fourth is
+      // anything `engine.sendChanges()` itself throws, and holding costs it nothing:
       // `send` queued those changes before it threw and
       // `add(pendingRecordZoneChanges:)` deduplicates, so the next start
       // re-queues nothing that is already there.
@@ -1406,7 +1407,7 @@ extension ShellModel {
       // again until it is edited again. So they wait for the next start instead
       // of being dropped.
       await deferSync(unitIds)
-      NSLog("[OPShell] sync is down; \(unitIds.count) unit(s) held for the next start")
+      NSLog("[OPShell] sync send postponed; \(unitIds.count) unit(s) held durably")
       return false
     }
   }
@@ -1521,6 +1522,15 @@ extension ShellModel {
     var deferred = syncDeferred(key: key)
     deferred.subtract(offered.subtracting(reowed))
     setSyncDeferred(deferred, key: key)
+  }
+
+  /// Retry debt created by a send the transport refused during `handleEvent`.
+  /// OPSync schedules this only after that delegate call has returned. A profile
+  /// switch or the preference turning off leaves the debt durable for its next
+  /// ordinary start rather than sending it through the wrong engine session.
+  func syncRetryDeferred(profileId: String) async {
+    guard syncEnabled == true, syncProfileId == profileId else { return }
+    await drainSyncDeferred(profileId: profileId)
   }
 
   private func syncFullUploadOwed(profileId: String) -> Bool {
