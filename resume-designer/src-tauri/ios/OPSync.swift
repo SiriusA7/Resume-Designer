@@ -315,7 +315,16 @@ protocol OPSyncHost: AnyObject {
   /// progress report — it is the answer to "may this device claim to know which
   /// server version it is editing". Anything less than a confirmed full apply,
   /// including not being able to ask at all, is `false`.
-  func syncDidFetch(_ units: [SyncUnit]) async -> Bool
+  /// The ROUTES (`SyncUnit.route`) of every unit the page accounted for: the
+  /// ones it wrote, plus the ones it settled because nothing will ever land
+  /// them — its own copy is newer, the payload is unreadable, the key is this
+  /// device's own. Everything absent from the answer was refused and must be
+  /// delivered again, so its change tag is forfeited.
+  ///
+  /// Per unit rather than a batch verdict, because the two outcomes are routine
+  /// in the SAME delivery and a single answer for all of them cannot be right
+  /// for either.
+  func syncDidFetch(_ units: [SyncUnit]) async -> Set<String>
 
   /// BOTH versions of every unit whose save hit `serverRecordChanged`, handed to
   /// the model to resolve.
@@ -1279,9 +1288,20 @@ extension OPSyncEngine {
   /// are compared. It fails toward an extra round trip, never toward an overwrite.
   private func deliver(_ arrivals: [Arrival]) async {
     guard !arrivals.isEmpty else { return }
-    let applied = await host?.syncDidFetch(arrivals.map(\.unit)) ?? false
+    // PER ARRIVAL, not per batch. The page answers with the route of every unit
+    // it has ACCOUNTED FOR — written, or settled because nothing will ever land
+    // it — and only those keep their change tags.
+    //
+    // A batch verdict could not express the ordinary case. A second device's
+    // freshly minted settings are always newer than the ones arriving, so that
+    // unit is correctly skipped every single time; read as a batch failure it
+    // condemned every other record delivered beside it, including the résumés,
+    // and the identical batch came back and failed identically at every start,
+    // for ever. Nothing converged and nothing said why.
+    let accounted = await host?.syncDidFetch(arrivals.map(\.unit)) ?? []
     for arrival in arrivals {
-      if applied { remember(arrival.record) } else { forget(arrival.recordID) }
+      if accounted.contains(arrival.unit.route) { remember(arrival.record) }
+      else { forget(arrival.recordID) }
     }
   }
 

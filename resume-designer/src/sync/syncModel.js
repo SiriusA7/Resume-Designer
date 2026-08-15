@@ -1036,7 +1036,7 @@ export async function applyUnits(units) {
   // for content that was never stored, and the reload the restore ends with
   // boots from the backup. Refusing is the safe direction, and these units are
   // offered again at the next start.
-  if (appStorage.isRestoreGuardActive()) return { applied: 0 };
+  if (appStorage.isRestoreGuardActive()) return nothingApplied();
 
   const wasApplying = applying;
   applying = true;
@@ -1049,15 +1049,43 @@ export async function applyUnits(units) {
 
   // Nothing landed means nothing was written, so there is no disk to wait for —
   // and forcing a drain here would only push somebody else's coalescing window
-  // early. Every path that increments the count writes first.
+  // early. Every path that increments the count writes first. The settled units
+  // still travel back: they wrote nothing, so no disk can contradict them.
   if (landed.applied === 0) return landed;
 
-  return (await appStorage.flush()) ? landed : { applied: 0 };
+  // A failed flush forfeits the SETTLED units too, not just the written ones.
+  // They are individually safe — nothing was written, so nothing can be missing
+  // — but the stamps that decided several of them share one key with the writes
+  // that just failed, so which of those reached disk is exactly as unknowable.
+  // Over-forfeiting costs a round trip; the other direction is the silent
+  // overwrite this whole barrier exists to stop.
+  return (await appStorage.flush()) ? landed : nothingApplied();
 }
+
+/** Every fetched unit refused: the shape of an answer that accounts for none. */
+const nothingApplied = () => ({ applied: 0, accounted: [] });
+
+/** The zone a fetched unit arrived in, `''` for the shared one. */
+const profileOf = (unit) => (typeof unit?.profileId === 'string' ? unit.profileId : '');
 
 function landFetchedUnits(units) {
   const incoming = Array.isArray(units) ? units : [];
   let applied = 0;
+
+  // THREE outcomes, not two, and this is the whole point of the shape.
+  //
+  // A fetched unit is WRITTEN, or SETTLED — this device has accounted for that
+  // server version and nothing further will ever land it — or REFUSED, meaning
+  // this device cannot take it YET and must be offered it again.
+  //
+  // Only a refusal may forfeit a change tag. The count alone could not say
+  // which had happened, so every non-write was read as a refusal, and one
+  // permanently-settled unit in a batch condemned the whole batch for ever.
+  // `accounted` carries the answer per unit instead, and names each unit by its
+  // ZONE as well as its id, because the same id exists in every workspace.
+  const accounted = [];
+  const account = (unit) => accounted.push({ id: unit.id, profileId: profileOf(unit) });
+  const settle = account;
 
   // Both halves of the blob, not just the résumés: `data:settings` and
   // `data:userProfile` are emitted by splitData and reassembled by mergeData,
@@ -1080,31 +1108,50 @@ function landFetchedUnits(units) {
   // that field holds (landsAsDataField) and must not land on top of an open
   // profile edit (interruptsProfileEditing). BOTH kinds are snapshots, so both
   // must also be newer than the copy this device holds (outranksLocalCopy).
-  const landing = incoming.filter((unit) => {
+  const landing = [];
+  for (const unit of incoming) {
     const id = typeof unit?.id === 'string' ? unit.id : '';
-    if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) return false;
-    if (!parsesAsJSON(unit.payload)) return false;
-    const profileId = typeof unit?.profileId === 'string' ? unit.profileId : '';
-    // A profile the registry does not list cannot be opened or listed, so its
-    // namespace would be unreachable bytes. The registry lands from opShared and
-    // this unit comes back on the next fetch.
-    if (profileId && !listProfiles().some((p) => p.id === profileId)) return false;
+    // Not a blob unit. The key loop below judges it, and settles anything
+    // neither loop recognises.
+    if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) continue;
+
+    // SETTLED, not refused: a payload that will not parse, a résumé with no
+    // document, a `data:` field of the wrong shape — none of them becomes
+    // landable by being sent again, and a copy older than the one this device
+    // holds never will either. This device has accounted for that record.
+    if (!parsesAsJSON(unit.payload)) { settle(unit); continue; }
+
+    const profileId = profileOf(unit);
+    // REFUSED, and the one refusal in this block: a profile the registry does
+    // not list cannot be opened or listed, so its namespace would be
+    // unreachable bytes. The registry lands from opShared and this unit has to
+    // come back on the next fetch — so its tag must NOT be held.
+    if (profileId && !listProfiles().some((p) => p.id === profileId)) continue;
+
     const dataKey = storageKeyFor(profileId, DATA_KEY);
     const recordedForUnit = stateFor(profileId);
-    if (!id.startsWith(RESUME_UNIT_PREFIX)) {
-      return landsAsDataField(unit)
-        && (dataKey !== DATA_KEY || !interruptsProfileEditing(unit))
-        && outranksLocalCopy(unit, recordedForUnit);
-    }
-    return landsAsResume(unit)
-      && (dataKey !== DATA_KEY || !interruptsLiveEditing(unit))
-      && outranksLocalCopy(unit, recordedForUnit);
-  });
+    const isResume = id.startsWith(RESUME_UNIT_PREFIX);
+    if (!(isResume ? landsAsResume(unit) : landsAsDataField(unit))) { settle(unit); continue; }
+    // REFUSED: an edit is in flight. It will not be in flight for ever.
+    if (dataKey === DATA_KEY
+        && (isResume ? interruptsLiveEditing(unit) : interruptsProfileEditing(unit))) continue;
+    // SETTLED: this device's copy is newer, so there is correctly nothing to
+    // write. It is the SERVER that is behind, and this device's own send fixes
+    // that. Counting it as a failure is what stalled every second device: its
+    // freshly minted settings and user profile are always newer than the ones
+    // arriving, so a batch carrying them could never fully land, and the whole
+    // batch — résumés included — was thrown away and re-offered identically for
+    // ever.
+    if (!outranksLocalCopy(unit, recordedForUnit)) { settle(unit); continue; }
+
+    landing.push(unit);
+  }
   for (const [profileId, group] of groupByProfile(landing)) {
     const dataKey = storageKeyFor(profileId, DATA_KEY);
     const blob = readJSON(dataKey, {});
     appStorage.setItem(dataKey, JSON.stringify(mergeData(blob, group)));
     applied += group.length;
+    for (const unit of group) account(unit);
     // AFTER the storage write, never before: the store is what the screen
     // reads, and putting a résumé there that the write then failed to persist
     // (quota) would show the user content this device does not hold.
@@ -1121,20 +1168,31 @@ function landFetchedUnits(units) {
   }
 
   for (const unit of incoming) {
-    if (!unit?.id?.startsWith(KEY_UNIT_PREFIX)) continue;
-    const key = unit.id.slice(KEY_UNIT_PREFIX.length);
-    if (classifyKey(key) !== 'synced') continue;
-    const profileId = typeof unit?.profileId === 'string' ? unit.profileId : '';
-    // A profile the registry does not list cannot be opened or listed, so its
-    // namespace would be unreachable bytes. The registry lands from opShared and
-    // this unit comes back on the next fetch.
+    const id = typeof unit?.id === 'string' ? unit.id : '';
+    // Anything neither loop recognises — a `resume:`/`data:` unit the block
+    // above already judged, or an id from a build that knows a kind this one
+    // does not — is SETTLED. Re-delivering it for ever accomplishes nothing,
+    // and the blob units were accounted for above.
+    if (!id.startsWith(KEY_UNIT_PREFIX)) {
+      if (!id.startsWith(RESUME_UNIT_PREFIX) && !id.startsWith(DATA_UNIT_PREFIX)) settle(unit);
+      continue;
+    }
+    const key = id.slice(KEY_UNIT_PREFIX.length);
+    // SETTLED: a key this device holds as its own is never landed from anybody
+    // else's, whatever arrives, however often.
+    if (classifyKey(key) !== 'synced') { settle(unit); continue; }
+    const profileId = profileOf(unit);
+    // REFUSED: a profile the registry does not list cannot be opened or listed,
+    // so its namespace would be unreachable bytes. The registry lands from
+    // opShared and this unit comes back on the next fetch.
     if (profileId && !listProfiles().some((p) => p.id === profileId)) continue;
     const storageKey = storageKeyFor(profileId, key);
     // `appStorage.setItem` does `String(value)`, so a malformed unit off the
     // native bridge would write the literal text `undefined` into a real
     // storage key — data that looks valid and parses nowhere. `mergeData`
-    // guards résumé payloads the same way (syncUnits.js).
-    if (typeof unit.payload !== 'string') continue;
+    // guards résumé payloads the same way (syncUnits.js). SETTLED: a payload
+    // that is not a string does not become one.
+    if (typeof unit.payload !== 'string') { settle(unit); continue; }
 
     // Both decided BEFORE the write, exactly as the résumé's guards are, and for
     // the same reason: a unit that reaches storage is on disk whatever its owner
@@ -1142,12 +1200,16 @@ function landFetchedUnits(units) {
     // into an empty list on the next boot. See KEY_OWNERS, and
     // interruptsLiveEditing for where a refused unit goes.
     const owner = KEY_OWNERS.get(key);
-    if (owner && !owner.lands(unit.payload)) continue;
+    // SETTLED: garbage on this key never becomes landable.
+    if (owner && !owner.lands(unit.payload)) { settle(unit); continue; }
+    // REFUSED: its owner is mid-edit, which is temporary.
     if (storageKey === key && owner?.isBusy?.()) continue;
 
     const accumulate = accumulatorFor(key);
     if (accumulate) {
-      if (!accumulate(key, unit, profileId)) continue;
+      // SETTLED on a refusal: the accumulators refuse only a payload they
+      // cannot read, which is a property of the record and not of this moment.
+      if (!accumulate(key, unit, profileId)) { settle(unit); continue; }
     } else {
       // A snapshot, so newer wins — decided BEFORE the write like every other
       // refusal here, and by the same `resolveConflict` the résumés and the
@@ -1155,7 +1217,10 @@ function landFetchedUnits(units) {
       // unguarded write loses, which destroys the local edit AND promotes the
       // stale copy to newest.
       const recordedForUnit = stateFor(profileId);
-      if (!outranksLocalCopy(unit, recordedForUnit)) continue;
+      // SETTLED, for the same reason as the blob units above: our copy is
+      // newer, so there is correctly nothing to write and never will be from
+      // this server version.
+      if (!outranksLocalCopy(unit, recordedForUnit)) { settle(unit); continue; }
       appStorage.setItem(storageKey, unit.payload);
     }
     // AFTER the write, never before — the same ordering adoptLoadedDocument
@@ -1163,9 +1228,10 @@ function landFetchedUnits(units) {
     // (quota) would show the user content this device does not hold.
     if (storageKey === key) owner?.adopt();
     applied += 1;
+    account(unit);
   }
 
-  return { applied };
+  return { applied, accounted };
 }
 
 /** Every conflict refused: the shape of an answer that resolves nothing. */

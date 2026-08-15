@@ -2087,55 +2087,70 @@ extension ShellModel: OPSyncHost {
   /// The one case that would loop for ever ends itself: a page that answers "I
   /// have nothing under that id" makes `recordToSend` take the change off the
   /// queue for good.
-  func syncDidFetch(_ units: [SyncUnit]) async -> Bool {
-    guard await applyFetched(units) else {
-      syncInitialFetchRefused = true
-      // GROUPED BY THE ZONE EACH ARRIVED IN, because one delivery can carry
-      // several workspaces' records and the debt is only recoverable in the
-      // zone it belongs to. `SyncUnit.profileId` is that zone, reported by the
-      // transport as a fact about the record — the same seam `syncScopes`
-      // crosses in the other direction. Empty means the shared zone, which
-      // `deferSync` reads as "no profile of its own".
-      for (profileId, group) in Dictionary(grouping: units, by: \.profileId) {
-        await deferSync(group.map(\.id), inProfile: profileId.isEmpty ? nil : profileId)
-      }
-      NSLog("[OPShell] \(units.count) fetched unit(s) were not applied; "
-            + "they are offered again at the next start")
-      return false
+  func syncDidFetch(_ units: [SyncUnit]) async -> Set<String> {
+    let accounted = await applyFetched(units)
+    let refused = units.filter { !accounted.contains($0.route) }
+    guard !refused.isEmpty else { return accounted }
+
+    // Only what was REFUSED waits for another attempt. A settled unit is not
+    // owed anything: this device has taken its server version into account and
+    // holds its tag, so re-offering it would be a send with nothing behind it.
+    syncInitialFetchRefused = true
+    // GROUPED BY THE ZONE EACH ARRIVED IN, because one delivery can carry
+    // several workspaces' records and the debt is only recoverable in the
+    // zone it belongs to. `SyncUnit.profileId` is that zone, reported by the
+    // transport as a fact about the record — the same seam `syncScopes`
+    // crosses in the other direction. Empty means the shared zone, which
+    // `deferSync` reads as "no profile of its own".
+    for (profileId, group) in Dictionary(grouping: refused, by: \.profileId) {
+      await deferSync(group.map(\.id), inProfile: profileId.isEmpty ? nil : profileId)
     }
-    return true
+    NSLog("[OPShell] \(refused.count) of \(units.count) fetched unit(s) were refused; "
+          + "they are offered again at the next start")
+    return accounted
   }
 
-  /// The ask itself, split out so that no answer of `false` can reach the
-  /// transport without the ids being held — the two would otherwise have to be
-  /// kept in step at three separate returns.
-  private func applyFetched(_ units: [SyncUnit]) async -> Bool {
+  /// The ask itself, split out so that no empty answer can reach the transport
+  /// without the ids being held — the two would otherwise have to be kept in
+  /// step at three separate returns.
+  ///
+  /// Answers the ROUTES the page accounted for. Empty means every way of not
+  /// knowing: the units would not encode, the round trip went unanswered, or
+  /// the reply carried nothing usable. All of them forfeit every tag in the
+  /// batch, which is the safe direction and costs one round trip.
+  private func applyFetched(_ units: [SyncUnit]) async -> Set<String> {
     // `SyncUnit`'s encoding includes `profileId`, reporting which record zone
     // each fetched unit arrived in. It does not classify the unit or choose a
     // destination; outbound zone selection still comes from `syncScopes`.
     guard let data = try? JSONEncoder().encode(units),
           let json = String(data: data, encoding: .utf8) else {
       NSLog("[OPShell] could not encode \(units.count) fetched unit(s)")
-      return false
+      return []
     }
     // A JSON STRING, not an object: the command channel is a JS string literal,
     // the same reason a picked file crosses as base64. `syncApply` parses it.
     //
-    // `applied` is the count `applyUnits` returned, read off the dispatcher's
-    // own `{ ok, result }` envelope. That is the bridge's shape, not a unit's:
-    // this side still never looks inside a payload.
+    // `accounted` is what `applyUnits` returned, read off the dispatcher's own
+    // `{ ok, result }` envelope. That is the bridge's shape, not a unit's: this
+    // side still never looks inside a payload. Each entry names a unit by id
+    // AND by the workspace it belongs to, because one id exists in every
+    // workspace and a batch can carry several of them.
     guard case .answered(let value) = await sendForResult("syncApply", ["units": json]),
-          let applied = (value as? [String: Any])?["applied"] as? Int else {
+          let entries = (value as? [String: Any])?["accounted"] as? [[String: Any]] else {
       NSLog("[OPShell] no usable answer for \(units.count) fetched unit(s)")
-      return false
+      return []
     }
-    guard applied == units.count else {
-      // Which of them landed is not knowable from a count, so the batch is
-      // treated as unconfirmed whole. See `deliver`.
-      NSLog("[OPShell] the page applied \(applied) of \(units.count) fetched unit(s)")
-      return false
+    // Built through `SyncUnit.route` rather than by joining strings here, so the
+    // separator has ONE definition on this side and the page never sees it.
+    var accounted: Set<String> = []
+    for entry in entries {
+      guard let id = entry["id"] as? String else { continue }
+      let profileId = entry["profileId"] as? String ?? ""
+      accounted.insert(SyncUnit(
+        id: id, kind: "", payload: "", modifiedAt: nil, profileId: profileId
+      ).route)
     }
-    return true
+    return accounted
   }
 
   /// Both versions of every unit whose save hit a conflict, handed to the model
@@ -2809,7 +2824,21 @@ private struct ShellView: View {
           // swallowed before it reached the page, silently.
           ToolbarItem(placement: .topBarLeading) {
             HStack(spacing: 10) {
-              if snapshot.profiles.count > 1 { profileMenu }
+              // ALWAYS, not only when there are several to switch between.
+              //
+              // Gated on `count > 1` this was unreachable: iOS has no way to
+              // create a workspace, so the only control that could manage them
+              // appeared only once you already had two — which you could not
+              // get. It is the same shape as the sync toggle that sat behind an
+              // onboarding cover, and it hid the button that was asked for by
+              // name: the current workspace's initials, in the top-left, as on
+              // the desktop.
+              //
+              // With one workspace the menu shows that one, checked and
+              // disabled. That is a true statement about the account rather
+              // than a dead control, and it is how you can tell which workspace
+              // you are in at all.
+              profileMenu
               actionsMenu
             }
             .disabled(snapshot.modalOpen)

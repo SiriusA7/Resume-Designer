@@ -122,7 +122,7 @@ describe('an apply is not confirmed until the bytes are on disk', () => {
 
     expect(await applyUnits([{
       ...settingsUnit({ pageSize: 'a4' }), profileId: FOREIGN_PROFILE_ID,
-    }])).toEqual({ applied: 0 });
+    }])).toEqual({ applied: 0, accounted: [] });
     expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, DATA))).settings)
       .toEqual({ pageSize: 'letter' });
     spy.mockRestore();
@@ -140,7 +140,8 @@ describe('an apply is not confirmed until the bytes are on disk', () => {
 
     // The answer waits for the drain, so the two can no longer disagree at the
     // moment the transport reads the count.
-    expect(await pending).toEqual({ applied: 1 });
+    expect(await pending)
+      .toEqual({ applied: 1, accounted: [{ id: 'data:settings', profileId: '' }] });
     expect(onDisk(backend, DATA).settings).toEqual({ pageSize: 'a4' });
   });
 
@@ -203,7 +204,8 @@ describe('an apply is not confirmed until the bytes are on disk', () => {
   it('lands a key unit durably, through its owner, for a plain successful apply', async () => {
     // The ordinary path, so the tests above are read as failures of a thing that
     // otherwise works rather than as the only behaviour there is.
-    expect(await applyUnits([appsUnit([{ id: 'app-9' }])])).toEqual({ applied: 1 });
+    expect(await applyUnits([appsUnit([{ id: 'app-9' }])]))
+      .toEqual({ applied: 1, accounted: [{ id: 'key:resume-designer-applications', profileId: '' }] });
     expect(onDisk(backend, APPS)).toEqual([{ id: 'app-9' }]);
   });
 });
