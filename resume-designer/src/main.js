@@ -12,6 +12,7 @@ import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
   hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId,
+  markInitialProfileFetchSettled, whenInitialProfileFetchSettled,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -626,6 +627,7 @@ export async function init() {
     // follows from what the unit is, so the transport asks instead of deciding.
     collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts, touchUnit,
     syncAccountProfiles: resolveAccountProfiles,
+    markInitialProfileFetchSettled,
     // ONE notifier, handed to both things that name a dirty unit: persistence
     // (the résumé and its history, on the save that wrote them) and the sync
     // model's storage interceptor (every other synced key). The shell installs
@@ -730,9 +732,14 @@ export async function init() {
 
   // Check onboarding after a short delay to ensure UI is ready
   console.log('[Main] Scheduling onboarding check in 300ms...');
-  setTimeout(() => {
+  setTimeout(async () => {
     console.log('[Main] Running onboarding check NOW');
     try {
+      const readiness = await whenInitialProfileFetchSettled();
+      if (readiness !== 'ready') {
+        console.warn('[Main] Initial profile fetch unavailable; deferring onboarding until a later launch');
+        return;
+      }
       const shouldShow = shouldShowOnboarding();
       console.log('[Main] shouldShowOnboarding returned:', shouldShow);
       if (shouldShow) {

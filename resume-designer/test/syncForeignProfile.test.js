@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import {
-  initAppStorage, __resetAppStorageForTests, setProfileMapping,
+  appStorage, initAppStorage, __resetAppStorageForTests, setProfileMapping,
 } from '../src/appStorage.js';
 import { physicalKey } from '../src/profileKeys.js';
 import { applyUnits } from '../src/sync/syncModel.js';
@@ -62,9 +62,31 @@ it('lands a foreign profile unit in that profile keys, not the active ones', asy
 
   expect(await applyUnits([unit])).toEqual({ applied: 1 });
 
-  const theirs = JSON.parse(backend.files.get(physicalKey('pother', DATA)));
+  const otherData = backend.files.get(physicalKey('pother', DATA));
+  expect(otherData).toBeDefined();
+  const theirs = JSON.parse(otherData);
   expect(theirs.variants['v-9'].data).toEqual({ name: 'Bo' });
   expect(backend.files.get(physicalKey('pactive', DATA)) ?? '{}').not.toContain('v-9');
+});
+
+it('routes by the live mapping while a durable profile switch awaits reload', async () => {
+  setProfileMapping('pactive');
+  appStorage.setItem(ACTIVE_PROFILE, 'pother');
+  expect(await appStorage.flush()).toBe(true);
+
+  expect(await applyUnits([{
+    id: 'resume:v-switch',
+    kind: 'resume',
+    payload: JSON.stringify({ id: 'v-switch', name: 'Theirs', data: { name: 'Bo' } }),
+    modifiedAt: NEW,
+    profileId: 'pother',
+  }])).toEqual({ applied: 1 });
+
+  const switchedData = backend.files.get(physicalKey('pother', DATA));
+  expect(switchedData).toBeDefined();
+  const theirs = JSON.parse(switchedData);
+  expect(theirs.variants['v-switch'].data).toEqual({ name: 'Bo' });
+  expect(backend.files.get(physicalKey('pactive', DATA)) ?? '{}').not.toContain('v-switch');
 });
 
 it('keeps the same unit id in two profiles independent', async () => {

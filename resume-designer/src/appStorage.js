@@ -12,6 +12,19 @@ export function setProfileMapping(profileId) {
 }
 
 /**
+ * The profile whose logical keys are mapped by this live appStorage instance.
+ *
+ * This is deliberately not the persisted active-profile pointer. During a
+ * durable profile switch that pointer already names the next boot while this
+ * process remains mapped to the profile being left until reload. Code routing
+ * profile-addressed bytes must use this live fact: confusing the two can write
+ * one profile's bytes into another profile's physical namespace.
+ */
+export function getProfileMapping() {
+  return activeProfileId;
+}
+
+/**
  * appStorage — the single persistence facade for every owned key.
  *
  * Why: webview localStorage has a hard ~5MB per-origin quota (WKWebView /

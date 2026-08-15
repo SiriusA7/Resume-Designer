@@ -987,6 +987,11 @@ final class ShellModel: ObservableObject {
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
   private var syncStart: Task<Void, Never>?
 
+  /// Set when any batch in the explicit initial pull was refused by the page.
+  /// A completed network request is not workspace readiness if its bytes did not
+  /// land durably; onboarding must wait for a later successful start instead.
+  private var syncInitialFetchRefused = false
+
   /// What the last `setZoom` said, so a finger resting still does not fire a
   /// command per touch event. Everything a frame carries is in here, because
   /// dropping a frame whose SCALE was unchanged would also drop the pan a
@@ -1308,6 +1313,7 @@ extension ShellModel {
       // Before the workspace has an active profile there is no zone to sync
       // to. The app works; sync waits for the next activation.
       NSLog("[OPShell] no active profile in the activation — sync stays down")
+      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
       return
     }
     if syncProfileId != profileId {
@@ -1336,6 +1342,7 @@ extension ShellModel {
     if syncSuspended {
       NSLog("[OPShell] this app's iCloud data was deleted by the account's owner — "
             + "the transport stays down and nothing is re-sent")
+      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
       return
     }
 
@@ -1377,6 +1384,7 @@ extension ShellModel {
       // error, and NOTHING local changes because of them — an empty server is
       // not what this means.
       NSLog("[OPShell] sync is not running: \(state)")
+      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
       return
     }
 
@@ -1399,7 +1407,17 @@ extension ShellModel {
     // the change token has moved past it — but a send with no tag brings it back
     // down that same conflict path. See `syncDeferred`.
     await drainSyncDeferred(profileId: profileId)
-    try? await sync.fetch()
+    syncInitialFetchRefused = false
+    do {
+      try await sync.fetch()
+      send(
+        "syncInitialProfileFetchSettled",
+        ["status": syncInitialFetchRefused ? "unavailable" : "ready"]
+      )
+    } catch {
+      NSLog("[OPShell] initial profile fetch unavailable: \(error)")
+      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
+    }
 
     // The first automatic start, and an explicit resume after a purge, are the
     // moments this device offers everything it already holds. A unit reaches the
@@ -1973,6 +1991,7 @@ extension ShellModel: OPSyncHost {
   /// queue for good.
   func syncDidFetch(_ units: [SyncUnit]) async -> Bool {
     guard await applyFetched(units) else {
+      syncInitialFetchRefused = true
       await deferSync(units.map(\.id))
       NSLog("[OPShell] \(units.count) fetched unit(s) were not applied; "
             + "they are offered again at the next start")
@@ -2115,6 +2134,9 @@ extension ShellModel: OPSyncHost {
   /// profile changes — the only point at which the engine session ends without
   /// the process ending with it.
   func syncDidFail(_ failures: [OPSyncFailure]) {
+    // An explicit fetch that reports an unreadable record or fetch-level failure
+    // did not establish workspace readiness, even if fetchChanges itself returns.
+    syncInitialFetchRefused = true
     var recover: [String] = []
     for failure in failures {
       NSLog("[OPShell] sync failure (unit \(failure.unitId ?? "—"), "

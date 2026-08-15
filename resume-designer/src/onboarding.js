@@ -19,6 +19,7 @@
  */
 import { getVariants } from './persistence.js';
 import { appStorage } from './appStorage.js';
+import { isInitialProfileFetchPending } from './profiles.js';
 
 const ONBOARDING_KEY = 'resume-designer-onboarding-complete';
 
@@ -27,6 +28,11 @@ const ONBOARDING_KEY = 'resume-designer-onboarding-complete';
  * @returns {boolean}
  */
 export function shouldShowOnboarding() {
+  // A known account's registry is not proof that its active workspace is empty:
+  // the profile-zone fetch follows later. Opening now can snapshot a
+  // non-dismissible wizard over content that lands milliseconds afterward.
+  if (isInitialProfileFetchPending()) return false;
+
   // Honor the "completed" flag FIRST — completion (including an explicit
   // dismissal via the wizard's X) is durable even for a profile with no user
   // variants yet. Checked before the zero-variant test below, which would
@@ -93,7 +99,9 @@ const ONBOARDING_CLOSE_POLL_MS = 400;
  */
 export function whenOnboardingClosed() {
   const blocked = () =>
-    !!document.querySelector(ONBOARDING_OPEN_SELECTOR) || shouldShowOnboarding();
+    !!document.querySelector(ONBOARDING_OPEN_SELECTOR)
+    || isInitialProfileFetchPending()
+    || shouldShowOnboarding();
   if (!blocked()) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setInterval(() => {

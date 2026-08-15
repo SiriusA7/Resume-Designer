@@ -53,9 +53,10 @@ vi.mock('../src/appStorage.js', () => ({
     // guard with `beginRestoreGuard` and asserts the disk.
     isRestoreGuardActive: () => false,
   },
-  // profiles.js imports this beside appStorage; syncModel reaches profiles.js
-  // for getActiveProfileId. Never called here — the active profile is set by
-  // seeding its key below, the same way the real app reads it.
+  // The mock's logical reads are permanently mapped to PROFILE, so expose that
+  // same LIVE fact to profile-addressed routing. The persisted pointer seeded
+  // below is a separate next-boot fact in production.
+  getProfileMapping: () => PROFILE,
   setProfileMapping: () => {},
 }));
 

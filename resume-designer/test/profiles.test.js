@@ -7,12 +7,14 @@ import {
   loadRegistry, listProfiles, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile, exportProfileBackup,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
-  activateProfileMappingForPrint,
+  activateProfileMappingForPrint, markInitialProfileFetchSettled,
+  whenInitialProfileFetchSettled,
 } from '../src/profiles.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, physicalKey,
 } from '../src/profileKeys.js';
 import { getSettings, saveSettings, saveApiKey } from '../src/persistence.js';
+import { shouldShowOnboarding } from '../src/onboarding.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
@@ -735,6 +737,40 @@ describe('adoption migration', () => {
     expect(localStorage.getItem('resume-profile-adoption-pending')).toBeNull();
   });
 
+  it('finishes a marker-only adoption before asking and merging account profiles', async () => {
+    const localData = '{"variants":{"local":{"name":"Local work"}}}';
+    const backend = makeBackend({
+      'resume-profile-adoption-pending': '1',
+      'resume-designer-data': localData,
+    });
+    await initAppStorage({ backend });
+
+    let registryAtAsk = null;
+    let localDataAtAsk = null;
+    const ask = vi.fn(async () => {
+      registryAtAsk = JSON.parse(backend.files.get(PROFILES_KEY) ?? 'null');
+      const localId = registryAtAsk?.[0]?.id;
+      localDataAtAsk = localId
+        ? backend.files.get(physicalKey(localId, 'resume-designer-data'))
+        : null;
+      return {
+        status: 'known',
+        profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+      };
+    });
+
+    const active = await ensureProfilesInitialized({ askAccount: ask });
+
+    expect(localDataAtAsk).toBe(localData);
+    expect(active).toBe(registryAtAsk[0].id);
+    expect(active).not.toBe('paccount');
+    expect(listProfiles().map((profile) => profile.id)).toEqual(
+      expect.arrayContaining([active, 'paccount']),
+    );
+    expect(backend.files.get(physicalKey(active, 'resume-designer-data'))).toBe(localData);
+    expect(backend.files.has(physicalKey('paccount', 'resume-designer-data'))).toBe(false);
+  });
+
   it('extractSharedApiKey never clobbers an existing shared key', async () => {
     appStorage.setItem(OPENROUTER_KEY_KEY, 'sk-keep');
     appStorage.setItem('resume-designer-data', JSON.stringify({ settings: { openrouterKey: 'sk-old' } }));
@@ -1163,6 +1199,55 @@ describe('account-first profile bootstrap', () => {
     // The starter marker is deleted by Step 4, so assert the behaviour it stood
     // for: a known account adopts what is there and mints nothing alongside it.
     expect(JSON.parse(backend.files.get(PROFILES_KEY)).map((p) => p.id)).toEqual(['paccount']);
+  });
+
+  it('does not treat a known account registry as onboarding-ready content', async () => {
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+
+    await ensureProfilesInitialized({ askAccount: ask });
+
+    expect(shouldShowOnboarding()).toBe(false);
+
+    const ready = whenInitialProfileFetchSettled();
+    appStorage.setItem('resume-designer-data', JSON.stringify({
+      variants: { existing: { builtIn: false, data: { name: 'Account résumé' } } },
+    }));
+    markInitialProfileFetchSettled('ready');
+
+    await expect(ready).resolves.toBe('ready');
+    expect(shouldShowOnboarding()).toBe(false);
+  });
+
+  it('keeps genuine first-run onboarding for a settled empty account profile', async () => {
+    await ensureProfilesInitialized({ askAccount: async () => ({
+      status: 'known',
+      profiles: [{ id: 'pempty', name: 'Empty', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }) });
+
+    expect(shouldShowOnboarding()).toBe(false);
+    markInitialProfileFetchSettled('ready');
+    expect(shouldShowOnboarding()).toBe(true);
+  });
+
+  it('bounds an unavailable initial fetch without falling into authoring', async () => {
+    vi.useFakeTimers();
+    try {
+      await ensureProfilesInitialized({ askAccount: async () => ({
+        status: 'known',
+        profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+      }) });
+
+      const readiness = whenInitialProfileFetchSettled({ timeoutMs: 250 });
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(readiness).resolves.toBe('unavailable');
+      expect(shouldShowOnboarding()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([['empty'], ['unavailable']])('mints a starter when the account answers %s', async (status) => {

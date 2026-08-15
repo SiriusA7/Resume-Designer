@@ -11,6 +11,7 @@ import {
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
   withoutDeadProviderCredentials, withoutStoredCredentials, withoutDeviceIdentity,
 } from './profileKeys.js';
+import { mergeRegistry } from './sync/syncMerge.js';
 
 // Starts with `resume-` ON PURPOSE so appStorage's one-time localStorage→disk
 // adoption (OWNED_PREFIX = 'resume-') copies it too — otherwise an incomplete
@@ -34,6 +35,51 @@ export const PROFILES_CHANGED_EVENT = 'rd:profiles-changed';
 // hide it behind an empty namespace after reload. Session-scoped on purpose:
 // the next boot re-runs init and either succeeds or re-enters this state.
 let initDegraded = false;
+
+// A known account's registry arrives before that profile's zone contents. The
+// first-run decision must wait for native sync to finish that initial pull or a
+// missing local completion flag looks like a genuinely fresh workspace.
+let initialProfileFetchState = 'ready'; // 'ready' | 'pending' | 'unavailable'
+let settleInitialProfileFetch = null;
+let initialProfileFetchPromise = Promise.resolve('ready');
+
+function resetInitialProfileFetchState() {
+  if (settleInitialProfileFetch) settleInitialProfileFetch('unavailable');
+  initialProfileFetchState = 'ready';
+  settleInitialProfileFetch = null;
+  initialProfileFetchPromise = Promise.resolve('ready');
+}
+
+function deferUntilInitialProfileFetch() {
+  initialProfileFetchState = 'pending';
+  initialProfileFetchPromise = new Promise((resolve) => {
+    settleInitialProfileFetch = resolve;
+  });
+}
+
+export function isInitialProfileFetchPending() {
+  return initialProfileFetchState === 'pending';
+}
+
+export function markInitialProfileFetchSettled(status = 'ready') {
+  const settled = status === 'ready' ? 'ready' : 'unavailable';
+  initialProfileFetchState = settled;
+  const resolve = settleInitialProfileFetch;
+  settleInitialProfileFetch = null;
+  resolve?.(settled);
+  return settled;
+}
+
+export function whenInitialProfileFetchSettled({ timeoutMs = 10_000 } = {}) {
+  if (!isInitialProfileFetchPending()) return Promise.resolve(initialProfileFetchState);
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve('unavailable'), timeoutMs);
+    initialProfileFetchPromise.then((status) => {
+      clearTimeout(timeout);
+      resolve(status);
+    });
+  });
+}
 
 // True while a first-profile adoption is incomplete — marker persisted, OR
 // this session's init degraded without managing to persist one (see above).
@@ -360,6 +406,7 @@ function rebuildRegistryFromKeys() {
  */
 export async function ensureProfilesInitialized({ askAccount = async () => ({ status: 'unavailable' }) } = {}) {
   initDegraded = false;
+  resetInitialProfileFetchState();
   try {
     return await resolveActiveProfile(askAccount);
   } catch (err) {
@@ -409,8 +456,31 @@ function revivalStamp(entry) {
 async function resolveActiveProfile(askAccount) {
   let registry = loadRegistry() || rebuildRegistryFromKeys();
   let accountActive = null;
+  let recoveredMarkerOnlyAdoption = false;
 
-  if (!registry) {
+  // A durable marker with no registry/pointer is the supported crash boundary
+  // immediately after a first adoption starts. The unprefixed workspace still
+  // belongs to a LOCAL profile, not to whichever account profile a later lookup
+  // happens to return. Recover and finish that local identity before asking the
+  // account; only the registry is merged afterward, never the workspace bytes.
+  if (!registry && appStorage.getItem(PROFILE_ADOPTION_MARKER)) {
+    const id = generateProfileId();
+    const profile = { id, name: adoptionProfileName(), emoji: '🙂', createdAt: new Date().toISOString() };
+    saveRegistry([profile]);
+    appStorage.setItem(ACTIVE_PROFILE_KEY, id);
+    if (!(await appStorage.flush())) {
+      console.error('[profiles] interrupted adoption recovery did not reach disk');
+      return null;
+    }
+    if (!(await finishAdoption(id))) {
+      console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
+      return id;
+    }
+    registry = [profile];
+    recoveredMarkerOnlyAdoption = true;
+  }
+
+  if (!registry || recoveredMarkerOnlyAdoption) {
     let account = { status: 'unavailable' };
     try {
       account = await askAccount();
@@ -418,16 +488,24 @@ async function resolveActiveProfile(askAccount) {
       console.warn('[profiles] account profile lookup unavailable:', err);
     }
     if (account?.status === 'known' && Array.isArray(account.profiles) && account.profiles.length) {
-      registry = account.profiles;
+      registry = recoveredMarkerOnlyAdoption
+        ? mergeRegistry(registry, account.profiles)
+        : account.profiles;
       saveRegistry(registry);
       const live = registry.filter((entry) => !entry?.deletedAt);
-      if (live.length) {
+      if (live.length && !recoveredMarkerOnlyAdoption) {
         accountActive = firstByRegistryOrder(live).id;
         appStorage.setItem(ACTIVE_PROFILE_KEY, accountActive);
       }
       if (!(await appStorage.flush())) {
-        throw new Error('account profile registry did not reach disk');
+        if (recoveredMarkerOnlyAdoption) {
+          console.warn('[profiles] account registry merge did not reach disk; keeping the recovered local profile');
+          registry = loadRegistry() || registry;
+        } else {
+          throw new Error('account profile registry did not reach disk');
+        }
       }
+      if (!recoveredMarkerOnlyAdoption) deferUntilInitialProfileFetch();
     }
   }
 

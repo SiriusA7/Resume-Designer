@@ -1668,6 +1668,11 @@ export function initIOSShell(deps) {
     },
     syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
     syncAccountProfiles: accountProfilesAction(deps),
+    // Registry bootstrap and profile-zone readiness are separate facts. Native
+    // reports only after its initial pull has either settled or become
+    // unavailable, so first-run onboarding cannot race ahead of fetched content.
+    syncInitialProfileFetchSettled: ({ status }) =>
+      deps.markInitialProfileFetchSettled(String(status ?? 'unavailable')),
     // Which zone each named unit belongs in, asked when the transport QUEUES a
     // save: a CloudKit record id carries its zone, and all Swift holds at that
     // moment is the id it was handed. Answered here rather than derived there

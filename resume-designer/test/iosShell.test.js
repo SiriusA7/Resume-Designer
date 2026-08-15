@@ -1150,6 +1150,15 @@ describe('the Design sheet commands', () => {
       .toBeGreaterThan(before);
   });
 
+  it('routes initial profile-fetch settlement to the workspace readiness gate', async () => {
+    const markInitialProfileFetchSettled = vi.fn();
+    const { send } = await mount({ markInitialProfileFetchSettled });
+
+    expect(send({ type: 'syncInitialProfileFetchSettled', status: 'ready' }))
+      .toEqual({ ok: true });
+    expect(markInitialProfileFetchSettled).toHaveBeenCalledWith('ready');
+  });
+
   it('names the active profile in the activation, since Swift has no way to know it', async () => {
     // The CloudKit zone is one per profile and `getActiveProfileId` lives in
     // JS, so the activation is where the native side learns which one it is

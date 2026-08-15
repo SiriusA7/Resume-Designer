@@ -5,7 +5,7 @@
  * Swift calls into here through the bridge and never learns any of it: a unit
  * crosses as `{ id, kind, payload, modifiedAt }` with an opaque payload.
  */
-import { appStorage } from '../appStorage.js';
+import { appStorage, getProfileMapping } from '../appStorage.js';
 import {
   splitPhysicalKey, physicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY,
 } from '../profileKeys.js';
@@ -78,7 +78,7 @@ const readJSON = (key, fallback) => parseJSON(appStorage.getItem(key), fallback)
  * lose it from its own, neither visible until somebody switches.
  */
 function storageKeyFor(profileId, logicalKey) {
-  if (!profileId || profileId === getActiveProfileId()) return logicalKey;
+  if (!profileId || profileId === getProfileMapping()) return logicalKey;
   return physicalKey(profileId, logicalKey);
 }
 
