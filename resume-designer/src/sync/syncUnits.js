@@ -12,10 +12,29 @@
  * Pure — no storage, no DOM.
  */
 
+import { withoutSettingsCredential } from '../profileKeys.js';
+
 export const RESUME_UNIT_PREFIX = 'resume:';
 
 /** Top-level blob keys that become their own units. */
 const PLAIN_FIELDS = ['settings', 'userProfile'];
+
+/**
+ * The credential never crosses this boundary, in EITHER direction.
+ *
+ * The API key lives in the OS keychain and syncs through iCloud Keychain, so
+ * `settings.openrouterKey` is only ever a leftover — a blob whose plaintext
+ * cleanup has not yet flushed, or an older backup restored over the top.
+ * Leftover or not, it is a paid credential, and `splitData` would serialize it
+ * into `data:settings` and put it in CloudKit. The standalone key's device-local
+ * classification does not protect it here: that rule is about the key's OWN
+ * storage key, and this is a different unit that merely contains it.
+ *
+ * Applied inbound as well, so a record uploaded by an older build cannot put
+ * the plaintext copy back on a device that has already cleaned itself up.
+ */
+const withoutCredential = (field, value) =>
+  (field === 'settings' ? withoutSettingsCredential(value) : value);
 
 /**
  * `currentVariantId` is absent from this list ON PURPOSE and must stay absent:
@@ -38,7 +57,11 @@ export function splitData(blob) {
 
   for (const field of PLAIN_FIELDS) {
     if (blob[field] !== undefined) {
-      units.push({ id: `data:${field}`, kind: 'plain', payload: JSON.stringify(blob[field]) });
+      units.push({
+        id: `data:${field}`,
+        kind: 'plain',
+        payload: JSON.stringify(withoutCredential(field, blob[field])),
+      });
     }
   }
 
@@ -69,7 +92,7 @@ export function mergeData(blob, units) {
       next.variants[unit.id.slice(RESUME_UNIT_PREFIX.length)] = value;
     } else if (unit.id.startsWith('data:')) {
       const field = unit.id.slice('data:'.length);
-      if (PLAIN_FIELDS.includes(field)) next[field] = value;
+      if (PLAIN_FIELDS.includes(field)) next[field] = withoutCredential(field, value);
     }
   }
 

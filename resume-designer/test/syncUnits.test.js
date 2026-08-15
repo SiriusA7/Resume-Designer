@@ -83,3 +83,44 @@ describe('mergeData', () => {
     expect(Object.keys(local.variants).sort()).toEqual(['v-1', 'v-2']);
   });
 });
+
+describe('the API key never crosses the sync boundary', () => {
+  // The key lives in the OS keychain and travels through iCloud Keychain. It
+  // can still be sitting in the blob — keychain migration succeeds before the
+  // plaintext strip flushes, and restoring an older backup puts it back — and
+  // `settings` is a sync unit, so without this it goes to CloudKit in clear
+  // text under `data:settings`.
+  const WITH_KEY = { ...BLOB, settings: { pageSize: 'letter', openrouterKey: 'sk-live' } };
+
+  it('is not in the data:settings unit that goes up', () => {
+    const settings = splitData(WITH_KEY).find((u) => u.id === 'data:settings');
+    expect(JSON.parse(settings.payload)).toEqual({ pageSize: 'letter' });
+  });
+
+  it('is not put back by a data:settings unit that comes down', () => {
+    // An older build, or another device that had this bug, can still be
+    // sending the field.
+    const merged = mergeData(
+      { settings: { pageSize: 'a4' } },
+      [{ id: 'data:settings', kind: 'plain', payload: JSON.stringify({ pageSize: 'letter', openrouterKey: 'sk-live' }) }],
+    );
+    expect(merged.settings).toEqual({ pageSize: 'letter' });
+  });
+
+  it('leaves the rest of settings alone', () => {
+    const settings = splitData({
+      ...BLOB, settings: { pageSize: 'letter', theme: 'dark', openrouterKey: 'sk-live' },
+    }).find((u) => u.id === 'data:settings');
+    expect(JSON.parse(settings.payload)).toEqual({ pageSize: 'letter', theme: 'dark' });
+  });
+
+  it('is not stripped out of the live blob as a side effect of collecting it', () => {
+    // splitData runs over the DOCUMENT, not a copy of it. Deleting the field in
+    // place would destroy the only durable credential on a device whose
+    // keychain write has not landed yet — a strip that is somebody else's job,
+    // done at the wrong moment and without the flush that makes it safe.
+    const live = { ...BLOB, settings: { pageSize: 'letter', openrouterKey: 'sk-live' } };
+    splitData(live);
+    expect(live.settings.openrouterKey).toBe('sk-live');
+  });
+});

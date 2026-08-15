@@ -96,6 +96,11 @@ export function isSharedKey(key) {
 // to recognise it, and this module is the one both exporters can reach.
 const RESUME_DATA_KEY = 'resume-designer-data';
 
+// The one field the OpenRouter credential ever lived under inside `settings`.
+// Named once so the blob-level strip and the settings-object-level strip below
+// cannot drift into disagreeing about what a credential is.
+const SETTINGS_CREDENTIAL_FIELD = 'openrouterKey';
+
 /**
  * Strip a legacy credential out of a `resume-designer-data` blob crossing a
  * backup boundary — used by BOTH the full-backup paths in persistence.js and
@@ -127,12 +132,34 @@ export function withoutLegacyCredential(logicalKey, value) {
   try {
     const parsed = JSON.parse(value);
     if (!parsed || typeof parsed !== 'object' || !parsed.settings) return value;
-    if (!('openrouterKey' in parsed.settings)) return value;
-    delete parsed.settings.openrouterKey;
-    return JSON.stringify(parsed);
+    const settings = withoutSettingsCredential(parsed.settings);
+    if (settings === parsed.settings) return value;
+    return JSON.stringify({ ...parsed, settings });
   } catch {
     return value;
   }
+}
+
+/**
+ * The same strip, one level down: a `settings` OBJECT rather than the blob
+ * string that contains it.
+ *
+ * Split out because the blob is not the only boundary the credential can cross.
+ * Sync decomposes the blob into units (sync/syncUnits.js) and sends `settings`
+ * as its own record, so a blob whose plaintext cleanup has not yet flushed —
+ * keychain migration can succeed while the strip is still pending — would put
+ * the paid credential into CloudKit under `data:settings`, where the standalone
+ * key's device-local classification never sees it.
+ *
+ * Returns the SAME reference when there is nothing to strip, which is what lets
+ * both callers tell "unchanged" from "sanitized" without comparing contents.
+ */
+export function withoutSettingsCredential(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  if (!(SETTINGS_CREDENTIAL_FIELD in settings)) return settings;
+  const next = { ...settings };
+  delete next[SETTINGS_CREDENTIAL_FIELD];
+  return next;
 }
 
 // Pre-OpenRouter provider credentials. The app moved to OpenRouter on
