@@ -3693,6 +3693,21 @@ private struct ShellView: View {
     }
   }
 
+  /// Fit and Actual size — the two zoom commands that are not a step.
+  ///
+  /// ONE definition, reached two ways, because they are the same two commands
+  /// and a second copy is how the collapsed pill and the expanded one come to
+  /// offer different things.
+  @ViewBuilder
+  private var zoomActions: some View {
+    Button { model.send("zoomFit"); keepZoomOpen() } label: {
+      Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
+    }
+    Button { model.send("zoomReset"); keepZoomOpen() } label: {
+      Label("Actual size", systemImage: "1.magnifyingglass")
+    }
+  }
+
   /// The centre of the control: always the live percentage.
   ///
   /// Collapsed it is the button that opens the controls. Expanded it carries
@@ -3701,14 +3716,7 @@ private struct ShellView: View {
   @ViewBuilder
   private var zoomMenu: some View {
     if zoomExpanded {
-      Menu {
-        Button { model.send("zoomFit"); keepZoomOpen() } label: {
-          Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
-        }
-        Button { model.send("zoomReset"); keepZoomOpen() } label: {
-          Label("Actual size", systemImage: "1.magnifyingglass")
-        }
-      } label: {
+      Menu { zoomActions } label: {
         zoomReadout
       }
       .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
@@ -3716,7 +3724,14 @@ private struct ShellView: View {
       // Collapsed, the readout OPENS the controls. It was a Menu in both
       // states for a moment, and tapping the percentage offered Fit and Actual
       // size instead of the −/+ the tap is asking for.
+      //
+      // A LONG PRESS still gets them, though, which is the point of this pair:
+      // the tap does the common thing and the hold does the rarer one, so Fit
+      // and Actual size stop being two taps away behind a control that has to
+      // be opened first — and the pill offers the same two commands whichever
+      // state it happens to be in.
       Button { keepZoomOpen() } label: { zoomReadout }
+        .contextMenu { zoomActions }
         .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent. Opens the zoom controls.")
     }
   }
