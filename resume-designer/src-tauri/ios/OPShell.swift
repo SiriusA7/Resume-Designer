@@ -738,6 +738,16 @@ final class ShellModel: ObservableObject {
   @Published private(set) var launchContinuationVisible = true
 
   private static let accountProfilesTimeout: TimeInterval = 5
+
+  /// The longest the splash will ever hold, from launch.
+  ///
+  /// It waits for the first pull now, not merely for the registry, so this has
+  /// to cover a page coming up AND a fetch completing. Long enough that an
+  /// ordinary launch finishes inside it and the workspace is complete the first
+  /// time it is drawn; short enough that an unreachable iCloud costs a pause
+  /// rather than looking broken. A device that cannot reach iCloud must never
+  /// be a device that cannot open its own résumés.
+  private static let launchCeiling: TimeInterval = 8
   private var accountProfilesTask: Task<AccountProfilesAnswer, Never>?
 
   init() {
@@ -749,7 +759,10 @@ final class ShellModel: ObservableObject {
   func beginProfileBootstrap() {
     guard accountProfilesTask == nil else { return }
     accountProfilesTask = Task { await probeAccountProfiles() }
-    DispatchQueue.main.asyncAfter(deadline: .now() + Self.accountProfilesTimeout) { [weak self] in
+    // The CEILING, not the account probe's own timeout — those are different
+    // waits and were the same number by coincidence. The probe answers the
+    // page's one boot question; this bounds how long a person looks at a logo.
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.launchCeiling) { [weak self] in
       self?.releaseLaunchContinuation()
     }
   }
@@ -835,8 +848,49 @@ final class ShellModel: ObservableObject {
     }
   }
 
-  func profilesDidResolve() {
+  /// The page knows WHICH workspace it is opening. That is not the same as
+  /// having its contents, and the splash waits for the contents.
+  ///
+  /// Releasing here is what made a launch show the workspace as it was when the
+  /// app last closed and then fill in seconds later, which reads as the app
+  /// losing the other device's edits and then finding them again. Identity
+  /// resolves early — it is a registry read — while the records arrive over the
+  /// network afterwards.
+  ///
+  /// Deliberately does NOT release the splash any more. The ceiling armed in
+  /// `beginProfileBootstrap` is the only thing that does besides the pull
+  /// settling, so a launch waits for content or for the clock, and for nothing
+  /// in between.
+  func profilesDidResolve() {}
+
+  /// The initial pull has settled — it landed, or it reported itself
+  /// unavailable. Either way there is nothing further to wait for, so the app
+  /// opens showing what the ACCOUNT holds rather than what this device last saw.
+  ///
+  /// One function for both halves of that fact, because they must not drift:
+  /// the page uses it to decide whether first-run onboarding may open, and the
+  /// splash uses it to decide whether there is still something coming. Sent
+  /// from every exit of `runStartSync`, including the ones that never reach
+  /// iCloud, so a signed-out or suspended device settles immediately instead of
+  /// staring at a logo until the ceiling.
+  private func announceInitialFetchSettled(_ status: String) {
+    send("syncInitialProfileFetchSettled", ["status": status])
     releaseLaunchContinuation()
+  }
+
+  /// Counted rather than a plain flag: the explicit pull at start brackets the
+  /// deliveries that happen INSIDE it, so a single boolean would be cleared by
+  /// the first arrival while the fetch was still running.
+  private var syncPullDepth = 0
+
+  private func beginPull() {
+    syncPullDepth += 1
+    if syncPullDepth == 1 { syncPulling = true }
+  }
+
+  private func endPull() {
+    syncPullDepth = max(0, syncPullDepth - 1)
+    if syncPullDepth == 0 { syncPulling = false }
   }
 
   private func releaseLaunchContinuation() {
@@ -881,6 +935,21 @@ final class ShellModel: ObservableObject {
   /// Settings (`syncStatus`) and nowhere else: signed out is a normal state,
   /// not an error, and it gets no alert.
   @Published private(set) var syncAccountState: OPSyncAccountState?
+
+  /// Whether a pull is in flight RIGHT NOW, for the one place it is worth
+  /// saying so.
+  ///
+  /// Only the pull, never a send. A send is this device's own edit on its way
+  /// out and there is nothing to wait for — the résumé on screen is already the
+  /// finished article. A pull is the other direction: the screen may be about
+  /// to change under the person, and a moment of "something is arriving" is the
+  /// difference between that reading as sync and reading as the app altering
+  /// their work by itself.
+  ///
+  /// Deliberately not a status line, a percentage or a banner. There is nothing
+  /// useful to say about how far along a fetch is, and sync that announces
+  /// itself constantly is sync that feels unreliable.
+  @Published private(set) var syncPulling = false
 
   /// ONE of the failures this device is not already acting on — see
   /// `syncDidFail`. Also only ever a line in Settings.
@@ -1333,7 +1402,7 @@ extension ShellModel {
       // Before the workspace has an active profile there is no zone to sync
       // to. The app works; sync waits for the next activation.
       NSLog("[OPShell] no active profile in the activation — sync stays down")
-      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
+      announceInitialFetchSettled("unavailable")
       return
     }
     if syncProfileId != profileId {
@@ -1362,7 +1431,7 @@ extension ShellModel {
     if syncSuspended {
       NSLog("[OPShell] this app's iCloud data was deleted by the account's owner — "
             + "the transport stays down and nothing is re-sent")
-      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
+      announceInitialFetchSettled("unavailable")
       return
     }
 
@@ -1415,7 +1484,7 @@ extension ShellModel {
       // error, and NOTHING local changes because of them — an empty server is
       // not what this means.
       NSLog("[OPShell] sync is not running: \(state)")
-      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
+      announceInitialFetchSettled("unavailable")
       return
     }
 
@@ -1448,15 +1517,15 @@ extension ShellModel {
     // down that same conflict path. See `syncDeferred`.
     await drainSyncDeferred()
     syncInitialFetchRefused = false
+    beginPull()
     do {
       try await sync.fetch()
-      send(
-        "syncInitialProfileFetchSettled",
-        ["status": syncInitialFetchRefused ? "unavailable" : "ready"]
-      )
+      endPull()
+      announceInitialFetchSettled(syncInitialFetchRefused ? "unavailable" : "ready")
     } catch {
+      endPull()
       NSLog("[OPShell] initial profile fetch unavailable: \(error)")
-      send("syncInitialProfileFetchSettled", ["status": "unavailable"])
+      announceInitialFetchSettled("unavailable")
     }
 
     // The first automatic start, and an explicit resume after a purge, are the
@@ -2088,6 +2157,12 @@ extension ShellModel: OPSyncHost {
   /// have nothing under that id" makes `recordToSend` take the change off the
   /// queue for good.
   func syncDidFetch(_ units: [SyncUnit]) async -> Set<String> {
+    // Records are landing, which is the only moment worth showing. Bracketed
+    // here as well as around the explicit pull because the engine also fetches
+    // on a schedule of its own, and that is exactly the case where content
+    // changes with nothing on screen to explain it.
+    beginPull()
+    defer { endPull() }
     let accounted = await applyFetched(units)
     let refused = units.filter { !accounted.contains($0.route) }
     guard !refused.isEmpty else { return accounted }
@@ -2847,7 +2922,22 @@ private struct ShellView: View {
             titleMenu.disabled(snapshot.modalOpen)
           }
           ToolbarItem(placement: .topBarTrailing) {
-            pdfButton.disabled(snapshot.modalOpen)
+            HStack(spacing: 10) {
+              // Present only while records are actually landing, and carrying
+              // no label: a spinner beside the workspace is legible as "this is
+              // catching up", and there is nothing truthful to add about how
+              // far along a fetch is. It sits on the trailing side because the
+              // leading pair is about to become one workspace control.
+              if model.syncPulling {
+                ProgressView()
+                  .controlSize(.small)
+                  .transition(.opacity)
+                  .accessibilityLabel("Syncing")
+              }
+              pdfButton
+            }
+            .animation(.easeInOut(duration: 0.2), value: model.syncPulling)
+            .disabled(snapshot.modalOpen)
           }
         }
         .sheet(item: $sheet) { which in
