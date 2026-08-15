@@ -12,21 +12,6 @@ export function setProfileMapping(profileId) {
 }
 
 /**
- * The profile every owned read and write is currently namespaced to, or null
- * while mapping is inactive.
- *
- * For the one kind of caller whose ANSWER depends on which namespace it read
- * from: `isUntouchedWorkspace` (profiles.js) discards a workspace when its keys
- * read back empty, and mapping-off is a state where EVERY key reads back empty
- * — a degraded init runs exactly like that. The active-profile POINTER cannot
- * answer this; it says which workspace the app is in, not whether reads are
- * resolving into it.
- */
-export function getProfileMapping() {
-  return activeProfileId;
-}
-
-/**
  * appStorage — the single persistence facade for every owned key.
  *
  * Why: webview localStorage has a hard ~5MB per-origin quota (WKWebView /

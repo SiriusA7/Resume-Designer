@@ -1008,6 +1008,82 @@ export function createCommandDispatcher(actions) {
   return dispatch;
 }
 
+const ACCOUNT_PROFILES_TIMEOUT_MS = 5000;
+let pendingAccountProfiles = null;
+
+function parseAccountProfilesAnswer(answer) {
+  const parsed = JSON.parse(String(answer ?? ''));
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('syncAccountProfiles needs an account answer');
+  }
+  if (parsed.status === 'known') {
+    if (!Array.isArray(parsed.profiles) || !parsed.profiles.every((profile) => (
+      profile && typeof profile === 'object'
+      && typeof profile.id === 'string'
+      && typeof profile.name === 'string'
+    ))) {
+      throw new Error('syncAccountProfiles needs a profile array');
+    }
+    return parsed;
+  }
+  if (parsed.status === 'empty' || parsed.status === 'unavailable') return { status: parsed.status };
+  throw new Error('syncAccountProfiles needs a known, empty, or unavailable status');
+}
+
+function accountProfilesAction(deps) {
+  // Deliberately not async: malformed input must throw synchronously so both
+  // dispatcher entry points turn it into the same refusal. The returned value
+  // may still be a promise; callAsyncJavaScript awaits it through dispatch.async.
+  return ({ answer }) => deps.syncAccountProfiles(parseAccountProfilesAnswer(answer));
+}
+
+/**
+ * Install the one bridge command boot needs before the full shell can exist.
+ * `initIOSShell` is intentionally wired much later, after storage and profiles;
+ * moving it would break the load-bearing boot sequence. This tiny endpoint is
+ * available from module import onward and owns no app state beyond one reply.
+ */
+export function initIOSProfileBootstrap(deps) {
+  if (!isNativeShellAvailable()) return;
+  const dispatch = createCommandDispatcher({
+    syncAccountProfiles: accountProfilesAction(deps),
+  });
+  window.__opProfileBootstrap = { commandAsync: dispatch.async };
+}
+
+/** Ask native iCloud what the fixed opShared zone holds, bounded to five seconds. */
+export function askAccountProfiles() {
+  if (!isNativeShellAvailable()) return Promise.resolve({ status: 'unavailable' });
+  if (pendingAccountProfiles) return pendingAccountProfiles.promise;
+
+  let resolveRequest;
+  const promise = new Promise((resolve) => { resolveRequest = resolve; });
+  const timeout = setTimeout(() => {
+    if (pendingAccountProfiles?.promise !== promise) return;
+    pendingAccountProfiles = null;
+    resolveRequest({ status: 'unavailable' });
+  }, ACCOUNT_PROFILES_TIMEOUT_MS);
+  pendingAccountProfiles = { promise, resolve: resolveRequest, timeout };
+  window.webkit.messageHandlers[SHELL_HANDLER].postMessage({ kind: 'syncAccountProfiles' });
+  return promise;
+}
+
+/** Complete the pending boot question. Passed into both bridge dispatchers. */
+export function resolveAccountProfiles(answer) {
+  const pending = pendingAccountProfiles;
+  if (!pending) return answer;
+  clearTimeout(pending.timeout);
+  pendingAccountProfiles = null;
+  pending.resolve(answer);
+  return answer;
+}
+
+/** Tell the continuation overlay that profile resolution, not merely the fetch, finished. */
+export function reportProfilesResolved() {
+  if (!isNativeShellAvailable()) return;
+  window.webkit.messageHandlers[SHELL_HANDLER].postMessage({ kind: 'profilesResolved' });
+}
+
 /**
  * Ask the native shell to present a share sheet for `path`.
  *
@@ -1591,11 +1667,7 @@ export function initIOSShell(deps) {
       });
     },
     syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
-    // The shared-zone fetch may have just introduced this account's real
-    // workspaces into a clean install. This is a pure, synchronous question:
-    // Swift reloads on yes, and the fresh boot performs the durable adoption
-    // before React mounts or this sync engine starts again.
-    syncShouldAdoptAccountWorkspaces: () => deps.shouldAdoptAccountWorkspaces(),
+    syncAccountProfiles: accountProfilesAction(deps),
     // Which zone each named unit belongs in, asked when the transport QUEUES a
     // save: a CloudKit record id carries its zone, and all Swift holds at that
     // moment is the id it was handed. Answered here rather than derived there

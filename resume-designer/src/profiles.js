@@ -3,11 +3,11 @@
  * here so desktop and the native shell share the same save-before-pointer
  * ordering; each UI still owns its own reload.
  */
-import { appStorage, setProfileMapping, getProfileMapping } from './appStorage.js';
+import { appStorage, setProfileMapping } from './appStorage.js';
 import { store } from './store.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
 import {
-  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, SYNC_STATE_KEY,
+  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
   withoutDeadProviderCredentials, withoutStoredCredentials, withoutDeviceIdentity,
 } from './profileKeys.js';
@@ -20,21 +20,6 @@ import {
 // not a history key), so isOwnedKey is false → backups never carry it and the
 // key mapping never namespaces it.
 const PROFILE_ADOPTION_MARKER = 'resume-profile-adoption-pending';
-
-// The profile THIS install created for itself because there was no registry at
-// all (see resolveActiveProfile). Held because the bootstrap adoption below is
-// allowed to discard exactly that one workspace and nothing else: a workspace
-// the person deliberately created is empty and unstamped at the moment they
-// make it, indistinguishable from the starter by every other clause, and
-// "create a workspace, relaunch before putting anything in it, find it gone"
-// is not a thing this feature may do.
-//
-// Same two properties as the marker above, for the same reasons: it starts
-// with `resume-` so appStorage's one-time localStorage→disk adoption carries
-// it, and it is NOT an owned key, so backups never carry it, the key mapping
-// never namespaces it, and it never syncs. An install that predates this key
-// simply never adopts — the conservative direction.
-const STARTER_PROFILE_KEY = 'resume-profile-starter';
 
 // Fired on the window after a registry mutation that stays on the current page
 // (rename; the switch/create paths reload instead). Header chrome that reads
@@ -364,341 +349,6 @@ function rebuildRegistryFromKeys() {
   return registry;
 }
 
-// The per-profile lists a person fills by using the app. Every one of them is
-// written as a JSON array by its own module (applications.js,
-// jobDescriptions.js, chatThreads.js, learnedAnswers.js) and every reader of
-// them demands an array, so anything else stored here is a shape this cannot
-// vouch for. `resume-designer-chat-history` is the pre-threads chat, migrated
-// into threads on load and listed here for the window in between.
-const WORKSPACE_LISTS = [
-  'resume-designer-applications',
-  'resume-designer-job-descriptions',
-  'resume-designer-chat-threads',
-  'resume-designer-chat-history',
-  'resume-designer-learned-answers',
-];
-
-// The per-profile keys a starter workspace may hold and still BE a starter
-// workspace: design and view preferences, this device's own sync bookkeeping,
-// and flags the app sets for itself. Nothing here is anything a person would
-// mourn, and a workspace picks all of it up just by being opened once.
-//
-// An ALLOWLIST, and that is the whole point of it. The predicate used to
-// enumerate the CONTENT keys it checked, which silently vouched for every key
-// nobody remembered to enumerate — `resume-photo-settings` holds `imageData`,
-// the headshot somebody uploaded and cropped, savePhotoSettings records no
-// version history for it, and the enumeration therefore called that workspace
-// empty. holdsAuthoredContent below makes this argument one level down, about
-// FIELDS; this is the same argument about keys. Anything not listed here
-// refuses: a known content key, a key this predicate has never heard of, and
-// any key a later release adds without touching this file.
-//
-// `resume-designer-bridge-token`, `resume-designer-theme`,
-// `resume-designer-update-channel` and `resume-designer-auto-update-check` are
-// deliberately absent, though all four are genuinely harmless. All four are
-// SHARED keys (SHARED_KEYS, profileKeys.js) — `mapKey` never namespaces a
-// shared key — so their ordinary, unprefixed form never reaches this list at
-// all; it passes through the shared-key clause in the walk below instead. One
-// of them showing up PREFIXED here did not arrive through the ordinary write
-// path: it was written by something this predicate does not understand, and an
-// unexplained key is doubt. (This list held the other three until they were
-// found sitting here on a different rationale than bridge-token's, for no
-// stated reason — same shared-key argument, opposite treatment. Moving them
-// out costs nothing: their normal unprefixed form is unaffected.)
-const STARTER_HARMLESS_KEYS = new Set([
-  SYNC_STATE_KEY, // per-unit sync stamps + this device's id — written by sync, never by a person
-  'resume-designer-onboarding-complete',
-  'resume-edit-hint-dismissed',
-  'resume-header-style',
-  'resume-accent-settings',
-  'resume-font-settings',
-  'resume-spacing-settings',
-  'resume-zoom',
-]);
-
-// The keys with a clause of their own below, so presence alone cannot judge
-// them: they are allowed to EXIST and are then read. Every other key in the
-// namespace is judged by presence.
-const STARTER_INSPECTED_KEYS = new Set([
-  'resume-designer-data',
-  'resume-designer-token-usage',
-  ...WORKSPACE_LISTS,
-]);
-
-// The top-level fields `resume-designer-data` may hold and still describe a
-// starter workspace. Same argument as STARTER_HARMLESS_KEYS, one level down:
-// the blob clause used to examine exactly `variants` and `userProfile` and let
-// everything else — `settings`, `currentVariantId`, and any field a later
-// release adds — pass unexamined. That is the defaults-to-innocent shape this
-// module already eliminated at the key level; a field it has never heard of
-// now refuses too.
-//
-// `settings` is a decided allowance, not an oversight. Every field in it
-// (DEFAULT_STORAGE.settings, persistence.js) is a design/AI/view preference —
-// palette, layout, page size, model choices, reasoning efforts, panel width.
-// The most "authored" of them, `customModels`, is typed-in model ids:
-// recreatable configuration, the same class as `resume-accent-settings` on
-// STARTER_HARMLESS_KEYS.
-//
-// No credential can reach it on this platform, though the mechanism is not
-// quite "stripped": `saveSettings` THROWS on `openrouterKey` rather than
-// removing it, and a legacy pre-extraction blob deliberately KEEPS its
-// `settings.openrouterKey` until `extractSharedApiKey` flushes successfully
-// (persistence.js). What makes the allowance airtight here is the platform: no
-// iOS release ever wrote the credential into the blob, the key lives in the OS
-// keychain, and `withoutLegacyCredential` sanitises a desktop backup at the
-// export boundary, so an imported one arrives clean.
-//
-// Refusing a field every settings interaction writes would fail adoption in
-// ordinary use and strand people on the starter workspace — the confusion this
-// feature exists to remove.
-//
-// `variants` and `userProfile` keep the treatment they already had below this
-// clause (variants must be empty; userProfile must be unauthored).
-// `currentVariantId` is a pointer, not content, so its presence needs no
-// further check.
-const BLOB_ALLOWED_FIELDS = new Set(['variants', 'currentVariantId', 'settings', 'userProfile']);
-
-/**
- * Whether anything inside a stored structure was authored by a person.
- *
- * The user profile is a fixed skeleton of empty strings and empty arrays
- * (DEFAULT_STORAGE, persistence.js), so "anything at all in it" is the honest
- * test rather than a field-by-field one that a new field would silently escape.
- * A number or a boolean where the skeleton has neither counts as content: this
- * answers a question whose wrong answer deletes a workspace, so an unrecognised
- * value is content.
- */
-function holdsAuthoredContent(value) {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim() !== '';
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === 'object') return Object.values(value).some(holdsAuthoredContent);
-  return true;
-}
-
-/**
- * Whether this workspace is the throwaway one `resolveActiveProfile` creates at
- * init and nothing has touched since.
- *
- * THE ONLY PLACE IN SYNC THAT CAN DISCARD ANYTHING, so it is deliberately
- * paranoid: any read that fails, any key that will not parse, and any doubt at
- * all answers false. A stray empty workspace is an annoyance someone can
- * delete; absorbing real work is the failure this whole feature exists to
- * prevent.
- *
- * It is an ALLOWLIST over the workspace's keys, not a list of content keys to
- * check: a key it has never heard of refuses, so the next content key added to
- * this app is safe from it without anyone having to remember this file exists.
- * See STARTER_HARMLESS_KEYS. The same allowlist shape applies one level down,
- * to the FIELDS of the `resume-designer-data` blob — see BLOB_ALLOWED_FIELDS.
- *
- * Version history is the load-bearing clause — the store records an entry on
- * every change, so an absent history is the strongest evidence available that
- * nothing was ever edited. Comparing the résumé to the default template was
- * considered and rejected: the template changes between releases, so a byte
- * comparison would silently start absorbing every workspace the moment the
- * default changed. There is no default to compare against anyway — init seeds
- * no résumé at all on Tauri and iOS, which is why ANY résumé refuses.
- */
-export function isUntouchedWorkspace(profileId) {
-  // Only ever asked of the ACTIVE profile — the one init just created — so
-  // ordinary `appStorage` reads resolve to its namespace. Refusing anything
-  // else keeps this from being pointed at a workspace whose keys it would
-  // silently read from the wrong namespace and judge empty.
-  if (!profileId || profileId !== getActiveProfileId()) return false;
-  // And the pointer is not enough on its own. It says which workspace the app
-  // is IN; the key mapping says which namespace a read LANDS in, and the two
-  // come apart in every degraded state this module has (an adoption that could
-  // not finish runs mapping-off on the unprefixed keys). With them apart, every
-  // read below returns null and a full workspace reads back as untouched.
-  if (getProfileMapping() !== profileId) return false;
-
-  try {
-    const entry = (loadRegistry() || []).find((p) => p.id === profileId);
-    if (!entry || entry.updatedAt) return false;
-
-    // Every key the workspace holds has to be one this can affirmatively vouch
-    // for (STARTER_HARMLESS_KEYS). Version history is still the load-bearing
-    // case — the store records an entry on every change, so an absent history is
-    // the strongest evidence available that nothing was ever edited — but it is
-    // no longer SPECIAL: it refuses because it is not on the harmless list,
-    // exactly like a headshot, or like a key from a release that does not exist
-    // yet.
-    for (const physical of appStorage.keys()) {
-      if (!physical) continue;
-      const split = splitPhysicalKey(physical);
-      if (split) {
-        if (split.profileId !== profileId) continue; // another workspace's key
-        if (STARTER_HARMLESS_KEYS.has(split.logicalKey)) continue;
-        if (STARTER_INSPECTED_KEYS.has(split.logicalKey)) continue;
-        return false;
-      }
-      // Unprefixed, with the mapping proven active above: adoption has finished,
-      // so no per-profile key should still be sitting unprefixed, and one that
-      // is means a half-finished adoption — which is doubt. Shared keys are
-      // unprefixed BY DESIGN and say nothing about this workspace, and neither
-      // do the app's own markers, which are not owned keys at all.
-      if (isOwnedKey(physical) && !isSharedKey(physical)) return false;
-    }
-
-    // NO résumé. Not "at most the one init created": on Tauri and iOS —
-    // the platforms this feature runs on — migrateBuiltInVariants seeds nothing
-    // (persistence.js), so init leaves no résumé behind and any variant present
-    // was AUTHORED. The allowance this started with described a state no
-    // shipping platform produces, and it absorbed the ordinary no-AI onboarding
-    // path: saveOnboardingResume writes exactly one variant, writes no history
-    // (only pushHistory does, on edits), never touches userProfile and spends no
-    // tokens, so a résumé somebody had just imported passed every other clause.
-    //
-    // A device nobody has given a résumé to yet has no blob at all, and absence
-    // is only readable as emptiness because the mapping was proven above.
-    const rawBlob = appStorage.getItem('resume-designer-data');
-    if (rawBlob !== null) {
-      const blob = JSON.parse(rawBlob);
-      // An ARRAY is typeof 'object' and has no `variants`, so `[]` used to sail
-      // through this entire clause. A blob shaped like nothing this app writes
-      // is a corrupt blob, and a corrupt blob is doubt.
-      if (!blob || typeof blob !== 'object' || Array.isArray(blob)) return false;
-      // A field this predicate has never heard of refuses, same as an unknown
-      // physical key one level up. See BLOB_ALLOWED_FIELDS.
-      for (const field of Object.keys(blob)) {
-        if (!BLOB_ALLOWED_FIELDS.has(field)) return false;
-      }
-      const { variants } = blob;
-      if (variants !== undefined) {
-        if (!variants || typeof variants !== 'object' || Array.isArray(variants)) return false;
-        if (Object.keys(variants).length > 0) return false;
-      }
-      // The Profile screen writes straight into this blob and records NO
-      // version history, so someone who filled in their contact details and
-      // work history without ever opening a résumé passes every other clause.
-      if (holdsAuthoredContent(blob.userProfile)) return false;
-    }
-
-    // Every list empty or absent.
-    for (const key of WORKSPACE_LISTS) {
-      const raw = appStorage.getItem(key);
-      if (raw === null) continue;
-      const list = JSON.parse(raw);
-      if (!Array.isArray(list) || list.length > 0) return false;
-    }
-
-    // No tokens spent.
-    const usageRaw = appStorage.getItem('resume-designer-token-usage');
-    if (usageRaw !== null) {
-      const usage = JSON.parse(usageRaw);
-      if (Array.isArray(usage?.events) ? usage.events.length > 0 : usage != null) return false;
-    }
-
-    return true;
-  } catch {
-    // A key that will not parse is a key this cannot vouch for.
-    return false;
-  }
-}
-
-function accountWorkspaceToAdopt(activeId) {
-  // An interrupted initial adoption belongs to finishAdoption at boot. Starting
-  // another adoption against its mapping-off recovery state would race its
-  // copy-before-delete protocol and could point at an incomplete namespace.
-  if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) return null;
-  // Only the workspace init created for itself, never one the person made.
-  if (appStorage.getItem(STARTER_PROFILE_KEY) !== activeId) return null;
-  const others = listProfiles().filter((p) => p.id !== activeId);
-  if (!others.length) return null;
-  // A restore is mid-flight, so both writes below would be recorded and skipped
-  // while flush() still answered true — see activateProfileDurably.
-  if (appStorage.isRestoreGuardActive()) return null;
-  if (!isUntouchedWorkspace(activeId)) return null;
-
-  // Least-recently-created, with the id breaking a tie: the same order
-  // mergeRegistry sorts by, so two devices bootstrapping against one account
-  // open the same workspace. `<` on strings compares by code unit —
-  // localeCompare calls Unicode-equivalent strings equal, which has already
-  // cost this feature one ordering bug (syncMerge.js).
-  const next = others.reduce((best, p) => {
-    const a = String(p.createdAt ?? '');
-    const b = String(best.createdAt ?? '');
-    if (a !== b) return a < b ? p : best;
-    return p.id < best.id ? p : best;
-  });
-
-  return next;
-}
-
-/**
- * Whether boot would absorb this install's starter workspace into an account
- * workspace. This is deliberately only a read of the shared adoption decision:
- * the live iOS page asks it after the shared-zone fetch, then reloads so boot can
- * perform any writes before the page and sync engine exist.
- */
-export function shouldAdoptAccountWorkspaces(activeId = getActiveProfileId()) {
-  return accountWorkspaceToAdopt(activeId) !== null;
-}
-
-/**
- * Absorb this install's starter workspace into the account it has since
- * discovered, and return the workspace to open instead — or null to keep what
- * is already active, which is every path but one.
- *
- * MUST run at boot, before React mounts and before `initIOSShell` starts the
- * sync engine. Those two protections are load-bearing: a live page can write
- * between the untouched check and namespace deletion, and a running engine can
- * transmit a registry that the first flush has not committed and may roll back.
- * Moving this call into a live session gives up both protections.
- *
- * The registry it reads has already been unioned with the account's by a
- * landing (landRegistry, syncModel.js) in an earlier session. On iOS a shared
- * fetch asks `shouldAdoptAccountWorkspaces` and reloads; this runs during that
- * fresh boot, before the page or transport starts.
- *
- * THE TOMBSTONE IS NOT AN IMPLEMENTATION DETAIL. If this device's own registry
- * ever reached the server ahead of that shared fetch — a retry, a reordering, a
- * future change to the enable path — a bare local removal is undone by the next
- * union merge and the empty workspace comes back for good. The tombstone is
- * harmless when the starter never reached the server and correct when it did.
- * See the spec's §4 ordering rules.
- */
-export async function adoptAccountWorkspaces(activeId = getActiveProfileId()) {
-  const next = accountWorkspaceToAdopt(activeId);
-  if (!next) return null;
-
-  const registryBefore = loadRegistry() || [];
-  const stamp = new Date().toISOString();
-  saveRegistry(registryBefore.map((p) => (p.id === activeId
-    ? { ...p, deletedAt: stamp, updatedAt: stamp }
-    : p)));
-  appStorage.setItem(ACTIVE_PROFILE_KEY, next.id);
-  setProfileMapping(next.id);
-
-  if (!(await appStorage.flush())) {
-    // Restore BOTH. The pair has to move together: a tombstone that reached
-    // disk without its pointer leaves the next boot active in a workspace
-    // nothing lists, and no later boot can adopt out of it either — the
-    // tombstone stamps `updatedAt`, which the predicate above refuses for ever.
-    console.error('[profiles] workspace adoption did not reach disk; keeping the starter workspace');
-    setProfileMapping(activeId);
-    appStorage.setItem(ACTIVE_PROFILE_KEY, activeId);
-    try { saveRegistry(registryBefore); } catch { /* keep going */ }
-    await appStorage.flush();
-    return null;
-  }
-
-  // Only now the namespace, and only its own keys. Nothing in it is content —
-  // that is exactly what the predicate proved — so unlike deleteProfileDurably
-  // there is nothing here worth snapshotting for a rollback, and a delete that
-  // does not reach disk costs some empty files.
-  const prefix = physicalKey(activeId, '');
-  for (const k of appStorage.keys()) {
-    if (k && k.startsWith(prefix)) appStorage.removeItem(k);
-  }
-  // The marker named a workspace that no longer exists.
-  appStorage.removeItem(STARTER_PROFILE_KEY);
-  await appStorage.flush();
-  return next.id;
-}
-
 /**
  * Boot entry point. Wraps the resolver so that ANY unexpected storage failure
  * during adoption (e.g. a passthrough QuotaExceededError thrown synchronously by
@@ -708,10 +358,10 @@ export async function adoptAccountWorkspaces(activeId = getActiveProfileId()) {
  * would repeat against the same full store. On failure we degrade to mapping-off
  * — the app runs on the unprefixed workspace and a later boot retries.
  */
-export async function ensureProfilesInitialized() {
+export async function ensureProfilesInitialized({ askAccount = async () => ({ status: 'unavailable' }) } = {}) {
   initDegraded = false;
   try {
-    return await resolveActiveProfile();
+    return await resolveActiveProfile(askAccount);
   } catch (err) {
     console.error('[profiles] adoption failed unexpectedly; running on unprefixed data:', err);
     initDegraded = true; // markerless recovery state — see isAdoptionPending
@@ -756,8 +406,30 @@ function revivalStamp(entry) {
   return new Date(Math.max(Date.now(), prior + 1)).toISOString();
 }
 
-async function resolveActiveProfile() {
+async function resolveActiveProfile(askAccount) {
   let registry = loadRegistry() || rebuildRegistryFromKeys();
+  let accountActive = null;
+
+  if (!registry) {
+    let account = { status: 'unavailable' };
+    try {
+      account = await askAccount();
+    } catch (err) {
+      console.warn('[profiles] account profile lookup unavailable:', err);
+    }
+    if (account?.status === 'known' && Array.isArray(account.profiles) && account.profiles.length) {
+      registry = account.profiles;
+      saveRegistry(registry);
+      const live = registry.filter((entry) => !entry?.deletedAt);
+      if (live.length) {
+        accountActive = firstByRegistryOrder(live).id;
+        appStorage.setItem(ACTIVE_PROFILE_KEY, accountActive);
+      }
+      if (!(await appStorage.flush())) {
+        throw new Error('account profile registry did not reach disk');
+      }
+    }
+  }
 
   if (!registry) {
     // Marker reaches disk FIRST; registry + pointer cross their own durability
@@ -775,12 +447,6 @@ async function resolveActiveProfile() {
     const profile = { id, name: adoptionProfileName(), emoji: '🙂', createdAt: new Date().toISOString() };
     saveRegistry([profile]);
     appStorage.setItem(ACTIVE_PROFILE_KEY, id);
-    // THIS is the workspace nobody asked for — the one a later boot may absorb
-    // into the account, once a landing has shown there is an account to absorb
-    // it into. Written with the registry it names and crossing the same
-    // durability barrier; a marker that does not land only costs this install
-    // its ability to adopt, which is the safe direction.
-    appStorage.setItem(STARTER_PROFILE_KEY, id);
     if (!(await appStorage.flush())) {
       // No migration has run yet, so aborting leaves sources untouched. The
       // queued registry/marker writes either land later (next boot resumes
@@ -801,14 +467,12 @@ async function resolveActiveProfile() {
     return id;
   }
 
-  let active = getActiveProfileId();
+  let active = accountActive || getActiveProfileId();
   // A TOMBSTONED entry does not count as membership, which is not the same
   // check as "is it in the array": the entry is still physically there (see
   // deleteProfile), and the app would map into a workspace no listing shows and
-  // no switcher can leave. Two things reach that state — another device
-  // deleting the workspace this one is sitting in, and the adoption below
-  // landing its tombstone without its pointer — and the heal below is what gets
-  // out of both.
+  // no switcher can leave. Another device can delete the workspace this one is
+  // sitting in; the heal below is what gets out of it.
   if (!registry.some((p) => p.id === active && !p?.deletedAt)) {
     const firstLive = registry.find((p) => !p?.deletedAt);
     if (firstLive) {
@@ -844,27 +508,6 @@ async function resolveActiveProfile() {
     return active;
   }
   setProfileMapping(active);
-  // The account's own workspaces, if a landing has unioned them into this
-  // device's registry since the last boot and this device's starter workspace
-  // is provably untouched. AFTER the mapping is active, because the predicate
-  // reads through it and answers "untouched" to everything while it is off;
-  // BEFORE extractSharedApiKey, so the sweep runs over the namespace the app is
-  // actually going to spend the session in.
-  try {
-    const adopted = await adoptAccountWorkspaces(active);
-    if (adopted) active = adopted;
-  } catch (err) {
-    // Its own catch, not ensureProfilesInitialized's: that one degrades the
-    // whole boot to mapping-off, which for a workspace that IS namespaced looks
-    // like every résumé disappearing. Nothing here is worth that. Re-read the
-    // pointer rather than assuming which side of the writes the throw landed
-    // on, so the mapping matches the workspace that is actually stored, and let
-    // the next boot try again — a tombstone that landed without its pointer is
-    // healed by the membership check above.
-    console.error('[profiles] workspace adoption failed; keeping the stored active profile:', err);
-    active = getActiveProfileId() || active;
-    setProfileMapping(active);
-  }
   await extractSharedApiKey();
   return active;
 }

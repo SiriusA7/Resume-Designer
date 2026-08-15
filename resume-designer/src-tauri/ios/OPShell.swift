@@ -19,6 +19,7 @@
 // is unit-tested there (test/iosShell.test.js).
 
 import Observation
+import CloudKit
 import PDFKit
 import PhotosUI
 import SwiftUI
@@ -672,6 +673,34 @@ enum ShellReply {
   case unanswered
 }
 
+/// The only three answers a profile-less page may act on at first launch.
+private enum AccountProfilesAnswer: Sendable {
+  case known(payload: String)
+  case empty
+  case unavailable
+
+  var json: String {
+    let object: [String: Any]
+    switch self {
+    case .known(let payload):
+      guard let data = payload.data(using: .utf8),
+            let profiles = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+        return #"{"status":"unavailable"}"#
+      }
+      object = ["status": "known", "profiles": profiles]
+    case .empty:
+      object = ["status": "empty"]
+    case .unavailable:
+      object = ["status": "unavailable"]
+    }
+    guard let data = try? JSONSerialization.data(withJSONObject: object),
+          let text = String(data: data, encoding: .utf8) else {
+      return #"{"status":"unavailable"}"#
+    }
+    return text
+  }
+}
+
 // MARK: - Model
 
 /// The single piece of state the chrome renders from. Deliberately not durable:
@@ -691,8 +720,117 @@ final class ShellModel: ObservableObject {
   /// the transport.
   @Published private(set) var syncSuspended: Bool
 
+  /// Covers the webview until profile resolution finishes, never past five
+  /// seconds. The timeout is the offline path: launch cannot wait on iCloud.
+  @Published private(set) var launchContinuationVisible = true
+
+  private static let accountProfilesTimeout: TimeInterval = 5
+  private var accountProfilesTask: Task<AccountProfilesAnswer, Never>?
+
   init() {
     syncSuspended = UserDefaults.standard.bool(forKey: Self.syncSuspendedKey)
+  }
+
+  /// Start the fixed-zone fetch as soon as the native shell owns the window.
+  /// opShared needs no profile id, so this is independent of page bootstrap.
+  func beginProfileBootstrap() {
+    guard accountProfilesTask == nil else { return }
+    accountProfilesTask = Task { await probeAccountProfiles() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.accountProfilesTimeout) { [weak self] in
+      self?.releaseLaunchContinuation()
+    }
+  }
+
+  /// Resolve the page's one account question, with a hard five-second ceiling.
+  private func probeAccountProfiles() async -> AccountProfilesAnswer {
+    await withCheckedContinuation { continuation in
+      var settled = false
+      let finish: @MainActor (AccountProfilesAnswer) -> Void = { answer in
+        guard !settled else { return }
+        settled = true
+        continuation.resume(returning: answer)
+      }
+
+      Task { finish(await Self.fetchAccountProfiles()) }
+      DispatchQueue.main.asyncAfter(deadline: .now() + Self.accountProfilesTimeout) {
+        MainActor.assumeIsolated { finish(.unavailable) }
+      }
+    }
+  }
+
+  /// Read only the shared registry record. Absence is a known-empty account;
+  /// account, network, decode, and permission failures are unavailable.
+  private static func fetchAccountProfiles() async -> AccountProfilesAnswer {
+    let container = CKContainer(identifier: "iCloud.com.onpaper.app")
+    do {
+      guard try await container.accountStatus() == .available else { return .unavailable }
+      let zoneID = CKRecordZone.ID(
+        zoneName: opSharedZoneName, ownerName: CKCurrentUserDefaultName
+      )
+      let recordID = CKRecord.ID(
+        recordName: "key:resume-designer-profiles", zoneID: zoneID
+      )
+      let record = try await container.privateCloudDatabase.record(for: recordID)
+      guard record.recordType == "SyncUnit" else { return .unavailable }
+
+      let payload: String?
+      if let inline = record["payload"] as? String {
+        payload = inline
+      } else if let asset = record["asset"] as? CKAsset, let url = asset.fileURL,
+                let data = try? Data(contentsOf: url) {
+        payload = String(data: data, encoding: .utf8)
+      } else {
+        payload = nil
+      }
+      guard let payload, let data = payload.data(using: .utf8),
+            let profiles = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+            profiles.allSatisfy({ $0["id"] is String && $0["name"] is String }) else {
+        return .unavailable
+      }
+      return profiles.isEmpty ? .empty : .known(payload: payload)
+    } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
+      return .empty
+    } catch {
+      NSLog("[OPShell] account profile lookup unavailable: \(error)")
+      return .unavailable
+    }
+  }
+
+  /// Reply through the early bootstrap command. callAsyncJavaScript is required:
+  /// the command participates in an async network answer just like syncApply's
+  /// durability answer participates in an async disk write.
+  func answerAccountProfilesRequest() async {
+    let answer: AccountProfilesAnswer
+    if let accountProfilesTask {
+      answer = await accountProfilesTask.value
+    } else {
+      beginProfileBootstrap()
+      answer = await accountProfilesTask?.value ?? .unavailable
+    }
+    guard let text = commandBody("syncAccountProfiles", ["answer": answer.json]),
+          let webView else { return }
+    webView.callAsyncJavaScript(
+      "if (!window.__opProfileBootstrap) return null; "
+        + "return await window.__opProfileBootstrap.commandAsync(command);",
+      arguments: ["command": text],
+      in: nil,
+      in: .page
+    ) { result in
+      if case .failure(let error) = result {
+        NSLog("[OPShell] account profile reply failed: \(error)")
+      }
+    }
+  }
+
+  func profilesDidResolve() {
+    releaseLaunchContinuation()
+  }
+
+  private func releaseLaunchContinuation() {
+    guard launchContinuationVisible else { return }
+    withAnimation(.easeOut(duration: LaunchScreenContinuationView.dissolveDuration)) {
+      launchContinuationVisible = false
+    }
   }
 
   /// Paces the live reply's text. Lives here rather than in the chat sheet so
@@ -848,11 +986,6 @@ final class ShellModel: ObservableObject {
 
   /// The `startSync` in flight, if any — see `startSync` for why one is enough.
   private var syncStart: Task<Void, Never>?
-
-  /// Backstop against a predicate/boot disagreement. Process-local on purpose:
-  /// one bad answer may cost one reload this launch, but cannot make the app
-  /// unusable; a genuine adoption is allowed to try again after a new launch.
-  private static var didReloadForAccountWorkspaceAdoption = false
 
   /// What the last `setZoom` said, so a finger resting still does not fire a
   /// command per touch event. Everything a frame carries is in here, because
@@ -1258,20 +1391,6 @@ extension ShellModel {
     // Not fatal when it fails, like every other fetch here: the device runs on
     // the registry it has and tries again at the next start.
     try? await sync.fetchShared()
-
-    // The shared landing may have introduced this account's real workspaces to
-    // a clean install whose boot knew only its starter. Ask only the shared pure
-    // decision here: adoption itself must run during the fresh boot, before
-    // React can write and before a sync engine can transmit an uncommitted
-    // registry. Nothing else from this start may drain, fetch or upload.
-    if case .answered(let value) = await sendForResult("syncShouldAdoptAccountWorkspaces"),
-       (value as? Bool) == true,
-       !Self.didReloadForAccountWorkspaceAdoption {
-      Self.didReloadForAccountWorkspaceAdoption = true
-      NSLog("[OPShell] account workspace adoption applies; reloading for boot-time adoption")
-      webView?.reload()
-      return
-    }
 
     // Anything this device still owes a send of goes up before the pull, so a
     // unit changed on both sides meets the conflict path rather than being
@@ -2098,6 +2217,10 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
     }
 
     switch body["kind"] as? String {
+    case "syncAccountProfiles":
+      Task { @MainActor in await self.model?.answerAccountProfilesRequest() }
+    case "profilesResolved":
+      Task { @MainActor in self.model?.profilesDidResolve() }
     case "share":
       guard let path = body["path"] as? String else {
         NSLog("[OPShell] share message with no path: \(body)")
@@ -2187,6 +2310,7 @@ final class OPShell: NSObject {
     MainActor.assumeIsolated {
       let model = ShellModel()
       model.webView = webView as? WKWebView
+      model.beginProfileBootstrap()
       self.model = model
 
       if let wk = webView as? WKWebView {
@@ -2673,6 +2797,13 @@ private struct ShellView: View {
     // halves of one screen disagreeing is worse than either choice.
     // `nil` means "System", which is exactly SwiftUI's default behaviour.
     .preferredColorScheme(preferredColorScheme)
+    .overlay {
+      if model.launchContinuationVisible {
+        LaunchScreenContinuationView()
+          .transition(.opacity)
+          .zIndex(100)
+      }
+    }
   }
 
   private var preferredColorScheme: ColorScheme? {

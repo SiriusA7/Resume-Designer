@@ -12,7 +12,6 @@ import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
   hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId,
-  shouldAdoptAccountWorkspaces,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
@@ -38,6 +37,7 @@ import { initZoomControls, getZoom, fitToView, setZoomLevel } from './zoomContro
 import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
 import {
   initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
+  initIOSProfileBootstrap, askAccountProfiles, resolveAccountProfiles, reportProfilesResolved,
 } from './iosShell.js';
 import {
   collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts,
@@ -365,6 +365,10 @@ function showMigrationToast(probe, result = null) {
 
 // Initialize the application
 export async function init() {
+  // The full native shell is wired after the app services below, as it always
+  // has been. This bootstrap-only command must exist earlier because profile
+  // resolution is exactly what waits for its answer.
+  initIOSProfileBootstrap({ syncAccountProfiles: resolveAccountProfiles });
   // FIRST: bring up the storage facade, THEN pull in any legacy Electron data,
   // THEN resolve profiles — and only after ALL THREE settle, open the React
   // mount gate. On the first Tauri boot after an Electron install the facade
@@ -380,7 +384,8 @@ export async function init() {
   try {
     await initAppStorage();
     await maybeAutoMigrateLegacyData();
-    await ensureProfilesInitialized();   // profiles resolve BEFORE the React gate opens
+    await ensureProfilesInitialized({ askAccount: askAccountProfiles });
+    reportProfilesResolved();            // profiles resolve BEFORE the React gate opens
     // ensureProfilesInitialized runs extractSharedApiKey on its HAPPY paths
     // only: an adoption that cannot finish (browser quota, a Tauri disk
     // failure) returns early without it. Left to that, a credential still
@@ -620,7 +625,7 @@ export async function init() {
     // `unitScopes` is here for the same reason: which zone a unit belongs in
     // follows from what the unit is, so the transport asks instead of deciding.
     collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts, touchUnit,
-    shouldAdoptAccountWorkspaces,
+    syncAccountProfiles: resolveAccountProfiles,
     // ONE notifier, handed to both things that name a dirty unit: persistence
     // (the résumé and its history, on the save that wrote them) and the sync
     // model's storage interceptor (every other synced key). The shell installs
