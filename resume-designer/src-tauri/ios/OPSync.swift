@@ -451,7 +451,17 @@ final class OPSyncEngine {
   func start(profileId: String, knownProfileIds: [String]) async -> OPSyncAccountState {
     let state = await accountState()
     guard case .available = state else { return state }
-    if self.profileId == profileId, engine != nil { return state }
+    if self.profileId == profileId, engine != nil {
+      // Same profile, engine already up — but NOT necessarily the same set of
+      // profiles. This device learns about a workspace created on another one
+      // by fetching the registry, which happens while this engine is running,
+      // and the zone set was fixed when it started. Left alone, the new
+      // workspace is in the registry, visible in the switcher, and its zone is
+      // outside every fetch — so it stays empty until something restarts the
+      // engine. Reconcile instead of returning on the profile alone.
+      adoptProfileZones(knownProfileIds + [profileId])
+      return state
+    }
     await stop()
 
     var seenProfileIds = Set<String>()
@@ -492,6 +502,32 @@ final class OPSyncEngine {
     // what keeps assets from an interrupted run from accumulating.
     Self.clearOutbox()
     return state
+  }
+
+  /// Take on any profile zone this running engine does not already handle.
+  ///
+  /// ADDITIVE ONLY, and never the reverse. A zone this session has handled has
+  /// a change token that has already moved past its records; dropping it from
+  /// the scope would leave later changes there fetched by nobody, which is the
+  /// same silent staleness this exists to fix. A tombstoned workspace can also
+  /// be revived (see `profiles.js`), and its zone is deliberately not deleted
+  /// with it, so "gone from the list" is not "gone".
+  ///
+  /// Queues the zone save as well as widening the scope: a profile created on
+  /// another device has a zone on the server already, and one created here does
+  /// not — saving an existing zone is a no-op, so both cases take this path.
+  @discardableResult
+  func adoptProfileZones(_ knownProfileIds: [String]) -> [String] {
+    guard let engine else { return [] }
+    var handled = Set(profileZoneIDs.map(\.zoneName))
+    let added = knownProfileIds.filter { !$0.isEmpty && handled.insert($0).inserted }
+    guard !added.isEmpty else { return [] }
+
+    let zones = added.map { CKRecordZone(zoneName: $0) }
+    profileZoneIDs.append(contentsOf: zones.map(\.zoneID))
+    engine.state.add(pendingDatabaseChanges: zones.map { .saveZone($0) })
+    NSLog("[OPSync] now handling \(added.count) newly known profile zone(s)")
+    return added
   }
 
   /// Put the transport down. Local data is untouched — this is the transport

@@ -711,6 +711,19 @@ final class ShellModel: ObservableObject {
   @Published var snapshot: ShellSnapshot = .empty {
     didSet {
       reply.update(to: Self.liveReplyText(in: snapshot))
+      // Every snapshot, because this is the ONLY moment Swift is told a
+      // workspace exists. The page owns the registry; a workspace created on
+      // another device arrives by fetching it, lands in JS, and reaches this
+      // side as a longer profile list on the next publish — with no event of
+      // its own. Reconciling here rather than only where a fetch is about to
+      // run means the running engine takes on the new zone whenever the page
+      // says so, and nothing depends on which of two main-actor jobs the
+      // publish and the fetch's continuation happen to run in.
+      //
+      // Cheap and idempotent: `adoptProfileZones` returns immediately once
+      // every named zone is already handled, which is every snapshot but the
+      // few that change the list.
+      sync.adoptProfileZones(snapshot.profiles.map(\.id))
     }
   }
 
@@ -1398,6 +1411,15 @@ extension ShellModel {
     //
     // Not fatal when it fails, like every other fetch here: the device runs on
     // the registry it has and tries again at the next start.
+    // The registry has just landed, so the profile list handed to `start` above
+    // is already out of date on the launch that matters most: a fresh install
+    // starts knowing only the workspace it minted, and this pull is the moment
+    // it learns the account's others. Their zones have to be inside the scope of
+    // the general fetch below, which is the only pull this launch makes.
+    //
+    // That reconciliation is NOT done here. It rides the snapshot's `didSet`,
+    // which fires when the page republishes the longer list — see there for why
+    // that is the reliable place and this is not.
     try? await sync.fetchShared()
 
     // Anything this device still owes a send of goes up before the pull, so a
