@@ -3283,14 +3283,16 @@ private struct ShellView: View {
   /// not a wrong shape, and it comes back the moment this is folded in again.
   private var avatar: some View {
     Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
-      .font(.system(size: 13, weight: .semibold))
+      .font(.system(size: 15, weight: .semibold))
       .foregroundStyle(Color.accentColor)
-      .frame(width: 32, height: 32)
-      .background(Color.accentColor.opacity(0.16), in: Circle())
-      // The 44pt touch target the bar's own items get, without the glass: a
-      // 32pt circle is the right SIZE to look at and the wrong one to hit.
-      .contentShape(Circle())
+      // 44pt, which is the size of the bar's OWN glass circles — the share
+      // button opposite is one. Drawing this smaller than them made the corner
+      // look unfinished rather than deliberate, and it is the same control
+      // class: one tap, one round target. The touch area is the circle itself,
+      // so there is no invisible margin around it either.
       .frame(width: 44, height: 44)
+      .background(Color.accentColor.opacity(0.16), in: Circle())
+      .contentShape(Circle())
   }
 
   private var actionsMenu: some View {
