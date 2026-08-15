@@ -3321,16 +3321,26 @@ private struct ShellView: View {
     // letters at their natural width give a capsule. Sized like the 17pt
     // symbols beside it, with the initials scaled to fit rather than allowed to
     // push it wider.
-    Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
-      .font(.system(size: 14, weight: .semibold))
-      .lineLimit(1)
-      // The frame sets the LAYOUT size, and `.frame` does not clip — so the
-      // glass is sized from a 17pt square (and is therefore round) while the
-      // initials draw at their own width across it. Scaling them down to fit
-      // instead made them tiny for no gain: nothing is measuring them.
-      .fixedSize()
-      .foregroundStyle(Color.accentColor)
+    // A SQUARE that cannot be argued with, and the initials drawn OVER it.
+    //
+    // The toolbar sizes its glass to the content's layout size plus symmetric
+    // padding, so the content must measure exactly square or the glass comes
+    // out a capsule. Text is the wrong thing to ask: `.frame` on it still let
+    // the natural width leak into the measurement (4pt of it), and constraining
+    // the width instead just shrank the letters.
+    //
+    // `Color.clear` at a fixed size has no opinion and no intrinsic width, and
+    // an `.overlay` draws without contributing to layout at all — so the bar
+    // measures 17×17 exactly, whatever the initials happen to be.
+    Color.clear
       .frame(width: 17, height: 17)
+      .overlay {
+        Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
+          .font(.system(size: 14, weight: .semibold))
+          .lineLimit(1)
+          .fixedSize()
+          .foregroundStyle(Color.accentColor)
+      }
   }
 
   private var actionsMenu: some View {
