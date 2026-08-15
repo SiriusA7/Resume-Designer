@@ -3725,24 +3725,31 @@ private struct ShellView: View {
     }
   }
 
-  /// Fit and Actual size — the two zoom commands that are not a step.
+  /// Fit and Actual size — the zoom commands that are not a step.
   ///
-  /// ONE definition, reached two ways, because they are the same two commands
-  /// and a second copy is how the collapsed pill and the expanded one come to
-  /// offer different things.
+  /// ONE definition, reached two ways, because they are the same commands and a
+  /// second copy is how the collapsed pill and the expanded one come to offer
+  /// different things.
+  ///
+  /// `finish` is the part the two callers do not share. Opened from the
+  /// expanded control, the menu is holding the auto-collapse off, so choosing
+  /// something has to let go of it. Opened from the collapsed pill there is
+  /// nothing to release — and nothing to open either: growing the bar into the
+  /// −/+ controls after the command has already run answers a question nobody
+  /// asked, and then tidies itself away again 2.5s later.
   @ViewBuilder
-  private var zoomActions: some View {
-    Button { model.send("zoomFit"); releaseZoomMenu() } label: {
+  private func zoomActions(finish: @escaping () -> Void) -> some View {
+    Button { model.send("zoomFit"); finish() } label: {
       Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
     }
     // Fills the width and lets the page run off the bottom. On a phone this is
     // the one you actually want while READING: a portrait page fitted whole is
     // mostly margin, and on a multi-page résumé the whole-page fit is bound by
     // a height several screens tall.
-    Button { model.send("zoomFitWidth"); releaseZoomMenu() } label: {
+    Button { model.send("zoomFitWidth"); finish() } label: {
       Label("Fit to width", systemImage: "arrow.left.and.right")
     }
-    Button { model.send("zoomReset"); releaseZoomMenu() } label: {
+    Button { model.send("zoomReset"); finish() } label: {
       Label("Actual size", systemImage: "1.magnifyingglass")
     }
   }
@@ -3755,7 +3762,7 @@ private struct ShellView: View {
   @ViewBuilder
   private var zoomMenu: some View {
     if zoomExpanded {
-      Menu { zoomActions } label: {
+      Menu { zoomActions(finish: releaseZoomMenu) } label: {
         zoomReadout
       }
       // The controls were timing out from UNDER the open menu. `keepZoomOpen`
@@ -3781,7 +3788,7 @@ private struct ShellView: View {
       // did nothing at all. This pairing is the API for exactly this: the tap
       // runs `primaryAction`, the hold opens the menu, and neither has to beat
       // the other to it.
-      Menu { zoomActions } label: {
+      Menu { zoomActions(finish: {}) } label: {
         zoomReadout
       } primaryAction: {
         keepZoomOpen()
