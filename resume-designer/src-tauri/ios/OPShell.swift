@@ -7399,6 +7399,16 @@ private struct ProfilesSheet: View {
           Button("Done") { dismiss() }
         }
       }
+      // The same shape as renaming a résumé — an alert with the current name in
+      // it — rather than an inline field that turned the row into a form and
+      // gave a "Save" button no room to say anything when it failed.
+      .alert("Rename profile", isPresented: renameBinding) {
+        TextField("Name", text: $draftName)
+          .textInputAutocapitalization(.words)
+        Button("Cancel", role: .cancel) { renamingId = nil }
+        Button("Rename", action: submitRename)
+          .disabled(draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
       .alert("Delete profile?", isPresented: deleteBinding, presenting: pendingDelete) { profile in
         Button("Delete", role: .destructive) {
           Task {
@@ -7422,58 +7432,61 @@ private struct ProfilesSheet: View {
     }
   }
 
-  @ViewBuilder
   private func row(for profile: ShellProfile) -> some View {
-    if renamingId == profile.id {
-      HStack {
-        TextField("Name", text: $draftName)
-          .textInputAutocapitalization(.words)
-          .onSubmit { commitRename(profile) }
-        Button("Save") { commitRename(profile) }
-          .buttonStyle(.borderless)
-          .disabled(draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    HStack {
+      Text(profile.name)
+      if profile.isActive {
+        Text("Open")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
       }
-    } else {
-      HStack {
-        Text(profile.name)
-        if profile.isActive {
-          Text("Open")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+      Spacer()
+
+      // AN EXPLICIT BUTTON, not a swipe. The actions were behind a leftward
+      // swipe on the row, which is a gesture nothing on the screen advertises —
+      // so renaming a profile was a feature you had to already know about.
+      Menu {
+        Button { renamingId = profile.id; draftName = profile.name } label: {
+          Label("Rename…", systemImage: "pencil")
         }
-        Spacer()
-      }
-      .contentShape(Rectangle())
-      .swipeActions(edge: .trailing) {
-        // Delete is offered for every workspace EXCEPT the open one. Deleting
-        // the workspace you are looking at would leave the app with no mapping
-        // and nothing on screen; switch away first, which the menu does in one
-        // tap.
-        if !profile.isActive {
+        // Delete is offered for every profile EXCEPT the open one, and only
+        // when there is somewhere to go: deleting the profile you are looking
+        // at leaves the app with no mapping and nothing on screen, and the last
+        // one has no replacement at all. Switching away first is one tap in the
+        // menu that opened this sheet.
+        if !profile.isActive && profiles.count > 1 {
           Button(role: .destructive) { pendingDelete = profile } label: {
-            Label("Delete", systemImage: "trash")
+            Label("Delete…", systemImage: "trash")
           }
         }
-        Button { renamingId = profile.id; draftName = profile.name } label: {
-          Label("Rename", systemImage: "pencil")
-        }
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+          // The glyph alone is a thin target in the middle of a row that is
+          // otherwise inert; this is the whole trailing end of the row.
+          .frame(width: 44, height: 32)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Actions for \(profile.name)")
+    }
+  }
+
+  private func submitRename() {
+    guard let id = renamingId else { return }
+    let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { return }
+    renamingId = nil
+    Task {
+      if !(await model.renameProfile(id, to: name)) {
+        failure = "Could not rename — the change didn't reach disk."
       }
     }
   }
 
-  private func commitRename(_ profile: ShellProfile) {
-    let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty else { return }
-    Task {
-      if await model.renameProfile(profile.id, to: name) {
-        renamingId = nil
-      } else {
-        // The editor STAYS OPEN on failure, showing what was typed. Closing it
-        // would show the old name back with no explanation, which reads as the
-        // rename having been rejected rather than not having reached disk.
-        failure = "Could not rename — the change didn't reach disk."
-      }
-    }
+  private var renameBinding: Binding<Bool> {
+    Binding(get: { renamingId != nil }, set: { if !$0 { renamingId = nil } })
   }
 
   private var deleteBinding: Binding<Bool> {

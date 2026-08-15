@@ -1365,12 +1365,25 @@ export function initIOSShell(deps) {
     // fail on a disk that did not take the write, and a control that reports
     // success it did not have is how a rename reverts after a restart.
     createProfile: ({ name }) => createProfileDurably(deps, String(name ?? '')),
-    renameProfile: ({ id, name }) => (deps.renameProfileDurably || renameProfileDurably)(
-      String(id ?? ''), { name: String(name ?? '') },
-    ),
-    deleteProfile: ({ id }) => (deps.deleteProfileDurably || deleteProfileDurably)(
-      String(id ?? ''),
-    ),
+    //
+    // BOTH REPUBLISH. The registry is the page's, and the sheet showing it is
+    // Swift's — it draws from the last snapshot and nothing else re-reads
+    // storage. Without the republish a rename reached disk and the row redrew
+    // from the stale snapshot, so the old name came straight back and looked
+    // like the save had failed. It had not; nobody had told the sheet.
+    // `createProfile` needs none of this because it reloads the page outright.
+    renameProfile: async ({ id, name }) => {
+      const done = await (deps.renameProfileDurably || renameProfileDurably)(
+        String(id ?? ''), { name: String(name ?? '') },
+      );
+      if (done) publish();
+      return done;
+    },
+    deleteProfile: async ({ id }) => {
+      const done = await (deps.deleteProfileDurably || deleteProfileDurably)(String(id ?? ''));
+      if (done) publish();
+      return done;
+    },
 
     // The wizard. Every one of these is the SAME handler the web card's button
     // calls — the component owns the step machine, and a second copy of "which
