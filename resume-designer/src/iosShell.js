@@ -25,9 +25,13 @@
 /** Name of the `WKScriptMessageHandler` Swift registers. Must match OPShell.swift. */
 // Shared projection and lifecycle services stay on the JS side of the bridge,
 // so native code never grows a second implementation of their rules.
+import { appStorage } from './appStorage.js';
 import { computeStats, timelinePoints } from './applicationStats.js';
 import { profileInitials } from './accountStats.js';
-import { listProfiles, switchToProfileDurably } from './profiles.js';
+import {
+  listProfiles, switchToProfileDurably, createProfile, deleteProfile,
+  activateProfileDurably, renameProfileDurably, deleteProfileDurably, getActiveProfileId,
+} from './profiles.js';
 // Version-history entry names, shared with the web dialog. The leaf module
 // holds only strings: the dialog's lucide icons live beside IT, because this
 // bridge draws nothing and Swift picks its own SF Symbols.
@@ -1078,6 +1082,37 @@ export function resolveAccountProfiles(answer) {
   return answer;
 }
 
+/**
+ * Create a workspace and open it, in the order that survives a failed disk.
+ *
+ * The same sequence as desktop's Account section, and it has to be: the
+ * registry entry is written FIRST and the pointer moved only once that entry is
+ * durable, so a create that never reached disk is unwound rather than left as
+ * an empty workspace that reappears at the next successful flush.
+ *
+ * `createProfile` can throw synchronously — the new registry entry ENLARGES
+ * storage, so it can hit quota even after a clean save — and that throw is the
+ * answer, not a crash: the dispatcher turns it into a refusal the sheet reads.
+ */
+async function createProfileDurably(deps, name) {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const create = deps.createProfile || createProfile;
+  const activate = deps.activateProfileDurably || activateProfileDurably;
+  const remove = deps.deleteProfile || deleteProfile;
+  const previous = (deps.getActiveProfileId || getActiveProfileId)();
+
+  // Every open editor's work reaches disk before the pointer can move. Reusing
+  // the switch's own guard rather than repeating its three saves here.
+  const profile = create({ name: trimmed });
+  if (!(await activate(profile.id, previous))) {
+    try { remove(profile.id); } catch { /* best effort — the pointer never moved */ }
+    await appStorage.flush();
+    return false;
+  }
+  return true;
+}
+
 /** Tell the continuation overlay that profile resolution, not merely the fetch, finished. */
 export function reportProfilesResolved() {
   if (!isNativeShellAvailable()) return;
@@ -1317,6 +1352,23 @@ export function initIOSShell(deps) {
     selectVariant: ({ id }) => deps.loadVariant(id),
     newVariant: () => window.showOnboardingWizard?.({ skipApiKeyStep: true }),
     switchProfile: ({ id }) => (deps.switchToProfileDurably || switchToProfileDurably)(
+      String(id ?? ''),
+    ),
+
+    // Workspace management, every one of them through the DURABLE helper that
+    // desktop's Account section uses. None of this logic is reimplemented here:
+    // the ordering inside those functions — save the open editors, flush, only
+    // then move the pointer — is load-bearing, and a second copy on this side is
+    // how the two platforms drift into disagreeing about when a switch is safe.
+    //
+    // Each answers a boolean the sheet reads, because every one of them can
+    // fail on a disk that did not take the write, and a control that reports
+    // success it did not have is how a rename reverts after a restart.
+    createProfile: ({ name }) => createProfileDurably(deps, String(name ?? '')),
+    renameProfile: ({ id, name }) => (deps.renameProfileDurably || renameProfileDurably)(
+      String(id ?? ''), { name: String(name ?? '') },
+    ),
+    deleteProfile: ({ id }) => (deps.deleteProfileDurably || deleteProfileDurably)(
       String(id ?? ''),
     ),
 
@@ -1823,6 +1875,11 @@ export function initIOSShell(deps) {
       {
         kind: 'snapshot',
         profiles,
+        // Counted on every publish rather than only when the sheet opens: the
+        // sheet renders from the snapshot like every other native surface here,
+        // and nothing else would tell it a résumé had been added while it was
+        // on screen. All four reads are over in-memory collections.
+        accountStats: deps.getAccountStats?.() ?? null,
         ...buildSnapshot({
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),

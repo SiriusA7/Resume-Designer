@@ -1476,3 +1476,100 @@ describe('buildHistory', () => {
     expect(buildHistory([null]).entries[0].label).toBe('Edit');
   });
 });
+
+describe('workspace management crosses the bridge through the durable helpers', () => {
+  // None of this logic is reimplemented on the iOS side. The ordering inside
+  // profiles.js — save the open editors, flush, only then move the pointer — is
+  // load-bearing and shared with desktop, so these assert the ROUTING and the
+  // one thing the shell does own: unwinding a create that never reached disk.
+  const mountShell = async (over = {}) => {
+    vi.resetModules();
+    const postMessage = vi.fn();
+    globalThis.webkit = { messageHandlers: { [SHELL_HANDLER]: { postMessage } } };
+    const deps = {
+      subscribeVariants: vi.fn(),
+      subscribeDocument: vi.fn(),
+      getVariantsSnapshot: () => ({ currentId: null, list: [] }),
+      getZoom: () => 1,
+      getSettings: () => ({}),
+      getTheme: () => 'system',
+      getAppInfo: () => Promise.resolve({ version: '2.1.0' }),
+      getDocument: vi.fn(),
+      getLibrary: vi.fn(),
+      getPendingChanges: () => [],
+      listProfiles: () => [{ id: 'p1', name: 'Ash' }],
+      getActiveProfileId: () => 'p1',
+      ...over,
+    };
+    const { initIOSShell } = await import('../src/iosShell.js');
+    initIOSShell(deps);
+    const send = (command) => window.__opShell.command(JSON.stringify(command));
+    const sendAsync = (command) => window.__opShell.commandAsync(JSON.stringify(command));
+    return { deps, send, sendAsync, postMessage };
+  };
+
+  it('creates a workspace and opens it, in that order', async () => {
+    const order = [];
+    const createProfile = vi.fn(() => { order.push('create'); return { id: 'p2' }; });
+    const activateProfileDurably = vi.fn(async () => { order.push('activate'); return true; });
+    const { sendAsync } = await mountShell({ createProfile, activateProfileDurably });
+
+    expect(await sendAsync({ type: 'createProfile', name: 'Work' }))
+      .toEqual({ ok: true, result: true });
+    expect(createProfile).toHaveBeenCalledWith({ name: 'Work' });
+    // The registry entry is durable BEFORE the pointer moves — the reverse
+    // order leaves a pointer at a workspace no registry lists.
+    expect(order).toEqual(['create', 'activate']);
+    expect(activateProfileDurably).toHaveBeenCalledWith('p2', 'p1');
+  });
+
+  it('unwinds the new workspace when the pointer never reached disk', async () => {
+    // Otherwise a later successful flush resurrects an empty workspace nobody
+    // asked for, in a switcher that now lists two.
+    const deleteProfile = vi.fn();
+    const { sendAsync } = await mountShell({
+      createProfile: () => ({ id: 'p2' }),
+      activateProfileDurably: async () => false,
+      deleteProfile,
+    });
+
+    expect(await sendAsync({ type: 'createProfile', name: 'Work' }))
+      .toEqual({ ok: true, result: false });
+    expect(deleteProfile).toHaveBeenCalledWith('p2');
+  });
+
+  it('refuses a blank name rather than inventing one', async () => {
+    const createProfile = vi.fn();
+    const { sendAsync } = await mountShell({ createProfile });
+
+    expect(await sendAsync({ type: 'createProfile', name: '   ' }))
+      .toEqual({ ok: true, result: false });
+    expect(createProfile).not.toHaveBeenCalled();
+  });
+
+  it('routes rename and delete to the durable helpers', async () => {
+    const renameProfileDurably = vi.fn(async () => true);
+    const deleteProfileDurably = vi.fn(async () => true);
+    const { sendAsync } = await mountShell({ renameProfileDurably, deleteProfileDurably });
+
+    await sendAsync({ type: 'renameProfile', id: 'p1', name: 'Personal' });
+    expect(renameProfileDurably).toHaveBeenCalledWith('p1', { name: 'Personal' });
+
+    await sendAsync({ type: 'deleteProfile', id: 'p2' });
+    expect(deleteProfileDurably).toHaveBeenCalledWith('p2');
+  });
+
+  it('publishes account stats beside the workspace list', async () => {
+    const getAccountStats = () => ({
+      resumes: 3, jobDescriptions: 2, applications: 5,
+      responseRate: '40%', interviewRate: '20%', medianDaysToResponse: '3 days',
+    });
+    const { postMessage } = await mountShell({ getAccountStats });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const snapshot = postMessage.mock.calls.map((c) => c[0]).reverse()
+      .find((m) => m.kind === 'snapshot');
+    expect(snapshot.accountStats.resumes).toBe(3);
+    expect(snapshot.accountStats.responseRate).toBe('40%');
+  });
+});

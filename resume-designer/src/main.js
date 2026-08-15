@@ -53,6 +53,11 @@ import { buildJobs, getJobsState, applyJobs } from './jobsBridge.js';
 import { buildProfile, getProfileState, applyProfile } from './profileBridge.js';
 import { searchLibrary } from './librarySearch.js';
 import { getAllApplications } from './applications.js';
+// The Workspaces sheet's stats, through the same functions the desktop Account
+// section formats with, so the two never round or label a rate differently.
+import { computeStats } from './applicationStats.js';
+import { formatRate, formatDays } from './accountStats.js';
+import { getAllJobDescriptions } from './jobDescriptions.js';
 import { initWindowDrag } from './tauriDrag.js';
 import {
   migrateBuiltInVariants,
@@ -655,6 +660,20 @@ export async function init() {
       getVariantList(),
       getAllApplications(),
     ),
+    // Account stats for the Workspaces sheet — the same four sources desktop's
+    // Account section reads, computed there rather than in the shell so the two
+    // cannot disagree about what "applications" or "résumés" counts.
+    getAccountStats: () => {
+      const stats = computeStats(getAllApplications());
+      return {
+        resumes: getVariantList().length,
+        jobDescriptions: getAllJobDescriptions().length,
+        applications: stats.sent,
+        responseRate: formatRate(stats.responseRate),
+        interviewRate: formatRate(stats.interviewRate),
+        medianDaysToResponse: formatDays(stats.medianDaysToResponse),
+      };
+    },
     getPendingChanges,
     applyInlineChange,
     rejectInlineChange,

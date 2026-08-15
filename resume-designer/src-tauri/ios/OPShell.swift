@@ -28,11 +28,26 @@ import WebKit
 
 // MARK: - Wire contract
 
-struct ShellProfile: Decodable, Equatable {
+struct ShellProfile: Decodable, Equatable, Identifiable {
   let id: String
   let name: String
   let initials: String
   let isActive: Bool
+}
+
+/// What the account holds, for the Workspaces sheet.
+///
+/// Every value arrives PRE-FORMATTED — the rates as `"42%"`, the median as
+/// `"3 days"` — because the page formats them with the functions the desktop
+/// Account section uses, and a second rounding rule on this side is how the
+/// same account comes to show two different numbers on two screens.
+struct ShellAccountStats: Decodable, Equatable {
+  let resumes: Int
+  let jobDescriptions: Int
+  let applications: Int
+  let responseRate: String
+  let interviewRate: String
+  let medianDaysToResponse: String
 }
 
 /// Mirrors the snapshot posted by src/iosShell.js. Changing either side
@@ -47,6 +62,9 @@ struct ShellSnapshot: Decodable, Equatable {
   var variantName: String
   var variants: [Variant]
   var profiles: [ShellProfile]
+  /// `nil` on a page that predates the Workspaces sheet, which is the one case
+  /// the sheet has nothing to draw and says so rather than showing zeroes.
+  var accountStats: ShellAccountStats?
   var zoom: Double
   var zoomPercent: Int
   var pdfBusy: Bool
@@ -484,7 +502,7 @@ struct ShellSnapshot: Decodable, Equatable {
   /// What the chrome shows before the first snapshot arrives — a fraction of a
   /// second at launch, but it must not render as blank or as "0%".
   static let empty = ShellSnapshot(
-    variantId: nil, variantName: "On Paper", variants: [], profiles: [],
+    variantId: nil, variantName: "On Paper", variants: [], profiles: [], accountStats: nil,
     zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
     chat: nil, library: nil, history: nil, jobs: nil, profile: nil,
     document: nil, design: nil
@@ -1207,6 +1225,37 @@ final class ShellModel: ObservableObject {
     guard case .answered(let value) = await sendForResult("switchProfile", ["id": id]),
           value as? Bool == true else { return }
     webView?.reload()
+  }
+
+  /// Create a workspace and open it. Reloads for the same reason a switch does:
+  /// the page maps every owned key through the active profile, and the mapping
+  /// is fixed at boot.
+  @discardableResult
+  func createProfile(named name: String) async -> Bool {
+    guard case .answered(let value) = await sendForResult("createProfile", ["name": name]),
+          value as? Bool == true else { return false }
+    webView?.reload()
+    return true
+  }
+
+  /// Rename in place. NO reload: nothing about the storage mapping changed, and
+  /// the new name arrives on the next snapshot like any other edit.
+  @discardableResult
+  func renameProfile(_ id: String, to name: String) async -> Bool {
+    guard case .answered(let value) = await sendForResult(
+      "renameProfile", ["id": id, "name": name]
+    ) else { return false }
+    return value as? Bool == true
+  }
+
+  /// Delete a workspace. Only ever one that is NOT active — the sheet does not
+  /// offer it for the open one — so the mapping is untouched and the registry
+  /// change rides the next snapshot.
+  @discardableResult
+  func deleteProfile(_ id: String) async -> Bool {
+    guard case .answered(let value) = await sendForResult("deleteProfile", ["id": id])
+    else { return false }
+    return value as? Bool == true
   }
 
   /// The command body, encoded once for both ways of asking.
@@ -2834,6 +2883,11 @@ private struct ShellView: View {
   /// silently does nothing. Measured: chat and structure both no-op'd while
   /// settings worked.
   @State private var sheet: Sheet?
+  /// The New-workspace prompt. An `.alert` with a text field rather than a
+  /// sheet: naming a workspace is one short answer, and a whole sheet for one
+  /// field reads as a bigger commitment than creating one actually is.
+  @State private var creatingWorkspace = false
+  @State private var newWorkspaceName = ""
   /// The zoom a pinch started from; nil when no pinch is in flight.
   @State private var pinchBase: Double?
   /// The bar is showing the zoom controls rather than the tools — see
@@ -2844,6 +2898,7 @@ private struct ShellView: View {
 
   private enum Sheet: String, Identifiable {
     case settings, structure, design, chat, library, history, jobs, profile, pdfPreview
+    case workspaces
     var id: String { rawValue }
   }
 
@@ -2898,25 +2953,12 @@ private struct ShellView: View {
           // therefore the hosted WKWebView — every tap on the web dialog was
           // swallowed before it reached the page, silently.
           ToolbarItem(placement: .topBarLeading) {
-            HStack(spacing: 10) {
-              // ALWAYS, not only when there are several to switch between.
-              //
-              // Gated on `count > 1` this was unreachable: iOS has no way to
-              // create a workspace, so the only control that could manage them
-              // appeared only once you already had two — which you could not
-              // get. It is the same shape as the sync toggle that sat behind an
-              // onboarding cover, and it hid the button that was asked for by
-              // name: the current workspace's initials, in the top-left, as on
-              // the desktop.
-              //
-              // With one workspace the menu shows that one, checked and
-              // disabled. That is a true statement about the account rather
-              // than a dead control, and it is how you can tell which workspace
-              // you are in at all.
-              profileMenu
-              actionsMenu
-            }
-            .disabled(snapshot.modalOpen)
+            // ONE button, not two. The initials and the overflow were separate
+            // controls sitting side by side, which spent the leading slot twice
+            // and made "whose workspace is this" compete with "what else can I
+            // do". Merged, the workspace IS the identity of everything in the
+            // menu, which is what it always was.
+            actionsMenu.disabled(snapshot.modalOpen)
           }
           ToolbarItem(placement: .principal) {
             titleMenu.disabled(snapshot.modalOpen)
@@ -2943,6 +2985,7 @@ private struct ShellView: View {
         .sheet(item: $sheet) { which in
           switch which {
           case .settings: SettingsSheet(model: model)
+          case .workspaces: WorkspacesSheet(model: model)
           case .structure: StructureSheet(model: model)
           case .design: DesignSheet(model: model)
           case .chat: ChatSheet(model: model)
@@ -2955,6 +2998,24 @@ private struct ShellView: View {
               PdfPreviewSheet(model: model, request: request)
             }
           }
+        }
+        // Naming a new workspace. An alert rather than a sheet: one short
+        // answer, and a whole card would make creating one feel weightier than
+        // it is. The create is disabled on an empty name rather than silently
+        // inventing "New profile", so the workspace list never fills with
+        // identical entries nobody meant to make.
+        .alert("New workspace", isPresented: $creatingWorkspace) {
+          TextField("Name", text: $newWorkspaceName)
+            .textInputAutocapitalization(.words)
+          Button("Cancel", role: .cancel) {}
+          Button("Create") {
+            let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            Task { await model.createProfile(named: name) }
+          }
+          .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+          Text("A separate space with its own résumés, job descriptions and chats.")
         }
         // The wizard, which is not in `sheet` at all. It has no open command —
         // the WEB component decides when it runs, because one component serves
@@ -3076,30 +3137,6 @@ private struct ShellView: View {
     }
   }
 
-  private var profileMenu: some View {
-    Menu {
-      ForEach(snapshot.profiles, id: \.id) { profile in
-        Button {
-          Task { await model.switchToProfile(profile.id) }
-        } label: {
-          if profile.isActive {
-            Label(profile.name, systemImage: "checkmark")
-          } else {
-            Text(profile.name)
-          }
-        }
-        .disabled(profile.isActive)
-      }
-    } label: {
-      Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
-        .font(.caption2.weight(.semibold))
-        .frame(width: 28, height: 28)
-        .foregroundStyle(Color.accentColor)
-        .background(Color.accentColor.opacity(0.14), in: Circle())
-    }
-    .accessibilityLabel("Switch workspace")
-  }
-
   // The title IS the résumé switcher: on a phone the navigation bar's centre is
   // the only place a title-length control fits, and a separate switcher would
   // cost a row of vertical space the canvas needs more.
@@ -3165,10 +3202,34 @@ private struct ShellView: View {
   /// title menu, which is the control that names it.
   private var actionsMenu: some View {
     Menu {
-      Section("Edit") {
-        Button { model.send("undo") } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
-        Button { model.send("redo") } label: { Label("Redo", systemImage: "arrow.uturn.forward") }
+      // WORKSPACES FIRST, because the button is now the workspace's initials
+      // and this is what it claims to be about. Switching is inline rather than
+      // behind the sheet: it is the one thing done often enough to deserve a
+      // single tap, and the sheet exists for the rest.
+      Section("Workspace") {
+        ForEach(snapshot.profiles) { profile in
+          Button {
+            Task { await model.switchToProfile(profile.id) }
+          } label: {
+            if profile.isActive {
+              Label(profile.name, systemImage: "checkmark")
+            } else {
+              Text(profile.name)
+            }
+          }
+          .disabled(profile.isActive)
+        }
+        Button { newWorkspaceName = ""; creatingWorkspace = true } label: {
+          Label("New workspace…", systemImage: "plus")
+        }
+        Button { sheet = .workspaces } label: {
+          Label("Manage workspaces", systemImage: "person.2")
+        }
       }
+      // No "Edit" section. Undo and redo are document actions used constantly
+      // while typing, and two taps into a menu is the wrong cost for something
+      // done that often — they live in the bottom bar now, one tap from the
+      // canvas.
       Section("File") {
         Button { model.send("importVariant") } label: { Label("Import…", systemImage: "square.and.arrow.down") }
         Button { model.send("exportVariant", ["format": "json"]) } label: { Label("Export as JSON", systemImage: "curlybraces") }
@@ -3198,9 +3259,16 @@ private struct ShellView: View {
         Button { sheet = .settings } label: { Label("Settings", systemImage: "gearshape") }
       }
     } label: {
-      Image(systemName: "ellipsis.circle")
+      // The initials, not an ellipsis: the same identity the desktop header
+      // carries, so the corner answers "whose workspace is this" before it is
+      // asked. `?` only before the first snapshot lands.
+      Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
+        .font(.caption2.weight(.semibold))
+        .frame(width: 28, height: 28)
+        .foregroundStyle(Color.accentColor)
+        .background(Color.accentColor.opacity(0.14), in: Circle())
     }
-    .accessibilityLabel("More actions")
+    .accessibilityLabel("Workspace and actions")
   }
 
   private var pdfButton: some View {
@@ -3291,6 +3359,21 @@ private struct ShellView: View {
     HStack(spacing: 12) {
       if !zoomExpanded {
         HStack(spacing: 20) {
+          // UNDO AND REDO FIRST, and in the bar rather than the menu they used
+          // to sit in. They are document actions used constantly while editing,
+          // and two taps into an overflow menu is the wrong price for the one
+          // pair of controls a person reaches for mid-sentence. Leading, where
+          // a thumb already is.
+          Button { model.send("undo") } label: {
+            Image(systemName: "arrow.uturn.backward")
+          }
+          .accessibilityLabel("Undo")
+
+          Button { model.send("redo") } label: {
+            Image(systemName: "arrow.uturn.forward")
+          }
+          .accessibilityLabel("Redo")
+
           Button {
             model.send("setChatOpen", ["value": "true"])
             sheet = .chat
@@ -7049,5 +7132,148 @@ private struct PhotoScreen: View {
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 4)
+  }
+}
+
+/// Managing the account's workspaces, and what it holds.
+///
+/// The iOS counterpart of desktop's Settings → Account, and deliberately the
+/// same three things in the same order: which workspaces exist, what you can do
+/// to them, and the numbers for the one that is open. Switching is NOT here —
+/// it is one tap in the menu that opened this — so the sheet is for the actions
+/// that deserve a confirmation step.
+private struct WorkspacesSheet: View {
+  @ObservedObject var model: ShellModel
+  @Environment(\.dismiss) private var dismiss
+
+  /// The workspace being renamed, and its draft. Held here rather than per row
+  /// so only one row can be in edit mode at a time.
+  @State private var renamingId: String?
+  @State private var draftName = ""
+  @State private var pendingDelete: ShellProfile?
+  @State private var failure: String?
+
+  private var profiles: [ShellProfile] { model.snapshot.profiles }
+  private var active: ShellProfile? { profiles.first(where: \.isActive) }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          ForEach(profiles) { profile in
+            row(for: profile)
+          }
+        } header: {
+          Text("Workspaces")
+        } footer: {
+          Text("Separate spaces — each keeps its own résumés, job descriptions, "
+               + "applications and chats. Everything here syncs across your devices.")
+        }
+
+        if let stats = model.snapshot.accountStats {
+          Section {
+            LabeledContent("Résumés", value: "\(stats.resumes)")
+            LabeledContent("Job descriptions", value: "\(stats.jobDescriptions)")
+            LabeledContent("Applications sent", value: "\(stats.applications)")
+            LabeledContent("Response rate", value: stats.responseRate)
+            LabeledContent("Interview rate", value: stats.interviewRate)
+            LabeledContent("Median to hear back", value: stats.medianDaysToResponse)
+          } header: {
+            // Named for the workspace it describes, because these numbers are
+            // NOT the account's — every workspace keeps its own applications.
+            Text(active.map { "\($0.name) holds" } ?? "This workspace holds")
+          }
+        }
+      }
+      .navigationTitle("Workspaces")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }
+        }
+      }
+      .alert("Delete workspace?", isPresented: deleteBinding, presenting: pendingDelete) { profile in
+        Button("Delete", role: .destructive) {
+          Task {
+            if !(await model.deleteProfile(profile.id)) {
+              failure = "Could not delete \(profile.name) — the change didn't reach disk."
+            }
+          }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: { profile in
+        // Says what is actually lost. "Delete workspace?" alone reads as
+        // tidying a label, and this is every résumé inside it.
+        Text("\(profile.name) and everything in it — résumés, job descriptions, "
+             + "applications and chats — will be deleted on all your devices.")
+      }
+      .alert("Couldn't save", isPresented: failureBinding, presenting: failure) { _ in
+        Button("OK", role: .cancel) {}
+      } message: { message in
+        Text(message)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func row(for profile: ShellProfile) -> some View {
+    if renamingId == profile.id {
+      HStack {
+        TextField("Name", text: $draftName)
+          .textInputAutocapitalization(.words)
+          .onSubmit { commitRename(profile) }
+        Button("Save") { commitRename(profile) }
+          .buttonStyle(.borderless)
+          .disabled(draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
+    } else {
+      HStack {
+        Text(profile.name)
+        if profile.isActive {
+          Text("Open")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        Spacer()
+      }
+      .contentShape(Rectangle())
+      .swipeActions(edge: .trailing) {
+        // Delete is offered for every workspace EXCEPT the open one. Deleting
+        // the workspace you are looking at would leave the app with no mapping
+        // and nothing on screen; switch away first, which the menu does in one
+        // tap.
+        if !profile.isActive {
+          Button(role: .destructive) { pendingDelete = profile } label: {
+            Label("Delete", systemImage: "trash")
+          }
+        }
+        Button { renamingId = profile.id; draftName = profile.name } label: {
+          Label("Rename", systemImage: "pencil")
+        }
+      }
+    }
+  }
+
+  private func commitRename(_ profile: ShellProfile) {
+    let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { return }
+    Task {
+      if await model.renameProfile(profile.id, to: name) {
+        renamingId = nil
+      } else {
+        // The editor STAYS OPEN on failure, showing what was typed. Closing it
+        // would show the old name back with no explanation, which reads as the
+        // rename having been rejected rather than not having reached disk.
+        failure = "Could not rename — the change didn't reach disk."
+      }
+    }
+  }
+
+  private var deleteBinding: Binding<Bool> {
+    Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
+  }
+
+  private var failureBinding: Binding<Bool> {
+    Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
   }
 }
