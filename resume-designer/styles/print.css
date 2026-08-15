@@ -107,8 +107,9 @@
     transform: none !important;
     /* The screen rule derives these from --zoom to make the scaled page's
        footprint scrollable. Print has no transform, so they would only indent
-       the sheet — zero them alongside it. */
-    margin-inline: 0 !important;
+       the sheet — zero them alongside it. All four, not just the inline pair:
+       the block-end margin is part of the same device. */
+    margin: 0 !important;
     position: static !important;
   }
 
@@ -243,8 +244,9 @@ html.pdf-export-mode .resume-container {
   border-radius: 0 !important;
   transform: none !important;
   /* As above: --zoom-derived margins are a screen-scrolling device only, and
-     would shift the exported page. */
-  margin-inline: 0 !important;
+     would shift the exported page. All four — the block-end one is the same
+     device, applied to the height. */
+  margin: 0 !important;
   position: static !important;
 }
 

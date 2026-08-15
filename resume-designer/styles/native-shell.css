@@ -76,20 +76,67 @@ html.op-native-shell .structure-panel-toggle {
   display: none;
 }
 
-/* `padding-bottom: 70–100px` across main.css exists to keep the floating pill
-   from covering the page. With the pill gone and a real toolbar below the
-   webview, that reservation is just dead space at the bottom of every résumé.
+/* The little chat bubble that appears beside whatever text you are editing, and
+   the menu it opens. Every one of its actions ends in the WEB chat panel —
+   `openChatWithContext` / `addContextChip` in inlineEditor.js — so on iOS it was
+   a desktop button sitting on the native canvas that opened the desktop chat
+   over the native one.
 
-   The top is the opposite case. The canvas extends UNDER the navigation bar
-   (OPShell.swift ignores the top safe area) so the résumé shows through the
-   glass, which means the scroller has to reserve the bar's height itself or the
-   top of page one starts life hidden behind it. Reserved as padding rather than
-   inset as layout, so the page still scrolls up behind the chrome — which is
-   the effect, and matches what the bottom bar already does. */
+   Hidden rather than rerouted, because there is nowhere to route it TO: the
+   native chat sheet carries threads, messages and sending, and deliberately not
+   context chips or proposed changes (see buildChatView in iosShell.js). The
+   menu's other half, Apply/Reject on a pending change, is not lost with it —
+   changes are reviewed in the native review sheet. */
+html.op-native-shell .editable-ai-container,
+html.op-native-shell .editable-ai-menu {
+  display: none;
+}
+
+/* `padding-bottom: 70–100px` across main.css exists to keep the floating pill
+   from covering the page; the pill is gone here, so that exact reservation is
+   not what this is.
+
+   Both ends are the same case: the canvas extends UNDER the bars — it ignores
+   every safe area, so the résumé shows through their glass — which means the
+   scroller has to reserve each bar's height itself, or the first line of page
+   one and the last line of the last page live permanently behind chrome.
+   Reserved as padding rather than inset as layout, so the page still scrolls
+   up behind the bars, which is the effect.
+
+   52px each, which is what the bars measure: the bottom toolbar runs 792pt to
+   836pt on an 874pt screen, so 52 plus the home indicator's own inset clears it
+   with a few points to spare. The bottom half of this was `16px` and read as
+   correct for as long as the canvas reserved the page's full UNSCALED height —
+   below 100% zoom that surplus was accidentally acting as the buffer. Giving
+   the height its own margin (see main.css) took the accident away and left the
+   last inch of the résumé under the toolbar. */
 html.op-native-shell .resume-scroller {
   padding: 16px;
   padding-top: calc(env(safe-area-inset-top) + 52px);
-  padding-bottom: 16px;
+  padding-bottom: calc(env(safe-area-inset-bottom) + 52px);
+}
+
+/* ...and no scrollbar on it. It is the last piece of web chrome still drawn on
+   the native canvas, and it was drawn WRONG: zooming in pans the scroller
+   sideways (the pinch anchors the page under your fingers, so scrollLeft grows
+   with the zoom), and the vertical bar travelled left across the screen with
+   it instead of staying at the edge.
+
+   Measured in a real engine at zooms from 42% to 150%: the scrollport's right
+   edge never moves off the screen edge and the document never scrolls
+   horizontally, so nothing about our layout puts the bar there — it is WebKit
+   painting the indicator in the scrolled content's space rather than the
+   scrollport's.
+
+   Hidden rather than chased, because a bar is not what this surface wants
+   anyway. It is a pinch-zoomable document with its own zoom readout, not a
+   list, and every other piece of web chrome on it is already hidden here. Only
+   the canvas: the web dialogs still scroll and still say so. */
+html.op-native-shell .resume-scroller {
+  scrollbar-width: none;
+}
+html.op-native-shell .resume-scroller::-webkit-scrollbar {
+  display: none;
 }
 
 /* ==========================================================================

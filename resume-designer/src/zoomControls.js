@@ -12,9 +12,15 @@ let currentZoom = 1;
 // now: re-fitting a width fit as a whole-page fit on the next rotation would
 // silently undo the choice.
 let lastFit = null;
+// The animation frame a fit in flight is waiting on, so a second fit takes over
+// from the first instead of the two driving the same canvas at once.
+let fitTravel = null;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const ZOOM_STEP = 0.1;
+// How long a fit takes to travel. The same 0.2s the CSS gives the buttons, so
+// the two kinds of zoom read as one app.
+const FIT_TRAVEL_MS = 200;
 
 /**
  * Pure fit-to-view maths, extracted so it can be unit-tested without a DOM.
@@ -47,8 +53,41 @@ export function computeFitZoom({
   return Math.min(Math.max(fit, minZoom), maxZoom);
 }
 
+/**
+ * Tell the CSS how tall the page is, unscaled, so it can subtract the height
+ * the transform does not use.
+ *
+ * `offsetHeight` is a LAYOUT height — a transform never touches it — which is
+ * exactly the number the margin needs. See the margin-bottom comment in
+ * main.css for why this cannot be a constant the way the width is, and
+ * `watchPageHeight` for why publishing it once is not enough.
+ */
+function publishPageHeight(container) {
+  if (!container) return;
+  container.style.setProperty('--page-height', `${container.offsetHeight}px`);
+}
+
+/**
+ * Keep it published. The page's height changes without the zoom ever moving —
+ * an edit, a repagination, a font that finishes loading — and a stale height
+ * leaves exactly the dead scroll space this is here to remove.
+ *
+ * No feedback loop: the property drives `margin-bottom`, and a margin is
+ * outside the border box the observer is watching.
+ */
+function watchPageHeight(container) {
+  if (!container) return;
+  publishPageHeight(container);
+  if (typeof ResizeObserver !== 'function') return;
+  new ResizeObserver(() => publishPageHeight(container)).observe(container);
+}
+
 // Initialize zoom controls
 export function initZoomControls() {
+  // Before the guard below: the page's height belongs to the canvas, not to the
+  // toolbar, and the canvas is there whether or not the buttons are.
+  watchPageHeight(document.getElementById('resume-container'));
+
   const zoomIn = document.getElementById('zoom-in');
   const zoomOut = document.getElementById('zoom-out');
   const zoomFit = document.getElementById('zoom-fit');
@@ -156,10 +195,9 @@ function setZoom(level, live = false) {
 
 /**
  * Run a zoom mutation with the CSS transition suppressed, then restore it on
- * the next frame. Used by fitToView to make its measure-and-apply sequence
- * instantaneous — ordinary user-initiated zoom (buttons, shortcuts) does not
- * use this and keeps its 0.2s animation. See the .is-zooming comment in
- * main.css.
+ * the next frame. Used to restore the saved zoom at startup, which must not
+ * animate — ordinary user-initiated zoom (buttons, shortcuts) does not use this
+ * and keeps its 0.2s animation. See the .is-zooming comment in main.css.
  */
 function withoutTransition(container, fn) {
   if (!container) { fn(); return; }
@@ -206,31 +244,83 @@ function applyFit(axis) {
 
   if (!scroller || !container) return;
 
-  // Suppression spans the measurement AND the final apply: applyZoom no longer
-  // suppresses anything, so user-initiated zoom keeps its 0.2s animation while
-  // fit-to-view stays instantaneous. See the .is-zooming comment in main.css.
-  withoutTransition(container, () => {
-    // Measure at scale 1 so scrollHeight is the true, unscaled height.
-    container.style.transform = 'scale(1)';
-    container.offsetHeight; // force reflow
+  const from = currentZoom;
 
-    // clientWidth/Height INCLUDE padding, so subtract the real computed values
-    // rather than the constants the CSS used to have.
-    const cs = getComputedStyle(scroller);
-    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
-    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  // Measure at scale 1, then put the canvas straight back where it was. None of
+  // this is ever seen: both writes and the reflow between them happen inside
+  // one task, so the frame on screen is still the zoom we are travelling FROM —
+  // which is what stops the old out-and-back wobble. The suppression stays on
+  // afterwards and is handed to the travel, which is a live gesture and owns it
+  // from there. See the .is-zooming comment in main.css.
+  container.classList.add('is-zooming');
+  container.style.transform = 'scale(1)';
+  container.offsetHeight; // force reflow
 
-    setZoom(computeFitZoom({
-      availableWidth: scroller.clientWidth - padX,
-      availableHeight: scroller.clientHeight - padY,
-      contentWidth: 8.5 * 96,
-      contentHeight: container.scrollHeight || 11 * 96,
-      axis,
-    }));
+  // clientWidth/Height INCLUDE padding, so subtract the real computed values
+  // rather than the constants the CSS used to have.
+  const cs = getComputedStyle(scroller);
+  const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+
+  const target = computeFitZoom({
+    availableWidth: scroller.clientWidth - padX,
+    availableHeight: scroller.clientHeight - padY,
+    contentWidth: 8.5 * 96,
+    contentHeight: container.scrollHeight || 11 * 96,
+    axis,
+  });
+
+  container.style.transform = `scale(${from})`;
+
+  travelZoomTo(target, from, scroller, () => {
     // Read back rather than reusing the computed value: setZoom rounds to two
     // decimals, and the resize guard compares for exact equality.
     lastFit = { zoom: currentZoom, axis };
   });
+}
+
+/**
+ * Travel from `from` to `target` over FIT_TRAVEL_MS, scaling about the middle
+ * of the view.
+ *
+ * A fit is not only a new zoom, it is a new scroll position: filling the width
+ * of a canvas that was zoomed in and panned across has to bring the page back
+ * to the left edge as well as shrink it. Setting the zoom outright did both in
+ * one frame, and the page appeared to teleport rather than to move.
+ *
+ * So it is run as a gesture instead. `setZoomLevel(live)` is the pinch path —
+ * transition suppressed, an anchored point held under a focal point — and
+ * driving it from a clock rather than from fingers carries the scroll along for
+ * free: the middle of the view stays put while the page grows or shrinks around
+ * it, and the scroller's own clamping does the rest.
+ */
+function travelZoomTo(target, from, scroller, done) {
+  cancelAnimationFrame(fitTravel);
+
+  const rect = scroller.getBoundingClientRect();
+  const focus = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+
+  // From the first frame's timestamp, not from now: the gap before the first
+  // frame is time the page has not moved in, and counting it would start the
+  // travel already part-way through.
+  let start = null;
+  const step = (now) => {
+    if (start === null) start = now;
+    const t = Math.min(1, (now - start) / FIT_TRAVEL_MS);
+    // Ease out: fastest where the movement is largest, settling gently onto the
+    // fitted value rather than stopping dead on it.
+    const eased = 1 - (1 - t) ** 3;
+    // The last frame is not live, which is what rounds the value, saves it, and
+    // gives the canvas its transition back.
+    setZoomLevel(from + (target - from) * eased, t < 1, focus);
+    if (t < 1) {
+      fitTravel = requestAnimationFrame(step);
+    } else {
+      fitTravel = null;
+      done();
+    }
+  };
+  fitTravel = requestAnimationFrame(step);
 }
 
 // Fit resume to available view space

@@ -934,6 +934,19 @@ html[data-theme="dark"] .header-variant-select {
      keeps this identical to the old rule before the first paint. */
   margin-left: max(0px, calc((100% - 8.5in * var(--zoom, 1)) / 2));
   margin-right: calc((var(--zoom, 1) - 1) * 8.5in);
+  /* And the same for the BOTTOM, which the width fix above quietly left out.
+     Below 100% the transform shrinks what you see but not what layout reserves,
+     so the scroller went on offering the full unscaled height: measured at 42%,
+     795px of empty scroll below a 527px page — far enough to scroll the résumé
+     completely off the screen.
+
+     The width could be written as a constant because a page is always 8.5in
+     wide. A page is NOT always 11in tall — pagination, editing and a font swap
+     all change it — and no CSS length reads an element's own height, so
+     `--page-height` is published from JS (see publishPageHeight in
+     zoomControls.js). Its 0px fallback is the old behaviour exactly, which is
+     what the export stylesheets rely on before they zero these out. */
+  margin-bottom: calc((var(--zoom, 1) - 1) * var(--page-height, 0px));
   background: white;
   border-radius: 4px;
   box-shadow:
