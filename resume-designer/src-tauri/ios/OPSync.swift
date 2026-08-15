@@ -72,6 +72,10 @@ struct SyncUnit: Codable, Equatable {
   /// decision remains the page's answer through `syncScopes`.
   let profileId: String
 
+  /// Workspace and id together — what actually identifies one record, since the
+  /// same unit id exists in every workspace's zone. See `SyncResolution.route`.
+  var route: String { "\(profileId)\u{1F}\(id)" }
+
   init(id: String, kind: String, payload: String, modifiedAt: String?, profileId: String = "") {
     self.id = id
     self.kind = kind
@@ -125,11 +129,22 @@ struct SyncResolution: Equatable {
   /// The unit id. A conflict whose id is ABSENT from the answer was refused —
   /// see `resolve`, which forfeits its change tag.
   let id: String
+  /// The workspace whose zone that conflict came from, `""` for the shared one.
+  ///
+  /// An id alone does not identify a conflict. One send can carry the same id
+  /// from several zones — every workspace has a `data:settings` — so answers
+  /// keyed by id collapsed into one, applying one workspace's decision to
+  /// another's conflict. A REFUSAL matched to another's acceptance is the worse
+  /// half: it leaves a change tag held for content this device does not have.
+  let profileId: String
   /// Whether the SERVER still owes an update. True for a union (the merged
   /// document has to go up) and for a snapshot this device won; false for a
   /// snapshot the server won, where re-sending would push this device's stamp
   /// back over the version it has just taken.
   let retry: Bool
+
+  /// How `resolve` matches an answer to the conflict that produced it.
+  var route: String { "\(profileId)\u{1F}\(id)" }
 }
 
 /// The model's answer for a batch of conflicts.
@@ -1179,12 +1194,15 @@ extension OPSyncEngine {
     // `uniquingKeysWith` rather than `uniqueKeysWithValues`, which TRAPS on a
     // duplicate: these ids come off the bridge, and a malformed answer must cost
     // a round trip, never the process.
-    let retries = Dictionary(outcome.resolved.map { ($0.id, $0.retry) },
+    let retries = Dictionary(outcome.resolved.map { ($0.route, $0.retry) },
                              uniquingKeysWith: { first, _ in first })
 
     for conflict in conflicts {
       let recordID = conflict.recordID
-      guard let retry = retries[recordID.recordName] else {
+      // Matched on the same route the answer was named with — the workspace and
+      // the id, not the id alone. `conflict.versions.server` carries the zone
+      // this record arrived from, put there by `unit(from:)`.
+      guard let retry = retries[conflict.versions.server.route] else {
         forget(recordID)
         continue
       }
@@ -1532,8 +1550,61 @@ extension OPSyncEngine {
     }
   }
 
+  /// The map's key: FULL record identity, not the record name.
+  ///
+  /// One engine session handles every workspace's zone plus the shared one, and
+  /// the same unit id exists in all of them — every workspace has a
+  /// `data:settings`. Keyed by name alone, fetching one workspace evicted the
+  /// other's tag, so its next save quoted none, met `serverRecordChanged` and
+  /// spent a round trip re-resolving a conflict that was not one. Alternating
+  /// between workspaces evicted continuously.
+  ///
+  /// `\u{1F}` (unit separator) is the joiner because it cannot occur in any
+  /// part: zone names are profile ids or `opSharedZoneName`, and record names
+  /// are unit ids built from storage keys, all of which are validated to
+  /// printable characters.
+  private static func systemFieldsKey(_ recordID: CKRecord.ID) -> String {
+    [recordID.zoneID.ownerName, recordID.zoneID.zoneName, recordID.recordName]
+      .joined(separator: "\u{1F}")
+  }
+
+  /// Decode one archived system-fields blob back into its empty record.
+  ///
+  /// `encodeSystemFields` writes no root object, so this is the decoder pair
+  /// Apple documents for it rather than
+  /// `NSKeyedUnarchiver.unarchivedObject(ofClass:from:)`, which would find
+  /// nothing to unarchive.
+  private static func decodeRecord(_ data: Data) -> CKRecord? {
+    guard let coder = try? NSKeyedUnarchiver(forReadingFrom: data) else { return nil }
+    coder.requiresSecureCoding = true
+    let record = CKRecord(coder: coder)
+    coder.finishDecoding()
+    return record
+  }
+
   fileprivate static func loadSystemFields(profileId: String) -> [String: Data] {
-    UserDefaults.standard.dictionary(forKey: recordsKey(profileId)) as? [String: Data] ?? [:]
+    let stored = UserDefaults.standard.dictionary(forKey: recordsKey(profileId))
+      as? [String: Data] ?? [:]
+
+    // Re-key anything written by a build that keyed by record name. The zone is
+    // not lost and does not have to be guessed: the archived system fields carry
+    // the whole `CKRecord.ID`, so each entry can say where it belongs. An entry
+    // that will not decode is dropped, which costs it one uncontested round trip
+    // — the same as never having had a tag, and it was unusable either way.
+    //
+    // Not written back here. The next event that dirties the map flushes it in
+    // the new shape; until then this is re-derived on load, which is cheap and
+    // leaves nothing half-converted if the process dies.
+    var migrated: [String: Data] = [:]
+    for (key, data) in stored {
+      guard !key.contains("\u{1F}") else {
+        migrated[key] = data
+        continue
+      }
+      guard let record = decodeRecord(data) else { continue }
+      migrated[systemFieldsKey(record.recordID)] = data
+    }
+    return migrated
   }
 
   /// Forget everything this device cached about the server, for EVERY profile.
@@ -1586,34 +1657,30 @@ extension OPSyncEngine {
     let coder = NSKeyedArchiver(requiringSecureCoding: true)
     record.encodeSystemFields(with: coder)
     coder.finishEncoding()
-    systemFields[record.recordID.recordName] = coder.encodedData
+    systemFields[Self.systemFieldsKey(record.recordID)] = coder.encodedData
     systemFieldsDirty = true
   }
 
   fileprivate func forget(_ recordID: CKRecord.ID) {
-    guard systemFields.removeValue(forKey: recordID.recordName) != nil else { return }
+    guard systemFields.removeValue(forKey: Self.systemFieldsKey(recordID)) != nil else { return }
     systemFieldsDirty = true
   }
 
   /// An empty record carrying only the remembered system fields — which is
-  /// exactly what a save needs as its base. `encodeSystemFields` writes no root
-  /// object, so this is the decoder pair Apple documents for it rather than
-  /// `NSKeyedUnarchiver.unarchivedObject(ofClass:from:)`, which would find
-  /// nothing to unarchive.
+  /// exactly what a save needs as its base.
   fileprivate func rememberedRecord(for recordID: CKRecord.ID) -> CKRecord? {
-    guard let data = systemFields[recordID.recordName],
-          let coder = try? NSKeyedUnarchiver(forReadingFrom: data)
+    guard let data = systemFields[Self.systemFieldsKey(recordID)],
+          let record = Self.decodeRecord(data)
     else { return nil }
-    coder.requiresSecureCoding = true
-    let record = CKRecord(coder: coder)
-    coder.finishDecoding()
-    // THE ZONE HAS TO MATCH, because the map is keyed by record NAME alone and a
-    // unit's zone can change under it: the registry used to be saved into the
-    // active profile's zone, so every device upgrading into the shared zone
-    // still holds a tag naming the old one. Handing that record back would build
-    // the save against the wrong zone entirely. Answering nil instead makes it a
-    // first save into the new zone, which is exactly what it is.
-    guard record?.recordID == recordID else { return nil }
+    // THE ZONE STILL HAS TO MATCH, even though the key now carries it. A unit's
+    // zone can change under the map — the registry used to be saved into the
+    // active profile's zone, so a device upgrading into the shared zone still
+    // holds a tag naming the old one — and the migration above re-keys such an
+    // entry by the zone it was WRITTEN with, so it is reachable under its old
+    // identity, not the one being asked for. This is the check that keeps a
+    // lookup from ever building a save against the wrong zone; the key change
+    // only stopped two zones evicting each other.
+    guard record.recordID == recordID else { return nil }
     return record
   }
 }

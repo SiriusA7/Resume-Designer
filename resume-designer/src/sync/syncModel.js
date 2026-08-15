@@ -1283,7 +1283,15 @@ function resolveEachConflict(conflicts) {
 
     const outcome = resolveOneConflict(local, server);
     if (!outcome) continue;
-    resolved.push({ id: server.id, retry: outcome.retry });
+    // NAMED WITH ITS WORKSPACE, because a unit id is not unique across a batch:
+    // one send can carry the same id from several zones — every workspace has a
+    // `data:settings` — and the transport matches these answers back to the
+    // conflicts that produced them. Keyed by id alone, two workspaces' answers
+    // collapsed into one, so one workspace's retry decision was applied to the
+    // other's conflict, and a resolution this side REFUSED could be matched to
+    // the other's acceptance and leave a change tag held for content this
+    // device does not have.
+    resolved.push({ id: server.id, profileId: server.profileId ?? '', retry: outcome.retry });
     if (outcome.parked) parked += 1;
   }
 

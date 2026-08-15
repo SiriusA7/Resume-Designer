@@ -119,7 +119,7 @@ describe('an append-shaped unit unions on the save-conflict path', () => {
     // reach it — and NOTHING is parked, because a union has no loser. The old
     // code parked here and `parkLoser` refused, which is how the entries were
     // lost without a word.
-    expect(answer).toEqual({ resolved: [{ id, retry: true }], parked: 0 });
+    expect(answer).toEqual({ resolved: [{ id, profileId: '', retry: true }], parked: 0 });
 
     // ON THE DISK...
     expect(onDisk(HISTORY).history.map((e) => e.data.name)).toEqual(['mine', 'theirs']);
@@ -140,7 +140,7 @@ describe('an append-shaped unit unions on the save-conflict path', () => {
     const server = unit(id, { events: [event('theirs', '2026-08-04T00:00:00.000Z')], summary: {} }, OLD, 'tokenUsage');
 
     expect(await resolveConflicts([{ local, server }]))
-      .toEqual({ resolved: [{ id, retry: true }], parked: 0 });
+      .toEqual({ resolved: [{ id, profileId: '', retry: true }], parked: 0 });
 
     expect(onDisk(TOKENS).events.map((e) => e.id)).toEqual(['mine', 'theirs']);
     expect(wouldSend(id).events.map((e) => e.id)).toEqual(['mine', 'theirs']);
@@ -162,7 +162,7 @@ describe('an append-shaped unit unions on the save-conflict path', () => {
     const server = unit(id, { events: [event('theirs', '2026-08-04T00:00:00.000Z')], summary: {} }, NEW, 'tokenUsage');
 
     expect(await resolveConflicts([{ local, server }]))
-      .toEqual({ resolved: [{ id, retry: true }], parked: 0 });
+      .toEqual({ resolved: [{ id, profileId: '', retry: true }], parked: 0 });
     expect(onDisk(TOKENS).events.map((e) => e.id)).toEqual(['mine', 'theirs']);
   });
 });
@@ -189,7 +189,7 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
     };
 
     expect(await resolveConflicts([{ local, server }]))
-      .toEqual({ resolved: [{ id, retry: false }], parked: 1 });
+      .toEqual({ resolved: [{ id, profileId: FOREIGN_PROFILE_ID, retry: false }], parked: 1 });
     expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, DATA)))
       .variants['v-1'].data).toEqual({ name: 'Ada (phone)' });
     expect(JSON.parse(backend.files.get(physicalKey(FOREIGN_PROFILE_ID, HISTORY)))
@@ -205,7 +205,7 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
     const server = unit(id, { id: 'v-1', name: 'Design Engineer', data: { name: 'Ada (phone)' } }, OLD, 'resume');
 
     expect(await resolveConflicts([{ local, server }]))
-      .toEqual({ resolved: [{ id, retry: true }], parked: 1 });
+      .toEqual({ resolved: [{ id, profileId: '', retry: true }], parked: 1 });
 
     // The document this device holds is untouched, and the server owes an update.
     expect(onDisk(DATA).variants['v-1'].data).toEqual({ name: 'Ada' });
@@ -228,7 +228,7 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
     // sending our copy back would push this device's stamp over the version it
     // has only just taken.
     expect(await resolveConflicts([{ local, server }]))
-      .toEqual({ resolved: [{ id, retry: false }], parked: 1 });
+      .toEqual({ resolved: [{ id, profileId: '', retry: false }], parked: 1 });
 
     expect(onDisk(DATA).variants['v-1'].data).toEqual({ name: 'Ada (phone)' });
     const parked = onDisk(HISTORY).history.filter((e) => e.changeType === 'sync-conflict');
@@ -245,7 +245,7 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
     const server = unit(id, [{ id: 'app-0' }], OLD);
 
     expect(await resolveConflicts([{ local, server }]))
-      .toEqual({ resolved: [{ id, retry: true }], parked: 0 });
+      .toEqual({ resolved: [{ id, profileId: '', retry: true }], parked: 0 });
   });
 
   it('forfeits a local-winner snapshot when its cached winner cannot reach disk', async () => {
@@ -279,7 +279,7 @@ describe('a snapshot still takes newer-wins, and its loser is still parked', () 
     expect(await resolveConflicts([{
       local: unit(id, winner, NEW),
       server: unit(id, [{ id: 'app-0' }], OLD),
-    }])).toEqual({ resolved: [{ id, retry: true }], parked: 0 });
+    }])).toEqual({ resolved: [{ id, profileId: '', retry: true }], parked: 0 });
     expect(onDisk(APPS)).toEqual(winner);
   });
 });
@@ -477,7 +477,7 @@ describe('the resolution crosses the bridge Swift actually uses', () => {
 
     const reply = await window.__opShell.commandAsync({ type: 'syncResolveConflicts', conflicts });
 
-    expect(reply).toEqual({ ok: true, result: { resolved: [{ id, retry: true }], parked: 0 } });
+    expect(reply).toEqual({ ok: true, result: { resolved: [{ id, profileId: '', retry: true }], parked: 0 } });
     // The disk is asserted after the answer, which is the claim the answer makes.
     expect(onDisk(TOKENS).events.map((e) => e.id)).toEqual(['mine', 'theirs']);
   });

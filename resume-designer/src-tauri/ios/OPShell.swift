@@ -2167,10 +2167,18 @@ extension ShellModel: OPSyncHost {
   /// session's one recovery attempt on a page that has just failed to answer.
   func syncDidConflict(_ conflicts: [SyncConflict]) async -> SyncConflictOutcome {
     let outcome = await resolveConflicts(conflicts)
-    let resolved = Set(outcome.resolved.map(\.id))
-    let unresolved = conflicts.map(\.server.id).filter { !resolved.contains($0) }
+    // By ROUTE, not by id. A batch can hold the same id from several workspaces,
+    // and matching on the id alone let one workspace's answer mark another's
+    // conflict resolved — so a conflict the page actually refused kept its
+    // change tag, which is a tag held for content this device does not have.
+    let resolved = Set(outcome.resolved.map(\.route))
+    let unresolved = conflicts.map(\.server).filter { !resolved.contains($0.route) }
     if !unresolved.isEmpty {
-      await deferSync(unresolved)
+      // Held under each one's own workspace, so the retry sends this device's
+      // copy back into the zone the conflict came from.
+      for (profileId, group) in Dictionary(grouping: unresolved, by: \.profileId) {
+        await deferSync(group.map(\.id), inProfile: profileId.isEmpty ? nil : profileId)
+      }
       NSLog("[OPShell] \(unresolved.count) of \(conflicts.count) conflict(s) were not "
             + "resolved; they are offered again at the next start")
     }
@@ -2215,7 +2223,9 @@ extension ShellModel: OPSyncHost {
         NSLog("[OPShell] a conflict resolution did not decode: \(entry)")
         continue
       }
-      resolved.append(SyncResolution(id: id, retry: retry))
+      // Absent from an older page, which only ever resolved the open workspace.
+      let profileId = entry["profileId"] as? String ?? ""
+      resolved.append(SyncResolution(id: id, profileId: profileId, retry: retry))
     }
     return SyncConflictOutcome(resolved: resolved, parked: parked)
   }
