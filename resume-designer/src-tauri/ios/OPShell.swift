@@ -510,8 +510,15 @@ struct ShellSnapshot: Decodable, Equatable {
 }
 
 extension ShellSnapshot {
+  // EVERY stored property needs a case here AND a line in `init(from:)` below.
+  // The compiler will not tell you when one is missing: an optional `var` is
+  // implicitly nil, so a forgotten decode compiles cleanly and the value is
+  // simply always absent. `accountStats` was added to the struct and missed
+  // here, and the Workspaces sheet drew without its stats for exactly that
+  // reason — no error, no warning, nothing in a log.
   private enum CodingKeys: String, CodingKey {
-    case variantId, variantName, variants, profiles, zoom, zoomPercent, pdfBusy, modalOpen
+    case variantId, variantName, variants, profiles, accountStats
+    case zoom, zoomPercent, pdfBusy, modalOpen
     case settings, chat, library, history, jobs, profile, onboarding, diff, document, design
   }
 
@@ -523,6 +530,7 @@ extension ShellSnapshot {
     // A newer shell can briefly host an older cached page during an update.
     // No profile list means no switcher, not a failed snapshot decode.
     profiles = try values.decodeIfPresent([ShellProfile].self, forKey: .profiles) ?? []
+    accountStats = try values.decodeIfPresent(ShellAccountStats.self, forKey: .accountStats)
     zoom = try values.decode(Double.self, forKey: .zoom)
     zoomPercent = try values.decode(Int.self, forKey: .zoomPercent)
     pdfBusy = try values.decode(Bool.self, forKey: .pdfBusy)
