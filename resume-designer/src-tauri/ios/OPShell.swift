@@ -3035,7 +3035,21 @@ private struct ShellView: View {
         // This also keeps the KEYBOARD out of the layout (the default region
         // set includes it), which is what stops SwiftUI and WKWebView both
         // avoiding it and collapsing the canvas to a ~90pt strip.
-        .ignoresSafeArea(edges: [.top, .bottom])
+        //
+        // EVERY edge, not just the vertical pair. Portrait has no horizontal
+        // safe-area inset, so naming only top and bottom looked complete and
+        // was: nothing could show the difference. LANDSCAPE has them — the
+        // sensor housing on one side, and a symmetric inset on the other — and
+        // the canvas stopped at them, leaving a black gutter down each edge of
+        // the screen.
+        //
+        // That gutter was both of the things it looked like. The bars are
+        // transparent, so what reads as "the header background" is this
+        // webview showing THROUGH the navigation bar — when it stopped short,
+        // the header appeared to stop short with it, and the avatar and share
+        // button ended up sitting on its edge rather than inside it. One gap,
+        // two symptoms.
+        .ignoresSafeArea(edges: .all)
         .navigationBarTitleDisplayMode(.inline)
         // No bar backgrounds: the résumé runs edge to edge and shows THROUGH the
         // chrome, which is the whole point of glass controls floating over it.
