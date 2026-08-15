@@ -244,6 +244,62 @@ describe('collectUnit', () => {
   });
 });
 
+describe('collecting a profile that is not the open one', () => {
+  // A device holds every workspace it has, but only one is mapped. Uploading
+  // just the mapped one leaves the others as registry entries with empty zones:
+  // the switcher offers them and they are blank on every other device. So a
+  // profile has to be collectable WITHOUT being opened, which means reading its
+  // namespaced keys directly rather than through the live mapping.
+  const OTHER = 'pother';
+  const otherKey = (k) => mapKey(OTHER, k);
+
+  beforeEach(() => {
+    disk.set(otherKey(DATA), JSON.stringify({
+      variants: { 'o-1': { name: 'Other Person' } },
+      currentVariantId: 'o-1',
+    }));
+    disk.set(otherKey('resume-designer-applications'), '[{"id":"a-other"}]');
+  });
+
+  it('collects that profile\'s résumés and not the open one\'s', () => {
+    const ids = collectUnits(OTHER).map((u) => u.id);
+    expect(ids).toContain('resume:o-1');
+    expect(ids).not.toContain('resume:v-1');
+  });
+
+  it('reads its own bytes for a unit id both profiles have', () => {
+    // The failure this exists for: one unit id, two workspaces, different
+    // contents. Reading through the live mapping returns the OPEN profile's
+    // value and sends it up as the other's — one workspace overwritten by
+    // another, invisible until somebody switches.
+    const unit = collectUnits(OTHER).find((u) => u.id === 'key:resume-designer-applications');
+    expect(unit.payload).toBe('[{"id":"a-other"}]');
+    expect(collectUnit('key:resume-designer-applications', OTHER).payload).toBe('[{"id":"a-other"}]');
+    expect(collectUnit('key:resume-designer-applications').payload).toBe('[]');
+  });
+
+  it('leaves the account\'s shared keys to the open workspace', () => {
+    // Shared keys are never namespaced — they belong to the account, not to a
+    // workspace — so they have exactly one value and exactly one collector.
+    // Emitting them again under each profile would send the same record from
+    // several zones and let the last one win.
+    expect(collectUnits(OTHER).map((u) => u.id)).not.toContain('key:resume-designer-profiles');
+    expect(collectUnits().map((u) => u.id)).toContain('key:resume-designer-profiles');
+  });
+
+  it('does not namespace a shared key when asked for one by id', () => {
+    // `physicalKey` would have; `mapKey` knows shared keys are identity. A
+    // namespaced shared key names a location nothing writes, so the lookup
+    // returns absent — and absence is a value in this protocol.
+    expect(collectUnit('key:resume-designer-profiles', OTHER)).not.toBe(null);
+  });
+
+  it('still collects the open workspace when named explicitly', () => {
+    expect(collectUnits(PROFILE).map((u) => u.id).sort())
+      .toEqual(collectUnits().map((u) => u.id).sort());
+  });
+});
+
 describe('applyUnits', () => {
   it('lands a remote résumé without touching the local currentVariantId', async () => {
     await applyUnits([resumeUnit('v-2', { name: 'Ada Lovelace', summary: 'Product Lead' })]);

@@ -1250,17 +1250,24 @@ extension ShellModel {
   /// persisted debt: `sendSync` may also hold the ids for the next start, but a
   /// profile switch drops that process-local set because the ids belong to
   /// another zone. Re-collecting from the persisted marker closes that hole.
-  func sendAllUnits(_ unitIds: [String]) async {
+  func sendAllUnits(_ unitIds: [String], forProfile answered: String) async {
     guard !syncSuspended else {
       NSLog("[OPShell] iCloud sync is suspended; \(unitIds.count) unit(s) not sent")
       return
     }
-    guard let profileId = syncProfileId, syncFullUploadOwed(profileId: profileId) else {
+    // THE ANSWER NAMES ITS OWN WORKSPACE. Several asks can be outstanding — a
+    // device that has never synced owes one per workspace — so settling against
+    // whichever profile happens to be open would clear a debt that was never
+    // paid and send one workspace's contents into another's zone. An older page
+    // that does not echo the id is answering the ask this side used to make,
+    // which was always about the open profile.
+    let profileId = answered.isEmpty ? syncProfileId : answered
+    guard let profileId, syncFullUploadOwed(profileId: profileId) else {
       NSLog("[OPShell] no full upload is owed; \(unitIds.count) collected unit(s) ignored")
       return
     }
-    NSLog("[OPShell] offering \(unitIds.count) unit(s) for a full upload")
-    let sent = await sendSync(unitIds: unitIds)
+    NSLog("[OPShell] offering \(unitIds.count) unit(s) for \(profileId)'s full upload")
+    let sent = await sendSync(unitIds: unitIds, inProfile: profileId)
     if sent {
       setSyncFullUploadOwed(false, profileId: profileId)
     }
@@ -1359,7 +1366,14 @@ extension ShellModel {
       return
     }
 
-    // THIS profile's debt, if this device has never offered it one.
+    // Every workspace this device holds, open one first. The page owns the
+    // registry and names them; the active id is included because it may be the
+    // first one on this install and not yet published.
+    var seenProfileIds = Set<String>()
+    let knownProfileIds = ([profileId] + snapshot.profiles.map(\.id))
+      .filter { !$0.isEmpty && seenProfileIds.insert($0).inserted }
+
+    // EVERY one of those workspaces' debt, if this device has never offered one.
     //
     // Workspaces are a shipped feature, so there are usually several. Every
     // profile's pre-existing resumes must be offered when it first starts: a
@@ -1380,17 +1394,21 @@ extension ShellModel {
     // removing the key, so a settled debt is still a decision on record and only
     // a genuinely never-seen profile is absent here. Nothing removes the key
     // afterwards, so this branch cannot be taken twice for the same profile.
-    if !syncFullUploadConsidered(profileId: profileId) {
-      NSLog("[OPShell] first gated start for this profile — a full upload is owed")
-      setSyncFullUploadOwed(true, profileId: profileId)
+    // Not only the OPEN one, which is the change. A device that upgrades with
+    // several workspaces has résumés in all of them, and owing a full upload
+    // only for whichever happened to be open left the rest as registry entries
+    // with empty zones — the other device offers the workspace in its switcher
+    // and finds nothing inside. Opening a workspace is a UI act; whether its
+    // contents are the person's data is not.
+    for known in knownProfileIds where !syncFullUploadConsidered(profileId: known) {
+      NSLog("[OPShell] first gated start seen for \(known) — a full upload is owed")
+      setSyncFullUploadOwed(true, profileId: known)
     }
 
     // The page owns the registry and names every profile explicitly. Swift
     // carries those ids unchanged; the engine still adds the active profile as
     // a fallback when an older cached page supplied no list.
-    let state = await sync.start(
-      profileId: profileId, knownProfileIds: snapshot.profiles.map(\.id)
-    )
+    let state = await sync.start(profileId: profileId, knownProfileIds: knownProfileIds)
     syncAccountState = state
     guard state == .available else {
       // Signed out, restricted, or iCloud not reachable. All normal, none an
@@ -1428,7 +1446,7 @@ extension ShellModel {
     // recover a batch the page would not apply: the pull cannot re-deliver it —
     // the change token has moved past it — but a send with no tag brings it back
     // down that same conflict path. See `syncDeferred`.
-    await drainSyncDeferred(profileId: profileId)
+    await drainSyncDeferred()
     syncInitialFetchRefused = false
     do {
       try await sync.fetch()
@@ -1451,8 +1469,13 @@ extension ShellModel {
     // Requesting the collection does NOT clear the debt. The process can die,
     // the page can reload, or `sendSync` can defer these ids; only a successful
     // send in `sendAllUnits` clears it.
-    if syncFullUploadOwed(profileId: profileId) {
-      send("syncCollect")
+    //
+    // One ask per owing workspace. The page can collect any of them without
+    // opening it — `collectUnits(profileId)` reads that profile's namespaced
+    // keys directly — so this does not disturb what is on screen. Each answer
+    // names the workspace it is for, because several can be in flight.
+    for owing in knownProfileIds where syncFullUploadOwed(profileId: owing) {
+      send("syncCollect", ["profileId": owing])
     }
   }
 
@@ -1484,7 +1507,7 @@ extension ShellModel {
   /// (OPSync.swift): a unit whose last send failed transiently is sitting in
   /// that queue and would otherwise wait for its own next edit.
   @discardableResult
-  func sendSync(unitIds: [String]) async -> Bool {
+  func sendSync(unitIds: [String], inProfile profileId: String? = nil) async -> Bool {
     guard !syncSuspended else {
       NSLog("[OPShell] iCloud sync is suspended; \(unitIds.count) changed unit(s) not sent")
       return false
@@ -1493,7 +1516,7 @@ extension ShellModel {
     // work to do, and treating that as sent lets its persisted debt settle.
     guard !unitIds.isEmpty else { return true }
     do {
-      try await sync.send(unitIds: unitIds)
+      try await sync.send(unitIds: unitIds, inProfile: profileId)
       return true
     } catch {
       // Four things reach here, and three of them queued nothing at all before
@@ -1510,8 +1533,9 @@ extension ShellModel {
       // These ids are the ONLY record that those bytes changed: persistence
       // names a unit once, on the save that wrote it, and will not name it
       // again until it is edited again. So they wait for the next start instead
-      // of being dropped.
-      await deferSync(unitIds)
+      // of being dropped — under the profile this send was FOR, which is the
+      // open one only when nobody named another.
+      await deferSync(unitIds, inProfile: profileId)
       NSLog("[OPShell] sync send postponed; \(unitIds.count) unit(s) held durably")
       return false
     }
@@ -1548,8 +1572,17 @@ extension ShellModel {
   /// Every id is first made durable under the active profile, before the scope
   /// ask can suspend. A shared answer adds a second, device-wide copy; the
   /// start-time hoist removes the fallback only after that copy is durable.
-  private func deferSync(_ unitIds: [String]) async {
-    guard let profileId = syncProfileId else {
+  private func deferSync(_ unitIds: [String], inProfile requested: String? = nil) async {
+    // WHOSE DEBT THIS IS. Nil means the open profile, which is right for a send
+    // that failed — those units came from the open workspace. It is wrong for a
+    // FETCH that would not apply: that record arrived in some zone, and the
+    // recovery is to send this device's copy of it back into THAT zone so the
+    // server answers `serverRecordChanged` and returns its own. Recorded under
+    // the open profile instead, the retry collected the open workspace's value
+    // for the id and sent it to the open workspace's zone — so the profile that
+    // actually needed the round trip never got one, and its change token had
+    // already moved past the record, meaning nothing would deliver it again.
+    guard let profileId = requested ?? syncProfileId else {
       NSLog("[OPShell] no active profile for \(unitIds.count) deferred sync unit(s)")
       return
     }
@@ -1599,26 +1632,57 @@ extension ShellModel {
     }
   }
 
+  /// Pay EVERY workspace's debt, not just the open one's.
+  ///
+  /// Debt is recorded per profile because it is only recoverable in that
+  /// profile's zone. Draining only the open profile's queue meant a fetch into
+  /// another workspace that the page would not apply waited for somebody to
+  /// switch to that workspace — and the change token had already moved past the
+  /// record, so until they did, nothing would deliver it again. On a device
+  /// where that workspace is never opened, "until they did" is never.
+  ///
+  /// The open profile's queue is one of these and needs no special case, which
+  /// is why this takes no profile any more. A queue whose profile the engine
+  /// does not handle — one left behind by a deleted workspace — fails its zone
+  /// lookup and keeps its debt, at the cost of a refused send and no round trip.
+  ///
   /// Hoist first so a shared id parked by the `nil` fallback reaches the queue
   /// that every profile drains. `fetchShared` has already run before this call,
   /// preserving the shared-zone fetch-before-send order.
-  private func drainSyncDeferred(profileId: String) async {
+  private func drainSyncDeferred() async {
     await hoistSharedSyncDeferred()
+    // Shared first: those ids belong to the account rather than to any one
+    // workspace, and a profile drain must not be the thing that sends them.
     await drainSyncDeferred(key: Self.syncDeferredSharedKey)
-    await drainSyncDeferred(key: OPSyncEngine.deferredKey(profileId))
+    for (queueProfileId, key) in deferredProfileQueues() {
+      await drainSyncDeferred(key: key, inProfile: queueProfileId)
+    }
+  }
+
+  /// Every per-profile deferred queue this device holds, as (profile id, key).
+  ///
+  /// The keys ARE the record. Nothing else enumerates the profiles this device
+  /// has ever owed a send for — a queue outlives the session that created it,
+  /// which is the entire point of it being durable.
+  private func deferredProfileQueues() -> [(String, String)] {
+    let prefix = OPSyncEngine.deferredKey("")
+    return UserDefaults.standard.dictionaryRepresentation().keys
+      .filter { $0.hasPrefix(prefix) && $0 != Self.syncDeferredSharedKey }
+      .sorted()
+      .map { (String($0.dropFirst(prefix.count)), $0) }
   }
 
   /// Offer one durable snapshot without clearing it first. Only a completed
   /// send settles ids, and anything refused again during that send stays owed.
   /// If the process dies before settlement, the whole snapshot is harmlessly
   /// offered again on the next start.
-  private func drainSyncDeferred(key: String) async {
+  private func drainSyncDeferred(key: String, inProfile profileId: String? = nil) async {
     let offered = syncDeferred(key: key)
     guard !offered.isEmpty else { return }
 
     syncDeferredDrainKey = key
     syncDeferredReowed.removeAll()
-    let sent = await sendSync(unitIds: Array(offered))
+    let sent = await sendSync(unitIds: Array(offered), inProfile: profileId)
     let reowed = syncDeferredReowed
     syncDeferredDrainKey = nil
     syncDeferredReowed.removeAll()
@@ -1635,7 +1699,7 @@ extension ShellModel {
   /// start rather than sending it through the wrong engine session.
   func syncRetryDeferred(profileId: String) async {
     guard !syncSuspended, syncProfileId == profileId else { return }
-    await drainSyncDeferred(profileId: profileId)
+    await drainSyncDeferred()
   }
 
   private func syncFullUploadOwed(profileId: String) -> Bool {
@@ -1735,9 +1799,18 @@ extension ShellModel {
   private func oweFullUploadForEveryConsideredProfile() {
     let defaults = UserDefaults.standard
     let prefix = Self.syncFullUploadKey("")
-    let keys = defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(prefix) }
+    var keys = Set(defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(prefix) })
+    // THE SNAPSHOT'S LIST TOO, which the marker keys do not cover. They record
+    // every workspace this device has STARTED syncing, and after a purge that
+    // is the wrong set: a workspace fetched from the account but never opened
+    // has no marker, so a marker-only sweep silently left it out of the restore
+    // the person had just explicitly asked for. (The comment that used to be
+    // here said this side never sees a workspace list. It has since — see
+    // `runStartSync`, which hands the registry's ids to `sync.start` — and the
+    // enumeration was never updated to match.)
+    keys.formUnion(snapshot.profiles.map { Self.syncFullUploadKey($0.id) })
     for key in keys { defaults.set(true, forKey: key) }
-    NSLog("[OPShell] a full upload is owed again for \(keys.count) considered profile(s)")
+    NSLog("[OPShell] a full upload is owed again for \(keys.count) profile(s)")
   }
 
   /// Stand behind one more failure. The published value is the one just
@@ -1903,16 +1976,19 @@ extension ShellModel {
 /// one.
 extension ShellModel: OPSyncHost {
   /// The unit as the page holds it RIGHT NOW, asked at send time.
-  func syncUnit(withId id: String) async -> SyncUnit? {
-    guard case .answered(let value) = await sendForResult("syncUnit", ["unitId": id]) else {
+  func syncUnit(withId id: String, inProfile profileId: String) async -> SyncUnit? {
+    guard case .answered(let value) = await sendForResult(
+      "syncUnit", ["unitId": id, "profileId": profileId]
+    ) else {
       // Nobody answered — most often `sendForResult`'s ten-second bound against
       // a webview that is still reloading. That is NOT this device having
       // nothing: `recordToSend` (OPSync.swift) treats nil as a final answer and
       // takes the change off the queue, so reading silence that way dropped a
       // real local edit until the unit happened to be edited again. The id
       // waits for the next start instead, in the same set an edit made while
-      // the transport was down waits in.
-      await deferSync([id])
+      // the transport was down waits in — under the profile whose record this
+      // is, which is not necessarily the open one.
+      await deferSync([id], inProfile: profileId.isEmpty ? nil : profileId)
       NSLog("[OPShell] no answer for unit \(id); held for the next start")
       return nil
     }
@@ -2014,7 +2090,15 @@ extension ShellModel: OPSyncHost {
   func syncDidFetch(_ units: [SyncUnit]) async -> Bool {
     guard await applyFetched(units) else {
       syncInitialFetchRefused = true
-      await deferSync(units.map(\.id))
+      // GROUPED BY THE ZONE EACH ARRIVED IN, because one delivery can carry
+      // several workspaces' records and the debt is only recoverable in the
+      // zone it belongs to. `SyncUnit.profileId` is that zone, reported by the
+      // transport as a fact about the record — the same seam `syncScopes`
+      // crosses in the other direction. Empty means the shared zone, which
+      // `deferSync` reads as "no profile of its own".
+      for (profileId, group) in Dictionary(grouping: units, by: \.profileId) {
+        await deferSync(group.map(\.id), inProfile: profileId.isEmpty ? nil : profileId)
+      }
       NSLog("[OPShell] \(units.count) fetched unit(s) were not applied; "
             + "they are offered again at the next start")
       return false
@@ -2312,17 +2396,22 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
       //
       // Only the ID of each unit is read. The payloads are right there in the
       // message and they are deliberately left alone — the engine re-asks for
-      // each unit's bytes at send time through `syncUnit(withId:)`, which is
-      // the whole point of that callback, and decoding a payload here would be
-      // the first place Swift knew what is inside one.
+      // each unit's bytes at send time through `syncUnit(withId:inProfile:)`,
+      // which is the whole point of that callback, and decoding a payload here
+      // would be the first place Swift knew what is inside one.
       guard let units = body["units"] as? [[String: Any]] else {
         NSLog("[OPShell] syncUnits with no units: \(body)")
         return
       }
       let unitIds = units.compactMap { $0["id"] as? String }
+      // Which workspace this is the collection OF, echoed back by the page,
+      // because this side can have asked for several and the answers arrive
+      // independently. Absent from an older page, which only ever answered for
+      // the open one.
+      let forProfile = body["profileId"] as? String ?? ""
       // An empty collection is still an answer: there is nothing to put on the
       // wire, and `sendAllUnits` can settle the persisted full-upload debt.
-      Task { @MainActor in await self.model?.sendAllUnits(unitIds) }
+      Task { @MainActor in await self.model?.sendAllUnits(unitIds, forProfile: forProfile) }
     default:
       guard let snapshot = try? JSONDecoder().decode(ShellSnapshot.self, from: data) else {
         NSLog("[OPShell] undecodable snapshot: \(message.body)")

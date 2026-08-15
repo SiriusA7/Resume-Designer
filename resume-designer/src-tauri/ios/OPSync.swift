@@ -265,7 +265,12 @@ protocol OPSyncHost: AnyObject {
   ///
   /// Returning nil drops the queued send. It never deletes anything: absence is
   /// not a deletion here, and the server keeps whatever it already holds.
-  func syncUnit(withId id: String) async -> SyncUnit?
+  ///
+  /// `inProfile` is the workspace to read from, taken from the record's own
+  /// zone by `recordToSend` — `""` for the shared zone, which has no workspace
+  /// of its own. It is a route, not a classification: this side still never
+  /// decides what a unit id means.
+  func syncUnit(withId id: String, inProfile profileId: String) async -> SyncUnit?
 
   /// Which zone each of these units belongs in — `opSharedScope` or anything
   /// else for the profile's own zone — keyed by unit id.
@@ -555,8 +560,15 @@ final class OPSyncEngine {
   /// `recordToSend`, which finally has the unit itself, is already too late to
   /// choose. Nothing about the id is inspected on this side; see `syncScopes`.
   /// A refused answer refuses the whole send rather than routing on a guess.
-  func send(unitIds: [String]) async throws {
+  /// `inProfile` names the workspace these units belong to, defaulting to the
+  /// open one. Any other value sends a workspace this device holds but nobody
+  /// has opened — a full upload of an unvisited profile, or debt owed for a
+  /// fetch into its zone that the page would not apply. The zone has to be
+  /// THAT profile's: routing those to the open profile's zone writes one
+  /// person's résumés into another's workspace.
+  func send(unitIds: [String], inProfile requested: String? = nil) async throws {
     try refuseSendDuringDelegateEvent()
+    let profileId = requested ?? self.profileId
     guard let engine, let profileId, let sharedZoneID,
           let profileZoneID = profileZoneIDs.first(where: { $0.zoneName == profileId })
     else { throw OPSyncError.notStarted }
@@ -1321,7 +1333,14 @@ extension OPSyncEngine {
   /// true. It is still a dropped SEND and never a delete — the server keeps
   /// whatever it already holds, because absence is not deletion here.
   private func recordToSend(_ recordID: CKRecord.ID, engine: CKSyncEngine) async -> CKRecord? {
-    guard let unit = await host?.syncUnit(withId: recordID.recordName) else {
+    // WHICH WORKSPACE'S BYTES, read off the record's own zone. A `CKRecord.ID`
+    // carries its zone, so the route was decided when the change was queued and
+    // is still here — it was simply being dropped, and the page then answered
+    // out of whatever workspace was open. Same unit id in two zones is the
+    // ordinary case, not an edge one: every workspace has a `data:settings`.
+    let zoneName = recordID.zoneID.zoneName
+    let profileId = zoneName == opSharedZoneName ? "" : zoneName
+    guard let unit = await host?.syncUnit(withId: recordID.recordName, inProfile: profileId) else {
       // This device has nothing under that id, and nothing will build one
       // later either, so leaving it queued is a question re-asked on every
       // send for the life of the app.

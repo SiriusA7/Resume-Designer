@@ -1657,16 +1657,26 @@ export function initIOSShell(deps) {
     // `{ id, kind, payload, modifiedAt }` and the payload is an opaque string.
     // Units cross Swift -> JS as a JSON STRING because the command channel is
     // a JS string literal — the same reason a picked file crosses as base64.
-    syncCollect: () => {
+    // Both take the profile whose workspace is being collected. `''` is the
+    // open one, which is every case but a full upload of a workspace nobody has
+    // opened on this device — the whole reason those two are separable. Swift
+    // never derives the id: it reads it off the record's own zone, or names the
+    // profile it is paying debt for.
+    syncCollect: ({ profileId }) => {
       // Same guard `sharePdf`/`openNativePdfPreview` use before posting
       // directly to the handler, rather than optional-chaining through it —
       // one idiom for "tell Swift something" on this bridge.
       if (!isNativeShellAvailable()) return;
+      const forProfile = String(profileId ?? '');
       window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
-        kind: 'syncUnits', units: deps.collectUnits(),
+        // ECHOED BACK, because the answer is asynchronous and Swift may have
+        // asked for more than one workspace: the reply has to say which one it
+        // is, or its debt is settled against whichever ask happens to be open.
+        kind: 'syncUnits', profileId: forProfile, units: deps.collectUnits(forProfile),
       });
     },
-    syncUnit: ({ unitId }) => deps.collectUnit(String(unitId ?? '')),
+    syncUnit: ({ unitId, profileId }) =>
+      deps.collectUnit(String(unitId ?? ''), String(profileId ?? '')),
     syncAccountProfiles: accountProfilesAction(deps),
     // Registry bootstrap and profile-zone readiness are separate facts. Native
     // reports only after its initial pull has either settled or become

@@ -7,9 +7,15 @@
  */
 import { appStorage, getProfileMapping } from '../appStorage.js';
 import {
-  splitPhysicalKey, physicalKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY,
+  splitPhysicalKey, mapKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY,
 } from '../profileKeys.js';
-import { getActiveProfileId, listProfiles } from '../profiles.js';
+// `getActiveProfileId` is deliberately NOT imported here. The persisted active
+// pointer and the live storage mapping are different facts — they disagree for
+// the whole of a profile switch — and every routing decision in this file wants
+// the mapping, because that is what `appStorage` reads and writes through. The
+// pointer is where the app will be after the next reload, which is a question
+// nothing here is asking.
+import { listProfiles } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
 // key from it on every edit, so parking a loser for that variant has to go
 // through it — see parkLoser.
@@ -79,11 +85,22 @@ const readJSON = (key, fallback) => parseJSON(appStorage.getItem(key), fallback)
  */
 function storageKeyFor(profileId, logicalKey) {
   if (!profileId || profileId === getProfileMapping()) return logicalKey;
-  return physicalKey(profileId, logicalKey);
+  // `mapKey`, not `physicalKey`: the latter namespaces anything it is handed,
+  // including the keys that must never be namespaced — shared keys, which
+  // belong to the account rather than to any one workspace, and keys the app
+  // does not own. Reaching those under a profile prefix invents a storage
+  // location nothing reads or writes, so a collection would report the shared
+  // key as absent and, worse, absence is a value here.
+  return mapKey(profileId, logicalKey);
 }
 
+// Per profile, because the stamps ARE per profile: `SYNC_STATE_KEY` is a
+// namespaced key like any other. `''` is the open workspace, which is what a
+// local edit stamps (`touchUnits`) and what a collection of the open workspace
+// reads back. Everything else stamps and reads under its own id, so a workspace
+// nobody has opened can still be collected with the stamps its own applies and
+// edits wrote — the two halves cannot disagree, because there is one accessor.
 const stateFor = (profileId) => readJSON(storageKeyFor(profileId, STATE_KEY), {});
-const state = () => stateFor('');
 
 /** Fetched units bucketed by the profile whose zone each arrived in. */
 function groupByProfile(units) {
@@ -785,63 +802,90 @@ function withModifiedAt(unit, recorded) {
   return { ...unit, modifiedAt: modifiedAtFor(unit.id, recorded) };
 }
 
-function collectDataUnits(recorded) {
-  // Every `resume:` and `data:` unit lives inside the active profile's own
-  // CloudKit zone — there is no shared variant of either kind.
-  return splitData(readJSON(DATA_KEY, null))
+function collectDataUnits(recorded, profileId) {
+  // Every `resume:` and `data:` unit lives inside its profile's own CloudKit
+  // zone — there is no shared variant of either kind.
+  return splitData(readJSON(storageKeyFor(profileId, DATA_KEY), null))
     .map((unit) => withModifiedAt({ ...unit, scope: 'profile' }, recorded));
 }
 
-function collectKeyUnit(key, recorded) {
+/**
+ * One key's unit, read from `storageKey` and NAMED by `logicalKey`.
+ *
+ * The two are the same string for the open workspace and for shared keys, and
+ * differ for every other profile, whose keys are namespaced on disk. They are
+ * separate parameters rather than one because they answer different questions:
+ * where the bytes are, and what the unit is called on the server — and a unit
+ * id is the same in every zone, which is the whole reason a profile can be
+ * collected without being open.
+ *
+ * Reading `storageKey` DIRECTLY is the point. The previous version reduced a
+ * physical key to its logical name and read it back through `appStorage`, which
+ * maps by whatever profile is live — so the name came from one profile and the
+ * bytes from another the moment those two differed.
+ */
+function collectKeyUnit(storageKey, logicalKey, recorded) {
   // The data blob is represented by its `resume:` / `data:` units, never by
   // one key snapshot, and every other key must pass the shared sync policy.
-  if (key === DATA_KEY || classifyKey(key) !== 'synced') return null;
+  if (logicalKey === DATA_KEY || classifyKey(logicalKey) !== 'synced') return null;
 
   // Absent is not empty. An empty payload CLEARS the key on every receiving
   // device; a key this device cannot read is one it has nothing to say about.
-  const payload = appStorage.getItem(key);
+  const payload = appStorage.getItem(storageKey);
   if (payload == null) return null;
 
-  const id = `${KEY_UNIT_PREFIX}${key}`;
+  const id = `${KEY_UNIT_PREFIX}${logicalKey}`;
   return withModifiedAt({
     id,
-    kind: key === TOKEN_KEY ? 'tokenUsage' : 'plain',
+    kind: logicalKey === TOKEN_KEY ? 'tokenUsage' : 'plain',
     payload,
-    scope: keyScope(key),
+    scope: keyScope(logicalKey),
   }, recorded);
 }
 
 /**
- * Everything this device would push.
+ * Everything this device would push FOR ONE PROFILE.
+ *
+ * `''` means the open workspace — whatever `appStorage` currently maps — and is
+ * also what a named profile resolves to when it is the one that is open. Any
+ * other id collects that workspace's namespaced keys WITHOUT opening it, which
+ * is what lets a device upload every workspace it holds rather than only the
+ * one somebody happens to be looking at. A profile nobody has opened on this
+ * device is otherwise a registry entry with an empty zone behind it.
  *
  * The data blob is decomposed rather than sent whole — see syncUnits.js.
  * Device-local keys are filtered out here rather than at the transport, so a
  * transport bug cannot leak them.
  */
-export function collectUnits() {
-  const recorded = state();
-  const units = collectDataUnits(recorded);
+export function collectUnits(profileId = '') {
+  const recorded = stateFor(profileId);
+  const units = collectDataUnits(recorded, profileId);
 
-  // `appStorage.keys()` returns PHYSICAL keys — profile-namespaced
-  // (`resume-p--<id>--<logical>`) — while `getItem`/`setItem` take LOGICAL ones
-  // and map them internally. Classifying a physical key returns 'unknown' and
-  // would sync nothing at all, so every key is reduced to its logical name
-  // first. A key that is not namespaced (a shared key) is already logical.
+  // `appStorage.keys()` returns PHYSICAL keys — the cache holds EVERY profile's,
+  // not just the open one — so the filter is what makes this a collection of ONE
+  // workspace rather than a blend of all of them.
   //
-  // The cache holds EVERY profile's keys, not just the active one, so the
-  // profile filter is not optional: reducing another profile's key to its
-  // logical name emits it as if it belonged to the active profile, and reads it
-  // back through `getItem`, which maps to the ACTIVE profile — so the unit
-  // carries the wrong profile's value, or none at all. Same filter as
-  // persistence.js's collectActiveOwnedKeys: namespaced keys must match the
-  // active profile, unnamespaced ones (shared keys, and pre-adoption
-  // unprefixed keys, which are the live workspace while mapping is off) pass.
-  const activeProfile = getActiveProfileId();
-  for (const physical of appStorage.keys()) {
-    const split = splitPhysicalKey(physical);
-    if (split && split.profileId !== activeProfile) continue;
-    const key = split?.logicalKey ?? physical;
-    const unit = collectKeyUnit(key, recorded);
+  // The two branches are not symmetric, and that asymmetry is the rule:
+  //  - a NAMESPACED key belongs to the profile named in it, full stop;
+  //  - an UNNAMESPACED key belongs to whatever is live. Those are the shared
+  //    keys, which are the account's rather than any workspace's, and the
+  //    pre-adoption unprefixed keys, which ARE the live workspace while mapping
+  //    is off. Neither can be another profile's, so collecting a profile that
+  //    is not the live one must skip them — collecting them under that profile
+  //    would send one workspace's shared state as another's.
+  //
+  // Compared against the LIVE MAPPING, never the persisted active pointer. The
+  // two are the same except during a profile switch, which is exactly when this
+  // can run and get it wrong: `appStorage` reads through the mapping, so a
+  // filter on the pointer selects one workspace's key names and hands back
+  // another's bytes.
+  const mapped = getProfileMapping() || '';
+  const target = profileId || mapped;
+  const targetIsLive = target === mapped;
+  for (const storageKey of appStorage.keys()) {
+    const split = splitPhysicalKey(storageKey);
+    if (split ? split.profileId !== target : !targetIsLive) continue;
+    const unit = collectKeyUnit(storageKey, split?.logicalKey ?? storageKey, recorded);
     if (unit) units.push(unit);
   }
 
@@ -849,23 +893,30 @@ export function collectUnits() {
 }
 
 /**
- * The one unit this device would push for `unitId`, or `null` when it has no
- * matching syncable value. Uses the same constructors and skip rules as the
- * full collection above so the two entry points cannot classify differently.
+ * The one unit this device would push for `unitId` IN ONE PROFILE, or `null`
+ * when it has no matching syncable value. Uses the same constructors and skip
+ * rules as the full collection above so the two entry points cannot classify
+ * differently.
+ *
+ * The profile comes from the record's own zone (see `recordToSend` in
+ * OPSync.swift): a `CKRecord.ID` carries its zone, so the transport already
+ * knows which workspace it is rebuilding a record for and does not have to
+ * assume it is the open one.
  */
-export function collectUnit(unitId) {
+export function collectUnit(unitId, profileId = '') {
   if (typeof unitId !== 'string') return null;
-  const recorded = state();
+  const recorded = stateFor(profileId);
 
   if (unitId.startsWith(RESUME_UNIT_PREFIX) || unitId.startsWith(DATA_UNIT_PREFIX)) {
     // One splitData pass over the blob is intentional: it keeps the exact same
     // decomposition rules as collectUnits without introducing a second parser.
-    return collectDataUnits(recorded).find((unit) => unit.id === unitId) ?? null;
+    return collectDataUnits(recorded, profileId).find((unit) => unit.id === unitId) ?? null;
   }
 
   if (unitId.startsWith(KEY_UNIT_PREFIX)) {
-    // Direct logical-key read; single-unit lookup never enumerates storage.
-    return collectKeyUnit(unitId.slice(KEY_UNIT_PREFIX.length), recorded);
+    // Direct read; single-unit lookup never enumerates storage.
+    const logicalKey = unitId.slice(KEY_UNIT_PREFIX.length);
+    return collectKeyUnit(storageKeyFor(profileId, logicalKey), logicalKey, recorded);
   }
 
   return null;

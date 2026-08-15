@@ -1047,9 +1047,26 @@ describe('the Design sheet commands', () => {
     const collectUnits = vi.fn(() => ([
       { id: 'resume:v-1', kind: 'resume', payload: '{"name":"A"}', modifiedAt: '2026-08-09T00:00:00.000Z' },
     ]));
-    const { send } = await mount({ collectUnits });
+    const { send, postMessage } = await mount({ collectUnits });
     expect(send({ type: 'syncCollect' })).toEqual({ ok: true });
-    expect(collectUnits).toHaveBeenCalled();
+    expect(collectUnits).toHaveBeenCalledWith('');
+    expect(postMessage.mock.calls.at(-1)[0].profileId).toBe('');
+  });
+
+  it('collects the workspace Swift asked for, and says which one it answered', async () => {
+    // A device that has never synced owes a full upload PER workspace, so
+    // several asks are outstanding at once and the answers arrive
+    // independently. Without the echo, whichever reply landed first would
+    // settle whichever debt happened to be current — clearing a workspace's
+    // debt that was never paid, and sending its units into another's zone.
+    const collectUnits = vi.fn(() => []);
+    const { send, postMessage } = await mount({ collectUnits });
+
+    expect(send({ type: 'syncCollect', profileId: 'pother' })).toEqual({ ok: true });
+    expect(collectUnits).toHaveBeenCalledWith('pother');
+    const answer = postMessage.mock.calls.at(-1)[0];
+    expect(answer.kind).toBe('syncUnits');
+    expect(answer.profileId).toBe('pother');
   });
 
   it('projects the stored iCloud switch, and leaves it off when nothing stored it', async () => {
@@ -1098,7 +1115,20 @@ describe('the Design sheet commands', () => {
       ok: true,
       result: unit,
     });
-    expect(collectUnit).toHaveBeenCalledWith('resume:v-1');
+    // The open workspace, which is what an absent profile means.
+    expect(collectUnit).toHaveBeenCalledWith('resume:v-1', '');
+  });
+
+  it('reads the unit out of the workspace Swift names', async () => {
+    // The transport takes this off the record's own zone, so it can be a
+    // workspace nobody has opened. Reading the open one instead would send that
+    // workspace's résumé into another's zone — one overwritten by the other,
+    // invisible until somebody switches.
+    const collectUnit = vi.fn(() => null);
+    const { send } = await mount({ collectUnit });
+
+    send({ type: 'syncUnit', unitId: 'resume:v-1', profileId: 'pother' });
+    expect(collectUnit).toHaveBeenCalledWith('resume:v-1', 'pother');
   });
 
   it('returns null through the command reply for an unknown unit id', async () => {
@@ -1109,7 +1139,7 @@ describe('the Design sheet commands', () => {
       ok: true,
       result: null,
     });
-    expect(collectUnit).toHaveBeenCalledWith('resume:unknown');
+    expect(collectUnit).toHaveBeenCalledWith('resume:unknown', '');
   });
 
   it('answers which zone each named unit belongs in, from the model', async () => {
