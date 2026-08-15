@@ -4943,7 +4943,27 @@ private struct ChatComposer: View {
 private struct ComposerSurface: ViewModifier {
   func body(content: Content) -> some View {
     let shape = RoundedRectangle(cornerRadius: ChatComposer.surfaceRadius, style: .continuous)
-    content.glassEffect(.regular.interactive(), in: shape)
+    // `.regular`, NOT `.regular.interactive()`.
+    //
+    // Interactive glass "reacts to touch and pointer events", which means the
+    // shape claims touches. This shape is not a control: it is the BACKING of
+    // one, and every control on it — the field, the two chips, send — is its
+    // own button with its own interactive glass. Nothing presses the backing,
+    // so nothing should be listening to it.
+    //
+    // It is also the best candidate for a bug I could not reproduce. The model
+    // and reasoning menus open upward out of chips on this surface, and on a
+    // device their lowest rows cannot be selected by a direct press — but CAN
+    // be if you press a row higher up and drag down onto them. That difference
+    // says the touch-DOWN never reaches the menu, while a gesture the menu
+    // already owns tracks fine: a hit-testing claim, not a drawing one. This
+    // backing is the thing in that region with a claim to drop.
+    //
+    // Nothing about the resting appearance changes: same material, same shape,
+    // same blur. UNVERIFIED — the simulator selects those rows under every
+    // synthetic touch, including real HID paths, so the failure only exists
+    // under a finger.
+    content.glassEffect(.regular, in: shape)
   }
 }
 
