@@ -104,6 +104,11 @@ targets:
               - UISceneConfigurationName: Default Configuration
                 UISceneDelegateClassName: TaoSceneDelegate
         ITSAppUsesNonExemptEncryption: false
+        # Lets a silent CloudKit push wake the app to fetch while it is not in
+        # front. Without it the push is delivered only when the app is already
+        # running, which is the case that needed it least.
+        UIBackgroundModes:
+          - remote-notification
     entitlements:
       path: resume-designer_iOS/resume-designer_iOS.entitlements
       # HAND-MAINTAINED. xcodegen writes the .entitlements file itself from
@@ -118,6 +123,15 @@ targets:
         com.apple.developer.icloud-services:
           - CloudKit
         com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
+        # SILENT pushes, and only silent ones. CloudKit uses APNs to say "this
+        # database changed"; nothing is ever shown, no alert, no badge, no
+        # sound, and iOS never asks the person for notification permission —
+        # that prompt belongs to UNUserNotificationCenter, which this app does
+        # not touch. Without this entitlement a device only learns of a change
+        # when it happens to fetch: at launch, on returning to the foreground,
+        # or on CKSyncEngine's own schedule, which is where the half-minute lag
+        # between two devices came from.
+        aps-environment: development
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full

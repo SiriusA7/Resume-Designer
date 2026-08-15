@@ -889,6 +889,25 @@ final class ShellModel: ObservableObject {
   /// in between.
   func profilesDidResolve() {}
 
+  /// Cover the webview for a reload that changes profile.
+  ///
+  /// A reload restarts the whole handover: the page comes up as the ORIGINAL
+  /// WEB APP, chrome and all, and `activateWeb` retries until the shell takes
+  /// it over. At launch nobody sees that because the splash is still up. On a
+  /// profile switch nothing covered it, so the desktop UI flashed through every
+  /// time — which reads as the app breaking rather than changing profile.
+  ///
+  /// The same view the launch uses, and that is the right one: the app IS
+  /// starting again, on another profile's data. Released by the new profile's
+  /// first pull settling, exactly as at launch, with its own ceiling because
+  /// the launch timer is long spent.
+  func coverForProfileReload() {
+    launchContinuationVisible = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.launchCeiling) { [weak self] in
+      self?.releaseLaunchContinuation()
+    }
+  }
+
   /// The initial pull has settled — it landed, or it reported itself
   /// unavailable. Either way there is nothing further to wait for, so the app
   /// opens showing what the ACCOUNT holds rather than what this device last saw.
@@ -1232,6 +1251,7 @@ final class ShellModel: ObservableObject {
   func switchToProfile(_ id: String) async {
     guard case .answered(let value) = await sendForResult("switchProfile", ["id": id]),
           value as? Bool == true else { return }
+    coverForProfileReload()
     webView?.reload()
   }
 
@@ -1242,6 +1262,7 @@ final class ShellModel: ObservableObject {
   func createProfile(named name: String) async -> Bool {
     guard case .answered(let value) = await sendForResult("createProfile", ["name": name]),
           value as? Bool == true else { return false }
+    coverForProfileReload()
     webView?.reload()
     return true
   }
@@ -2603,6 +2624,27 @@ final class OPShell: NSObject {
       model.beginProfileBootstrap()
       self.model = model
 
+      // SILENT CloudKit pushes. Nothing is ever shown — no alert, no badge, no
+      // sound — and iOS does not prompt: that prompt belongs to
+      // `UNUserNotificationCenter`, which this app never touches. This is only
+      // the APNs registration that lets the database's change notifications
+      // arrive at all.
+      //
+      // Nothing else is needed, and deliberately so. CKSyncEngine.h: a sync
+      // engine "attempts to discover an existing CKDatabaseSubscription … If
+      // the engine doesn't find a subscription, it automatically creates one …
+      // On receipt of a notification, the engine schedules a sync operation to
+      // fetch the related changes." So there is no delegate to forward from and
+      // no subscription to manage — which is just as well, since Tauri owns the
+      // app delegate. The same header states the requirement this pairs with:
+      // "CKSyncEngine requires the CloudKit and Remote notifications
+      // entitlements" (see `aps-environment` in project.yml).
+      //
+      // Without this, a device only learned of another's edit when it happened
+      // to fetch — at launch, on returning to the foreground, or on the
+      // engine's own schedule.
+      UIApplication.shared.registerForRemoteNotifications()
+
       if let wk = webView as? WKWebView {
         let bridge = SnapshotBridge()
         bridge.model = model
@@ -2894,8 +2936,8 @@ private struct ShellView: View {
   /// The New-workspace prompt. An `.alert` with a text field rather than a
   /// sheet: naming a workspace is one short answer, and a whole sheet for one
   /// field reads as a bigger commitment than creating one actually is.
-  @State private var creatingWorkspace = false
-  @State private var newWorkspaceName = ""
+  @State private var creatingProfile = false
+  @State private var newProfileName = ""
   /// The zoom a pinch started from; nil when no pinch is in flight.
   @State private var pinchBase: Double?
   /// The bar is showing the zoom controls rather than the tools — see
@@ -2906,11 +2948,60 @@ private struct ShellView: View {
 
   private enum Sheet: String, Identifiable {
     case settings, structure, design, chat, library, history, jobs, profile, pdfPreview
-    case workspaces
+    case profiles
     var id: String { rawValue }
   }
 
   private var snapshot: ShellSnapshot { model.snapshot }
+
+  /// The navigation bar, extracted from `body`.
+  ///
+  /// Not a preference: with the profile submenu inline, the whole `body`
+  /// stopped type-checking "in reasonable time" and the BUILD failed. A
+  /// `ToolbarContentBuilder` property is the documented way to divide it, and
+  /// this has to stay separate however small it looks.
+  @ToolbarContentBuilder
+  private var chrome: some ToolbarContent {
+        // `.disabled` is applied per ITEM, never to the NavigationStack's
+        // content. It is an environment modifier that propagates down the
+        // whole tree, so putting it on the content disabled CanvasHost and
+        // therefore the hosted WKWebView — every tap on the web dialog was
+        // swallowed before it reached the page, silently.
+        ToolbarItem(placement: .topBarLeading) {
+          // ONE button, not two. The initials and the overflow were separate
+          // controls sitting side by side, which spent the leading slot twice
+          // and made "whose profile is this" compete with "what else can I
+          // do". Merged, the profile IS the identity of everything in the
+          // menu, which is what it always was.
+          actionsMenu.disabled(snapshot.modalOpen)
+        }
+        // The avatar draws its own circle, so the bar must not draw a capsule
+        // behind it — two backgrounds is what made it an oval. This belongs to
+        // the ITEM, not to the view inside it: it is `ToolbarContent`, and the
+        // bar owns the background it is switching off.
+        .sharedBackgroundVisibility(.hidden)
+        ToolbarItem(placement: .principal) {
+          titleMenu.disabled(snapshot.modalOpen)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          HStack(spacing: 10) {
+            // Present only while records are actually landing, and carrying
+            // no label: a spinner beside the workspace is legible as "this is
+            // catching up", and there is nothing truthful to add about how
+            // far along a fetch is. It sits on the trailing side because the
+            // leading pair is about to become one workspace control.
+            if model.syncPulling {
+              ProgressView()
+                .controlSize(.small)
+                .transition(.opacity)
+                .accessibilityLabel("Syncing")
+            }
+            pdfButton
+          }
+          .animation(.easeInOut(duration: 0.2), value: model.syncPulling)
+          .disabled(snapshot.modalOpen)
+        }
+  }
 
   var body: some View {
     NavigationStack {
@@ -2954,46 +3045,11 @@ private struct ShellView: View {
         // Each toolbar item carries its own backing, so nothing here depends on
         // the bar for legibility.
         .toolbarBackground(.hidden, for: .navigationBar, .bottomBar)
-        .toolbar {
-          // `.disabled` is applied per ITEM, never to the NavigationStack's
-          // content. It is an environment modifier that propagates down the
-          // whole tree, so putting it on the content disabled CanvasHost and
-          // therefore the hosted WKWebView — every tap on the web dialog was
-          // swallowed before it reached the page, silently.
-          ToolbarItem(placement: .topBarLeading) {
-            // ONE button, not two. The initials and the overflow were separate
-            // controls sitting side by side, which spent the leading slot twice
-            // and made "whose workspace is this" compete with "what else can I
-            // do". Merged, the workspace IS the identity of everything in the
-            // menu, which is what it always was.
-            actionsMenu.disabled(snapshot.modalOpen)
-          }
-          ToolbarItem(placement: .principal) {
-            titleMenu.disabled(snapshot.modalOpen)
-          }
-          ToolbarItem(placement: .topBarTrailing) {
-            HStack(spacing: 10) {
-              // Present only while records are actually landing, and carrying
-              // no label: a spinner beside the workspace is legible as "this is
-              // catching up", and there is nothing truthful to add about how
-              // far along a fetch is. It sits on the trailing side because the
-              // leading pair is about to become one workspace control.
-              if model.syncPulling {
-                ProgressView()
-                  .controlSize(.small)
-                  .transition(.opacity)
-                  .accessibilityLabel("Syncing")
-              }
-              pdfButton
-            }
-            .animation(.easeInOut(duration: 0.2), value: model.syncPulling)
-            .disabled(snapshot.modalOpen)
-          }
-        }
+        .toolbar { chrome }
         .sheet(item: $sheet) { which in
           switch which {
           case .settings: SettingsSheet(model: model)
-          case .workspaces: WorkspacesSheet(model: model)
+          case .profiles: ProfilesSheet(model: model)
           case .structure: StructureSheet(model: model)
           case .design: DesignSheet(model: model)
           case .chat: ChatSheet(model: model)
@@ -3012,18 +3068,14 @@ private struct ShellView: View {
         // it is. The create is disabled on an empty name rather than silently
         // inventing "New profile", so the workspace list never fills with
         // identical entries nobody meant to make.
-        .alert("New workspace", isPresented: $creatingWorkspace) {
-          TextField("Name", text: $newWorkspaceName)
+        .alert("New profile", isPresented: $creatingProfile) {
+          TextField("Name", text: $newProfileName)
             .textInputAutocapitalization(.words)
           Button("Cancel", role: .cancel) {}
-          Button("Create") {
-            let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { return }
-            Task { await model.createProfile(named: name) }
-          }
-          .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          Button("Create", action: submitNewProfile)
+            .disabled(trimmedNewProfileName.isEmpty)
         } message: {
-          Text("A separate space with its own résumés, job descriptions and chats.")
+          Text("A separate profile with its own résumés, job descriptions and chats.")
         }
         // The wizard, which is not in `sheet` at all. It has no open command —
         // the WEB component decides when it runs, because one component serves
@@ -3208,13 +3260,50 @@ private struct ShellView: View {
 
   /// Everything that is NOT about which résumé is open — that lives on the
   /// title menu, which is the control that names it.
+  /// Both halves of the New-profile alert, out of the view builder.
+  ///
+  /// Inline, the trimming expression appeared twice inside a `ViewBuilder` and
+  /// the toolbar chain around it stopped type-checking "in reasonable time" —
+  /// a build failure, not a behaviour one, and it returns the moment either of
+  /// these is folded back in.
+  private var trimmedNewProfileName: String {
+    newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func submitNewProfile() {
+    let name = trimmedNewProfileName
+    guard !name.isEmpty else { return }
+    Task { await model.createProfile(named: name) }
+  }
+
+  /// The initials, as an actual circle.
+  ///
+  /// Extracted from the menu's label because inlining it tipped the toolbar
+  /// expression over the type-checker's budget — the failure is a build timeout,
+  /// not a wrong shape, and it comes back the moment this is folded in again.
+  private var avatar: some View {
+    Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(Color.accentColor)
+      .frame(width: 32, height: 32)
+      .background(Color.accentColor.opacity(0.16), in: Circle())
+      // The 44pt touch target the bar's own items get, without the glass: a
+      // 32pt circle is the right SIZE to look at and the wrong one to hit.
+      .contentShape(Circle())
+      .frame(width: 44, height: 44)
+  }
+
   private var actionsMenu: some View {
     Menu {
       // WORKSPACES FIRST, because the button is now the workspace's initials
       // and this is what it claims to be about. Switching is inline rather than
       // behind the sheet: it is the one thing done often enough to deserve a
       // single tap, and the sheet exists for the rest.
-      Section("Workspace") {
+      // ONE ROW that opens a submenu, rather than the whole profile list spilling
+      // into the main menu. With three or four profiles the list pushed File and
+      // Tools off the bottom, so the menu opened on a scroll — and everything a
+      // person came here for was the part they could not see.
+      Menu {
         ForEach(snapshot.profiles) { profile in
           Button {
             Task { await model.switchToProfile(profile.id) }
@@ -3227,12 +3316,20 @@ private struct ShellView: View {
           }
           .disabled(profile.isActive)
         }
-        Button { newWorkspaceName = ""; creatingWorkspace = true } label: {
-          Label("New workspace…", systemImage: "plus")
+        Divider()
+        Button { newProfileName = ""; creatingProfile = true } label: {
+          Label("New profile…", systemImage: "plus")
         }
-        Button { sheet = .workspaces } label: {
-          Label("Manage workspaces", systemImage: "person.2")
+        Button { sheet = .profiles } label: {
+          Label("Manage profiles", systemImage: "person.2")
         }
+      } label: {
+        // Named for the profile you are IN, so the row answers "which one is
+        // this" without being opened.
+        Label(
+          snapshot.profiles.first(where: \.isActive)?.name ?? "Profiles",
+          systemImage: "person.crop.circle"
+        )
       }
       // No "Edit" section. Undo and redo are document actions used constantly
       // while typing, and two taps into a menu is the wrong cost for something
@@ -3270,13 +3367,17 @@ private struct ShellView: View {
       // The initials, not an ellipsis: the same identity the desktop header
       // carries, so the corner answers "whose workspace is this" before it is
       // asked. `?` only before the first snapshot lands.
-      Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
-        .font(.caption2.weight(.semibold))
-        .frame(width: 28, height: 28)
-        .foregroundStyle(Color.accentColor)
-        .background(Color.accentColor.opacity(0.14), in: Circle())
+      // A REAL circle, drawn here, with the toolbar's own glass switched off
+      // beneath it (`sharedBackgroundVisibility(.hidden)` on the item).
+      //
+      // The toolbar's automatic capsule cannot be a circle for this label: it is
+      // 44pt tall and pads the content horizontally, so two letters always come
+      // out wider than tall. Every attempt to size the label into a circle ends
+      // up shrinking the initials to fit somebody else's arithmetic. Drawing the
+      // shape means the shape is the shape.
+      avatar
     }
-    .accessibilityLabel("Workspace and actions")
+    .accessibilityLabel("Profile and actions")
   }
 
   private var pdfButton: some View {
@@ -7150,7 +7251,7 @@ private struct PhotoScreen: View {
 /// to them, and the numbers for the one that is open. Switching is NOT here —
 /// it is one tap in the menu that opened this — so the sheet is for the actions
 /// that deserve a confirmation step.
-private struct WorkspacesSheet: View {
+private struct ProfilesSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
 
@@ -7172,9 +7273,9 @@ private struct WorkspacesSheet: View {
             row(for: profile)
           }
         } header: {
-          Text("Workspaces")
+          Text("Profiles")
         } footer: {
-          Text("Separate spaces — each keeps its own résumés, job descriptions, "
+          Text("Separate profiles — each keeps its own résumés, job descriptions, "
                + "applications and chats. Everything here syncs across your devices.")
         }
 
@@ -7189,18 +7290,18 @@ private struct WorkspacesSheet: View {
           } header: {
             // Named for the workspace it describes, because these numbers are
             // NOT the account's — every workspace keeps its own applications.
-            Text(active.map { "\($0.name) holds" } ?? "This workspace holds")
+            Text(active.map { "\($0.name) holds" } ?? "This profile holds")
           }
         }
       }
-      .navigationTitle("Workspaces")
+      .navigationTitle("Profiles")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
       }
-      .alert("Delete workspace?", isPresented: deleteBinding, presenting: pendingDelete) { profile in
+      .alert("Delete profile?", isPresented: deleteBinding, presenting: pendingDelete) { profile in
         Button("Delete", role: .destructive) {
           Task {
             if !(await model.deleteProfile(profile.id)) {
