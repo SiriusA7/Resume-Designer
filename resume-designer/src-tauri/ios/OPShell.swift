@@ -27,8 +27,15 @@ import WebKit
 
 // MARK: - Wire contract
 
-/// Mirrors `buildSnapshot()` in src/iosShell.js. Changing either side without
-/// the other silently empties the chrome.
+struct ShellProfile: Decodable, Equatable {
+  let id: String
+  let name: String
+  let initials: String
+  let isActive: Bool
+}
+
+/// Mirrors the snapshot posted by src/iosShell.js. Changing either side
+/// without the other silently empties the chrome.
 struct ShellSnapshot: Decodable, Equatable {
   struct Variant: Decodable, Equatable, Identifiable {
     let id: String
@@ -38,6 +45,7 @@ struct ShellSnapshot: Decodable, Equatable {
   var variantId: String?
   var variantName: String
   var variants: [Variant]
+  var profiles: [ShellProfile]
   var zoom: Double
   var zoomPercent: Int
   var pdfBusy: Bool
@@ -475,11 +483,42 @@ struct ShellSnapshot: Decodable, Equatable {
   /// What the chrome shows before the first snapshot arrives — a fraction of a
   /// second at launch, but it must not render as blank or as "0%".
   static let empty = ShellSnapshot(
-    variantId: nil, variantName: "On Paper", variants: [],
+    variantId: nil, variantName: "On Paper", variants: [], profiles: [],
     zoom: 1, zoomPercent: 100, pdfBusy: false, modalOpen: false, settings: .empty,
     chat: nil, library: nil, history: nil, jobs: nil, profile: nil,
     document: nil, design: nil
   )
+}
+
+extension ShellSnapshot {
+  private enum CodingKeys: String, CodingKey {
+    case variantId, variantName, variants, profiles, zoom, zoomPercent, pdfBusy, modalOpen
+    case settings, chat, library, history, jobs, profile, onboarding, diff, document, design
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    variantId = try values.decodeIfPresent(String.self, forKey: .variantId)
+    variantName = try values.decode(String.self, forKey: .variantName)
+    variants = try values.decode([Variant].self, forKey: .variants)
+    // A newer shell can briefly host an older cached page during an update.
+    // No profile list means no switcher, not a failed snapshot decode.
+    profiles = try values.decodeIfPresent([ShellProfile].self, forKey: .profiles) ?? []
+    zoom = try values.decode(Double.self, forKey: .zoom)
+    zoomPercent = try values.decode(Int.self, forKey: .zoomPercent)
+    pdfBusy = try values.decode(Bool.self, forKey: .pdfBusy)
+    modalOpen = try values.decode(Bool.self, forKey: .modalOpen)
+    settings = try values.decode(Settings.self, forKey: .settings)
+    chat = try values.decodeIfPresent(ChatView.self, forKey: .chat)
+    library = try values.decodeIfPresent(LibraryView.self, forKey: .library)
+    history = try values.decodeIfPresent(History.self, forKey: .history)
+    jobs = try values.decodeIfPresent(JobsView.self, forKey: .jobs)
+    profile = try values.decodeIfPresent(ProfileView.self, forKey: .profile)
+    onboarding = try values.decodeIfPresent(OnboardingView.self, forKey: .onboarding)
+    diff = try values.decodeIfPresent(DiffReview.self, forKey: .diff)
+    document = try values.decodeIfPresent(DocumentOutline.self, forKey: .document)
+    design = try values.decodeIfPresent(Design.self, forKey: .design)
+  }
 }
 
 // MARK: - Reply pacing
@@ -941,6 +980,15 @@ final class ShellModel: ObservableObject {
     }
   }
 
+  /// Ask the page to run the shared save-before-pointer switch path. The page
+  /// answers true only after both editors and the active pointer are durable;
+  /// this side owns the WKWebView reload and must not reload on any other reply.
+  func switchToProfile(_ id: String) async {
+    guard case .answered(let value) = await sendForResult("switchProfile", ["id": id]),
+          value as? Bool == true else { return }
+    webView?.reload()
+  }
+
   /// The command body, encoded once for both ways of asking.
   ///
   /// `nil` means it could not be built or there is nobody to ask; the caller
@@ -1184,10 +1232,12 @@ extension ShellModel {
       setSyncFullUploadOwed(true, profileId: profileId)
     }
 
-    // Deliberate Phase 0 stub: this shell has no workspace list of its own yet.
-    // Pass only the active profile until Plan 2 supplies the page-owned list;
-    // Swift must not invent one by classifying unit ids or reading the registry.
-    let state = await sync.start(profileId: profileId, knownProfileIds: [profileId])
+    // The page owns the registry and names every profile explicitly. Swift
+    // carries those ids unchanged; the engine still adds the active profile as
+    // a fallback when an older cached page supplied no list.
+    let state = await sync.start(
+      profileId: profileId, knownProfileIds: snapshot.profiles.map(\.id)
+    )
     syncAccountState = state
     guard state == .available else {
       // Signed out, restricted, or iCloud not reachable. All normal, none an
@@ -2491,7 +2541,11 @@ private struct ShellView: View {
           // therefore the hosted WKWebView — every tap on the web dialog was
           // swallowed before it reached the page, silently.
           ToolbarItem(placement: .topBarLeading) {
-            actionsMenu.disabled(snapshot.modalOpen)
+            HStack(spacing: 10) {
+              if snapshot.profiles.count > 1 { profileMenu }
+              actionsMenu
+            }
+            .disabled(snapshot.modalOpen)
           }
           ToolbarItem(placement: .principal) {
             titleMenu.disabled(snapshot.modalOpen)
@@ -2627,6 +2681,30 @@ private struct ShellView: View {
     case "dark": return .dark
     default: return nil
     }
+  }
+
+  private var profileMenu: some View {
+    Menu {
+      ForEach(snapshot.profiles, id: \.id) { profile in
+        Button {
+          Task { await model.switchToProfile(profile.id) }
+        } label: {
+          if profile.isActive {
+            Label(profile.name, systemImage: "checkmark")
+          } else {
+            Text(profile.name)
+          }
+        }
+        .disabled(profile.isActive)
+      }
+    } label: {
+      Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
+        .font(.caption2.weight(.semibold))
+        .frame(width: 28, height: 28)
+        .foregroundStyle(Color.accentColor)
+        .background(Color.accentColor.opacity(0.14), in: Circle())
+    }
+    .accessibilityLabel("Switch workspace")
   }
 
   // The title IS the résumé switcher: on a phone the navigation bar's centre is

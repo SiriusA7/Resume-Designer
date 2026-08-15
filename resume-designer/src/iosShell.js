@@ -23,12 +23,11 @@
  */
 
 /** Name of the `WKScriptMessageHandler` Swift registers. Must match OPShell.swift. */
-// The library's stats and timeline are the ONLY things this module imports.
-// `applicationStats.js` has no imports of its own — it is pure arithmetic over
-// a list of applications, tested standalone — so pulling it in keeps this
-// module free of anything with a side effect, which is the property that lets
-// every projection here be unit-tested without a DOM.
+// Shared projection and lifecycle services stay on the JS side of the bridge,
+// so native code never grows a second implementation of their rules.
 import { computeStats, timelinePoints } from './applicationStats.js';
+import { profileInitials } from './accountStats.js';
+import { listProfiles, switchToProfileDurably } from './profiles.js';
 // Version-history entry names, shared with the web dialog. The leaf module
 // holds only strings: the dialog's lucide icons live beside IT, because this
 // bridge draws nothing and Swift picks its own SF Symbols.
@@ -1141,6 +1140,7 @@ function disablePageZoom() {
 }
 
 let activated = false;
+let activationSent = false;
 let streamDocument = false;
 let streamChat = false;
 let chatView = null;
@@ -1240,6 +1240,9 @@ export function initIOSShell(deps) {
     // is how a delete quietly loses threads.
     selectVariant: ({ id }) => deps.loadVariant(id),
     newVariant: () => window.showOnboardingWizard?.({ skipApiKeyStep: true }),
+    switchProfile: ({ id }) => (deps.switchToProfileDurably || switchToProfileDurably)(
+      String(id ?? ''),
+    ),
 
     // The wizard. Every one of these is the SAME handler the web card's button
     // calls — the component owns the step machine, and a second copy of "which
@@ -1722,9 +1725,17 @@ export function initIOSShell(deps) {
     }
     waits = 0;
     const { currentId, list } = getVariantsSnapshot();
+    const activeProfileId = deps.getActiveProfileId?.() || '';
+    const profiles = (deps.listProfiles?.() || listProfiles()).map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      initials: profileInitials(profile.name),
+      isActive: profile.id === activeProfileId,
+    }));
     window.webkit.messageHandlers[SHELL_HANDLER].postMessage(
       {
         kind: 'snapshot',
+        profiles,
         ...buildSnapshot({
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),
@@ -1750,6 +1761,15 @@ export function initIOSShell(deps) {
         }),
       }
     );
+    // The engine reads the profile ids from Swift's current snapshot. Post that
+    // snapshot first, then activate sync, so its first start cannot capture the
+    // empty pre-snapshot model and fall back to the active profile alone.
+    if (!activationSent) {
+      activationSent = true;
+      window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
+        kind: 'activated', profileId: activeProfileId,
+      });
+    }
   };
   // Coalesce: loading a variant fires the variant subscription AND a zoom
   // refit in the same frame, and the chrome only needs the settled result.
@@ -1814,17 +1834,9 @@ export function initIOSShell(deps) {
       // them from the new page's viewport, so a reload hands the canvas back a
       // second scale that fights the app's own.
       //
-      // The active profile rides along because Swift has no notion of one and
-      // the CloudKit zone is named after it. This is the right carrier: a
-      // profile switch reloads the window, so the id cannot change under a
-      // document. Empty means the workspace has not adopted a profile yet, and
-      // the native side leaves sync down until an activation names one.
-      if (isNativeShellAvailable()) {
-        window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
-          kind: 'activated',
-          profileId: deps.getActiveProfileId?.() || '',
-        });
-      }
+      // `send` posts the profile-bearing snapshot first and the activation
+      // immediately after it. That order is load-bearing now that native sync
+      // starts every profile zone named by the snapshot.
       publish();
       return true;
     },

@@ -18,7 +18,7 @@ import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
   listProfiles, getActiveProfileId, activateProfileDurably, createProfile,
   renameProfileDurably, deleteProfile, deleteProfileDurably, exportProfileBackup,
-  importProfileBackup, isAdoptionPending, PROFILES_CHANGED_EVENT,
+  importProfileBackup, isAdoptionPending, PROFILES_CHANGED_EVENT, switchToProfileDurably,
 } from '../../profiles.js';
 import { getVariants, getUserProfile } from '../../persistence.js';
 import { getAllJobDescriptions } from '../../jobDescriptions.js';
@@ -112,12 +112,8 @@ export function AccountSection() {
 
   const switchTo = async (id) => {
     if (id === activeId || adopting) return;
-    if (!(await flushActiveEdits())) {
-      toast.error('Could not save your latest changes — profile switch cancelled.');
-      return;
-    }
-    if (!(await activateProfileDurably(id, activeId))) {
-      toast.error("Could not switch profiles — the change didn't reach disk.");
+    if (!(await switchToProfileDurably(id))) {
+      toast.error("Could not switch profiles — the latest changes didn't reach disk.");
       return;
     }
     window.location.reload();

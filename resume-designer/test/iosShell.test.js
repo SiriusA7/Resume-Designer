@@ -760,6 +760,10 @@ describe('the Design sheet commands', () => {
     return {
       deps,
       postMessage,
+      snapshot: () => postMessage.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.kind === 'snapshot')
+        .at(-1),
       send: (command) => window.__opShell.command(command),
       // What Swift's `sendForResult` reaches, through `callAsyncJavaScript`:
       // the same handlers, with a promised answer awaited instead of dropped.
@@ -774,6 +778,42 @@ describe('the Design sheet commands', () => {
     postMessage.mock.calls.map(([m]) => m).filter((m) => m.kind === 'snapshot').at(-1);
 
   afterEach(() => { delete globalThis.webkit; });
+
+  it('puts the profile list and the active one in the snapshot', async () => {
+    const listProfiles = vi.fn(() => [
+      { id: 'pa', name: 'Ada Shah' },
+      { id: 'pb', name: 'Bo' },
+    ]);
+    const getActiveProfileId = vi.fn(() => 'pb');
+    const { snapshot } = await mount({ listProfiles, getActiveProfileId });
+
+    expect(snapshot().profiles).toEqual([
+      { id: 'pa', name: 'Ada Shah', initials: 'AS', isActive: false },
+      // A single-word name takes two letters. This helper is shared with
+      // desktop deliberately so the two shells can never drift.
+      { id: 'pb', name: 'Bo', initials: 'BO', isActive: true },
+    ]);
+  });
+
+  it('publishes the profile list before activation starts native sync', async () => {
+    const { postMessage } = await mount({
+      listProfiles: () => [{ id: 'pa', name: 'Ada Shah' }],
+      getActiveProfileId: () => 'pa',
+    });
+
+    expect(postMessage.mock.calls.map(([message]) => message.kind).slice(0, 2))
+      .toEqual(['snapshot', 'activated']);
+  });
+
+  it('routes a profile switch through the durable service', async () => {
+    const switchToProfileDurably = vi.fn(async () => true);
+    const { sendAsync } = await mount({ switchToProfileDurably });
+
+    await expect(sendAsync({ type: 'switchProfile', id: 'pb' })).resolves.toEqual({
+      ok: true, result: true,
+    });
+    expect(switchToProfileDurably).toHaveBeenCalledWith('pb');
+  });
 
   it('resolves a new row\'s shape on this side, from the path alone', async () => {
     const addListItem = vi.fn();

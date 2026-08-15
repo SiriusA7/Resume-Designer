@@ -1,9 +1,11 @@
 /**
- * Profile registry + lifecycle. Storage-only module: imports the appStorage
- * facade and pure key helpers, no DOM and no React, so vitest imports it
- * directly. The switch/reload orchestration lives in the UI (AccountSection).
+ * Profile registry + lifecycle. The durable half of profile switching lives
+ * here so desktop and the native shell share the same save-before-pointer
+ * ordering; each UI still owns its own reload.
  */
 import { appStorage, setProfileMapping, getProfileMapping } from './appStorage.js';
+import { store } from './store.js';
+import { flushPendingProfileSave } from './userProfilePanel.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, SYNC_STATE_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
@@ -980,6 +982,26 @@ export async function activateProfileDurably(id, restoreId) {
   setActiveProfile(restoreId);
   await appStorage.flush();
   return false;
+}
+
+/**
+ * Save every active editor, then durably point the next boot at `id`.
+ *
+ * The order is load-bearing: the resume and profile editors must write first,
+ * then their storage writes must reach disk, and only then may the active
+ * profile pointer change. Reloading belongs to the caller because desktop
+ * reloads the window while iOS reloads its WKWebView.
+ */
+export async function switchToProfileDurably(id) {
+  const activeId = getActiveProfileId();
+  if (!id || id === activeId || isAdoptionPending()) return false;
+
+  const savedResume = store.saveNow();
+  const savedProfile = flushPendingProfileSave();
+  const durable = await appStorage.flush();
+  if (!savedResume || !savedProfile || !durable) return false;
+
+  return activateProfileDurably(id, activeId);
 }
 
 export function createProfile({ name, emoji = '🙂' }) {
