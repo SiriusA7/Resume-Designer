@@ -20,7 +20,7 @@ import { paginate, resetPaginatedState } from './pagination.js';
 import { normalizePageSize, DEFAULT_PAGE_WIDTH_IN } from './pageSetup.js';
 import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from './inlineEditor.js';
 import {
-  initVariants, loadVariant, duplicateVariant, exportCurrentVariant,
+  initVariants, loadVariant, duplicateVariant, exportCurrentVariant, renameCurrentVariant,
   subscribeVariants, getVariantsSnapshot,
   getVariantList, getCurrentId,
 } from './variantManager.js';
@@ -597,7 +597,7 @@ export async function init() {
   // calls activate(), so desktop and the browser are unaffected. Wired last:
   // its commands drive the controls and window globals set up above.
   initIOSShell({
-    subscribeVariants, getVariantsSnapshot, loadVariant, duplicateVariant,
+    subscribeVariants, getVariantsSnapshot, loadVariant, duplicateVariant, renameCurrentVariant,
     exportCurrentVariant, getZoom, fitToView, setZoomLevel, openSettings,
     // Settings sheet.
     getTheme, setTheme, getSettings, saveSettings, saveApiKey, getAppInfo,

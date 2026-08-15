@@ -1432,7 +1432,13 @@ export function initIOSShell(deps) {
     diffApplyAll: () => diffHandlers.applyAll?.(),
     diffRejectAll: () => diffHandlers.rejectAll?.(),
     diffClose: () => diffHandlers.close?.(),
-    renameVariant: () => ask('rd:variant-rename'),
+    // The NAME, not a request to ask for one. `ask('rd:variant-rename')` opened
+    // the desktop dialog — a shadcn card, in the middle of a native app — and
+    // that is the whole reason this route exists separately from the others
+    // here: everything else on this bridge already had a native surface.
+    // `renameCurrentVariant` is the same function the web header calls once its
+    // own dialog closes, so both platforms rename through one implementation.
+    renameVariant: ({ name }) => deps.renameCurrentVariant(String(name ?? '')),
     duplicateVariant: () => duplicateVariant(),
     deleteVariant: () => ask('rd:variant-delete'),
     importVariant: () => ask('rd:variant-import'),

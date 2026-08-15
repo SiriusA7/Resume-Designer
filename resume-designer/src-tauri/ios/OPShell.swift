@@ -2936,6 +2936,8 @@ private struct ShellView: View {
   /// The New-workspace prompt. An `.alert` with a text field rather than a
   /// sheet: naming a workspace is one short answer, and a whole sheet for one
   /// field reads as a bigger commitment than creating one actually is.
+  @State private var renamingVariant = false
+  @State private var renameDraft = ""
   @State private var creatingProfile = false
   @State private var newProfileName = ""
   /// The zoom a pinch started from; nil when no pinch is in flight.
@@ -2975,11 +2977,6 @@ private struct ShellView: View {
           // menu, which is what it always was.
           actionsMenu.disabled(snapshot.modalOpen)
         }
-        // The avatar draws its own circle, so the bar must not draw a capsule
-        // behind it — two backgrounds is what made it an oval. This belongs to
-        // the ITEM, not to the view inside it: it is `ToolbarContent`, and the
-        // bar owns the background it is switching off.
-        .sharedBackgroundVisibility(.hidden)
         ToolbarItem(placement: .principal) {
           titleMenu.disabled(snapshot.modalOpen)
         }
@@ -3068,6 +3065,18 @@ private struct ShellView: View {
         // it is. The create is disabled on an empty name rather than silently
         // inventing "New profile", so the workspace list never fills with
         // identical entries nobody meant to make.
+        // Renaming the résumé, natively. It used to post `rd:variant-rename`,
+        // which opened the WEB header's dialog — a desktop card in the middle
+        // of a native app, and the last web surface reachable from this bar.
+        // Pre-filled with the current name, because a rename is nearly always
+        // an edit of what is there rather than a fresh sentence.
+        .alert("Rename resume", isPresented: $renamingVariant) {
+          TextField("Name", text: $renameDraft)
+            .textInputAutocapitalization(.words)
+          Button("Cancel", role: .cancel) {}
+          Button("Rename", action: submitRename)
+            .disabled(trimmedRenameDraft.isEmpty)
+        }
         .alert("New profile", isPresented: $creatingProfile) {
           TextField("Name", text: $newProfileName)
             .textInputAutocapitalization(.words)
@@ -3233,7 +3242,12 @@ private struct ShellView: View {
       // without it "Rename…" reads as applying to whichever row you last
       // looked at rather than to the one on screen.
       Section("This resume") {
-        Button { model.send("renameVariant") } label: { Label("Rename…", systemImage: "pencil") }
+        Button {
+          renameDraft = snapshot.variantName
+          renamingVariant = true
+        } label: {
+          Label("Rename…", systemImage: "pencil")
+        }
         Button { model.send("duplicateVariant") } label: {
           Label("Duplicate", systemImage: "plus.square.on.square")
         }
@@ -3266,6 +3280,16 @@ private struct ShellView: View {
   /// the toolbar chain around it stopped type-checking "in reasonable time" —
   /// a build failure, not a behaviour one, and it returns the moment either of
   /// these is folded back in.
+  private var trimmedRenameDraft: String {
+    renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func submitRename() {
+    let name = trimmedRenameDraft
+    guard !name.isEmpty else { return }
+    model.send("renameVariant", ["name": name])
+  }
+
   private var trimmedNewProfileName: String {
     newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
   }
@@ -3282,17 +3306,31 @@ private struct ShellView: View {
   /// expression over the type-checker's budget — the failure is a build timeout,
   /// not a wrong shape, and it comes back the moment this is folded in again.
   private var avatar: some View {
+    // THE BAR'S OWN GLASS, not a circle drawn here. That is what makes this a
+    // Liquid Glass button in the same sense the share button is one — the same
+    // material, the same size, the same inset from its edge — and all three of
+    // those came free the moment this stopped fighting the toolbar for the
+    // background.
+    //
+    // Hiding the shared background and drawing the shape by hand cost exactly
+    // those: the item left the bar's background group, so it was laid out with
+    // its own margins and sat ~20pt further in than the share button opposite.
+    //
+    // The frame is what keeps it ROUND. The toolbar sizes its glass to the
+    // content plus symmetric padding, so square content gives a circle and two
+    // letters at their natural width give a capsule. Sized like the 17pt
+    // symbols beside it, with the initials scaled to fit rather than allowed to
+    // push it wider.
     Text(snapshot.profiles.first(where: \.isActive)?.initials ?? "?")
-      .font(.system(size: 15, weight: .semibold))
+      .font(.system(size: 14, weight: .semibold))
+      .lineLimit(1)
+      // The frame sets the LAYOUT size, and `.frame` does not clip — so the
+      // glass is sized from a 17pt square (and is therefore round) while the
+      // initials draw at their own width across it. Scaling them down to fit
+      // instead made them tiny for no gain: nothing is measuring them.
+      .fixedSize()
       .foregroundStyle(Color.accentColor)
-      // 44pt, which is the size of the bar's OWN glass circles — the share
-      // button opposite is one. Drawing this smaller than them made the corner
-      // look unfinished rather than deliberate, and it is the same control
-      // class: one tap, one round target. The touch area is the circle itself,
-      // so there is no invisible margin around it either.
-      .frame(width: 44, height: 44)
-      .background(Color.accentColor.opacity(0.16), in: Circle())
-      .contentShape(Circle())
+      .frame(width: 17, height: 17)
   }
 
   private var actionsMenu: some View {
@@ -3501,15 +3539,7 @@ private struct ShellView: View {
           }
           .accessibilityLabel("Edit structure")
 
-          Button {
-            model.send("setDesignOpen", ["value": "true"])
-            sheet = .design
-          } label: {
-            Image(systemName: "paintbrush")
-          }
-          .accessibilityLabel("Design")
-
-          formatMenu
+          styleMenu
         }
         .modifier(BarCapsule())
         // Scale rather than slide: the zoom capsule is growing into the space
@@ -3577,8 +3607,38 @@ private struct ShellView: View {
 
   // shell hides. Routing them here is what keeps hiding it from being a
   // functional regression.
-  private var formatMenu: some View {
+  /// Text formatting and Design, behind ONE button.
+  ///
+  /// They were two, side by side, and the pair could not be told apart: the
+  /// bar's `textformat` glyph opened selection formatting, while the Design
+  /// sheet's own Typography row carries the SAME glyph for document fonts. Two
+  /// icons, one symbol, adjacent — and the honest answer to "which one changes
+  /// the text" was "both, differently".
+  ///
+  /// One button, and the split inside it says which is which: the top section
+  /// acts on what is SELECTED right now, and Design opens everything that is a
+  /// property of the document. The paintbrush labels it, because that is the
+  /// larger of the two and the one that is not otherwise reachable.
+  private var styleMenu: some View {
     Menu {
+      formatActions
+      Section {
+        Button {
+          model.send("setDesignOpen", ["value": "true"])
+          sheet = .design
+        } label: {
+          Label("Design…", systemImage: "paintpalette")
+        }
+      }
+    } label: {
+      Image(systemName: "paintbrush")
+    }
+    .accessibilityLabel("Style")
+  }
+
+  @ViewBuilder
+  private var formatActions: some View {
+    Group {
       Button { model.send("textBold") } label: { Label("Bold", systemImage: "bold") }
       Button { model.send("textItalic") } label: { Label("Italic", systemImage: "italic") }
       Button { model.send("textUnderline") } label: { Label("Underline", systemImage: "underline") }
@@ -3590,10 +3650,7 @@ private struct ShellView: View {
       Section {
         Button { model.send("textClearFormat") } label: { Label("Clear formatting", systemImage: "eraser") }
       }
-    } label: {
-      Image(systemName: "textformat")
     }
-    .accessibilityLabel("Text formatting")
   }
 
   /// Open the zoom controls, and restart the clock on closing them again.
