@@ -1331,6 +1331,7 @@ export function initIOSShell(deps) {
     getVariantsSnapshot,
     getZoom,
     fitToView,
+    fitToWidth,
     duplicateVariant,
     exportCurrentVariant,
   } = deps;
@@ -1475,6 +1476,7 @@ export function initIOSShell(deps) {
     zoomOut: () => click('zoom-out'),
     zoomReset: () => click('zoom-reset'),
     zoomFit: () => fitToView(),
+    zoomFitWidth: () => fitToWidth(),
     // Driven by the native pinch. Sent continuously during a gesture, so it
     // goes straight to the zoom model rather than through a button click.
     // `live` marks the frames of a pinch, which run without the zoom

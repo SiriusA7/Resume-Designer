@@ -50,3 +50,41 @@ describe('computeFitZoom', () => {
                             contentWidth: 100, contentHeight: 100 })).toBe(1);
   });
 });
+
+describe('fitting to width only', () => {
+  // "Fit to view" fits the whole page, so a portrait page on a phone is mostly
+  // margin — the text ends up too small to read. Fitting the WIDTH fills the
+  // view edge to edge and lets the page run off the bottom, which is what you
+  // want while reading rather than while judging the layout.
+  const view = { availableWidth: 400, availableHeight: 800 };
+  const page = { contentWidth: 816, contentHeight: 3168 };  // 8.5in, ~3 pages
+
+  it('ignores the height, which is what makes it different', () => {
+    // Whole-page fit is HEIGHT-bound on a three-page résumé (800/3168), and
+    // that is the number that makes the text unreadable. Width-bound is nearly
+    // twice it.
+    expect(computeFitZoom({ ...view, ...page })).toBeCloseTo(800 / 3168, 5);
+    expect(computeFitZoom({ ...view, ...page, axis: 'width' })).toBeCloseTo(400 / 816, 5);
+  });
+
+  it('still respects the zoom limits', () => {
+    expect(computeFitZoom({
+      availableWidth: 10_000, availableHeight: 10_000, ...page, axis: 'width',
+    })).toBe(2);
+  });
+
+  it('does not need a measurable height to answer', () => {
+    // The height is exactly what a width fit has no opinion about, so an
+    // unmeasurable one must not collapse it to the 1 that means "no idea".
+    expect(computeFitZoom({
+      availableWidth: 400, availableHeight: 0, contentWidth: 816, contentHeight: 0,
+      axis: 'width',
+    })).toBeCloseTo(400 / 816, 5);
+  });
+
+  it('leaves the whole-page fit exactly as it was', () => {
+    expect(computeFitZoom({
+      availableWidth: 400, availableHeight: 0, contentWidth: 816, contentHeight: 0,
+    })).toBe(1);
+  });
+});

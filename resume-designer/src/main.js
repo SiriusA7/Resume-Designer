@@ -34,7 +34,7 @@ import {
 import { applyPendingToData } from './changePreview.js';
 import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
-import { initZoomControls, getZoom, fitToView, setZoomLevel } from './zoomControls.js';
+import { initZoomControls, getZoom, fitToView, fitToWidth, setZoomLevel } from './zoomControls.js';
 import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
 import {
   initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
@@ -598,7 +598,7 @@ export async function init() {
   // its commands drive the controls and window globals set up above.
   initIOSShell({
     subscribeVariants, getVariantsSnapshot, loadVariant, duplicateVariant, renameCurrentVariant,
-    exportCurrentVariant, getZoom, fitToView, setZoomLevel, openSettings,
+    exportCurrentVariant, getZoom, fitToView, fitToWidth, setZoomLevel, openSettings,
     // Settings sheet.
     getTheme, setTheme, getSettings, saveSettings, saveApiKey, getAppInfo,
     exportFullBackupWithFeedback, importBackupFromFile,

@@ -2947,6 +2947,14 @@ private struct ShellView: View {
   @State private var zoomExpanded = false
   /// Counts zoom interactions so a stale hide cannot cut a newer one short.
   @State private var zoomInteraction = 0
+  /// A zoom menu is open, so the auto-collapse must not run.
+  ///
+  /// SwiftUI's `Menu` reports neither its opening nor its dismissal, so this is
+  /// set on the tap that opens one and cleared by whichever comes first: an
+  /// action being chosen, or the backstop below. Without the backstop a menu
+  /// dismissed by tapping elsewhere would pin the controls open for good — the
+  /// bug this guard exists to fix, with the sign flipped.
+  @State private var zoomMenuOpen = false
 
   private enum Sheet: String, Identifiable {
     case settings, structure, design, chat, library, history, jobs, profile, pdfPreview
@@ -3689,7 +3697,31 @@ private struct ShellView: View {
     Task { @MainActor in
       try? await Task.sleep(for: .seconds(2.5))
       guard generation == zoomInteraction else { return }
+      // A menu is up and the person is reading it. Collapsing now would take
+      // the control the menu is anchored to out from under it.
+      guard !zoomMenuOpen else { return }
       withAnimation(.snappy(duration: 0.3)) { zoomExpanded = false }
+    }
+  }
+
+  /// An action was chosen, so the menu is gone: resume the ordinary timeout.
+  private func releaseZoomMenu() {
+    zoomMenuOpen = false
+    keepZoomOpen()
+  }
+
+  /// Hold the controls open while a zoom menu is, and let go afterwards.
+  ///
+  /// The backstop is what makes the flag safe: a menu dismissed with a tap
+  /// outside it tells us nothing, so the guard is released on a timer and the
+  /// ordinary collapse resumes.
+  private func holdZoomForMenu() {
+    zoomMenuOpen = true
+    keepZoomOpen()
+    Task { @MainActor in
+      try? await Task.sleep(for: .seconds(12))
+      zoomMenuOpen = false
+      keepZoomOpen()
     }
   }
 
@@ -3700,10 +3732,17 @@ private struct ShellView: View {
   /// offer different things.
   @ViewBuilder
   private var zoomActions: some View {
-    Button { model.send("zoomFit"); keepZoomOpen() } label: {
+    Button { model.send("zoomFit"); releaseZoomMenu() } label: {
       Label("Fit to view", systemImage: "arrow.up.left.and.arrow.down.right")
     }
-    Button { model.send("zoomReset"); keepZoomOpen() } label: {
+    // Fills the width and lets the page run off the bottom. On a phone this is
+    // the one you actually want while READING: a portrait page fitted whole is
+    // mostly margin, and on a multi-page résumé the whole-page fit is bound by
+    // a height several screens tall.
+    Button { model.send("zoomFitWidth"); releaseZoomMenu() } label: {
+      Label("Fit to width", systemImage: "arrow.left.and.right")
+    }
+    Button { model.send("zoomReset"); releaseZoomMenu() } label: {
       Label("Actual size", systemImage: "1.magnifyingglass")
     }
   }
@@ -3719,6 +3758,11 @@ private struct ShellView: View {
       Menu { zoomActions } label: {
         zoomReadout
       }
+      // The controls were timing out from UNDER the open menu. `keepZoomOpen`
+      // collapses them 2.5s after the last interaction, and opening a menu was
+      // not one — so the bar tidied itself away mid-decision and took the menu
+      // with it. Simultaneous, because the tap still has to reach the Menu.
+      .simultaneousGesture(TapGesture().onEnded { holdZoomForMenu() })
       .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent")
     } else {
       // Collapsed, the readout OPENS the controls. It was a Menu in both
@@ -3730,9 +3774,19 @@ private struct ShellView: View {
       // and Actual size stop being two taps away behind a control that has to
       // be opened first — and the pill offers the same two commands whichever
       // state it happens to be in.
-      Button { keepZoomOpen() } label: { zoomReadout }
-        .contextMenu { zoomActions }
-        .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent. Opens the zoom controls.")
+      // `Menu(content:label:primaryAction:)`, not a Button with a
+      // `.contextMenu`. Both give tap-one-thing / hold-another, but the context
+      // menu had to win an arbitration against the button's own tap and the
+      // bar's interactive glass, and lost often enough that a hold sometimes
+      // did nothing at all. This pairing is the API for exactly this: the tap
+      // runs `primaryAction`, the hold opens the menu, and neither has to beat
+      // the other to it.
+      Menu { zoomActions } label: {
+        zoomReadout
+      } primaryAction: {
+        keepZoomOpen()
+      }
+      .accessibilityLabel("Zoom, \(snapshot.zoomPercent) percent. Opens the zoom controls.")
     }
   }
 

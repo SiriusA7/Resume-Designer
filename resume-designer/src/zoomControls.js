@@ -6,9 +6,12 @@
 import { appStorage } from './appStorage.js';
 
 let currentZoom = 1;
-// The zoom fitToView last applied, or null if the canvas has never been fitted.
-// Read by the resize handler to tell an app-chosen zoom from a user-chosen one.
-let lastFittedZoom = null;
+// The last fit this module applied — `{ zoom, axis }` — or null if the canvas
+// has never been fitted. Read by the resize handler to tell an app-chosen zoom
+// from a user-chosen one. The AXIS is part of it because there are two fits
+// now: re-fitting a width fit as a whole-page fit on the next rotation would
+// silently undo the choice.
+let lastFit = null;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const ZOOM_STEP = 0.1;
@@ -27,12 +30,20 @@ export function computeFitZoom({
   contentHeight,
   minZoom = MIN_ZOOM,
   maxZoom = MAX_ZOOM,
+  // `'both'` fits the whole page and is what "Fit to view" means. `'width'`
+  // ignores the height entirely: the page fills the view edge to edge and runs
+  // off the bottom, which is the right answer when you are READING it rather
+  // than looking at its shape — and on a phone the difference is most of the
+  // screen, because a portrait page fitted whole is mostly margin.
+  axis = 'both',
 }) {
   const ok = (n) => Number.isFinite(n) && n > 0;
-  if (!ok(availableWidth) || !ok(availableHeight) || !ok(contentWidth) || !ok(contentHeight)) {
-    return 1;
-  }
-  const fit = Math.min(availableWidth / contentWidth, availableHeight / contentHeight);
+  if (!ok(availableWidth) || !ok(contentWidth)) return 1;
+  if (axis !== 'width' && (!ok(availableHeight) || !ok(contentHeight))) return 1;
+  const byWidth = availableWidth / contentWidth;
+  const fit = axis === 'width'
+    ? byWidth
+    : Math.min(byWidth, availableHeight / contentHeight);
   return Math.min(Math.max(fit, minZoom), maxZoom);
 }
 
@@ -113,15 +124,15 @@ export function initZoomControls() {
   // overwrite a zoom the user chose: fitToView goes through setZoom, which
   // persists, so an unguarded refit silently replaced a deliberate 100% with a
   // whole-document fit — 31% on a 2-page résumé, MIN_ZOOM on anything longer —
-  // and saved it. `lastFittedZoom` stays null until the user actually fits, so
+  // and saved it. `lastFit` stays null until the user actually fits, so
   // a zoom that was never fitted (including one restored from storage) is left
   // alone. Debounced because a Split View drag fires continuously.
   let refitTimer = null;
   const scheduleRefit = () => {
     clearTimeout(refitTimer);
     refitTimer = setTimeout(() => {
-      if (currentZoom !== lastFittedZoom) return;
-      fitToView();
+      if (!lastFit || currentZoom !== lastFit.zoom) return;
+      applyFit(lastFit.axis);
     }, 150);
   };
   window.addEventListener('resize', scheduleRefit);
@@ -188,8 +199,8 @@ function applyZoom() {
   window.dispatchEvent(new CustomEvent('rd:zoom', { detail: { zoom: currentZoom } }));
 }
 
-// Fit resume to available view space
-export function fitToView() {
+/** Fit the résumé to the view. `'both'` fits the page; `'width'` fills it. */
+function applyFit(axis) {
   const scroller = document.getElementById('resume-scroller');
   const container = document.getElementById('resume-container');
 
@@ -214,12 +225,19 @@ export function fitToView() {
       availableHeight: scroller.clientHeight - padY,
       contentWidth: 8.5 * 96,
       contentHeight: container.scrollHeight || 11 * 96,
+      axis,
     }));
     // Read back rather than reusing the computed value: setZoom rounds to two
     // decimals, and the resize guard compares for exact equality.
-    lastFittedZoom = currentZoom;
+    lastFit = { zoom: currentZoom, axis };
   });
 }
+
+// Fit resume to available view space
+export function fitToView() { applyFit('both'); }
+
+/** Fill the view's width with the page, whatever that does to its height. */
+export function fitToWidth() { applyFit('width'); }
 
 // Update button enabled/disabled states
 function updateButtonStates() {
