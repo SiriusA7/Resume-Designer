@@ -102,6 +102,36 @@ fn decode_apple_error(error: SecurityFrameworkError) -> KeyringError {
     }
 }
 
+/// Drop the legacy NON-synchronizable item, once a synchronizable copy is
+/// CONFIRMED in place. Best effort: the caller has already succeeded, and a
+/// leftover here costs nothing until the synchronizable item goes away.
+///
+/// Why it has to go at all. Kept, it is a second stored value that no later
+/// write ever updates — `secret_set` writes only the synchronizable item — so
+/// it freezes at whatever the credential was on the day it was migrated. Read
+/// order hides that until the synchronizable item disappears (an iCloud
+/// Keychain reset, an Apple ID change), and then the fallback below serves the
+/// stale value and re-synchronizes it to every device: a key the person
+/// replaced, or revoked and cleared, silently back in use and billing.
+///
+/// APPLE ONLY, and the `cfg` is load-bearing rather than tidiness: everywhere
+/// else the two entry builders return THE SAME keychain item, so this would
+/// delete the credential that was just written.
+///
+/// On Apple it cannot touch the synchronizable item even by accident. `keyring`
+/// reaches the file-based login keychain through the legacy `SecKeychain` API,
+/// while `SynchronizableEntry` uses modern `SecItem` queries against the
+/// data-protection keychain — different stores, not merely different query
+/// attributes. Deleting the synchronizable one would be the far worse bug: that
+/// deletion PROPAGATES, taking the credential off every device on the account.
+#[cfg(target_vendor = "apple")]
+fn forget_legacy_local(name: &str) {
+    let _ = local_entry(name).map(|e| e.delete_credential());
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn forget_legacy_local(_name: &str) {}
+
 /// Read a secret.
 ///
 /// `Ok(Some(v))` stored, `Ok(None)` no such entry, `Err` keychain unreachable.
@@ -121,10 +151,18 @@ pub fn secret_get(name: String) -> Result<Option<String>, String> {
     match local_entry(&name)?.get_password() {
         Ok(v) => {
             // Best effort: a failed upgrade must not hide a key the person has.
-            let _ = synchronizable_entry(&name).and_then(|e| {
-                e.set_password(&v)
-                    .map_err(|e| format!("keychain upgrade {name}: {e}"))
-            });
+            // The legacy item is retained on failure for exactly that reason —
+            // it is still the only copy — and dropped only once the upgrade
+            // itself reports success.
+            if synchronizable_entry(&name)
+                .and_then(|e| {
+                    e.set_password(&v)
+                        .map_err(|e| format!("keychain upgrade {name}: {e}"))
+                })
+                .is_ok()
+            {
+                forget_legacy_local(&name);
+            }
             Ok(Some(v))
         }
         Err(KeyringError::NoEntry) => Ok(None),
@@ -141,7 +179,19 @@ pub fn secret_get(name: String) -> Result<Option<String>, String> {
 pub fn secret_set(name: String, value: String) -> Result<(), String> {
     synchronizable_entry(&name)?
         .set_password(&value)
-        .map_err(|e| format!("keychain write {name}: {e}"))
+        .map_err(|e| format!("keychain write {name}: {e}"))?;
+    // Here too, not only on the migrating read: this device may never have READ
+    // the credential before the person set one — a device that only ever had
+    // the key typed into it still has a legacy item from an older build, and
+    // nothing else would ever come back for it. Every write is a moment the
+    // legacy copy becomes stale, which is precisely when it stops being a
+    // fallback and starts being a way to resurrect a revoked key.
+    //
+    // After the write and outside its `?`: this function's success is the
+    // caller's durability signal for deleting the plaintext original, and a
+    // failed cleanup of a superseded item is not a failure to store the key.
+    forget_legacy_local(&name);
+    Ok(())
 }
 
 // No delete command on purpose. "Clear all API keys" writes an EMPTY value
