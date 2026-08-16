@@ -1,0 +1,27 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Loose Leaf r2-3 "Caret O": the dot void grown into the counter, the stem flipped
+       to an ink caret standing inside it. Calm, concentric, O-first.
+       Disc c(512,501) r340. Counter void c(512,501) r230 (concentric).
+       Ring ink 110 uniform (= 106 nominal + 4 curve-reads-thinner compensation, 3.8%).
+       Caret ink island: stadium x[410,502] w92, y[373,621] drawn length 248
+       (= 240 intended + 8 round-cap compensation, 4 per end), caps r46
+       c(456,419)/(456,575); cy 497 = counter centre 501 - 4 in-counter optical lift
+       (0.87% of counter d460); cx 456 = 512 - 56 margin displacement.
+       Void moat caret-to-ring-wall: min 84.7 (top cap), 91.2 (bottom cap).
+       Overshoot: 0 - all-curve composition, no flat edge for a curve to level with. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <path fill="#0C0A08" fill-rule="evenodd" d="
+    M 852,501
+    A 340,340 0 1 1 172,501
+    A 340,340 0 1 1 852,501
+    Z
+    M 742,501
+    A 230,230 0 1 1 282,501
+    A 230,230 0 1 1 742,501
+    Z
+    M 410,419
+    A 46,46 0 0 1 502,419
+    L 502,575
+    A 46,46 0 0 1 410,575
+    Z" />
+</svg>

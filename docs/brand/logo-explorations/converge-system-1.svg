@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Converge "Display Cut": the full-size half of a two-cut system. Parent: caret-2
+       (Margin), carrying r2-1's 2:1 weight decision and r2-3's containment clearances.
+       The O: c(512,500) - lifted 12 from geometric 512 (1.17% of canvas). Centreline
+       r290, stroke 108 = 104 nominal + 4 curve-reads-thinner compensation (3.8%), so
+       the 2:1 ratio against the straight 52 rule reads true. Outer 344, inner 236
+       (counter d472). Extents x[168,856] y[156,844] - inside the 720 box [152,872].
+       The rule: coral, stroke 52, round caps, centreline x392 - 24.6% into the
+       counter, the parent's left-third margin position held. Cap-centre span
+       208 = 200 intended + 8 round-cap compensation (4 per end); centred at cy 496 =
+       counter centre 500 - 4 in-counter optical lift (0.85% of counter d472).
+       Caps (392,392)/(392,600); visual extent y[366,626] x[366,418].
+       Clearance rule-to-inner-wall: 48.6 at the top cap, 53.8 at the bottom - the
+       parent's minimum 48 held. Overshoot 0: all-curve O, no flat edge to level with.
+       System fact: the annulus band [236,344] at c(512,500) is IDENTICAL in
+       converge-system-2; only the vertical event is redrawn for size. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="512" cy="500" r="290" fill="none" stroke="#0C0A08" stroke-width="108"/>
+  <path d="M 392 392 L 392 600" fill="none" stroke="#E8503A" stroke-width="52" stroke-linecap="round"/>
+</svg>

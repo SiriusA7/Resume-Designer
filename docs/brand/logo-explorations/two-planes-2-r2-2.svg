@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Restated r2-2 "Full Stop": toward the letter. The ring becomes the free-floating
+       bowl of a P (centre (567,361), centreline r160, stroke 60, outer 190), passing
+       BEHIND a 96-wide flat-capped stem (x[359,455], y 178->690) across the family
+       34-unit gap (halo rect = stem +34 each side, so the bowl's visible ends are cut
+       flat at x=489). The disc survives as the descender's terminal — a full stop,
+       c(407,690) r140, merged with the stem. Bowl outer top 171 = stem top 178 minus a
+       7-unit overshoot (1.84% of its 380 diameter). Bowl-to-disc clearance
+       sqrt(160^2+329^2) - (190+140) = 35.8, echoing the gap. Hidden bowl arc: centreline
+       x <= 489 -> 2*acos(78/160)... cos t = -0.4875 -> 121.7 deg behind the stem; the
+       bowl never emerges on the stem's left (outer leftmost 377 > stem left 359).
+       Ink extents x[267,757] y[171,830]: bbox centre (512,500.5), lifted 11.5. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="567" cy="361" r="160" fill="none" stroke="#0C0A08" stroke-width="60"/>
+  <rect x="325" y="130" width="164" height="430" fill="#F4EFE6"/>
+  <rect x="359" y="178" width="96" height="512" fill="#0C0A08"/>
+  <circle cx="407" cy="690" r="140" fill="#0C0A08"/>
+</svg>

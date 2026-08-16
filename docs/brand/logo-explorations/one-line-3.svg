@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#0C0A08"/>
+  <!-- The line itself is ONE path: up the stem, tangent into the bowl at its
+       9 o'clock point (374,390), 270 deg clockwise around the bowl
+       (centre (546,390) r 172), leaving tangentially at 6 o'clock (546,562),
+       closing horizontally across the stem to (306,562). Crossing at (374,562).
+       The two paths after it only render the weave: a ground-colour patch cuts
+       the under-strand (stem), then the over-strand is retraced on top. -->
+  <path d="M 374 806 L 374 390 A 172 172 0 1 1 546 562 L 306 562"
+        fill="none" stroke="#FFFFFF" stroke-width="72"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 314 562 L 434 562" fill="none" stroke="#0C0A08"
+        stroke-width="136" stroke-linecap="butt"/>
+  <path d="M 306 562 L 458 562" fill="none" stroke="#FFFFFF"
+        stroke-width="72" stroke-linecap="round"/>
+</svg>

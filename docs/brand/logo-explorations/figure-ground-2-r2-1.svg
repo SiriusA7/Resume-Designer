@@ -1,0 +1,25 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Loose Leaf r2-1 "Interval": the parent's numbers moved, nothing else.
+       Disc c(512,501) r340 (lifted 11 from y512, 1.07% of canvas).
+       Stem void x[294,434] w140, caps r70 c(364,397)/(364,609), top 327 bottom 679
+       (drawn length 352 = 340 intended + 12 round-cap compensation, 6 per end).
+       Dot void c(630,423) r100 (drawn 100 = 97 nominal + 3 curve-reads-light comp);
+       dot top 323 = stem top 327 - 4 overshoot (2.0% of d200).
+       Ink bridge stem-to-dot = 96 (parent 66). Ratio dot-d : stem-w = 200:140 = 1.43
+       (parent 240:130 = 1.85). Void bbox [294,730] x [323,679], centred (512,501). -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <path fill="#0C0A08" fill-rule="evenodd" d="
+    M 852,501
+    A 340,340 0 1 1 172,501
+    A 340,340 0 1 1 852,501
+    Z
+    M 294,397
+    A 70,70 0 0 1 434,397
+    L 434,609
+    A 70,70 0 0 1 294,609
+    Z
+    M 730,423
+    A 100,100 0 1 1 530,423
+    A 100,100 0 1 1 730,423
+    Z" />
+</svg>

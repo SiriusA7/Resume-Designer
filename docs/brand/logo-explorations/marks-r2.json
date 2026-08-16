@@ -1,0 +1,453 @@
+{
+ "territories": [
+  {
+   "slug": "stem-counter-1",
+   "territory": "Colophon \u2014 four ways",
+   "thesis": "Colophon \u2014 the heavy bar and heavy ring. Flagged for reading as the numeral 10, and for the bar-and-circle prior art.",
+   "marks": [
+    {
+     "id": "stem-counter-1",
+     "name": "Colophon",
+     "file": "docs/brand/logo-explorations/stem-counter-1.svg",
+     "idea": "A solid vertical ink lozenge (140 wide, 540 tall, fully rounded ends) and, 90 units to its right with their tops exactly aligned, a heavy disc of outer radius 200 with a small 120-unit-wide round counter punched through its centre; the bar descends 140 units below the disc's bottom, so the eye closes a bold uppercase P.",
+     "why": "This is the first pinned reference restated in On Paper's own materials \u2014 heavy black on warm paper, a printer's-mark seriousness that matches 'substance, clearly expressed'. The tiny counter keeps it at the P end of the territory's range: mass first, letter second.",
+     "colour": "#0C0A08 ink on #F4EFE6 paper",
+     "risk": "It reads as the numeral 10 (or 'IO') at least as readily as a deconstructed P \u2014 a stranger may see a bar and a record before a letter. The counter (~2px) and the gap (~1.4px) both survived my 16px downscale test but are at the absolute limit; a poor rasteriser could fuse the gap and turn it into a plain bold P. It does not read as a page, a fold, or a font letterform.",
+     "axis": "round one"
+    },
+    {
+     "id": "stem-counter-1-r2-1",
+     "name": "Counterweight",
+     "file": "docs/brand/logo-explorations/stem-counter-1-r2-1.svg",
+     "axis": "interval-and-weight",
+     "idea": "The parent held at arm's length and re-weighted: a heavier stem (152) against a lighter ring (stroke 108) whose counter has opened to 184, outer diameter 400 held, gap widened to 104.",
+     "changed": "Gap 90 to 104; bar width 140 to 152; ring stroke 140 to 108; counter 120 to 184 (outer 400 held); descent below disc 140 held plus cap compensation. Optical corrections: ring top overshoots the bar top by 6 units, corrected from the parent's mathematically equal tops (both y=272) \u2014 1.5% of the 400 diameter; ring stroke 108 = visual target 104 + 4 (+3.8%) curve-vs-straight compensation so the curved stroke does not read lighter than intended beside the straight stem; descender extended 140 to 146 (+6, ~8% of the 76 cap radius) because the round cap reads short; vertical mass centroid placed at y=500, 12 units (1.2%) above geometric centre 512; horizontally shifted +22 from bbox-centred so bbox-centre (534) and mass centroid (490) straddle x=512 \u2014 continuing the parent's own +20 practice.",
+     "why": "This is the ratio I believe in: stem-to-ring at roughly root-2 (152 against a visual 104) follows how type actually works \u2014 the stem is the heavy stroke, the bowl lightens \u2014 so the pair reads as one weighted letterform rather than two equal objects, and equal weights ARE the Patreon and numeral-10 case. The counter at 184 (2.9px at 16px) and the gap at 104 (1.6px) both clear the two limits the parent was flagged for.",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "In silhouette this is still, honestly, a bar beside a ring \u2014 a lazy describer can still say Patreon or 10. The weight flip and open counter argue the case at arm's length, not from across the room; this variation refines the parent rather than escaping its prior art."
+    },
+    {
+     "id": "stem-counter-1-r2-2",
+     "name": "Initial",
+     "file": "docs/brand/logo-explorations/stem-counter-1-r2-2.svg",
+     "axis": "toward-the-letter",
+     "idea": "Unmistakably a P: the disc becomes a bowl at 62% of a taller stem, nearly touching it (gap 20), with a true 242-unit descender below the bowl.",
+     "changed": "Gap 90 to 20; outer diameter 400 to 380; counter 120 to 148; stem 540x140 to 616x150; descent below the bowl 140 to 242, taking the bowl from 74% to 62% of stem height \u2014 textbook P proportion. Optical corrections: ring top overshoots the stem top by 6 (from the parent's equal tops); ring stroke 116 = visual target 112 + 4 (+3.6%) curve compensation; stem foot extended +6 (610 to 616) round-cap compensation; vertical mass centroid at y=500, 12 units (1.2%) above geometric centre; shifted +28 from bbox-centred so bbox-centre (540) and centroid (485) straddle x=512.",
+     "why": "Alignment and proportion do what no amount of gap-tuning can: a bowl top-aligned at 62% of the stem with a real descender can only be read as P. The 20-unit gap keeps the parent's free-floating-bowl character at display sizes and deliberately fuses into a solid letter below about 48px, which is graceful rather than broken.",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "Below ~48px the gap closes and this is simply a solid geometric rounded P \u2014 the deconstructed idea survives only at display sizes, and solid friendly P marks are a crowded genre. It trades the 10/IO problem for a smaller distinctiveness problem."
+    },
+    {
+     "id": "stem-counter-1-r2-3",
+     "name": "Aperture",
+     "file": "docs/brand/logo-explorations/stem-counter-1-r2-3.svg",
+     "axis": "toward-the-O",
+     "idea": "An O with a vertical event: a big 460 ring with a wide-open 280 counter as the page, and the bar reduced to a quiet 64-unit margin rule standing at margin distance, white on ink.",
+     "changed": "Bar 140x540 to a 64x448 rule; ring stroke 140 to 90; outer diameter 400 to 460; counter 120 to 280; gap 90 to 112; descender 140 to 0; ground inverted to Ink with a White mark. Optical corrections: the ring overshoots the rule by 6 at top AND bottom (mirrored exactly: rule y 274-722 about cy 498), corrected from mathematically equal extents \u2014 derived as 8 units of circle overshoot on the 460 diameter minus a 2-unit allowance for the rule's own round caps reading short; ring stroke 90 = visual target 87 + 3 (+3.4%) curve compensation against the straight rule; whole mark raised 14 (1.4%) from mathematical centring at cy=512 to cy=498; placed so mass centroid (516) and bbox-centre (509) straddle x=512.",
+     "why": "The calm, confident end of the family: with the descender gone and the counter at 280 (4.4px at 16px) nothing about it says letter \u2014 it says page and margin. The 112 gap is past conversational distance, so the rule reads as a rule, not as the ring's companion object.",
+     "colour": "White #FFFFFF on Ink #0C0A08",
+     "risk": "Still literally describable as a circle and a bar, just at a wider, quieter interval \u2014 this one softens the prior-art problem rather than killing it. Dropping the descender also drifts toward sibling territory (Margin, Open Counter), so it is the least distinctly Colophon of the four; and the 64 rule is exactly 1px at 16px, with nothing to spare."
+    },
+    {
+     "id": "stem-counter-1-r2-4",
+     "name": "Eclipse",
+     "file": "docs/brand/logo-explorations/stem-counter-1-r2-4.svg",
+     "axis": "kill-the-risk",
+     "idea": "The two objects stop being neighbours and interlock: the ring passes in front of the stem, its outer edge crossing 36 units into the bar, separated by a 36-unit paper channel \u2014 a seal pinned over a stem, not a circle beside a bar.",
+     "changed": "Gap 90 to minus 36 (overlap: ring outer edge at x=402 crosses into the bar, whose right edge is 438); a new 36-unit paper channel realised as a ground-colour stroke of 196 under the 124 ink ring (halo radii 40-236 against ink radii 76-200); bar 140 to 168 wide; counter 120 to 152; ring stroke 140 to 124; stem remnant at the ring's equator verified at 96 units (1.5px at 16px). Optical corrections: ring top overshoots bar top by 6 (from the parent's equal tops); ring stroke 124 = visual target 120 + 4 (+3.3%) curve compensation; descender 140 to 146 (+6) round-cap compensation; vertical centroid at y=495, 17 (1.7%) above geometric centre; shifted -24 from pure centroid-centring so bbox-centre (536) and centroid (488) straddle x=512. The halo's outer radius (236) was checked against the bar's top-right cap (distance 254) so the channel does not nick the cap.",
+     "why": "This is the variation that cannot be described as a circle and a bar: the shapes share space, so the silhouette is one interlocked figure. It kills both flagged readings at once \u2014 10/IO dies because numerals never overlap, and the Patreon silhouette dies because Patreon's elements are disjoint and its circle is solid where this ring is open.",
+     "colour": "Coral #E8503A on Paper #F4EFE6",
+     "risk": "The 36-unit channel is 0.56px at 16px, so at favicon size the interlock vanishes and the mark degrades to a fused P-like mass \u2014 graceful, but the cleverness only exists at 32px and up. And the knockout-interlock move has prior art of its own (chain-link and monogram traditions), so it escapes Patreon without being wholly unprecedented. It no longer resembles the bar-and-circle prior art; that claim I can make plainly."
+    }
+   ]
+  },
+  {
+   "slug": "stem-counter-2",
+   "territory": "Open Counter \u2014 four ways",
+   "thesis": "Open Counter \u2014 the monoline version. Flagged for the same silhouette, and for a coral stroke that thins to about 1px at 16px.",
+   "marks": [
+    {
+     "id": "stem-counter-2",
+     "name": "Open Counter",
+     "file": "docs/brand/logo-explorations/stem-counter-2.svg",
+     "idea": "Everything one 72-unit monoline: a vertical coral rule (72 by 560, rounded ends) and, 110 units to its right with tops aligned, a monoline ring of outer radius 216 whose counter is 288 units wide; the rule descends 128 units below the ring, which is the only thing still whispering P.",
+     "why": "This is the interval the brand guide explicitly asks for: at this counter size the mark stops being a P and becomes an O with a rule beside it \u2014 and On Paper is an O and a P. Coral monoline is the closest of the three to the user's outlined-coral reference, and the quietest, most contemporary drawing.",
+     "colour": "#E8503A coral on #F4EFE6 paper",
+     "risk": "The O-dominance cuts both ways: first readings may be '10', 'IO', or a power symbol beside a line rather than any letter at all. The 72-unit coral stroke drops to about 1px at 16px and is the faintest of the three against warm paper \u2014 it passed the downscale test but with the least margin. No fold, document, or font-letterform reading.",
+     "axis": "round one"
+    },
+    {
+     "id": "stem-counter-2-r2-1",
+     "name": "Close Interval",
+     "file": "docs/brand/logo-explorations/stem-counter-2-r2-1.svg",
+     "axis": "interval-and-weight",
+     "idea": "The same rule-and-ring, but the gap closed to nearly touching and the mass shifted to the stem: a 5:4 stem-to-ring weight ratio at an interval of 56, so the pair reads as one letterish figure with a bright seam rather than two objects in conversation.",
+     "changed": "Interval 110 -> 56. Weight ratio from 72:72 to perceived 104:84 (~5:4); ring drawn at 87 = 84 + 3.6% curve-vs-straight compensation (parent: both 72, uncorrected). Overshoot: stem apex sits 8 above the ring's outer top (parent: mathematically flush at 0). Cap compensation: stem 560 -> 576, +8 per round cap. Optical centring: composition bbox centre raised from the parent's y=532 to y=502 (1% above geometric 512), and shifted +12 in x (bbox centre 524) against the ring's greater mass. Ring outer radius held at 216; counter 288 -> 258.",
+     "why": "I believe in 5:4-at-56 because equal weight at conversational distance is exactly the generic Patreon case: biasing mass to the stem makes it anatomy (stem and counter) instead of two equals, and both weights rising from 72 kills the faintness flag at once. The near-touch keeps daylight at display size while letting small sizes fuse into one mark.",
+     "colour": "#E8503A on #F4EFE6",
+     "risk": "It is still, literally, a bar and a circle - closer and unevenly weighted, but a stranger could still say 'like Patreon' from the silhouette. And the 56 gap is 0.9px at 16px, so at icon size the two elements fuse into a ligature; the 'open' construction only survives at larger sizes."
+    },
+    {
+     "id": "stem-counter-2-r2-2",
+     "name": "Descender",
+     "file": "docs/brand/logo-explorations/stem-counter-2-r2-2.svg",
+     "axis": "toward-the-letter",
+     "idea": "A lowercase p built from the parent's parts: tops aligned, the counter shrunk past the tipping point, a real descender dropping 247 below the bowl, and the gap closed to 24 so the bowl attaches at any distance.",
+     "changed": "Counter 288 -> 218 (ring outer diameter 432 -> 400) - past the P/O tipping point. Interval 110 -> 24, which is 0.4px at 16px, so the bowl attaches by design at icon size. Descent below the ring 128 -> 247 (a true descender; stem 654 tall at x 270, y 173). Curve compensation: monoline held at perceived 88 - stem 88, ring drawn 91 (+3.4%); parent had both at 72 uncorrected. Overshoot: stem apex 7 above ring outer top (from 0). Cap compensation: stem length 654 = 640 flat-cap equivalent + 7 per round cap. Optical centring: bbox centre y=500 (from the parent's 532); x shifted +14 toward the bowl's mass.",
+     "why": "Every ambiguous reading of the parent (10, IO, power symbol) dies the moment the geometry commits to p: bowl at the top, tail below, counter tight enough to read as a bowl and not a page. The detached construction is kept at display size, so the parent's crafted character survives inside an unmistakable letter.",
+     "colour": "#E8503A on #F4EFE6",
+     "risk": "It trades the parent's abstract calm for letter-first: this is now a lowercase p, and detached-bowl monoline p marks are a well-populated genre, so the distinctiveness burden moves from silhouette to execution. At 16px the gap vanishes entirely and it is simply an attached p."
+    },
+    {
+     "id": "stem-counter-2-r2-3",
+     "name": "Open Page",
+     "file": "docs/brand/logo-explorations/stem-counter-2-r2-3.svg",
+     "axis": "toward-the-O",
+     "idea": "The hierarchy inverted: a page-sized O (outer 520, counter 338) is the whole mark, and the rule thins to a 56-unit margin line standing at a deliberate distance, top near-aligned, running 160 below - an O with a vertical event, not a pair.",
+     "changed": "Ring outer diameter 432 -> 520, counter 288 -> 338 (decisively O). Rule 72 -> 56, ring stroke 72 -> 91 drawn (perceived 88 + 3.4% curve compensation; ratio 1.63:1 from the parent's 1:1). Interval 110 -> 120 - opened until the rule is clearly a margin and the circle clearly a page. Rule length 688: overshoot of 8 above the ring's outer top (parent: flush at 0), descent 128 -> 160, including +12 round-cap compensation (flat-cap equivalent 148). Optical centring: bbox centre y=501 (from the parent's 532); ring cx 608, rule x 172, a +8 mass-weighted x shift.",
+     "why": "This is the calm, confident end of the parent's range: one dominant circular field with a quiet authored line beside it - closer to a page with its margin rule than to any two-object logo. The extreme weight ratio is itself the differentiation ROUND-2 asks for.",
+     "colour": "#E8503A on #F4EFE6",
+     "risk": "The 56-unit rule is 0.9px at 16px - this variation accepts the faintness flag rather than solving it, and at icon size the mark is effectively a lone O with a hairline beside it. The silhouette is still parseable as 'circle and stick', and the mass-weighted composition sits visibly right-of-centre in an icon grid."
+    },
+    {
+     "id": "stem-counter-2-r2-4",
+     "name": "One Stroke",
+     "file": "docs/brand/logo-explorations/stem-counter-2-r2-4.svg",
+     "axis": "kill-the-risk",
+     "idea": "The rule and the ring stop being two things: one continuous monoline stroke - the O whose left waist runs tangent straight down into the descender, a geometric rho that is the O and the P in a single gesture.",
+     "changed": "Interval 110 -> 0: the tail joins the ring tangentially at 9 o'clock (x=359.5 = cx 530 - r_mid 170.5), tucked 1.5 units inside the ring stroke per side (tail half-width 44 vs stroke half 45.5) so the seam cannot render; the straight edge emerges from the curve at ~7 degrees off vertical, so there is no kink. Weight 72 -> perceived 88: ring drawn 91 (+3.4% curve compensation), tail 88 - at 16px the line is 1.4px against the parent's 1.1px, killing the faintness flag. Descent below the ring 128 -> 160 (tail drop 376 from the waist, including +12 round-cap compensation, flat-cap equivalent 364). Counter 288 -> 250, still a mathematically clean circle (tail's closest approach 126.5 vs inner radius 125). Overshoot: no flat-to-curve alignment exists in this construction; the correction it replaces is the 1.5-unit seam tuck. Optical centring: cx 512 -> 530 (+18 against the left tail's mass), bbox centre y=500 (from the parent's 532).",
+     "why": "Every flagged weakness dies at the root: nothing detached can read as 10 or IO, nothing is describable as 'a circle and a bar' because there is only one stroke, and the heavier monoline survives 16px. The brand guide's asked-for O-and-P relationship becomes the mark's actual mechanism - the loop is the O, the same line's tail is the P.",
+     "colour": "#E8503A on #F4EFE6",
+     "risk": "Honestly: it no longer resembles Patreon, but it fuses the two elements the client chose as a pair, so it is the furthest of the four from the picked mark. And a loop with a dropped left tail has its own readings - Greek rho, a balloon on a string, at a squint a mirrored 9 - and monoline loop-and-tail p marks exist in the wild, so it swaps the Patreon adjacency for a smaller, different prior-art neighbourhood."
+    }
+   ]
+  },
+  {
+   "slug": "stem-counter-3",
+   "territory": "Spine \u2014 four ways",
+   "thesis": "Spine \u2014 the bowed stroke. Its bow is the one gesture with no prior art, and it flattened to nothing at icon size.",
+   "marks": [
+    {
+     "id": "stem-counter-3",
+     "name": "Spine",
+     "file": "docs/brand/logo-explorations/stem-counter-3.svg",
+     "idea": "On a full-bleed ink ground, a 96-unit round-capped white stroke that bows 48 units leftward along a circular arc of radius 514.5 (chord from y310 to y744 at x307) \u2014 a spine flexing away from the letter \u2014 and, about 100 units to its right, a 96-unit white ring of outer radius 198 whose top aligns with the stroke's cap top.",
+     "why": "The humane end of the territory: the first reference's stem 'curves like a spine', and the bow supplies the hand-felt imperfection the user liked in Ola without faking an organic blob. White on ink is the calm, polished night version of the brand \u2014 a colophon that breathes.",
+     "colour": "#FFFFFF white on #0C0A08 ink ground",
+     "risk": "The round-capped bowed stroke honestly reads as an opening parenthesis \u2014 '(O' \u2014 or a crescent beside a ring, before it reads as a P stem. Worse, the bow is the mark's one gesture and it flattens to nearly straight at 16px (confirmed in my downscale test), so at icon size this collapses toward mark 2 without mark 2's considered proportions. No fold or document reading.",
+     "axis": "round one"
+    },
+    {
+     "id": "stem-counter-3-r2-1",
+     "name": "Heavy Spine",
+     "file": "docs/brand/logo-explorations/stem-counter-3-r2-1.svg",
+     "axis": "interval-and-weight",
+     "idea": "A 112-weight bowed stem pulled to a tight 64-unit interval from a lighter 84-nominal ring, tops optically flush \u2014 the parent's two elements compressed into one mark.",
+     "changed": "Gap 100 to 64 (minimum edge-to-edge, verified 64.1 at the true diagonal near-point, not just at ring height; the parent's 100 was measured at ring-centre height). Weight ratio 96:96 to 112:84 nominal (4:3, stem-heavy). Curve-vs-straight compensation: ring drawn 87, +3 over nominal 84 (+3.6%), because its centerline radius 154.5 curves hard against the near-straight radius-542 stem \u2014 corrected from the parent's uncompensated 96=96. Cap overshoot 0 to 6: cap top 218 vs ring top 224, 1.5% of the 396 ring diameter \u2014 corrected from the parent's mathematically flush 262=262. Cap compensation: chord 434 to 446, +6 per round-capped end, corrected from the parent's uncompensated 434. Optical centring: composition centre y 527 to 497 (512 minus 1.5% of canvas), a 30-unit lift from the parent, which sat 15 below centre. Held: sagitta 48, ring outer 198, white on ink.",
+     "why": "The bow is the mark's identity and weight is what keeps a curve legible: at 16px this stem is 1.75px with a 0.75px deflection, readable where the parent's 1.5px stroke lost it, and the lighter ring recedes into being the page instead of competing. I believe in 4:3 stem-heavy because equal weight is the generic case and ring-heavy turns the stem into a parenthesis serving an O; 64 is the tightest interval that still holds a full pixel of ground at 16px, so the pair reads as one designed mark rather than a conversation.",
+     "colour": "White (#FFFFFF) on ink (#0C0A08)",
+     "risk": "Still a bowed stroke beside a ring: at display sizes the '(O' parenthesis reading survives, and at 16px the 48 sagitta is 0.75px, so the bow softens toward a plain bar and the mark drifts back toward the bar-and-circle prior art. This variation improves the ratio, not the flagged risk."
+    },
+    {
+     "id": "stem-counter-3-r2-2",
+     "name": "Descender",
+     "file": "docs/brand/logo-explorations/stem-counter-3-r2-2.svg",
+     "axis": "toward-the-letter",
+     "idea": "A 96 stem with a 298-unit descender under a compact heavy bowl (outer 150, counter 102) hung at its head at a constant 48 clearance \u2014 unmistakably a P.",
+     "changed": "Ring outer 198 to 150 and counter 204 to 102 (ROUND-2's small-counter lever, tipping the mass to P). Stem chord 434 to 507: +61 of descender plus the +6-per-end cap compensation (corrected from the parent's uncompensated 434); cap-to-cap 530 to 603; descender below the bowl 134 to 298, nearly a bowl-diameter. Sagitta 48 to 56, held proportional (56/507 = 48/434) so the gesture survives the longer stem. Gap 100 to 48 minimum \u2014 and by construction the clearance is exactly 48.0 at the top cap AND 47.9 at the stroke's upper edge, so the bowl orbits the stem head at constant distance. Curve-vs-straight compensation: ring drawn 99 over nominal 96 (+3.1%) at the set's tightest centerline radius, 100.5 \u2014 corrected from uncompensated 96. Cap overshoot 0 to 5: cap top 195 vs ring top 200, 1.7% of the 300 bowl diameter, corrected from flush. Optical centring: centre y 527 to 496.5, corrected from 15-below-centre.",
+     "why": "Alignment does the letter-work rather than attachment: bowl at the stem's head, a descender nearly a bowl-diameter long, and a halved counter tip the silhouette unmistakably into P, while the bow, the round caps and the still-separate bowl keep it the parent's P and not a typeset one.",
+     "colour": "White (#FFFFFF) on ink (#0C0A08)",
+     "risk": "The densest and most conventional of the four \u2014 it steps toward the generic geometric-P monogram the brief warns about, and the 48 gap fuses at 16px on 1x displays into a solid P, losing the split-bowl identity exactly at app-icon size. The fusion is deliberate (it fails closed, into a clean letter) but it is a real trade."
+    },
+    {
+     "id": "stem-counter-3-r2-3",
+     "name": "Open O",
+     "file": "docs/brand/logo-explorations/stem-counter-3-r2-3.svg",
+     "axis": "toward-the-O",
+     "idea": "A 520-diameter airy O (counter 338) with a slim 64-weight bowed rule standing its exact optical height at the left margin \u2014 an O with one vertical event.",
+     "changed": "Ring outer 198 to 260 and counter 204 to 338 (the large-counter side of ROUND-2's tipping point \u2014 the O becomes the subject). Stem weight 96 to 64, ratio 1:1 to 0.73:1 nominal \u2014 the rule demoted to an annotation. Alignment extended from top-only to top AND bottom: stem cap span 532 against ring 520, i.e. caps overshoot the ring by 6 at each end (1.15% of the 520 diameter), corrected from the parent's flush top and unrelated bottom; this doubles as the cap compensation (+6 per round end over the flat-cap 520). Curve-vs-straight compensation: ring drawn 91 over nominal 88 (+3.4%), corrected from uncompensated 96. Sagitta 48 to 52, proportional to the 468 chord. Gap 100 to 64 minimum, which here falls exactly at ring mid-height (64.0), caps clearing by 91.6. Optical centring: centre y 527 to 497, from 15-below-centre.",
+     "why": "Growing the counter past the tipping point and demoting the stem makes the O the subject and the spine a quiet event upon it \u2014 the calm, confident, most abstract end of the parent's idea, and the composition that flatters the brand's 'substance, clearly expressed' the most at display sizes.",
+     "colour": "White (#FFFFFF) on ink (#0C0A08)",
+     "risk": "The calm is bought adjacent to the flagged weakness: a full-height bowed rule beside a big O is still describable as '(O', and at 16px the 64 stem is 1px with a 0.8px bow \u2014 the event degrades to a plain thin rule, which is to say an O and a bar. This is the variation most dependent on being seen large."
+    },
+    {
+     "id": "stem-counter-3-r2-4",
+     "name": "Bound",
+     "file": "docs/brand/logo-explorations/stem-counter-3-r2-4.svg",
+     "axis": "kill-the-risk",
+     "idea": "The spine threaded through the O: the deep-bowed stroke crosses in front of the ring's left side inside a uniform 56-unit ink channel, so a 186-degree right-hand arc of the O survives, hooked around the stem \u2014 interlocked, not adjacent.",
+     "changed": "Interval 100 to overlap: the ring slid left until its left band centerline passes exactly under the stem centerline at ring height \u2014 crossing verified at (363.5, 460) = (363.5, 460). The interlace is cut by a 208-wide ink halo under the 96 stem, a 56-unit channel each side; computed erasure begins 94.2 degrees off the O-to-C axis, leaving one clean ~186-degree arc from roughly 12 to 7 o'clock, and the ring's right side clears the halo by 192 (296.3 vs 104). Sagitta 48 to 72 \u2014 the bow at 16px goes from 0.75px to 1.13px, past the flattening threshold that created the flagged risk. Chord 434 to 490, including the +6-per-end cap compensation, corrected from uncompensated 434; descender 132 below the ring. Curve-vs-straight compensation: ring drawn 99 over nominal 96 (+3.1%), from uncompensated 96. Overshoot: no flush edge survives in this variant to correct \u2014 its replacement is the stem tip's 74-unit clearance over the ring's local rim at x 434, raised from 24 in my first construction pass, where the tip read as ambiguously attached. Optical centring: centre y 527 to 497 (bbox 204 to 790), from 15-below-centre.",
+     "why": "Overlap is the one move that makes 'a circle and a bar' a factually false description \u2014 the elements interlock, the deepened bow can no longer flatten to a bar at icon size, and the weave literally pictures the product: a spine binding a page. It is also the only variation whose silhouette no competitor in the pinned set or the prior art owns.",
+     "colour": "White (#FFFFFF) on ink (#0C0A08)",
+     "risk": "The 56-unit interlace channels close below roughly 32px, collapsing the weave into a solid woven-P silhouette \u2014 still not a circle-and-bar, but the interlock is a display-size story, not a favicon one. Some viewers may read a monogram knot or a script-P glyph, and it stands the furthest of the four from the parent's airy two-element composition, which is exactly what the client liked about round one."
+    }
+   ]
+  },
+  {
+   "slug": "two-planes-2",
+   "territory": "Restated \u2014 four ways",
+   "thesis": "Restated \u2014 the same circle stated twice, as disc and as ring. Flagged as a generic dot-and-ring pairing.",
+   "marks": [
+    {
+     "id": "two-planes-2",
+     "name": "Restated",
+     "file": "docs/brand/logo-explorations/two-planes-2.svg",
+     "idea": "The same circle stated twice: a solid ink disc (r190) in front, and an equal-radius monoline ring (stroke 64) offset up the 45-degree diagonal that passes behind the disc, hidden for about 77 degrees of its arc and re-emerging on both sides across crisp 34-unit gaps.",
+     "why": "One source, restated \u2014 substance once, contour once, identical radius \u2014 with no document imagery at all. The two weights of the same circle quietly echo the O of On Paper, and the depth pass gives the aligned planes a real spatial relationship rather than a flat duplication.",
+     "colour": "#0C0A08 on Paper #F4EFE6",
+     "risk": "Reads as a generic dot-and-ring pairing \u2014 could be described as linked rings, a pearl and a band, or an abstract eclipse. The equal-radius conceit, which is the actual idea, is invisible without being told; an earlier deeper-overlap tuning read as an eyeball and was rebuilt, so the concept is sensitive to spacing.",
+     "axis": "round one"
+    },
+    {
+     "id": "two-planes-2-r2-1",
+     "name": "Stated Equal",
+     "file": "docs/brand/logo-explorations/two-planes-2-r2-1.svg",
+     "axis": "interval-and-weight",
+     "idea": "The parent tuned so the equality finally sits where the eye measures it: both statements of the circle now have the same silhouette, a quarter of the ring tucked behind the page across a wider gap.",
+     "changed": "Equality moved from centreline to silhouette: disc r 190\u2192202, ring restated as outer-r 200 (stroke 64\u219260, centreline 190\u2192170) \u2014 the parent's silhouettes measured 380 vs 444, now 404 vs 400, the +2 on the disc being irradiation compensation (a solid reads smaller than an outline of equal diameter). Gap 34\u219240 (0.63px at 16px), halo r 224\u2192242. Diagonal offset (240,240)\u2192(232,232), d 339.4\u2192328.1: hidden arc 77\u00b0\u219291.3\u00b0, a clean quarter. Optical centring: ink bbox centre corrected from the parent's (546,478) to (512,500) \u2014 horizontal error 34\u21920, vertical lifted 12 above geometric centre (1.17% of canvas).",
+     "why": "This is the ratio I believe in because it makes the actual idea legible for the first time: two same-size circles, one substance, one contour, one passing behind the other. The 91\u00b0 occlusion reads as a deliberate quarter rather than a clip, and the 40 gap survives icon size where 34 flickered out.",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "At arm's length a stranger can still say \"a circle and a ring\" \u2014 the silhouette equality is an argument you feel more than name, so this one banks on craft, not novelty. It is the closest of the four to the flagged prior art; the disc's edge also still noses 14 units into the counter zone (as the parent's did by 9), which reads fine at the tuned angle but is the sensitive spot if anyone retunes it."
+    },
+    {
+     "id": "two-planes-2-r2-2",
+     "name": "Full Stop",
+     "file": "docs/brand/logo-explorations/two-planes-2-r2-2.svg",
+     "axis": "toward-the-letter",
+     "idea": "An unmistakable P built entirely from the parent's two circles: the ring is the free-floating bowl passing behind a flat-capped stem, and the disc survives as the descender's terminal \u2014 a full stop.",
+     "changed": "Ring 64/190\u219260/160 (outer 190) repositioned as the bowl at (567,361); disc 190\u2192140 as the stem's ball terminal at (407,690); new 96-wide stem, bar:ring weight 1.6:1 \u2014 the deliberately unequal case, so no curve-vs-straight matching applies and none is faked. Overshoot: bowl outer top 171 = stem top 178 \u2212 7 (1.84% of its 380 diameter, corrected from 0). Cap compensation: stem cap flat, not round \u2014 a round cap would have read ~48 shorter. Gap held at the family 34 behind the stem (halo rect stem\u00b134); bowl-to-disc clearance \u221a(160\u00b2+329\u00b2)\u2212330 = 35.8, echoing it. Hidden bowl arc 121.7\u00b0; the bowl never emerges left of the stem (outer leftmost 377 > stem left 359). Bbox (512,500.5), lifted 11.5 from geometric.",
+     "why": "It is a P you cannot misread \u2014 stem, detached bowl, descender \u2014 while every part is inherited: the same monoline ring, the same solid disc, the same pass-behind gap. The full-stop foot is the one letter-P gesture that belongs to this brand specifically: your career, clearly put, period.",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "Stem-beside-ring is exactly reference #1's construction and, of the four, the nearest silhouette to the old Patreon bar-and-circle \u2014 the ball foot and the behind-the-stem gaps are what hold it away, and they must both survive reproduction. The ball descender also risks reading as a thermometer or a lowercase-p-with-a-blob to an uncharitable eye; the 36-unit bowl-to-disc clearance closes at 16px and the letter goes slightly dense there."
+    },
+    {
+     "id": "two-planes-2-r2-3",
+     "name": "Standing O",
+     "file": "docs/brand/logo-explorations/two-planes-2-r2-3.svg",
+     "axis": "toward-the-O",
+     "idea": "The depth order flips and the offset turns vertical: a complete, unbroken O with the solid substance rising behind it from below, separated by a crisp gap that follows the O's own curve.",
+     "changed": "Offset rotated 45\u00b0\u219290\u00b0: centres (512,347)/(512,651), d=304. Ring 64/190\u219260/164 (outer 194), drawn IN FRONT for the first time; disc 190\u2192196 (+2 irradiation over ring outer, silhouette-equal). The gap is a halo annulus of stroke 128 = 60+2\u00d734, so the family 34 holds on both sides of the stroke. Eyeball guard as a number: disc's nearest approach to ring centre 108 vs halo inner 100 \u2014 nothing enters the counter, with 8 units in hand. Visible substance: the lune beyond radial 228, tips at \u00b140.1\u00b0, full 392 width at its equator. Bbox (512,500): lifted 12 (1.17%), from a parent whose bbox sat at (546,478). Ground inverted to Ink, mark White.",
+     "why": "The calmest and most confident of the four: the O is whole, so \"unmistakably an O\" is satisfied by construction, and the vertical event is the product story \u2014 substance rising behind the clear contour. The white-on-ink inversion gives it real presence in an icon grid without adding a single element.",
+     "colour": "White #FFFFFF on Ink #0C0A08",
+     "risk": "Ring-over-rising-mass flirts with eclipse, sunrise and horizon clich\u00e9s \u2014 deliberately adjacent to the pinned ORO reference, but adjacency cuts both ways. The lune under the O can scan as a cradle or, squinting, a smile under a face. And the mark is tall and narrow (392\u00d7694), so it holds less of the icon field than its siblings."
+    },
+    {
+     "id": "two-planes-2-r2-4",
+     "name": "One Circle",
+     "file": "docs/brand/logo-explorations/two-planes-2-r2-4.svg",
+     "axis": "kill-the-risk",
+     "idea": "The two statements collapse onto one literal circle \u2014 left of the vertical diameter it is solid, right of it it is contour \u2014 split by the family gap, so the mark cannot be described as a dot and a ring because there is only one circle in it.",
+     "changed": "Two circles \u2192 one: c(536,500), solid half to r270, contour half centreline 240/stroke 60 (outer 270 \u2014 seam alignment error 0 units), 34-unit channel at x[519,553]. Chord half-length \u221a(270\u00b2\u221217\u00b2)=269.46, arc 172.8\u00b0, flags 0 0 verified numerically to resolve to centre (536.07,500). Irradiation +2 deliberately NOT applied (stated as +0, corrected from r2-1/r2-3's +2): a 2-unit ledge at a shared seam reads as an error, and continuity outranks irradiation. Cap compensation: channel cut faces are flat verticals mirroring the solid's chord face \u2014 round caps would shorten each stub ~30. Optical centring: mass centroid sits 39 left of bbox centre (solid 114,511 area vs arc 45,239, 2.5:1), so the bbox moved +24 right of canvas centre; silhouette-centre and mass-centre straddle 512 at +24/\u221215. Vertical lifted 12 (512\u2192500). Stroke held at family 60.",
+     "why": "It defeats the flagged weakness by construction rather than by tuning: the equal-radius conceit stops being invisible and becomes the entire figure \u2014 substance and its clear expression are demonstrably the same form, read left to right like the product itself (one profile, its tailored statement). No overlap exists, so the eyeball failure mode is gone too.",
+     "colour": "Coral #E8503A on Paper #F4EFE6",
+     "risk": "It is honestly adjacent to the display-contrast / half-moon glyph family \u2014 a stranger might say \"contrast icon\" before \"logo\", though that family always carries a full enclosing outline this mark refuses. At 16px the 34 channel closes and it degrades to a half-solid circle \u2014 still ownable, but the two-state idea needs 32px and up to actually read. And it is the furthest of the four from the parent's pass-behind drama; the family resemblance rests on stroke, radius and the gap, not on composition."
+    }
+   ]
+  },
+  {
+   "slug": "caret-2",
+   "territory": "Margin \u2014 four ways",
+   "thesis": "Margin \u2014 the rule set inside the ring. Flagged as a circled numeral 1, and as the least self-explanatory idea.",
+   "marks": [
+    {
+     "id": "caret-2",
+     "name": "Margin",
+     "file": "docs/brand/logo-explorations/caret-2.svg",
+     "idea": "An ink circle (centre 512,512, radius 300, stroke 88) holding a single coral vertical rule (stroke 88, round caps, centreline x=392, y 400-624) that floats fully inside the ring at the left third of the counter - a margin rule set across a circular page, minimum clearance to the ring about 48 units.",
+     "why": "The margin is where review lives, and setting it inside the O makes the brand's own initial without a monogram: the whole (one career, one circle) disciplined by one editorial line. It sits in the quiet register of the pinned ORO reference - monoline, one accent, negative space doing the talking.",
+     "colour": "Ink #0C0A08 ring with a Coral #E8503A rule on a Paper #F4EFE6 ground",
+     "risk": "Nothing of the play button, chevron, or upload arrow in it. The honest weaknesses are different: a vertical bar inside a circle can be misread as a circled numeral 1, a coin slot, or a power-symbol relative, and 'margin' is the least self-explanatory idea of the three - a stranger sees a handsome abstract before they see editing. The off-centre placement is the only thing carrying the meaning.",
+     "axis": "round one"
+    },
+    {
+     "id": "caret-2-r2-1",
+     "name": "Fine Rule",
+     "file": "docs/brand/logo-explorations/caret-2-r2-1.svg",
+     "axis": "interval-and-weight",
+     "idea": "The margin rule held exactly where the parent set it, but re-weighted to a deliberate 2:1 \u2014 a massive ink page-ring carrying one fine coral rule.",
+     "changed": "Weight ratio 88:88 -> 98:48 (ring:rule): rule thinned 88 -> 48, ring 98 = 96 nominal (2.0x the rule) + 2 curve-vs-straight compensation (+2.1%, corrected from the parent's uncompensated equal weights, where the curve read lighter than the bar). Ring r 300 -> 294 so the heavier ring's outer radius 343 holds the 720 optical box after centring (top edge 157 >= 152). Interval: minimum radial clearance 48 -> 52, rule centreline 224 -> 238 (y 400-624 -> 381-619; endpoint-to-centre distance exactly 169, sqrt(169^2-120^2)=119, clearance exactly 52 at both ends). Optical centring: cy 512 -> 500 (up 12, 1.17% of canvas). Cap compensation: caps stay round; cap radius fell 44 -> 24 with the thinning, and the +14 centreline extension offsets round-cap foreshortening so the finer rule does not read stubby (visual tip-to-tip 286 = 58% of the 490 counter, vs the parent's 312/512 = 61%). Overshoot: not applicable \u2014 no flat edge is aligned to the circle's edge; the interval is radial by construction. Rule x 392 held (centre -120), now fully inside the counter's left third (right edge 416 < third-line 430).",
+     "why": "Equal weights made the bar and ring compete as two glyph parts, which is exactly the circled-1 and coin-slot reading; a fine rule inside a dominant ring reads as a mark drawn ON a page rather than a character IN a circle, and a heavy bar is also the Patreon half of the prior art, so thinning the rule (not the ring) moves away from it directly. 2:1 is the ratio I believe in: at 3:1 the rule dies at icon sizes, at 1.5:1 the ambiguity returns.",
+     "colour": "Ink ring #0C0A08 + Coral rule #E8503A on Paper #F4EFE6",
+     "risk": "Still literally a circle and a bar \u2014 this axis refines the parent, it does not de-risk it, so the bar-and-circle family resemblance survives at silhouette level. And the fineness has a price: the 48 rule and 52 gap are both under 1px at 16px, where the mark degrades to a heavy ring with a faint coral fleck."
+    },
+    {
+     "id": "caret-2-r2-2",
+     "name": "Descender",
+     "file": "docs/brand/logo-explorations/caret-2-r2-2.svg",
+     "axis": "toward-the-letter",
+     "idea": "The rule steps out of the counter and becomes a coral stem with a true descender; the ring becomes the bowl, top-aligned and near-touching \u2014 a monoline geometric p in the parent's two parts.",
+     "changed": "Structure: rule leaves the counter to x 268.5 (stroke 88 held from parent); ring r 300 -> 180, recentred (574, 426); stem-bowl gap 36 (near-touch, from the parent's 48 internal clearance); descender 148 = 25% of the 591 visual stem, the canonical p proportion. Overshoot: bowl outer top 200.5 sits 8 above the stem's perceived flat top 208.5 = 1.8% of the 451 bowl diameter (corrected from a maths-aligned top, which would have read short). Curve-vs-straight: bowl stroke 88 -> 91 (+3.4%) so the curved bowl reads equal to the 88 straight stem, corrected from the parent's uncompensated 88/88. Cap compensation: round caps read short, so each stem endpoint extends 6 past its flat-cap target \u2014 top endpoint 246.5 (true apex 202.5, reading at ~208.5), bottom 761.5 (true apex 805.5, reading at ~799.5). Optical centring: composite visual bbox 200.5-799.5 centres on y=500, up 12 (1.17%) from geometric 512; width 575 (edges 224.5-799.5) centres on x=512.",
+     "why": "This is the variation a stranger names on sight: 'a P' \u2014 the descender and the top alignment are the two cues ROUND-2 lists for turning two objects into a letter, and both are applied at canonical proportions. It keeps the parent's exact grammar (detached ink ring, coral rule, round caps, same stroke weight) so the family is unmistakable side by side.",
+     "colour": "Ink bowl #0C0A08 + Coral stem #E8503A on Paper #F4EFE6",
+     "risk": "The split-P genre is crowded: this sits close to pinned reference 1 and its many relatives, and when the 36 gap and the descender blur at small sizes the silhouette drifts back toward the bar-beside-circle prior art. Of the four it is the most legible and the least ownable."
+    },
+    {
+     "id": "caret-2-r2-3",
+     "name": "Insertion Point",
+     "file": "docs/brand/logo-explorations/caret-2-r2-3.svg",
+     "axis": "toward-the-O",
+     "idea": "The ring grows to an unmistakable O and the rule contracts to a small coral insertion point held at the margin \u2014 a cursor resting on a circular page.",
+     "changed": "Ring: stroke 88 -> 96, of which +3 is curve-vs-straight compensation so the curve is not read lighter than the 88 rule (+3.4%, corrected from the parent's uncompensated pairing) and +5 is a deliberate mass shift to the O; r 300 held, outer edge lands exactly on the 720-box top (152, from the parent's 168). Rule: centreline 224 -> 120 (y 400-624 -> 436-556); of the 120, 12 is cap compensation (+6 per end over the 108 visual target, because round caps read short); stroke 88 and x 392 held from the parent. Optical centring: cy 512 -> 500 (up 12, 1.17%), and the tick lifted a further +4 above the ring's own centre (tick centre y 496), because a small mark dead-centred in a circle reads low \u2014 giving radial clearances 72 top / 76 bottom, opened from the parent's 48. Overshoot: not applicable \u2014 no flat edge aligns to the circle; the event floats with >= 72 of air.",
+     "why": "This is the calm, confident end the axis asks for: the O is now the figure and the coral tick is a quiet editorial event \u2014 an insertion point, the brand guide's own word \u2014 rather than a competing glyph part. The generous 72+ clearance and off-centre placement dissolve the power-symbol and circled-1 readings, which both need a large or centred bar.",
+     "colour": "Ink ring #0C0A08 + Coral insertion point #E8503A on Paper #F4EFE6",
+     "risk": "Calmest and also the most abstract: a stranger sees a handsome ring with a coral fleck before any editorial meaning, so the parent's 'handsome abstract first' weakness is soothed, not solved. At 16px the tick is roughly 1.4 x 3.3px and nearly vanishes \u2014 the mark survives, but as a plain O."
+    },
+    {
+     "id": "caret-2-r2-4",
+     "name": "Offprint",
+     "file": "docs/brand/logo-explorations/caret-2-r2-4.svg",
+     "axis": "kill-the-risk",
+     "idea": "No ring and no bar at all: a solid ink page-disc with its margin strip cut free and pulled out \u2014 the vertical is now a seam of paper between two masses, and the coral sliver is the tailored excerpt leaving the page.",
+     "changed": "Construction inverted from strokes to solid masses, so the mark cannot be described as 'a circle and a bar'. Disc r 300 held from the parent; the rule restated as a cut of ground along the chord at disc-centre -150 (chord x 374, half-chord sqrt(90000-22500)=259.81, chord y 240.19-759.81). Gap width 60, corrected from the parent's 88 stroke: a paper gap between ink masses reads wider than an ink stroke of equal width (irradiation), and 60 is 0.94px at 16px, the survival floor. The margin sliver translated a further -60 so the piece reads pulled out, not merely sliced (flat face at x 314, curved back through 164,500). Optical centring: cy 512 -> 500 (up 12, 1.17%); disc cx 512 -> 524 (+12) so the mass-weighted composite centre computes to x=512.3 (segment 55277 units^2 at centroid -271.5 vs main mass 227466 at +51.4) \u2014 bbox centring would have shoved the dominant disc visibly right. Overshoot, curve-vs-straight and cap compensation: not applicable \u2014 there are no stroked elements, no caps, and the flat chord faces end at y 240/760, inside the disc's own 200-800 verticals, so no flat edge aligns with a curve's extreme.",
+     "why": "This is the only one of the four that actually defeats the flagged weakness: the silhouette is a broken disc, not circle-plus-bar, and it gains a true story \u2014 one page, one margin drawn off for tailoring \u2014 while being the best 16px survivor (two solid masses, one 0.94px seam). Negative space doing the work is straight from the pinned mood.",
+     "colour": "Ink page-mass #0C0A08 + Coral margin sliver #E8503A on Paper #F4EFE6",
+     "risk": "It trades the old prior art for new adjacencies: the main mass alone is a D-shaped solid (flat chord, round back), and split-disc marks exist, notably in fintech. It is also the furthest from the parent's outline construction \u2014 the family resemblance rides on the shared r=300 circle, palette and left-of-centre vertical, not on the ring \u2014 so if the client's attachment is to the drawn ring specifically, this one leaves it behind."
+    }
+   ]
+  },
+  {
+   "slug": "figure-ground-2",
+   "territory": "Loose Leaf \u2014 four ways",
+   "thesis": "Loose Leaf \u2014 bar and bowl cut out of a disc. Flagged as Patreon's old mark inverted, with an ink bridge that fuses at 16px.",
+   "marks": [
+    {
+     "id": "figure-ground-2",
+     "name": "Loose Leaf",
+     "file": "docs/brand/logo-explorations/figure-ground-2.svg",
+     "idea": "A solid ink disc (r 340 at 512,512) holding two separate voids in conversation: a rounded vertical stem (a 130-by-380 stadium, x 294\u2013424, y 322\u2013702) and a free-floating 120-radius dot at (610,452) where a P's bowl would sit, kept apart by a 66-unit bridge of ink.",
+     "why": "It is the product's one-line story drawn in negative: the stem is the constant (one career profile), the detached disc is the tailored document sent out on its own \u2014 and together they still read as the P. It fuses the two references the client pinned hardest: the split stem-and-circle P (ref 1) and the negative-space cut (ref 4).",
+     "colour": "#0C0A08 ink field; voids are transparent, so the two shapes are made of the ground beneath.",
+     "risk": "It is essentially Patreon's old bar-and-circle mark inverted, and without the brand nearby it can read as 'IO' or a lowercase 'i\u00b7' before it reads as P. The 66-unit ink bridge between the voids is below the 90-unit floor I hold voids to; at 16px it nearly fuses \u2014 which collapses it into mark 1's connected P, a soft failure of the 'two shapes' idea rather than a legibility failure.",
+     "axis": "round one"
+    },
+    {
+     "id": "figure-ground-2-r2-1",
+     "name": "Interval",
+     "file": "docs/brand/logo-explorations/figure-ground-2-r2-1.svg",
+     "axis": "interval-and-weight",
+     "idea": "The parent held exactly \u2014 ink disc, stem void, floating dot void \u2014 with only the two numbers that define it moved: the bridge widened to 96 and the mass ratio pulled down from 1.85 to 1.43 so the stem leads and the dot answers.",
+     "changed": "Bridge 66 -> 96 (the 90 floor plus margin; 1.5px of ink at 16px where the parent nearly fused). Stem width 130 -> 140; dot r 120 -> 100, making dot-diameter:stem-width 200:140 = 1.43 (from 240:130 = 1.85). Optical corrections: disc centre (512,512) -> (512,501), an 11-unit lift = 1.07% of canvas; stem drawn 352 long = 340 intended + 12 round-cap compensation (6 per end); dot drawn r100 = r97 nominal + 3 (+3.1%) because a circular void reads lighter than a straight-sided one; dot top 323 = stem top 327 - 4 overshoot (2.0% of d200) so the circle reads level with the cap line. Void bbox [294,730] x [323,679], re-centred on the lifted (512,501); edge ink minimum 86.8 at the lower cap, up from the parent's 77.4.",
+     "why": "1.85 is why the parent read 'O beside a stick': the circle out-massed the stem. At 1.43 with optical top-alignment the dot reads as a bowl-in-waiting rather than a tittle or an O, and 96 is the narrowest interval that both survives 16px and reads as a drawn channel rather than a crack. I believe in this ratio because it is the midpoint between the two misreadings \u2014 below ~1.2 the dot becomes a period ('i.'), above ~1.7 it becomes an O ('IO').",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "It is still, plainly, a bar-void and a circle-void inside a disc \u2014 the inversion and the new ratio distance it from Patreon's old mark but do not defeat the silhouette; a hostile viewer can still say 'bar and circle'. This variation refines the parent's numbers; killing the prior art is r2-4's job, not this one's."
+    },
+    {
+     "id": "figure-ground-2-r2-2",
+     "name": "Counterproof",
+     "file": "docs/brand/logo-explorations/figure-ground-2-r2-2.svg",
+     "axis": "toward-the-letter",
+     "idea": "The two voids fuse into one P-silhouette void cut from the disc, and the parent's floating element flips polarity: the free dot of void becomes a free disc of ink \u2014 the P's counter \u2014 floating inside the bowl.",
+     "changed": "The 66-unit bridge goes to 0 by attachment (bowl fused to stem), which is what makes it a letter. Stem width 130 -> 112, x[362,474]; bowl = circle c(512,421) r150 replacing the d240 dot void; counter ink island r72, giving a 78-unit ring void uniform on all sides (bowl left edge coincides with the stem's left wall by construction, so the 78 holds even across the stem). Descender: 160 below the bowl's flat underside (y571 -> 731). Optical corrections: disc lifted 11 to (512,501) (1.07% of canvas); bowl apex 271 overshoots the flat top y276 by 5 = 1.67% of the bowl's d300 (corrected from the tangent construction where apex and flat would share y276); ring void drawn 78 = 75 nominal + 4% because a curved channel reads narrower than a straight one; drawn bottom 731 = 721 intended + 10 round-cap compensation on the r56 foot, which also floats the visual centre ~5 above the disc centre. P bbox [362,662] x [271,731] centred (512,501); minimum edge ink 80.3.",
+     "why": "At 16px this renders as a legible P \u2014 verified \u2014 which no other variation and not the parent can claim. The fusion solves the flagged fuse-risk by embracing it, and the polarity flip keeps the parent's soul: there is still exactly one small circle floating free in a field that isn't its own.",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "A P inside a circle is honest, real prior art of its own: the sound-recording copyright mark \u2117 appears on every record sleeve, and this courts it more directly than the parent courted Patreon. The rounded stem, fused geometric bowl and figure-ground cut soften but do not erase that adjacency. The 78-unit ring void is also the finest feature in the whole set (~1.2px at 16px) \u2014 it held in the render, but it is the first thing to die in a bad rasteriser."
+    },
+    {
+     "id": "figure-ground-2-r2-3",
+     "name": "Caret O",
+     "file": "docs/brand/logo-explorations/figure-ground-2-r2-3.svg",
+     "axis": "toward-the-O",
+     "idea": "The dot void grows up to become the counter \u2014 a concentric r230 void turning the disc into a heavy true O \u2014 and the stem flips polarity into a small ink caret standing quietly inside it: an insertion point held in an O.",
+     "changed": "Dot void r 120 -> 230 and moved to dead concentric (512,501), converting the disc into a 110-unit O ring; stem void 130x380 -> ink island 92x248 (polarity flip); the 66 ink bridge becomes a void moat of 84.7 minimum (top cap) / 91.2 (bottom cap) between caret and ring wall. Optical corrections: disc and counter lifted 11 to cy 501 (1.07% of canvas); ring drawn 110 = 106 nominal + 4 (+3.8%) because a curved stroke reads thinner than a straight one \u2014 this keeps the ring visually ahead of the 92 bar; caret drawn 248 long = 240 intended + 8 round-cap compensation (4 per end); caret cy 497 = counter centre 501 - 4, a second optical-centring lift (0.87% of the counter's d460) because a form at the geometric centre of a circle sits low; caret cx 456 = 512 - 56, set left of axis as a margin rule rather than a spindle. Overshoot: 0 \u2014 stated honestly, this is an all-curve composition with no flat edge for a circle to level with; the correction has no site.",
+     "why": "This is the calm, confident end the axis asks for: the O is stated once, heavily, and the vertical event is small, contained and editorial \u2014 a caret, the brand's own review gesture \u2014 instead of a sibling shape competing for the silhouette. Containment is also what breaks the Patreon geometry: nothing sits beside anything.",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "A vertical bar inside an O flirts with glyph prior art of its own \u2014 phi, theta, slashed-zero \u2014 and at a glance the pair can be spelled 'OI'. The off-axis placement and the non-touching moat are the defences, and the caret is small enough that at 16px it reads as a mark inside the O rather than a letter, but it is also the faintest element of the four at that size."
+    },
+    {
+     "id": "figure-ground-2-r2-4",
+     "name": "Embrace",
+     "file": "docs/brand/logo-explorations/figure-ground-2-r2-4.svg",
+     "axis": "kill-the-risk",
+     "idea": "The stem stops being a bar: it bows and orbits the dot at constant clearance, so the two voids stop sitting side by side and start holding each other \u2014 an arc cradling a point, cut from the disc.",
+     "changed": "The straight 130x380 stem becomes an 88-wide arc stroke whose centreline (R234) is concentric with the dot, span 96 degrees about west; the dot goes r 120 -> 100 and moves to (601,501); the 66 bridge becomes a 90-unit channel \u2014 exactly the floor \u2014 held uniform along the entire embrace including around the caps, because the cap centres sit on the same R234 (verified: cap-centre-to-dot distance 234.0). Optical corrections: disc lifted 11 to (512,501) (1.07% of canvas); bow width drawn 88 = 85 nominal + 3 (+3.5%) curve-reads-thinner compensation; span drawn \u00b148\u00b0 = \u00b146\u00b0 intended + 2\u00b0 per end (~8 units of centreline arc each) to offset round-cap foreshortening; assembly bbox [323,701] x [283,719] re-centred on (512,501), which required displacing the shared arc/dot centre 89 right of canvas axis. Overshoot: 0 \u2014 no flat edge exists anywhere in this composition; the uniform 90 channel is the discipline that replaces it. Overshoot has no site, honestly stated.",
+     "why": "This is the only one of the four that cannot be described as 'a circle and a bar' \u2014 the describing sentence becomes 'a curve holding a point', which is nobody's prior art in this category and happens to be the product's pitch (your substance, held and reviewed). It uses the one lever ROUND-2 says no geometric competitor owns \u2014 the bow \u2014 and the constant-clearance construction means the interval reads as designed, not left over.",
+     "colour": "Ink #0C0A08 on Paper #F4EFE6",
+     "risk": "It trades the bar-and-circle prior art for milder adjacencies of its own: it can be described as 'a C and a dot', which brushes \u00a9, G, a crescent, or an ear. The 96-degree span is the number keeping it out of C-territory \u2014 wider and it becomes a letter, narrower and it becomes a parenthesis \u2014 and that number is chosen by arithmetic and one render, not yet by living with it. Of the four it is also the furthest from the parent's silhouette, which is precisely its job but means the family resemblance rests on the shared disc, the dot, and the cut rather than on outline."
+    }
+   ]
+  },
+  {
+   "slug": "converge",
+   "territory": "Convergence",
+   "thesis": "Two agents were asked to stop choosing between the six and fuse them instead \u2014 one to synthesise the best decision from each parent, one to think in pairs: a full-size icon and its simplified 16px counterpart as one system.",
+   "marks": [
+    {
+     "id": "converge-fuse-1",
+     "name": "Echo",
+     "file": "docs/brand/logo-explorations/converge-fuse-1.svg",
+     "axis": "synthesis \u2014 fuses Open Counter's open counter, Colophon's mass, Spine's bow, and Margin's interiority (plus Fine Rule's 2:1 weight verdict and Caret O's in-counter lift)",
+     "idea": "A heavy ink O whose page-open counter holds a coral margin rule that bows at the counter's own radius \u2014 the rule echoes the page's curvature from inside it.",
+     "changed": "From Open Counter: the counter scale \u2014 counter r224 against outer r344, counter:outer 0.65 (Colophon's own was 0.30). From Colophon: the mass \u2014 ring stroke 120, Colophon's 140 tempered \u221220 so the O stays an O. From Margin: interiority and coral \u2014 the rule floats fully inside the counter at a left-of-centre station, displacement 56 (pulled in from Margin's 0.47r to 0.25r so Margin's \u226548 clearance rule survives: 52.3 at the top cap, 59.6 bottom, 98.5 at the apex). From Spine: the bow \u2014 arc radius 224 = the counter's own radius, sagitta 37.45 on a chord of 248, caps (456,372)/(456,620). From caret-2-r2-1: the ~2:1 ring:rule weight verdict, 120:64 = 1.9. Optical corrections: chord drawn 248 = 240 intended + 8 round-cap comp (4/end); bow stroke 64 = 62 nominal + 2 curve-reads-thinner comp (3.2%); bow centre y496 = ring centre 500 \u2212 4 in-counter lift (0.89% of counter d448); mark lifted 12 (1.17% of canvas, centre y500); overshoot 0 \u2014 all-curve composition, no flat edge to level with. Ink extents x[168,856] y[156,844]: 688 square, inside the 720 optical area; bow = 1px at 16px, ring 1.9px.",
+     "why": "This is the calm, O-first convergence: it keeps every winning decision \u2014 mass, open counter, interior event, the one gesture no prior art owns \u2014 in a single two-element mark, and the bow-radius-equals-counter-radius detail makes the vertical event belong to this circle rather than stand beside it.",
+     "colour": "Ink ring with a Coral bow on Paper (#0C0A08 + #E8503A on #F4EFE6); flattens to all-Ink and still reads",
+     "risk": "The skeleton is still one circle and one vertical stroke, so the Patreon ingredients survive \u2014 what saves it is that nothing sits beside the circle and the rule is curved, neither of which is true of Patreon's mark. The honest residue: at 16px the 37-unit sagitta collapses to under a pixel, the bow reads as a straight interior tick, and the mark degrades toward caret-2-r2-3's silhouette (an O with an insertion point) rather than anything new. It is also adjacent to the power-symbol glyph family (circle + interior vertical), though the power icon's line is centred and breaks the ring's top edge while this one floats whole, off-centre, and bowed; and a stranger may describe it as 'an eye' or 'a paren in a circle'."
+    },
+    {
+     "id": "converge-fuse-2",
+     "name": "Verso",
+     "file": "docs/brand/logo-explorations/converge-fuse-2.svg",
+     "axis": "synthesis \u2014 fuses Restated's second statement of the circle with Loose Leaf's figure-ground inversion, executing Margin's interiority as a cut instead of a drawing",
+     "idea": "The circle stated twice \u2014 a solid recto page in front carrying Margin's rule cut into it as a void, and the verso showing through behind across the family gap.",
+     "changed": "From Restated (at Stated Equal's tuned numbers, inherited deliberately): ring c(629,383) centreline r170 stroke 60; front disc c(397,615) r202 = ring outer 200 + 2 irradiation comp; halo r242 giving the 40-unit gap (0.63px at 16px); hidden centreline arc 91.3\u00b0 \u2014 a quarter of the ring behind the page. From Loose Leaf: the inversion and the stadium form \u2014 the vertical event is a void cut from the disc, w110 (1.7px at 16px), caps r55, x[282,392]. From Margin: the station \u2014 void centreline x337 = 60 left of disc centre, the rule set inside the page. New optical corrections: void drawn length 236 = 228 intended + 8 round-cap comp (4/end), y[493,729]; void centre y611 = disc centre 615 \u2212 4 in-disc lift (0.99% of disc d404); ink bridge at the disc's equator 87, ink beyond the caps 57 top / 63 bottom \u2014 every passage \u226540. Ink extents x[195,829] y[183,817], bbox centre (512,500), lift 12 (1.17%); the void also debits the left-heavy disc, moving the ink centroid from ~x469 to ~x489, 20 closer to canvas centre.",
+     "why": "This is the mark that cannot be flattened into the prior art: the vertical is an absence inside a disc and the circle appears twice, so no reading produces 'a circle and a bar'. It also repairs Stated Equal's one loss \u2014 the refinement had no vertical event at all \u2014 by restoring it as the thing the brand actually sells: the space on the page where your words go.",
+     "colour": "Ink on Paper (#0C0A08 on #F4EFE6), one colour by design \u2014 the same circle stated twice must be the same substance; restates cleanly in Coral or White-on-Ink",
+     "risk": "Fully clear of the bar-and-circle silhouette \u2014 its exposure is elsewhere. It sits near the generic two-circle eclipse family (a Mastercard-adjacent overlap read), and at very small sizes the 110-unit void closes first, after which it genuinely is just two circles. The front disc with a rounded slot can momentarily read as a computer mouse, though the off-centre, near-full-height slot works against that. And because it inherits Stated Equal's circles verbatim \u2014 deliberate, as the convergence mark \u2014 a viewer who has seen the r2 sheet may describe it as 'Stated Equal with a slot' rather than a new mark."
+    },
+    {
+     "id": "converge-system-1",
+     "name": "Display Cut",
+     "file": "docs/brand/logo-explorations/converge-system-1.svg",
+     "axis": "synthesis: fuses caret-2's containment skeleton with caret-2-r2-1's 2:1 weight decision and r2-3's clearance discipline \u2014 the full-size half of a two-cut system",
+     "idea": "A heavy ink O holding one fine coral margin rule inside its counter \u2014 the page with an insertion point standing on it, drawn at display weight.",
+     "changed": "From parent caret-2: ring r300/stroke 88 -> centreline r290/stroke 108, where 108 = 104 nominal (an exact 2:1 against the rule) + 4 curve-reads-thinner compensation (3.8%); weight ratio 1:1 -> 2:1; rule 88 -> 52, centreline x=392 held (24.6% into the counter, the parent's left-third margin); rule cap-centre span 224 -> 208 = 200 intended + 8 round-cap compensation (4 per end); mark centre y 512 -> 500, an optical lift of 12 (1.17% of canvas); rule centred at cy 496 = counter centre \u2212 4 in-counter lift (0.85% of counter d472); minimum rule-to-wall clearance 48.6 (parent's 48 held, verified 48.56/53.80 by calculation); overshoot 0 \u2014 all-curve O, no flat edge to level with; extents x[168,856] y[156,844], inside the 720 optical box with 16 to spare.",
+     "why": "The parent that deserves to scale is caret-2 (Margin), for three reasons. It is the only version of 'a circle and a vertical event' where the event happens ON the page rather than beside it \u2014 containment is a structural escape from the Patreon silhouette, not a cosmetic one. It is the brand guide's own named direction (a margin/caret/insertion point suggesting authorship and review), so the mark means the product. And two independent round-2 tracks from different parents (caret-2-r2-3 and figure-ground-2-r2-3) converged on exactly this figure \u2014 the exploration chose it on its own. The system conceit: the O's annulus band [236,344] at c(512,500) is numerically identical in both files; only the vertical event is redrawn for size, like display and caption cuts of one typeface.",
+     "colour": "Ink ring + Coral rule on Paper (#0C0A08 + #E8503A on #F4EFE6)",
+     "risk": "Enumerated element by element it is still a circle and a vertical bar, so it has not left the neighbourhood \u2014 but Patreon's bar stands full-height BESIDE its circle, and nobody describes that mark as 'a circle with a line inside it'; containment plus the 2:1 weight contrast puts this a genuine distance away. The nearer prior art is now the caret-in-circle genre: 1Password's keyhole (dodged \u2014 the rule floats free with a 48.6-unit moat, no circle-on-top, off-centre) and the power symbol (dodged \u2014 the rule never breaks the ring). Its honest weakness at 16px is the 52-unit rule fading to a faint coral trace \u2014 which is exactly the job the caption cut exists to take over."
+    },
+    {
+     "id": "converge-system-2",
+     "name": "Caption Cut",
+     "file": "docs/brand/logo-explorations/converge-system-2.svg",
+     "axis": "synthesis: the same caret-2 containment skeleton restated in figure-ground-2's cut-mass logic (weight, not lines) \u2014 the 16px half of the system",
+     "idea": "The identical O, cut from a solid disc instead of drawn, with the margin rule regrown into a stout ink caret \u2014 the same identity redrawn to survive a 16px menu bar.",
+     "changed": "From its true parent, the display cut: annulus band [236,344] at c(512,500) held to 0 units of change (the system invariant \u2014 one outer silhouette across both files), but construction flipped from a stroked circle to a disc r344 minus a concentric r236 counter; the 52 coral rule becomes a 128-wide ink caret \u2014 2.46x heavier, where 128 = ring 108 + 20 isolation compensation (a small free-floating mass erodes at raster sizes and irradiates lighter than the long band around it); cap-centre span 208 -> 96 = 88 intended + 8 round-cap compensation (4 per end); margin displacement from centre 120 -> 56, compressed to buy interval; minimum caret-to-wall moat 48.6 -> 95.6 (verified 95.58/100.78/105.22), i.e. 1.49px at 16px \u2014 the interval nearly doubles as the drawing shrinks, exactly as a caption cut opens its fit; colours 2 -> 1; optical lift 12 and in-counter lift 4 held from the display cut; overshoot 0, all-curve composition. Raster-verified at 16px: ring 1.69px, caret 2.0px, all features open.",
+     "why": "This is the drawing that actually ships at menu-bar and tab-bar sizes, and it proves the two files are one identity: heavier weight (smallest element 52 -> 128), larger interval (48.6 -> 95.6), one colour instead of two, mass instead of line \u2014 while the O itself never moves by a single unit. A stranger seeing the pair says 'same mark, one bolder'; a 16px raster test shows every element surviving where the display cut's fine rule washes out.",
+     "colour": "Ink on Paper (#0C0A08 on #F4EFE6)",
+     "risk": "At exactly 16px the 56-unit displacement is 0.875px, so the caret reads as near-centred and the mark flirts with the generic 'mark in a circle' genre \u2014 camera lens, eye, record glyph; from 32px up the margin position becomes legible and the read snaps back to an insertion point on a page. It shares the display cut's residual honesty: described element-by-element it is still a circle and a vertical stroke \u2014 the distance from Patreon is containment and weight, not different parts. The keyhole adjacency is weaker here than in the display cut (the caret is stubbier and fully mooted, never attached), but a heavy annulus with a centred pill is a crowded neighbourhood, and the off-axis placement is the one feature keeping it ownable."
+    }
+   ]
+  }
+ ],
+ "title": "On Paper Round Two",
+ "eyebrow": "On Paper \u00b7 identity refinement \u00b7 six marks, twenty-eight variations",
+ "headline": "The circle and the vertical event",
+ "lede": "You picked six marks and they turned out to be one skeleton: a circle with a vertical event beside it, inside it, or cut out of it. So this round is depth, not territory \u2014 each parent pushed four ways, with every optical correction stated as a number, plus four marks that stopped choosing between them and fused instead.",
+ "read": "The constraint did the work. Each parent got a variation whose only job was to defeat its own flagged weakness \u2014 chiefly that a circle beside a vertical bar is Patreon's old mark \u2014 and three of the four best things here came out of that instruction. The refinements that merely tuned interval and weight are better drawings of the parent, and their designers say plainly that they do not escape the silhouette.",
+ "shortlist": [
+  {
+   "id": "stem-counter-1-r2-4",
+   "note": "The ring crosses into the stem with a paper channel between them, so the two stop being neighbours and become one interlocked figure. It reads as a P, and numerals never overlap \u2014 which kills both the '10' reading and the prior art at once."
+  },
+  {
+   "id": "stem-counter-2-r2-4",
+   "note": "The monoline resolved into a single continuous p. The most drawn thing in the set and the furthest from anything constructed out of two objects."
+  },
+  {
+   "id": "two-planes-2-r2-4",
+   "note": "The circle split down its own axis \u2014 solid on one side, ring on the other. The most original mark of the whole exploration, and the only one with no letter in it at all: brave or a miss, depending on how much you need the P."
+  },
+  {
+   "id": "converge-fuse-1",
+   "note": "Margin's interiority with Spine's bow: a heavy ring holding a curved coral rule. The bow is the one gesture in this family that no geometric prior art owns."
+  },
+  {
+   "id": "converge-system-1",
+   "note": "Display Cut, with Caption Cut as its 16px counterpart below. The only submission that treats small sizes as a different drawing rather than the same drawing shrunk \u2014 which is what shipping on four platforms actually needs."
+  },
+  {
+   "id": "stem-counter-1-r2-2",
+   "note": "The safe one: a solid geometric P with a hairline gap that closes below about 48px. Most legible, least distinctive \u2014 worth keeping on the table as the conservative option."
+  }
+ ],
+ "failed": "Two honest cautions. The interval-and-weight variations \u2014 Counterweight, Close Interval, Interval, Open Page \u2014 are better-drawn parents but still a bar beside a circle; their own designers say so in the risk lines. And Standing O, Full Stop and Embrace each solved their brief by losing the thread: a stacked disc and ring reads as a figure, and a crescent with a dot reads as a moon."
+}

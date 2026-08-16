@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Pivot: two identical planes, rotationally offset. The front plane 360x520 rx48
+       at x365 y266 (centre 545,526). The back plane is the SAME rect rotated -20deg
+       about the shared bottom-left corner (365,786), fanning up-left; its corners land
+       at TL(187,297) TR(526,174) BR(703,663). A Paper halo (front inflated by 40:
+       x325 y226 w440 h600 rx88) cuts a clean 40-unit gap, so the back plane survives
+       only as the fan wedge on the left and its corner tip over the top.
+       Composition shifted right of canvas centre so the fan balances: mass centroid ~(505,514). -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <rect x="365" y="266" width="360" height="520" rx="48" fill="#E8503A" transform="rotate(-20 365 786)"/>
+  <rect x="325" y="226" width="440" height="600" rx="88" fill="#F4EFE6"/>
+  <rect x="365" y="266" width="360" height="520" rx="48" fill="#E8503A"/>
+</svg>

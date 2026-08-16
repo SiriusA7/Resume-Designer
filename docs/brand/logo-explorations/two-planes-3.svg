@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Die Cut: the second plane exists only as the gap it left in the first.
+       First plane: coral disc c(512,512) r330. Second plane: a 300x420 rx48 rect
+       of ground, centred on (512,512) and rotated -8deg about that same centre,
+       so the remaining coral stays centrally symmetric — no optical correction needed.
+       Rotated void bbox x[334,690] y[283,741]; min coral band at the void corners
+       = 330 - 239.4 (max radial extent of the rounded corner) = ~90 units. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="512" cy="512" r="330" fill="#E8503A"/>
+  <rect x="362" y="302" width="300" height="420" rx="48" fill="#F4EFE6" transform="rotate(-8 512 512)"/>
+</svg>

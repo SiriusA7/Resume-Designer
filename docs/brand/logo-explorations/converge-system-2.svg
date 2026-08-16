@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Converge "Caption Cut": the same identity cut for 16px, where 1px = 64 units.
+       The O does not change: annulus band [236,344] at c(512,500), numerically
+       identical to the display cut's ring (there a centreline-r290 stroke-108 circle),
+       here cut from a solid disc r344 with a concentric r236 counter -
+       figure-ground-2's mass logic, weight instead of lines. At 16px: ring 1.69px,
+       counter d472 = 7.4px.
+       The vertical event is redrawn: the 52 coral rule becomes a 128-wide ink caret -
+       2.46x heavier, and 128 = ring 108 + 20 isolation compensation (a small
+       free-floating mass erodes at raster sizes and irradiates lighter than the long
+       band around it). Stadium, caps r64, cap centres (456,448)/(456,544): span
+       96 = 88 intended + 8 round-cap compensation (4 per end); cy 496 = counter
+       centre 500 - 4 in-counter optical lift (0.85% of d472); cx 456 = 56 left of
+       centre - the margin displacement compressed from the display cut's 120 to buy
+       interval, still unmistakably off-axis from 32px up.
+       Moat caret-to-wall: 95.6 at the top cap (1.49px at 16), 100.8 bottom, 105.2
+       flank - against the display cut's 48.6 the minimum interval nearly doubles as
+       the drawing shrinks, exactly as a caption cut opens its fit. Colours 2 -> 1:
+       all Ink on Paper. Overshoot 0: all-curve composition, no flat edge anywhere.
+       Extents x[168,856] y[156,844] - the two files share one outer silhouette. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <path fill="#0C0A08" fill-rule="evenodd" d="
+    M 856,500
+    A 344,344 0 1 1 168,500
+    A 344,344 0 1 1 856,500
+    Z
+    M 748,500
+    A 236,236 0 1 1 276,500
+    A 236,236 0 1 1 748,500
+    Z"/>
+  <rect x="392" y="384" width="128" height="224" rx="64" fill="#0C0A08"/>
+</svg>

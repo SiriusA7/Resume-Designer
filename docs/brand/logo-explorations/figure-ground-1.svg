@@ -1,0 +1,23 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Letterpress: coral disc, P-shaped void with a floating coral counter.
+       Disc c(512,512) r340. Stem x[384,504] w120, y 322 to 722, bottom cap r60 c(444,662),
+       top-left corner r36 c(420,358). Bowl arc r135 c(504,457), top tangent y322, bottom y592.
+       Counter c(504,457) r42; ring void = 135-42 = 93. -->
+  <path fill="#E8503A" fill-rule="evenodd" d="
+    M 852,512
+    A 340,340 0 1 1 172,512
+    A 340,340 0 1 1 852,512
+    Z
+    M 420,322
+    L 504,322
+    A 135,135 0 0 1 504,592
+    L 504,662
+    A 60,60 0 0 1 384,662
+    L 384,358
+    A 36,36 0 0 1 420,322
+    Z
+    M 546,457
+    A 42,42 0 1 1 462,457
+    A 42,42 0 1 1 546,457
+    Z" />
+</svg>

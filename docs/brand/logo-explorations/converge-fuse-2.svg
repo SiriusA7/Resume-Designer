@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Converge 2 "Verso": a fusion, not a pick. Restated's circle-stated-twice, held
+       at Stated Equal's tuned numbers, with Loose Leaf's inversion setting Margin's
+       rule INTO the front page as a void - the vertical event Stated Equal lost is
+       restored as absence: the recto carries its margin, the verso shows through.
+       Ring (verso, behind): c(629,383), centreline r170, stroke 60. Page disc
+       (recto, front): c(397,615) r202 = ring outer 200 + 2 irradiation comp; halo
+       r242 gives the 40-unit gap (0.63px at 16px); hidden centreline arc 91.3deg -
+       a quarter of the ring behind the page. Stem void: stadium w110 (1.7px at
+       16px), caps r55, x[282,392], centreline x337 = 60 left of disc centre
+       (Margin's station applied to the page, Loose Leaf's stadium form); y[493,729]
+       drawn length 236 = 228 intended + 8 round-cap comp (4/end); void centre y611
+       = disc centre 615 - 4 in-disc lift (0.99% of disc d404, Caret O precedent).
+       Ink bridge at the disc's equator 87; ink beyond the caps 57 top, 63 bottom -
+       every ink passage >= 40. Ink extents x[195,829] y[183,817], bbox centre
+       (512,500), lift 12 (1.17%). The void also debits the left-heavy disc: ink
+       centroid moves from ~x469 to ~x489, 20 closer to canvas centre. One colour
+       on one ground - the same circle stated twice must be the same substance. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="629" cy="383" r="170" fill="none" stroke="#0C0A08" stroke-width="60"/>
+  <circle cx="397" cy="615" r="242" fill="#F4EFE6"/>
+  <circle cx="397" cy="615" r="202" fill="#0C0A08"/>
+  <rect x="282" y="493" width="110" height="236" rx="55" fill="#F4EFE6"/>
+</svg>
