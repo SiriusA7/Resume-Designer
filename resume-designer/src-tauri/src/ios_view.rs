@@ -111,6 +111,18 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
         );
         return;
     }
+    try_apply(app);
+}
+
+/// One fixup pass, without waiting for a run-loop event.
+///
+/// Called from `setup` as well as from the event loop, and that is the point:
+/// `.run()` does not start pumping until the whole of Rust startup is done, so
+/// the loop's first pass is ~150ms in. If UIKit has already connected a scene
+/// by `setup` — it usually has — this shows the window there instead, which is
+/// what lets the launch cover be on screen before the system hands off. A no-op
+/// when nothing is ready yet; the loop retries as before.
+pub fn try_apply<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -171,6 +183,11 @@ unsafe fn apply(webview: *mut AnyObject) {
     if scene.is_null() {
         attach_window_scene(window);
     }
+    // Showing this window is what dismisses UILaunchScreen, and the app has not
+    // drawn yet — so put the launch screen back, as a plain UIKit view, in the
+    // same turn. The chrome takes it down once it has rendered.
+    crate::ios_shell::arm_launch_window(window);
+
     let _: () = msg_send![window, setHidden: false];
     let _: () = msg_send![window, makeKeyAndVisible];
 

@@ -2614,6 +2614,128 @@ final class OPShell: NSObject {
   @MainActor private static var model: ShellModel?
   @MainActor private static var bridge: SnapshotBridge?
 
+  /// The launch cover's view tag, so it can be found and removed idempotently.
+  private static let launchCoverTag = 0x0_C0FFEE
+
+  /// True once the cover has been taken down, so a later pass cannot put it
+  /// back over a running app.
+  @MainActor private static var launchCoverRetired = false
+
+  /// Keep the launch screen on screen until the app has actually drawn.
+  ///
+  /// UIKit shows `UILaunchScreen` and stops the instant another window becomes
+  /// visible. Here that instant is precisely `ios_view::apply`'s
+  /// `makeKeyAndVisible` — and what it reveals is tao's web view with nothing
+  /// painted in it. The app's first real frame comes later, when `installShell`
+  /// swaps in the hosting controller. Between the two the screen is blank, which
+  /// is why the launch logo appeared to sink away and snap back.
+  ///
+  /// MEASURED: `installShell` runs 147ms after the process's first log line, and
+  /// the sag is 8–9 frames at 60fps — the same interval, ending exactly at the
+  /// pop. Three earlier attempts all failed for one reason: every one of them
+  /// ran INSIDE `installShell`, at the END of the gap. So does anything based on
+  /// `UIWindow.didBecomeVisibleNotification`, which never fires here at all —
+  /// tao's window is already unhidden when it is handed its scene.
+  ///
+  /// Called from Rust with the window pointer in hand, in the same turn of the
+  /// runloop that shows it. The cover is the launch screen redrawn: same colour
+  /// set, same image, same 88pt, same centre — so there is nothing to see when
+  /// it goes.
+  /// Show `window` the instant UIKit connects a scene, not a poll later.
+  ///
+  /// `makeKeyAndVisible` is a no-op on a window with no `windowScene` (see
+  /// ios_view.rs), and at Rust's `setup` UIKit has not connected one yet —
+  /// measured: three fixup passes report "scene MISSING" before one attaches.
+  /// The tauri event loop only notices on its next pass, and by then the system
+  /// has begun retiring the launch screen, which is the whole artefact.
+  ///
+  /// So this listens for the connection itself and does the work in the same
+  /// turn of the runloop: adopt the scene, raise the cover, show the window.
+  /// ios_view's polling stays exactly as it was — every step here is idempotent
+  /// and it remains the safety net if this observer never fires.
+  @objc(armLaunchWindow:)
+  static func armLaunchWindow(_ window: UIWindow) {
+    MainActor.assumeIsolated {
+      coverLaunchWindow(window)
+      adopt(scene: nil, for: window)
+
+      NotificationCenter.default.addObserver(
+        forName: UIScene.willConnectNotification, object: nil, queue: .main
+      ) { note in
+        MainActor.assumeIsolated { adopt(scene: note.object as? UIWindowScene, for: window) }
+      }
+      NotificationCenter.default.addObserver(
+        forName: UIScene.didActivateNotification, object: nil, queue: .main
+      ) { note in
+        MainActor.assumeIsolated { adopt(scene: note.object as? UIWindowScene, for: window) }
+      }
+    }
+  }
+
+  /// Give `window` a scene and show it, if that is possible yet.
+  @MainActor
+  private static func adopt(scene: UIWindowScene?, for window: UIWindow) {
+    guard !launchCoverRetired else { return }
+    if window.windowScene == nil {
+      let candidate = scene ?? UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .first
+      guard let candidate else { return }
+      window.windowScene = candidate
+    }
+    coverLaunchWindow(window)
+    window.isHidden = false
+    window.makeKeyAndVisible()
+    NSLog("[OPShell] window shown on scene connect, launch cover up")
+  }
+
+  @objc(coverLaunchWindow:)
+  static func coverLaunchWindow(_ window: UIWindow) {
+    MainActor.assumeIsolated {
+      guard !launchCoverRetired else { return }
+      guard window.viewWithTag(launchCoverTag) == nil else { return }
+
+      let view = UIView()
+      view.tag = launchCoverTag
+      view.backgroundColor = UIColor(named: "LaunchBackground")
+      view.translatesAutoresizingMaskIntoConstraints = false
+      // Never eat a touch, so a cover that somehow outlived its welcome is a
+      // cosmetic bug rather than an unusable app.
+      view.isUserInteractionEnabled = false
+
+      let logo = UIImageView(image: UIImage(named: "LaunchLogo"))
+      logo.contentMode = .scaleAspectFit
+      logo.translatesAutoresizingMaskIntoConstraints = false
+      view.addSubview(logo)
+      let side = LaunchScreenContinuationView.logoSize
+      NSLayoutConstraint.activate([
+        logo.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+        logo.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+        logo.widthAnchor.constraint(equalToConstant: side),
+        logo.heightAnchor.constraint(equalToConstant: side),
+      ])
+
+      window.addSubview(view)
+      // Constraints, not a frame: this runs before ios_view has sized anything,
+      // so the window is very often still 0x0 here and a frame copied from it
+      // would stay 0x0 for ever.
+      NSLayoutConstraint.activate([
+        view.leadingAnchor.constraint(equalTo: window.leadingAnchor),
+        view.trailingAnchor.constraint(equalTo: window.trailingAnchor),
+        view.topAnchor.constraint(equalTo: window.topAnchor),
+        view.bottomAnchor.constraint(equalTo: window.bottomAnchor),
+      ])
+    }
+  }
+
+  /// Take the cover down, once and for good.
+  @MainActor
+  private static func uncover(_ window: UIWindow) {
+    guard let cover = window.viewWithTag(launchCoverTag) else { return }
+    cover.removeFromSuperview()
+    launchCoverRetired = true
+  }
+
   /// Installs the chrome into `window` and reparents `webView` into it.
   /// Main thread only; Rust guarantees a single invocation.
   @objc(installShellInWindow:webView:)
@@ -2662,8 +2784,23 @@ final class OPShell: NSObject {
       let host = UIHostingController(
         rootView: ShellView(model: model, taoController: taoController, webView: webView)
       )
+      // The cover comes off only once this transaction has been rendered —
+      // otherwise it is traded for the very blank frame it exists to hide.
+      // What it uncovers is the SwiftUI continuation, drawn to the same numbers
+      // from the same asset, so there is nothing to see at the swap.
+      CATransaction.begin()
+      CATransaction.setCompletionBlock { MainActor.assumeIsolated { uncover(window) } }
       window.rootViewController = host
       window.makeKeyAndVisible()
+      window.layoutIfNeeded()
+      CATransaction.commit()
+
+      // A belt to the completion block's braces: if that never fires, a cover
+      // left up would look like an app frozen on its splash. It cannot eat a
+      // touch, but it would still be the worst bug in the file.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        MainActor.assumeIsolated { uncover(window) }
+      }
 
       NSLog("[OPShell] installed: root=\(type(of: host)) webview=\(type(of: webView))")
       activateWeb()

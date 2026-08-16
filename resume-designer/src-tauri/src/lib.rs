@@ -26,6 +26,14 @@ pub fn run() {
         .manage(commands::PreviewPdfPath::default())
         .manage(commands::bridge::BridgePending::default())
         .setup(|app| {
+            // BEFORE anything slow: show tao's window as early as this process
+            // can. `.run()` only starts pumping once the whole of Rust startup
+            // is finished, so leaving this to the event loop puts the app's
+            // first visible frame ~150ms in — after iOS has already given up on
+            // the launch screen and faded it to black. See ios_view::try_apply.
+            #[cfg(target_os = "ios")]
+            ios_view::try_apply(app.handle());
+
             #[cfg(desktop)]
             {
                 app.handle()

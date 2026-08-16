@@ -56,6 +56,44 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     let _ = window.with_webview(|webview| unsafe { install(webview.inner() as *mut AnyObject) });
 }
 
+/// Paint the launch screen into `window` before it is shown.
+///
+/// Called from `ios_view::apply`, in the same turn of the runloop as its
+/// `makeKeyAndVisible` — which is the exact moment UIKit stops showing
+/// `UILaunchScreen` and starts showing tao's unpainted web view. The Swift side
+/// takes the cover down once the real chrome has rendered. See
+/// `OPShell.coverLaunchWindow` for the measurement behind it.
+///
+/// Silent when the Swift is missing: `install` already reports that loudly, and
+/// this must never be the thing that stops an app starting.
+///
+/// # Safety
+/// `window` must be a non-null `UIWindow`, on the main thread.
+pub unsafe fn cover_launch_window(window: *mut AnyObject) {
+    if window.is_null() {
+        return;
+    }
+    let Some(class) = AnyClass::get(c"OPShell") else {
+        return;
+    };
+    let _: () = msg_send![class, coverLaunchWindow: window];
+}
+
+/// Hand tao's window to Swift so it can be shown the moment UIKit connects a
+/// scene, rather than on whichever run-loop pass happens to notice.
+///
+/// # Safety
+/// `window` must be a non-null `UIWindow`, on the main thread.
+pub unsafe fn arm_launch_window(window: *mut AnyObject) {
+    if window.is_null() {
+        return;
+    }
+    let Some(class) = AnyClass::get(c"OPShell") else {
+        return;
+    };
+    let _: () = msg_send![class, armLaunchWindow: window];
+}
+
 /// # Safety
 /// `webview` must be a `WKWebView` (or null), on the main thread.
 unsafe fn install(webview: *mut AnyObject) {
