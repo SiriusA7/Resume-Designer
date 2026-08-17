@@ -1720,13 +1720,27 @@ export function initIOSShell(deps) {
       publish();
       return durable;
     },
-    setApiKey: ({ value }) => {
-      // Fire-and-forget by design: the keychain write is async and the sheet
-      // learns the outcome from the next snapshot's `hasApiKey`, not from a
-      // return value the bridge has no way to deliver.
-      deps.saveApiKey(String(value ?? ''))
-        .then(publish)
-        .catch((err) => console.error('[iosShell] saving the API key failed:', err));
+    // ANSWERS, rather than fire-and-forget. It used to drop the promise and log
+    // a rejection, on the reasoning that the sheet would learn the outcome from
+    // the next snapshot's `hasApiKey` — but a rejected write publishes no
+    // snapshot at all, and the sheet had already cleared its draft on the way
+    // out. A keychain that refused the write therefore ate the key silently:
+    // nothing saved, nothing shown, nothing left to retry with.
+    //
+    // Republishes either way, so `hasApiKey` is true after a save and still
+    // honest after a refusal, and returns the outcome so Swift can hold the
+    // draft. Replacing an EXISTING key is why the answer has to be explicit —
+    // `hasApiKey` is already true then, so no snapshot change can confirm it.
+    setApiKey: async ({ value }) => {
+      try {
+        await deps.saveApiKey(String(value ?? ''));
+        publish();
+        return true;
+      } catch (err) {
+        console.error('[iosShell] saving the API key failed:', err);
+        publish();
+        return false;
+      }
     },
     replayOnboarding: () => window.showOnboardingWizard?.(),
     exportBackup: () => deps.exportFullBackupWithFeedback(),

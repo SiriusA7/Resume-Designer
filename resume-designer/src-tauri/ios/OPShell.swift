@@ -1287,6 +1287,18 @@ final class ShellModel: ObservableObject {
     return value as? Bool == true
   }
 
+  /// Save the OpenRouter key, and say whether the keychain took it.
+  ///
+  /// Asked FOR AN ANSWER rather than sent, because a keychain can refuse — the
+  /// device is locked, access is denied — and the sheet clears the field the
+  /// user typed into. Without an answer that clearing is unconditional, so a
+  /// refused write loses the key with nothing on screen to say so.
+  func saveApiKey(_ key: String) async -> Bool {
+    guard case .answered(let value) = await sendForResult("setApiKey", ["value": key])
+    else { return false }
+    return value as? Bool == true
+  }
+
   /// The command body, encoded once for both ways of asking.
   ///
   /// `nil` means it could not be built or there is nobody to ask; the caller
@@ -4049,6 +4061,10 @@ private struct SettingsSheet: View {
 
   @State private var apiKeyDraft = ""
   @State private var apiKeyFocused = false
+  @State private var savingApiKey = false
+  /// The last save was refused. Cleared on the next attempt, not on a timer —
+  /// the message has to outlive the tap that caused it.
+  @State private var apiKeyFailed = false
 
   private var settings: ShellSnapshot.Settings { model.snapshot.settings }
 
@@ -4071,11 +4087,20 @@ private struct SettingsSheet: View {
           )
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
-          Button("Save key") {
-            model.send("setApiKey", ["value": apiKeyDraft])
-            apiKeyDraft = ""
+          Button(savingApiKey ? "Saving…" : "Save key") {
+            let key = apiKeyDraft
+            savingApiKey = true
+            apiKeyFailed = false
+            Task {
+              let saved = await model.saveApiKey(key)
+              savingApiKey = false
+              // The draft survives a refusal. Clearing it unconditionally is
+              // what used to lose the key: the keychain says no, nothing
+              // publishes, and the field the user typed into is already empty.
+              if saved { apiKeyDraft = "" } else { apiKeyFailed = true }
+            }
           }
-          .disabled(apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+          .disabled(savingApiKey || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
 
           Toggle("Automatic fallback", isOn: fallbackBinding)
         } header: {
@@ -4083,12 +4108,21 @@ private struct SettingsSheet: View {
         } footer: {
           // Says what the app does with the key, in the place the key is
           // entered — the same promise the web onboarding makes.
-          Text(
-            (settings.hasApiKey ? "A key is saved. " : "")
-            + "Your key is stored in the iOS keychain and sent only to OpenRouter. "
-            + "Automatic fallback retries an alternate model when the chosen one "
-            + "is unavailable."
-          )
+          //
+          // A refusal replaces it rather than joining it: the one thing worth
+          // reading at that moment is that the key is NOT saved, and it should
+          // not have to be found at the end of a paragraph about privacy.
+          if apiKeyFailed {
+            Text("The keychain would not save that key. It is still in the field above — try again, or unlock the device and retry.")
+              .foregroundStyle(.red)
+          } else {
+            Text(
+              (settings.hasApiKey ? "A key is saved. " : "")
+              + "Your key is stored in the iOS keychain and sent only to OpenRouter. "
+              + "Automatic fallback retries an alternate model when the chosen one "
+              + "is unavailable."
+            )
+          }
         }
 
         Section {

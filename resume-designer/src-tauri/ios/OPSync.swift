@@ -1465,14 +1465,28 @@ extension OPSyncEngine {
   /// One file per record, named from the record id rather than a fresh UUID: the
   /// same unit re-staged overwrites its own file, which is what bounds the
   /// directory by the number of large units instead of by the number of pushes a
-  /// long-running app has made. `.atomic` writes through a rename, so an upload
-  /// already reading the old file keeps reading the old file.
+  /// long-running app has made.
+  ///
+  /// FULL record identity, for the same reason `systemFieldsKey` needs it and
+  /// not one line later: one engine session handles every workspace's zone, and
+  /// the same unit id exists in all of them. Keyed by name alone, two workspaces
+  /// sending a large `data:settings` in one batch staged to ONE path — and a
+  /// `CKAsset` is a URL the engine opens when it finally uploads, not an open
+  /// file handle, so `.atomic`'s rename does not protect a reader that has not
+  /// started. The second write simply became both uploads, and one workspace's
+  /// payload went up into the other's zone.
+  ///
+  /// This was safe until foreign-zone saves became possible; it was never
+  /// re-asked afterwards. Percent-encoding to alphanumerics is total and encodes
+  /// the separator too, so the joined name cannot be ambiguous — `a/bc` and
+  /// `ab/c` differ once `/` becomes `%2F`.
   private static func stage(_ data: Data, for recordID: CKRecord.ID) throws -> URL {
     let directory = outbox
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     // Record names carry `:` (`resume:<id>`, `key:resume-designer-data`), so they
     // are not filenames. Percent-encoding down to alphanumerics is total.
-    let name = recordID.recordName
+    let name = [recordID.zoneID.ownerName, recordID.zoneID.zoneName, recordID.recordName]
+      .joined(separator: "/")
       .addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? UUID().uuidString
     let url = directory.appendingPathComponent(name)
     try data.write(to: url, options: .atomic)

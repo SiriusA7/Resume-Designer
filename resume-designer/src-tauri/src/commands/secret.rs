@@ -61,6 +61,23 @@ fn synchronizable_entry(name: &str) -> Result<Entry, String> {
     local_entry(name)
 }
 
+/// "Every device" means every device running an app in the SAME KEYCHAIN
+/// ACCESS GROUP — which today means iOS to iOS, and NOT iOS to the Mac.
+///
+/// `kSecAttrSynchronizable` decides whether an item rides iCloud Keychain. It
+/// does not widen who may read it: that is the access group, which defaults to
+/// `<team>.<bundle id>`, and iOS is `com.onpaper.app` while desktop is
+/// `com.resumedesigner.app`. No `keychain-access-groups` entitlement is
+/// configured on either, so the synchronized item is unreachable from the Mac
+/// app however many devices it reaches.
+///
+/// That costs nothing today — the desktop app has no CloudKit sync, so nothing
+/// over there is waiting for this key. It becomes a PREREQUISITE the moment
+/// macOS sync starts: both App IDs need a shared access group, and the group
+/// has to be added under the OLD identifier before any bundle-id rename, since
+/// deleting a synchronized item propagates that deletion to every device.
+/// Written down because the shape invites the opposite assumption — a review
+/// read this as already carrying the desktop key across, and it does not.
 #[cfg(target_vendor = "apple")]
 struct SynchronizableEntry {
     name: String,
