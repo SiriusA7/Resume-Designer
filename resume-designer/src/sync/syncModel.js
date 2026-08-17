@@ -656,8 +656,8 @@ export function registerPersistedSaveHandler(register) {
     // Each gated on the key that actually holds it: the résumé lives in the
     // data blob, its history in its own key. They fail independently, so a
     // refused history write must not hold the résumé back or vice versa.
-    pendingDirty.set(unitIds[0], { key: DATA_KEY, profileId: '' });
-    pendingDirty.set(unitIds[1], { key: `${HISTORY_PREFIX}${variantId}`, profileId: '' });
+    queueDirty(unitIds[0], DATA_KEY, '');
+    queueDirty(unitIds[1], `${HISTORY_PREFIX}${variantId}`, '');
     return unitIds;
   });
 }
@@ -682,13 +682,39 @@ export function registerPersistedSaveHandler(register) {
  */
 let applying = false;
 
-/** Unit ids stamped since the last notification — see `onStorageFlush`. */
-// unitId -> { key, profileId }. `key` is the LOGICAL storage key whose
-// durability gates this unit: nothing is announced until appStorage reports
-// that key's write actually landed. `profileId` is '' for the open workspace —
-// the same convention `syncCollect` uses — and a real id when the unit belongs
-// to a workspace this device is not in, which only `parkLoser` produces.
+/** Units stamped since the last notification — see `onStorageFlush`. */
+// route -> { id, key, profileId }, where the route is the workspace AND the
+// unit, because a unit id alone does not name a record. The same id exists in
+// several workspaces at once: every workspace has a `data:settings`, and the
+// same variant id sits in two of them as soon as one backup was imported into
+// both. Keyed by unit id alone, one conflict batch parking that variant in two
+// workspaces had the second `set` REPLACE the first, so the drain announced one
+// of the two recovery copies and the other stayed device-local until that
+// workspace happened to be edited again — which for a workspace this device is
+// not in may be never. Same separator as `SyncUnit.route` on the Swift side.
+//
+// `key` is the storage key whose durability gates this unit: nothing is
+// announced until appStorage reports that key's write landed, and it is the
+// string its caller passed to `setItem` — the PHYSICAL, namespaced name for a
+// workspace this device is not in — because that is the name a refusal comes
+// back under. `profileId` is '' for the open workspace, the same convention
+// `syncCollect` uses, and a real id for a unit belonging to a workspace this
+// device is not in, which only `parkLoser` produces.
 const pendingDirty = new Map();
+
+const dirtyRoute = (profileId, unitId) => `${profileId}\u001f${unitId}`;
+
+/** Queue one unit for the next drain, gated on the key that carries its bytes. */
+function queueDirty(unitId, logicalKey, profileId) {
+  // The workspace CANONICALISED first, by the same test `storageKeyFor` makes,
+  // because a route is only an identity if one record has exactly one of them.
+  // The open workspace answers to two spellings: a conflict arriving in its own
+  // zone carries its REAL id — the transport's `deliver` maps only the SHARED
+  // zone to '' — while every local write queues under ''. Left as they come,
+  // one record holds two routes and is announced, and sent, twice.
+  const owner = !profileId || profileId === getProfileMapping() ? '' : profileId;
+  pendingDirty.set(dirtyRoute(owner, unitId), { id: unitId, key: logicalKey, profileId: owner });
+}
 
 let dirtyNotifier = null;
 
@@ -782,7 +808,7 @@ function onStorageWrite(logicalKey, value, previous) {
   touchUnits(unitIds);
   // Gated on the key that carried them: this write's bytes are what the
   // transport would be uploading.
-  for (const unitId of unitIds) pendingDirty.set(unitId, { key: logicalKey, profileId: '' });
+  for (const unitId of unitIds) queueDirty(unitId, logicalKey, '');
 }
 
 /**
@@ -827,13 +853,20 @@ function onStorageFlush(failedLogicalKeys = new Set()) {
   // units that key carries, and a permanently full disk cannot silence sync for
   // everything else.
   const announced = [];
-  for (const [unitId, gate] of pendingDirty) {
+  const sent = [];
+  for (const [route, gate] of pendingDirty) {
     if (failedLogicalKeys.has(gate.key)) continue;
-    announced.push({ id: unitId, profileId: gate.profileId });
+    announced.push({ id: gate.id, profileId: gate.profileId });
+    sent.push(route);
   }
   if (announced.length === 0) return;
   dirtyNotifier(announced);
-  for (const { id } of announced) pendingDirty.delete(id);
+  // Removed by ROUTE — the key they were queued under. By unit id this would
+  // remove nothing at all, and every drain would re-announce the whole map
+  // forever; worse, an id that happened to match would take the OTHER
+  // workspace's entry for the same unit with it, including one this drain
+  // deliberately held back because its own write was refused.
+  for (const route of sent) pendingDirty.delete(route);
 }
 
 /** Wire the interceptor onto the storage facade. main.js owns this edge too. */
@@ -1576,7 +1609,11 @@ export function parkLoser(unitId, payload, profileId = '') {
     // name. appStorage reports a refusal under the name its caller used, so a
     // gate built from the logical name would never match one and the parked
     // history would be announced while it existed only in memory.
-    pendingDirty.set(unitId, { key: storageKey, profileId });
+    //
+    // Queued under workspace AND unit, which is this call's own reason for the
+    // routing `pendingDirty` explains: one conflict batch can park the SAME
+    // variant id in two workspaces, and both parks arrive here with one unit id.
+    queueDirty(unitId, storageKey, profileId);
   };
 
   // The loaded variant: only the store can make this stick (see above). It

@@ -564,10 +564,10 @@ describe('a conflict parked into a workspace this device is not in', () => {
   // The payload is a VARIANT RECORD, not a bare document — `resumeDocument`
   // reads `.data` off it and parkLoser refuses anything else. Shape taken from
   // syncModel.test.js's own helper rather than invented here.
-  const park = () => parkLoser('resume:v-9', JSON.stringify({
+  const park = (profileId = 'p2') => parkLoser('resume:v-9', JSON.stringify({
     id: 'v-9', name: 'Tailored for Acme', data: { name: 'the losing copy' },
     createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
-  }), 'p2');
+  }), profileId);
 
   it('names the parked history, carrying the workspace it went into', async () => {
     // Stamping alone left the recovery copy on this device: the conflict queues
@@ -592,5 +592,68 @@ describe('a conflict parked into a workspace this device is not in', () => {
     await settle();
 
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('routes a park into the OPEN workspace under the canonical empty id', async () => {
+    // The open workspace answers to two spellings. A conflict arriving in its
+    // own zone carries its REAL id — the transport maps only the SHARED zone to
+    // '' — while every local write of the same record queues under ''. Both are
+    // the same zone, so left as they come one record holds two routes and is
+    // announced, and sent, twice. A route is only an identity if it is one.
+    setProfileMapping('p1');
+    expect(park('p1')).toBe(true);
+    await settle();
+
+    expect(notify).toHaveBeenCalledWith([
+      { id: 'key:resume-designer-history-v-9', profileId: '' },
+    ]);
+  });
+
+  it('names both when one batch parks the same variant in two workspaces', async () => {
+    // The same variant id is in two workspaces as soon as one backup was
+    // imported into both, and a fetch brings both zones' conflicts down in one
+    // batch. Both parks produce the SAME unit id, so queued under that id alone
+    // the second REPLACED the first: the drain named one of the two recovery
+    // copies and the other stayed on this device until that workspace happened
+    // to be edited again — which, for a workspace this device is not in, may be
+    // never. The recovery copy is the whole reason newer-wins destroys nothing.
+    expect(park('p2')).toBe(true);
+    expect(park('p3')).toBe(true);
+    await settle();
+
+    expect(notify).toHaveBeenCalledWith([
+      { id: 'key:resume-designer-history-v-9', profileId: 'p2' },
+      { id: 'key:resume-designer-history-v-9', profileId: 'p3' },
+    ]);
+  });
+
+  it('holds the refused workspace back and names it on a later drain', async () => {
+    // Per-route gating, not per-unit: these two parks share a unit id and
+    // differ only by workspace, so a refusal reaching across them would either
+    // silence the workspace that wrote fine or announce the one that did not.
+    failWritesFor('resume-p--p2--resume-designer-history-v-9');
+    expect(park('p2')).toBe(true);
+    expect(park('p3')).toBe(true);
+    await settle();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenLastCalledWith([
+      { id: 'key:resume-designer-history-v-9', profileId: 'p3' },
+    ]);
+
+    // THE HALF THAT MATTERS, and the half a "only p3 was named" assertion
+    // cannot see on its own: the refused park is HELD, not lost. Keyed by unit
+    // id alone, p3's entry had simply overwritten p2's, and a map that no
+    // longer holds p2 produces exactly the same first drain as one that is
+    // holding it back on purpose. Only the drain AFTER the refusal clears tells
+    // the two apart.
+    failWritesFor(null);
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+
+    expect(notify).toHaveBeenLastCalledWith([
+      { id: 'key:resume-designer-history-v-9', profileId: 'p2' },
+      { id: 'key:resume-designer-applications', profileId: '' },
+    ]);
   });
 });
