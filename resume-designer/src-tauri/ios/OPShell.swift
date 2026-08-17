@@ -2575,11 +2575,27 @@ private final class SnapshotBridge: NSObject, WKScriptMessageHandler {
       // Persistence names the units whose bytes just landed, on the save
       // debounce it already had. WHEN they go up is the engine's to decide —
       // this only says what changed.
-      guard let unitIds = body["unitIds"] as? [String], !unitIds.isEmpty else {
-        NSLog("[OPShell] syncDirty with no unit ids: \(body)")
+      // `{ id, profileId }` each, because a unit can belong to a workspace this
+      // device is not in — a parked conflict loser does — and `sendSync` reads
+      // the bytes back out of the workspace it is told. Grouped so each zone is
+      // asked for once. `profileId` is "" for the open workspace, which is what
+      // `sendSync` already means by nil.
+      guard let units = body["units"] as? [[String: Any]], !units.isEmpty else {
+        NSLog("[OPShell] syncDirty with no units: \(body)")
         return
       }
-      Task { @MainActor in await self.model?.sendSync(unitIds: unitIds) }
+      var byProfile: [String: [String]] = [:]
+      for unit in units {
+        guard let id = unit["id"] as? String else { continue }
+        byProfile[(unit["profileId"] as? String) ?? "", default: []].append(id)
+      }
+      Task { @MainActor in
+        for (profileId, unitIds) in byProfile {
+          await self.model?.sendSync(
+            unitIds: unitIds, inProfile: profileId.isEmpty ? nil : profileId
+          )
+        }
+      }
     case "syncUnits":
       // The answer to `syncCollect`: everything this device would push, asked
       // for on a profile's first automatic start and after a purge is resumed.

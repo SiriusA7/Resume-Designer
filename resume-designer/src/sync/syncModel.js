@@ -653,7 +653,11 @@ export function registerPersistedSaveHandler(register) {
     // these ride the same path as every other synced key, and stop being a
     // second, earlier, undurable one. Stamping stays here: `modifiedAt` records
     // when the edit happened, and the interceptor stamps at write time too.
-    for (const unitId of unitIds) pendingDirty.add(unitId);
+    // Each gated on the key that actually holds it: the résumé lives in the
+    // data blob, its history in its own key. They fail independently, so a
+    // refused history write must not hold the résumé back or vice versa.
+    pendingDirty.set(unitIds[0], { key: DATA_KEY, profileId: '' });
+    pendingDirty.set(unitIds[1], { key: `${HISTORY_PREFIX}${variantId}`, profileId: '' });
     return unitIds;
   });
 }
@@ -679,7 +683,12 @@ export function registerPersistedSaveHandler(register) {
 let applying = false;
 
 /** Unit ids stamped since the last notification — see `onStorageFlush`. */
-const pendingDirty = new Set();
+// unitId -> { key, profileId }. `key` is the LOGICAL storage key whose
+// durability gates this unit: nothing is announced until appStorage reports
+// that key's write actually landed. `profileId` is '' for the open workspace —
+// the same convention `syncCollect` uses — and a real id when the unit belongs
+// to a workspace this device is not in, which only `parkLoser` produces.
+const pendingDirty = new Map();
 
 let dirtyNotifier = null;
 
@@ -771,15 +780,23 @@ function onStorageWrite(logicalKey, value, previous) {
   // reads that as -Infinity — it would lose every conflict it met. If the stamp
   // throws, nothing is queued and appStorage logs it.
   touchUnits(unitIds);
-  for (const unitId of unitIds) pendingDirty.add(unitId);
+  // Gated on the key that carried them: this write's bytes are what the
+  // transport would be uploading.
+  for (const unitId of unitIds) pendingDirty.set(unitId, { key: logicalKey, profileId: '' });
 }
 
 /**
- * One notification per storage coalescing window, carrying every unit stamped
- * in it. Called from appStorage's drain, which every durability barrier forces
- * — so nothing sits here unannounced across a close.
+ * One notification per storage coalescing window, carrying every unit whose
+ * bytes REACHED DISK in it. Called from appStorage's drain after that batch's
+ * writes have run, so nothing sits here unannounced across a close and nothing
+ * is announced ahead of the disk.
+ *
+ * Each entry carries the workspace it belongs to: '' for the open one, a real
+ * id for a unit parked into a workspace this device is not in. Naming a foreign
+ * unit without it would have the transport collect that id out of the open
+ * workspace and send it to the wrong zone.
  */
-function onStorageFlush() {
+function onStorageFlush(failedLogicalKeys = new Set()) {
   if (pendingDirty.size === 0) return;
   // HELD, not dropped, until there is somewhere to send them. The interceptor is
   // installed at module load and the shell installs the notifier during init(),
@@ -803,9 +820,20 @@ function onStorageFlush() {
   // re-entrant drain, a shell callback that saves — queues an id this drain
   // never announced. A blanket clear dropped exactly those, and a dropped id is
   // not re-announced until that unit is edited again.
-  const unitIds = [...pendingDirty];
-  dirtyNotifier(unitIds);
-  for (const unitId of unitIds) pendingDirty.delete(unitId);
+  // WHAT LANDED, not what was queued. A unit whose gating key was refused stays
+  // in the map and rides a later drain — announcing it would hand the server
+  // content this disk does not hold, which is the whole failure this barrier
+  // exists for. Failures are per KEY, so one refused write holds back only the
+  // units that key carries, and a permanently full disk cannot silence sync for
+  // everything else.
+  const announced = [];
+  for (const [unitId, gate] of pendingDirty) {
+    if (failedLogicalKeys.has(gate.key)) continue;
+    announced.push({ id: unitId, profileId: gate.profileId });
+  }
+  if (announced.length === 0) return;
+  dirtyNotifier(announced);
+  for (const { id } of announced) pendingDirty.delete(id);
 }
 
 /** Wire the interceptor onto the storage facade. main.js owns this edge too. */
@@ -1531,9 +1559,20 @@ export function parkLoser(unitId, payload, profileId = '') {
   // time, which resolveConflict reads as -Infinity: the parked loser, which is
   // the whole reason newer-wins destroys nothing, would lose every conflict it
   // ever met and be overwritten by any device that had not seen the park.
-  const stampParked = () => touchUnitsForProfile(
-    profileId, [`${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`],
-  );
+  const stampParked = () => {
+    const unitId = `${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`;
+    touchUnitsForProfile(profileId, [unitId]);
+    // AND named to the transport. Stamping alone left the parked loser on this
+    // device: the conflict queues at most the résumé record, so with no later
+    // edit the recovery copy — the thing that makes newer-wins non-destructive —
+    // never reached CloudKit and died with the device.
+    //
+    // Carrying `profileId` is what makes that safe. This runs from the conflict
+    // path and can park into a workspace this device is not in; an id announced
+    // without one is collected out of the OPEN workspace and sent to the wrong
+    // zone. Gated on the history key, which is the one these bytes went into.
+    pendingDirty.set(unitId, { key: `${HISTORY_PREFIX}${variantId}`, profileId });
+  };
 
   // The loaded variant: only the store can make this stick (see above). It
   // reports false for any other variant, and this is the one call that can tell

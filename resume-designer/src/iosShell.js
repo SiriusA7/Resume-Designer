@@ -1351,10 +1351,14 @@ export function initIOSShell(deps) {
 
   // Persistence names the units whose bytes landed. The shell only carries
   // those ids to CKSyncEngine, and stays silent on desktop/browser builds.
-  deps.setSyncDirtyNotifier?.((unitIds) => {
+  deps.setSyncDirtyNotifier?.((units) => {
     if (!isNativeShellAvailable()) return;
+    // Each entry carries the workspace it belongs to — '' for the open one.
+    // Swift groups by it and sends each group into its own zone, because a
+    // parked conflict loser can belong to a workspace this device is not in and
+    // collecting its id out of the open one would send the wrong bytes.
     window.webkit.messageHandlers[SHELL_HANDLER].postMessage({
-      kind: 'syncDirty', unitIds,
+      kind: 'syncDirty', units,
     });
   });
 
@@ -1982,6 +1986,10 @@ export function initIOSShell(deps) {
   // one document silently disagree.
   deps.subscribeDocument(() => { if (streamDocument) publish(); });
   window.addEventListener('rd:zoom', publish);
+  // The profile's save state changing without a DOM change to notice — a disk
+  // write the drain refused. Without this the sheet's failure banner waits for
+  // whatever unrelated mutation happens to publish next.
+  window.addEventListener('rd:profile-state-changed', publish);
   // Dialogs open and close without any event this module could listen for —
   // Radix just portals a node into <body> and flips data-state. Watching the
   // DOM is the only signal that covers React dialogs, the onboarding wizard

@@ -131,10 +131,13 @@ let preRestoreSnapshot = null;
 // write replaced, and it is what lets the observer tell a `resume-designer-data`
 // write that changed `settings` from one that only touched a résumé.
 //
-// `onFlush()` is called from the write-behind drain — the coalescing window
-// this file already runs on, and the one every durability barrier forces
-// through flush(). The observer accumulates ids in onWrite and notifies ONCE
-// per window there. That matters: the application-notes field writes on every
+// `onFlush(failedLogicalKeys)` is called from the write-behind drain, AFTER
+// that batch's writes have actually run — not when they were queued. The
+// observer accumulates ids in onWrite and notifies ONCE per window there, and
+// the set names the keys whose bytes were refused so it can hold those back.
+// The barrier is the point: whatever the observer announces, something uploads,
+// so announcing before the disk has taken the bytes hands the server content
+// this device may never hold. That matters: the application-notes field writes on every
 // keystroke ON PURPOSE (see DetailPane.jsx), on the understanding that this
 // layer collapses the burst into one write — a sync notification per character
 // would be a CloudKit send per character.
@@ -167,12 +170,50 @@ function observeWrite(logicalKey, value, previous) {
   }
 }
 
-function observeFlush() {
+/**
+ * Announce the window that just closed, naming the keys whose writes FAILED.
+ *
+ * The observer decides what to do with them; this layer only reports. Failures
+ * are named rather than successes because the observer holds its own record of
+ * what it is waiting on, and an empty set is the ordinary case.
+ */
+function observeFlush(failedLogicalKeys) {
   if (!writeObserver?.onFlush) return;
   try {
-    writeObserver.onFlush();
+    writeObserver.onFlush(failedLogicalKeys ?? EMPTY_KEYS);
   } catch (err) {
     console.error('[appStorage] sync notification failed:', err);
+  }
+}
+
+const EMPTY_KEYS = new Set();
+
+/**
+ * Told when a disk write is permanently rejected, whoever is listening.
+ *
+ * Separate from `writeObserver`, which is ONE slot and belongs to the sync
+ * layer's stamping. A failure is of interest to more than one part of the app —
+ * the sync layer must not announce a unit whose bytes were refused, and the
+ * profile sheet must not tell somebody their edits are saved when they are
+ * memory-only — so this is a set rather than a slot. Fired for the LOGICAL key,
+ * because that is the name every consumer above this layer knows.
+ */
+const writeFailureListeners = new Set();
+
+/** Subscribe to permanently-failed writes. Returns its own unsubscribe. */
+export function onWriteFailure(listener) {
+  if (typeof listener !== 'function') return () => {};
+  writeFailureListeners.add(listener);
+  return () => writeFailureListeners.delete(listener);
+}
+
+function notifyWriteFailure(logicalKey) {
+  for (const listener of writeFailureListeners) {
+    try {
+      listener(logicalKey);
+    } catch (err) {
+      console.error(`[appStorage] a write-failure listener threw for "${logicalKey}":`, err);
+    }
   }
 }
 
@@ -245,6 +286,11 @@ function reportWriteFailure(key, err) {
   );
 }
 
+// Physical key -> the logical name it was written under. `dirty` is keyed
+// physically (profile-namespaced) while every observer above speaks logical
+// names, and a failure has to be reported in the caller's vocabulary.
+const dirtyLogical = new Map();
+
 function scheduleDrain() {
   if (drainScheduled || readOnly) return;
   drainScheduled = true;
@@ -265,6 +311,8 @@ function drain() {
   }
   const batch = [...dirty.entries()];
   dirty.clear();
+  // Keys this batch could not write, named for the observer below.
+  const failedLogicalKeys = new Set();
   for (const [key, op] of batch) {
     // Value is read from the cache at write time, so a set that happened
     // after this key was marked dirty still writes the latest value. If a
@@ -297,16 +345,34 @@ function drain() {
             dirty.set(key, op);
           }
           reportWriteFailure(key, err2);
+          const logical = dirtyLogical.get(key) ?? key;
+          failedLogicalKeys.add(logical);
+          notifyWriteFailure(logical);
         }
       }
     });
   }
-  // The coalescing window just closed: one sync notification for everything
-  // stamped since the last drain (see setStorageWriteObserver). Outside the
-  // per-key chain on purpose — the notification says WHAT changed, and the
-  // transport decides when it goes up; making it wait on the disk chain would
-  // hold it behind an unrelated key's retry.
-  observeFlush();
+  // The coalescing window just closed — but the writes for it have only been
+  // APPENDED to `chain`, not run. Announcing here (which this did) tells the
+  // transport a unit is ready while its bytes are still queued, and the
+  // transport uploads on being told: CloudKit then keeps a change tag for
+  // content that may never reach this disk, the next launch reads the older
+  // file, and the edit after that overwrites the server with no conflict.
+  //
+  // The old note here argued the notification "says WHAT changed, and the
+  // transport decides when it goes up", so it should not wait behind an
+  // unrelated key's retry. The first half is true and the second does not
+  // follow: being told IS what sends it. Waiting costs a delay; not waiting
+  // costs the guarantee.
+  //
+  // `chain` is sequential, so the value captured after the loop resolves once
+  // every op queued above has settled. A later drain extending `chain` cannot
+  // affect this snapshot.
+  const batchSettled = chain;
+  batchSettled.then(() => {
+    for (const [key] of batch) dirtyLogical.delete(key);
+    observeFlush(failedLogicalKeys);
+  });
 }
 
 export const appStorage = {
@@ -351,13 +417,15 @@ export const appStorage = {
       // change that never landed.
       observeWrite(logicalKey, v, previous);
       // Passthrough has no drain to coalesce on — this call IS the durable
-      // write, so the notification window opens and closes with it.
-      observeFlush();
+      // write, so the notification window opens and closes with it, and nothing
+      // can have failed: a quota throw above returned before reaching here.
+      observeFlush(EMPTY_KEYS);
       return;
     }
     cache.set(key, v);
     if (readOnly) return; // print window: cache-only, never queued to disk
     dirty.set(key, 'write');
+    dirtyLogical.set(key, logicalKey);
     scheduleDrain();
     observeWrite(logicalKey, v, previous);
   },

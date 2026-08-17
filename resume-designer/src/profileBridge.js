@@ -27,12 +27,19 @@
  */
 
 import { getUserProfile, saveUserProfile } from './persistence.js';
+import { onWriteFailure } from './appStorage.js';
 import { DEFAULT_PROFILE, markdownToProfile } from './profileMarkdown.js';
 import { assignGroupIds, companyKey, groupExperience } from './experienceGroups.js';
 import { buildDateFields, freeformDateFields, readEntryDates } from './experienceDates.js';
 import { getByPath, setByPath } from './diffEngine.js';
 import { generateId } from './store.js';
 import { profileCompleteness } from './accountStats.js';
+
+// The profile lives inside the data blob, so that is the key whose write
+// failing means the profile did not save.
+const PROFILE_STORAGE_KEY = 'resume-designer-data';
+/** Fired when `saveFailed` changes without any DOM change to notice. */
+export const PROFILE_STATE_CHANGED_EVENT = 'rd:profile-state-changed';
 
 // ---------------------------------------------------------------------------
 // Shared with the web dialog
@@ -651,6 +658,8 @@ let unsavedProfile = null;
 let pendingImport = null;
 
 let flushListenerAttached = false;
+// The last profile handed to storage, kept only to retry an async refusal.
+let lastCommitted = null;
 
 /**
  * Answer `rd:profile-flush` when a native write failed.
@@ -673,6 +682,25 @@ let flushListenerAttached = false;
 function ensureFlushListener() {
   if (flushListenerAttached || typeof window === 'undefined') return;
   flushListenerAttached = true;
+  // The disk refusing the profile key, reported asynchronously by the drain
+  // that actually attempted it. Without this the sheet only ever heard about a
+  // SYNCHRONOUS failure — the browser's localStorage quota throw — and on a
+  // device, where the write is behind a cache, it heard nothing at all: the
+  // banner never showed and the retry below never armed, while the person was
+  // told their edits were saved.
+  onWriteFailure((logicalKey) => {
+    if (logicalKey !== PROFILE_STORAGE_KEY) return;
+    if (saveFailed) return; // already reported; the retry owns it now
+    // Only now does the sheet have something true to say. Promoting the held
+    // copy is what arms both the banner and the `rd:profile-flush` retry, which
+    // reads `unsavedProfile`.
+    if (!lastCommitted) return;
+    saveFailed = true;
+    unsavedProfile = lastCommitted;
+    // The sheet reads `saveFailed` off the next snapshot, and nothing else
+    // here would prompt one — a disk failure is not a DOM change.
+    window.dispatchEvent(new CustomEvent(PROFILE_STATE_CHANGED_EVENT));
+  });
   window.addEventListener('rd:profile-flush', (event) => {
     if (!saveFailed) return;
     // Retry: the failure discarded the write, and storage may have room now.
@@ -720,6 +748,17 @@ function commit(profile) {
   const ok = saveUserProfile(profile) !== false;
   saveFailed = !ok;
   unsavedProfile = ok ? null : profile;
+  // Held for the ASYNC failure only. On Tauri the answer above is the cache
+  // taking the value, not the disk; the drain can refuse it later, and the
+  // retry then needs the copy that was refused.
+  //
+  // NOT used as a read source, and `unsavedProfile` is still cleared on
+  // success. `current()` has to go on reading storage, because saving
+  // NORMALISES — `saveUserProfile` merges over the default shape — so serving
+  // the raw copy back would have every later edit build on an unnormalised
+  // profile. An earlier draft of this retained it and the profileBridge suite
+  // failed on exactly that.
+  lastCommitted = ok ? profile : null;
 }
 
 function toIndex(value) {

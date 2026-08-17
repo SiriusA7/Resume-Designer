@@ -1215,11 +1215,34 @@ describe('the Design sheet commands', () => {
     const setSyncDirtyNotifier = vi.fn((notify) => { notifyDirty = notify; });
     const { postMessage } = await mount({ setSyncDirtyNotifier });
 
-    notifyDirty(['resume:v-1', 'key:resume-designer-history-v-1']);
+    notifyDirty([
+      { id: 'resume:v-1', profileId: '' },
+      { id: 'key:resume-designer-history-v-1', profileId: '' },
+    ]);
 
     expect(postMessage).toHaveBeenCalledWith({
       kind: 'syncDirty',
-      unitIds: ['resume:v-1', 'key:resume-designer-history-v-1'],
+      units: [
+        { id: 'resume:v-1', profileId: '' },
+        { id: 'key:resume-designer-history-v-1', profileId: '' },
+      ],
+    });
+  });
+
+  it('carries the workspace a unit belongs to, not just its id', async () => {
+    // A parked conflict loser can belong to a workspace this device is not in.
+    // Swift reads the bytes back out of the workspace it is told, so an id sent
+    // without one is collected from the OPEN workspace and lands in the wrong
+    // zone — the failure this branch has already fixed twice elsewhere.
+    let notifyDirty;
+    const setSyncDirtyNotifier = vi.fn((notify) => { notifyDirty = notify; });
+    const { postMessage } = await mount({ setSyncDirtyNotifier });
+
+    notifyDirty([{ id: 'key:resume-designer-history-v-9', profileId: 'p-other' }]);
+
+    expect(postMessage).toHaveBeenCalledWith({
+      kind: 'syncDirty',
+      units: [{ id: 'key:resume-designer-history-v-9', profileId: 'p-other' }],
     });
   });
 

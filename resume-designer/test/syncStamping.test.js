@@ -48,12 +48,21 @@ const STATE = 'resume-designer-sync-state';
 const SYNCED_KEYS = [...new Set([...BACKUP_FIXED_KEYS, ...SYNCED_SHARED_KEYS])]
   .filter((key) => classifyKey(key) === 'synced' && key !== DATA);
 
+// The key whose disk write should be refused, or null. Set by `failWritesFor`.
+// A real refusal is retried once inside the drain and only then reported, so
+// this rejects every attempt for that key rather than the first.
+let refusedKey = null;
+const failWritesFor = (key) => { refusedKey = key; };
+
 function makeBackend(initial = {}) {
   const files = new Map(Object.entries(initial));
   return {
     files,
     loadAll: vi.fn(async () => Object.fromEntries(files)),
-    write: vi.fn(async (key, value) => { files.set(key, value); }),
+    write: vi.fn(async (key, value) => {
+      if (key === refusedKey) throw new Error('no space left on device');
+      files.set(key, value);
+    }),
     delete: vi.fn(async (key) => { files.delete(key); }),
     clear: vi.fn(async () => { files.clear(); }),
   };
@@ -89,6 +98,7 @@ beforeEach(async () => {
       'resume-designer-applications': '[]',
     }),
   });
+  refusedKey = null;
   notify = vi.fn();
   installStorageStamping(setStorageWriteObserver);
   setStorageDirtyNotifier(notify);
@@ -103,6 +113,11 @@ afterEach(() => {
 
 /** Force the coalescing window closed the way a durability barrier does. */
 const settle = () => appStorage.flush();
+// The notifier carries `{ id, profileId }` per unit — the profile is what lets
+// a parked conflict loser be sent into a workspace this device is not in. These
+// assertions are about WHICH units were named, so they read the ids out.
+const namedIn = (call) => call[0].map((u) => u.id);
+const allNamed = () => notify.mock.calls.flatMap(namedIn);
 
 describe('a write to a synced key stamps its unit and notifies', () => {
   it('stamps a plain synced key', async () => {
@@ -110,7 +125,7 @@ describe('a write to a synced key stamps its unit and notifies', () => {
     await settle();
 
     expect(stampedIds()).toEqual(['key:resume-designer-applications']);
-    expect(notify).toHaveBeenCalledWith(['key:resume-designer-applications']);
+    expect(notify).toHaveBeenCalledWith([{ id: 'key:resume-designer-applications', profileId: '' }]);
   });
 
   it('stamps the accumulating token-usage key', async () => {
@@ -205,7 +220,7 @@ describe('the data blob is split, not double-handled', () => {
     await settle();
 
     expect(stampedIds()).toEqual(['data:settings']);
-    expect(notify).toHaveBeenCalledWith(['data:settings']);
+    expect(notify).toHaveBeenCalledWith([{ id: 'data:settings', profileId: '' }]);
   });
 
   it('stamps data:userProfile when the blob write changed the profile', async () => {
@@ -318,7 +333,7 @@ describe('the notification is coalesced, not one per write', () => {
     await settle();
 
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify).toHaveBeenCalledWith(['key:resume-designer-applications']);
+    expect(notify).toHaveBeenCalledWith([{ id: 'key:resume-designer-applications', profileId: '' }]);
   });
 
   it('carries every distinct unit touched in the window', async () => {
@@ -328,7 +343,7 @@ describe('the notification is coalesced, not one per write', () => {
     await settle();
 
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls[0][0].sort()).toEqual([
+    expect(namedIn(notify.mock.calls[0]).sort()).toEqual([
       'key:resume-designer-applications',
       'key:resume-designer-job-descriptions',
     ]);
@@ -357,7 +372,7 @@ describe('the notification is coalesced, not one per write', () => {
     await settle();
 
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls[0][0].sort()).toEqual([
+    expect(namedIn(notify.mock.calls[0]).sort()).toEqual([
       'key:resume-designer-applications',
       'key:resume-designer-job-descriptions',
     ]);
@@ -381,7 +396,7 @@ describe('the notification is coalesced, not one per write', () => {
     await settle();
 
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls[0][0]).toEqual(['key:resume-designer-job-descriptions']);
+    expect(namedIn(notify.mock.calls[0])).toEqual(['key:resume-designer-job-descriptions']);
   });
 
   it('holds ids written before the shell installed a notifier', async () => {
@@ -396,7 +411,7 @@ describe('the notification is coalesced, not one per write', () => {
     appStorage.setItem('resume-designer-job-descriptions', '[]');
     await settle();
 
-    expect(notify.mock.calls[0][0].sort()).toEqual([
+    expect(namedIn(notify.mock.calls[0]).sort()).toEqual([
       'key:resume-designer-applications',
       'key:resume-designer-job-descriptions',
     ]);
@@ -431,7 +446,7 @@ describe('the résumé save path still stamps exactly what it did', () => {
     store.saveNow();
     await settle();
 
-    const named = notify.mock.calls.flatMap(([ids]) => ids);
+    const named = allNamed();
     expect([...new Set(named)]).toEqual(named);
   });
 
@@ -453,9 +468,37 @@ describe('the résumé save path still stamps exactly what it did', () => {
     await settle();
 
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls[0][0].sort()).toEqual([
+    expect(namedIn(notify.mock.calls[0]).sort()).toEqual([
       `key:${BACKUP_HISTORY_PREFIX}v-1`,
       'resume:v-1',
     ]);
+  });
+});
+
+describe('the durability barrier', () => {
+  beforeEach(() => {
+    registerPersistedSaveHandler(setPersistedSaveHandler);
+    setStorageDirtyNotifier(notify);
+  });
+
+  it('holds back a unit whose key the disk refused', async () => {
+    // The transport uploads on being told. A unit announced while its bytes sat
+    // in a queue that then failed leaves CloudKit holding a change tag for
+    // content this device does not have — the next launch reads the older file,
+    // and the edit after that overwrites the server with no conflict to stop
+    // it. Refusals are per KEY so one full-disk key cannot silence the rest.
+    failWritesFor('resume-designer-applications');
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    appStorage.setItem('resume-designer-job-descriptions', '[]');
+    await settle();
+
+    expect(allNamed()).toEqual(['key:resume-designer-job-descriptions']);
+
+    // Still owed. It rides the next drain that manages to write it.
+    failWritesFor(null);
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-2"}]');
+    await settle();
+
+    expect(allNamed()).toContain('key:resume-designer-applications');
   });
 });
