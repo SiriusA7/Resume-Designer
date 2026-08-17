@@ -68,7 +68,7 @@ const {
 // variant's history has to go through it.
 const { store: resumeStore } = await import('../src/store.js');
 const {
-  initPersistence, setPersistedSaveHandler, setSyncDirtyNotifier,
+  initPersistence, setPersistedSaveHandler,
   getUserProfile, saveUserProfile,
 } = await import('../src/persistence.js');
 // The four modules that hold a whole synced key in memory. Imported after the
@@ -1554,9 +1554,7 @@ describe('touchUnit', () => {
 
 describe('persisted save stamping', () => {
   it('stamps the résumé and history units after a successful save', () => {
-    const notifyDirty = vi.fn();
     registerPersistedSaveHandler(setPersistedSaveHandler);
-    setSyncDirtyNotifier(notifyDirty);
     resumeStore.setData({ name: 'Edited' }, true, 'v-1');
     initPersistence('v-1');
 
@@ -1570,16 +1568,15 @@ describe('persisted save stamping', () => {
     for (const { modifiedAt } of stamps) {
       expect(new Date(modifiedAt).toISOString()).toBe(modifiedAt);
     }
-    expect(notifyDirty).toHaveBeenCalledWith([
-      'resume:v-1',
-      `key:${BACKUP_HISTORY_PREFIX}v-1`,
-    ]);
+    // WHEN these reach the transport is asserted in syncStamping.test.js,
+    // against a real drain: this file mocks appStorage, so it can only speak to
+    // the stamp. The assertion that stood here — that the save NOTIFIED
+    // synchronously — was asserting the defect a review later found, so it has
+    // moved rather than been relaxed.
   });
 
   it('stamps neither unit when the save fails', () => {
-    const notifyDirty = vi.fn();
     registerPersistedSaveHandler(setPersistedSaveHandler);
-    setSyncDirtyNotifier(notifyDirty);
     resumeStore.setData({ name: 'Edited' }, true, 'v-1');
     initPersistence('v-1');
     failDataWrites = true;
@@ -1589,15 +1586,12 @@ describe('persisted save stamping', () => {
     const recorded = JSON.parse(disk.get(physical('resume-designer-sync-state')) ?? '{}');
     expect(recorded['resume:v-1']).toBeUndefined();
     expect(recorded[`key:${BACKUP_HISTORY_PREFIX}v-1`]).toBeUndefined();
-    expect(notifyDirty).not.toHaveBeenCalled();
 
     error.mockRestore();
   });
 
   it('still reports a successful save when sync-state stamping throws', () => {
-    const notifyDirty = vi.fn();
     registerPersistedSaveHandler(setPersistedSaveHandler);
-    setSyncDirtyNotifier(notifyDirty);
     resumeStore.setData({ name: 'Edited' }, true, 'v-1');
     initPersistence('v-1');
     failSyncStateWrites = true;
@@ -1605,8 +1599,7 @@ describe('persisted save stamping', () => {
 
     try {
       expect(resumeStore.saveNow()).toBe(true);
-      expect(notifyDirty).not.toHaveBeenCalled();
-    } finally {
+      } finally {
       error.mockRestore();
     }
   });

@@ -638,6 +638,22 @@ export function registerPersistedSaveHandler(register) {
       `${KEY_UNIT_PREFIX}${HISTORY_PREFIX}${variantId}`,
     ];
     touchUnits(unitIds);
+    // QUEUED for the drain, not announced here. persistence.js used to notify
+    // the transport the moment `saveVariant` returned — and that return is
+    // `saveToStorage`, which answers true as soon as the write-behind cache
+    // TOOK the value. On Tauri the disk write is behind the coalescing drain,
+    // so the transport was told to upload bytes that might never land: CloudKit
+    // accepts the résumé and keeps a change tag for it, the next launch reads
+    // the older file the failed write never replaced, and the edit after that
+    // overwrites the server with no conflict, because this device holds a tag
+    // it did not earn. That is the failure this whole layer exists to prevent.
+    //
+    // `pendingDirty` is the interceptor's own queue and `onStorageFlush` drains
+    // it — from appStorage's drain, which every durability barrier forces. So
+    // these ride the same path as every other synced key, and stop being a
+    // second, earlier, undurable one. Stamping stays here: `modifiedAt` records
+    // when the edit happened, and the interceptor stamps at write time too.
+    for (const unitId of unitIds) pendingDirty.add(unitId);
     return unitIds;
   });
 }

@@ -19,7 +19,7 @@ import {
 } from '../src/sync/syncModel.js';
 import { store } from '../src/store.js';
 import {
-  initPersistence, setPersistedSaveHandler, setSyncDirtyNotifier,
+  initPersistence, setPersistedSaveHandler,
 } from '../src/persistence.js';
 import { registerPersistedSaveHandler } from '../src/sync/syncModel.js';
 import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
@@ -406,7 +406,9 @@ describe('the notification is coalesced, not one per write', () => {
 describe('the résumé save path still stamps exactly what it did', () => {
   beforeEach(() => {
     registerPersistedSaveHandler(setPersistedSaveHandler);
-    setSyncDirtyNotifier(notify);
+    // ONE installer now. Persistence had its own, and used it to announce the
+    // résumé the instant the write-behind cache accepted the value.
+    setStorageDirtyNotifier(notify);
   });
 
   it('stamps the résumé and its history, and nothing else', async () => {
@@ -423,7 +425,7 @@ describe('the résumé save path still stamps exactly what it did', () => {
     ]);
   });
 
-  it('names each dirty unit once across both notification paths', async () => {
+  it('names each dirty unit exactly once', async () => {
     store.setData({ name: 'Edited' }, true, 'v-1');
     initPersistence('v-1');
     store.saveNow();
@@ -431,5 +433,29 @@ describe('the résumé save path still stamps exactly what it did', () => {
 
     const named = notify.mock.calls.flatMap(([ids]) => ids);
     expect([...new Set(named)]).toEqual(named);
+  });
+
+  it('announces NOTHING until the write has reached disk', async () => {
+    // The P1 this replaced an assertion for. `saveVariant` answers true as soon
+    // as the write-behind cache takes the value; persistence announced on that
+    // answer, so the transport was told to upload bytes that might never land.
+    // CloudKit then keeps a change tag for content this device does not have —
+    // the next launch reads the older file the failed write never replaced, and
+    // the edit after that overwrites the server with no conflict to stop it.
+    store.setData({ name: 'Edited' }, true, 'v-1');
+    initPersistence('v-1');
+
+    expect(store.saveNow()).toBe(true);
+    // The save has been reported as successful, and the transport has still not
+    // been told anything. This is the whole assertion.
+    expect(notify).not.toHaveBeenCalled();
+
+    await settle();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0].sort()).toEqual([
+      `key:${BACKUP_HISTORY_PREFIX}v-1`,
+      'resume:v-1',
+    ]);
   });
 });

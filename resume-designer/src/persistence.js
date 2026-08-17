@@ -16,17 +16,17 @@ import {
 const STORAGE_KEY = 'resume-designer-data';
 export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
 let persistedSaveHandler = null;
-let syncDirtyNotifier = null;
 
 /** Wired by syncModel.js through main.js to keep the module graph acyclic. */
 export function setPersistedSaveHandler(handler) {
   persistedSaveHandler = typeof handler === 'function' ? handler : null;
 }
 
-/** Wired by main.js so persistence does not import the native shell. */
-export function setSyncDirtyNotifier(notify) {
-  syncDirtyNotifier = typeof notify === 'function' ? notify : null;
-}
+// `setSyncDirtyNotifier` stood here, and this module no longer names a dirty
+// unit at all: the handler above queues them for the storage drain, which is
+// the only place that knows the bytes reached disk. The notifier now has ONE
+// installer (syncModel's `setStorageDirtyNotifier`) rather than two, and there
+// is no longer a route that can announce a unit earlier than the drain.
 
 // Storage structure
 const DEFAULT_STORAGE = {
@@ -380,8 +380,13 @@ export function initPersistence(variantId) {
         const ok = saveVariant(variantId, variant.name, data);
         if (ok) {
           try {
-            const unitIds = persistedSaveHandler?.(variantId) ?? [];
-            if (unitIds.length > 0) syncDirtyNotifier?.(unitIds);
+            // Stamps the résumé and its history and QUEUES them for the storage
+            // drain — it no longer announces them here. `ok` above is the
+            // write-behind cache accepting the value, not the disk taking it,
+            // and telling the transport to upload on that answer is how a
+            // change tag gets held for bytes that never landed. The handler's
+            // own comment carries the rest.
+            persistedSaveHandler?.(variantId);
           } catch (err) {
             console.error('[Persistence] sync bookkeeping failed after successful save:', err);
           }

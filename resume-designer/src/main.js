@@ -75,7 +75,6 @@ import {
   importFullBackupDurably,
   saveApiKey,
   setPersistedSaveHandler,
-  setSyncDirtyNotifier,
 } from './persistence.js';
 import {
   isTauri,
@@ -639,15 +638,13 @@ export async function init() {
     collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts, touchUnit,
     syncAccountProfiles: resolveAccountProfiles,
     markInitialProfileFetchSettled,
-    // ONE notifier, handed to both things that name a dirty unit: persistence
-    // (the résumé and its history, on the save that wrote them) and the sync
-    // model's storage interceptor (every other synced key). The shell installs
-    // it once at mount, and it stays silent on desktop, where the postMessage
-    // it wraps is guarded by isNativeShellAvailable().
-    setSyncDirtyNotifier: (notify) => {
-      setSyncDirtyNotifier(notify);
-      setStorageDirtyNotifier(notify);
-    },
+    // ONE notifier, and now ONE installer. Persistence used to take it too and
+    // announce the résumé and its history on the save that wrote them — before
+    // the drain, so on a cache acceptance rather than on disk. Those units are
+    // queued for the drain now, so the interceptor is the only thing that names
+    // a dirty unit. It stays silent on desktop, where the postMessage it wraps
+    // is guarded by isNativeShellAvailable().
+    setSyncDirtyNotifier: setStorageDirtyNotifier,
     getActiveProfileId,
     // The iCloud switch, off until the person turns it on. Read on every
     // snapshot so the native toggle shows what is stored rather than what it
