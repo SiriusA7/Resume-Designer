@@ -9,6 +9,7 @@ import {
   buildSettings,
   buildSnapshot,
   createCommandDispatcher,
+  createProfileDurably,
   hasOpenModal,
   isNativeShellAvailable,
   openNativePdfPreview,
@@ -1571,5 +1572,53 @@ describe('workspace management crosses the bridge through the durable helpers', 
       .find((m) => m.kind === 'snapshot');
     expect(snapshot.accountStats.resumes).toBe(3);
     expect(snapshot.accountStats.responseRate).toBe('40%');
+  });
+});
+
+describe('createProfileDurably', () => {
+  // The barrier this asserts is the one a review found missing. `createProfile`
+  // + `activateProfileDurably` durably move the POINTER, and Swift reloads the
+  // webview the moment they answer true — but a résumé edit still inside the
+  // store's save debounce has not reached `appStorage` yet, so nothing in that
+  // sequence flushes it and the reload takes it away. Only `flushActiveEdits`
+  // pushes the editors; only then does flushing storage mean anything.
+  const deps = (over = {}) => ({
+    getActiveProfileId: () => 'p-old',
+    flushActiveEdits: vi.fn().mockResolvedValue(true),
+    createProfile: vi.fn(({ name }) => ({ id: 'p-new', name })),
+    activateProfileDurably: vi.fn().mockResolvedValue(true),
+    deleteProfile: vi.fn(),
+    ...over,
+  });
+
+  it('flushes the open editors BEFORE creating the workspace', async () => {
+    const order = [];
+    const d = deps({
+      flushActiveEdits: vi.fn(async () => { order.push('flush'); return true; }),
+      createProfile: vi.fn(({ name }) => { order.push('create'); return { id: 'p-new', name }; }),
+      activateProfileDurably: vi.fn(async () => { order.push('activate'); return true; }),
+    });
+
+    await expect(createProfileDurably(d, 'Work')).resolves.toBe(true);
+    // Order, not merely "was called": flushing after the pointer moved would
+    // save the edit into the workspace the person just left.
+    expect(order).toEqual(['flush', 'create', 'activate']);
+  });
+
+  it('refuses, and creates NOTHING, when the editors will not flush', async () => {
+    // A full disk or a quota refusal. Continuing would report a created
+    // workspace and drop the edit — recoverable failure beats silent loss.
+    const d = deps({ flushActiveEdits: vi.fn().mockResolvedValue(false) });
+
+    await expect(createProfileDurably(d, 'Work')).resolves.toBe(false);
+    expect(d.createProfile).not.toHaveBeenCalled();
+    expect(d.activateProfileDurably).not.toHaveBeenCalled();
+  });
+
+  it('unwinds the new workspace when the pointer will not move', async () => {
+    const d = deps({ activateProfileDurably: vi.fn().mockResolvedValue(false) });
+
+    await expect(createProfileDurably(d, 'Work')).resolves.toBe(false);
+    expect(d.deleteProfile).toHaveBeenCalledWith('p-new');
   });
 });

@@ -13,12 +13,11 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { appStorage } from '../../appStorage.js';
-import { store } from '../../store.js';
-import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
   listProfiles, getActiveProfileId, activateProfileDurably, createProfile,
   renameProfileDurably, deleteProfile, deleteProfileDurably, exportProfileBackup,
   importProfileBackup, isAdoptionPending, PROFILES_CHANGED_EVENT, switchToProfileDurably,
+  flushActiveEdits,
 } from '../../profiles.js';
 import { getVariants, getUserProfile } from '../../persistence.js';
 import { getAllJobDescriptions } from '../../jobDescriptions.js';
@@ -61,16 +60,9 @@ function Avatar({ name, className }) {
   );
 }
 
-// Flush every pending edit of the active profile to disk before a switch/export
-// reloads or serializes. Reports false on a passthrough-quota failure that
-// appStorage.flush() alone would miss (store.saveNow / flushPendingProfileSave
-// now surface it). Callers abort so unsaved edits aren't lost.
-async function flushActiveEdits() {
-  const savedResume = store.saveNow();
-  const savedProfile = flushPendingProfileSave();
-  const durable = await appStorage.flush();
-  return savedResume && savedProfile && durable;
-}
+// `flushActiveEdits` was written out here as well as inside
+// `switchToProfileDurably`, and a third caller that needed it had neither — see
+// its doc comment in profiles.js. It is imported now so there is one of it.
 
 export function AccountSection() {
   const [registry, setRegistry] = useState(() => listProfiles());

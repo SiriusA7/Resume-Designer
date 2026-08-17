@@ -713,14 +713,34 @@ export async function activateProfileDurably(id, restoreId) {
  * profile pointer change. Reloading belongs to the caller because desktop
  * reloads the window while iOS reloads its WKWebView.
  */
+/**
+ * Every open editor's work, on disk. False if any part of it did not land.
+ *
+ * THE BARRIER, in one place. `store.saveNow()` and `flushPendingProfileSave()`
+ * push what is still sitting in the editors' save debounce into `appStorage`;
+ * `appStorage.flush()` gets what is in `appStorage` onto the disk. Neither half
+ * covers the other, which is the whole trap: `activateProfileDurably` awaits
+ * only the second and reads as durable, so a caller reaching for it instead of
+ * this one loses whatever was still debounced.
+ *
+ * It exists as a function because it had been written out three times — here,
+ * in the desktop Account section, and nowhere at all in the iOS create path,
+ * which is how a résumé edit still inside the debounce was discarded by the
+ * webview reload that followed. Callers abort on false rather than proceeding:
+ * a switch or a create that continues past this loses the edit it did not save.
+ */
+export async function flushActiveEdits() {
+  const savedResume = store.saveNow();
+  const savedProfile = flushPendingProfileSave();
+  const durable = await appStorage.flush();
+  return savedResume && savedProfile && durable;
+}
+
 export async function switchToProfileDurably(id) {
   const activeId = getActiveProfileId();
   if (!id || id === activeId || isAdoptionPending()) return false;
 
-  const savedResume = store.saveNow();
-  const savedProfile = flushPendingProfileSave();
-  const durable = await appStorage.flush();
-  if (!savedResume || !savedProfile || !durable) return false;
+  if (!(await flushActiveEdits())) return false;
 
   return activateProfileDurably(id, activeId);
 }

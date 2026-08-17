@@ -31,6 +31,7 @@ import { profileInitials } from './accountStats.js';
 import {
   listProfiles, switchToProfileDurably, createProfile, deleteProfile,
   activateProfileDurably, renameProfileDurably, deleteProfileDurably, getActiveProfileId,
+  flushActiveEdits,
 } from './profiles.js';
 // Version-history entry names, shared with the web dialog. The leaf module
 // holds only strings: the dialog's lucide icons live beside IT, because this
@@ -1094,7 +1095,7 @@ export function resolveAccountProfiles(answer) {
  * storage, so it can hit quota even after a clean save — and that throw is the
  * answer, not a crash: the dispatcher turns it into a refusal the sheet reads.
  */
-async function createProfileDurably(deps, name) {
+export async function createProfileDurably(deps, name) {
   const trimmed = name.trim();
   if (!trimmed) return false;
   const create = deps.createProfile || createProfile;
@@ -1102,8 +1103,20 @@ async function createProfileDurably(deps, name) {
   const remove = deps.deleteProfile || deleteProfile;
   const previous = (deps.getActiveProfileId || getActiveProfileId)();
 
-  // Every open editor's work reaches disk before the pointer can move. Reusing
-  // the switch's own guard rather than repeating its three saves here.
+  // Every open editor's work reaches disk before the pointer can move.
+  //
+  // This comment used to sit here claiming the guard below already did it, on
+  // the reading that `activateProfileDurably` WAS "the switch's own guard". It
+  // is not — it is the inner pointer move that `switchToProfileDurably` calls
+  // AFTER saving the editors, and it awaits `appStorage.flush()` alone. A
+  // résumé edit still inside the store's debounce had therefore never been
+  // handed to `appStorage` at all, so nothing flushed it, and Swift reloads the
+  // webview the moment this returns true: the edit went with it.
+  //
+  // Refusing here rather than creating anyway — the sheet reports a failed
+  // create, which is recoverable, where a silently dropped edit is not.
+  if (!(await (deps.flushActiveEdits || flushActiveEdits)())) return false;
+
   const profile = create({ name: trimmed });
   if (!(await activate(profile.id, previous))) {
     try { remove(profile.id); } catch { /* best effort — the pointer never moved */ }
