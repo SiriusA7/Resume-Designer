@@ -220,6 +220,20 @@ struct OPSyncFailure: Equatable {
   /// The unit that failed, or nil when the failure belonged to the ZONE — which
   /// applies to every unit in it — or to a fetch.
   let unitId: String?
+  /// The workspace this failed out of: "" for the shared zone, a profile id for
+  /// a workspace's own. Only meaningful beside a `unitId` — the zone-and-fetch
+  /// failures name no single workspace — and "" for those.
+  ///
+  /// Carried because a unit id is NOT an identity. Every workspace has a
+  /// `data:settings`, and one engine session covers every zone, so a bare
+  /// record name says which record only by accident. The host recovers a
+  /// non-retryable failure by re-sending the unit, and re-sending it without
+  /// this sent the OPEN workspace's unit to the OPEN zone: the failed record
+  /// stayed un-recovered in a zone nobody named, and — for an unreadable
+  /// fetched asset, whose change token has already advanced past it — the
+  /// content stayed unavailable locally until that workspace was next edited.
+  /// A `CKRecord.ID` has always carried its zone; this was simply dropping it.
+  let profileId: String
   /// Whether the transport put the change back in the queue. `false` means
   /// nothing more will be attempted until the unit is edited again, which is
   /// the only case worth telling the user about.
@@ -229,6 +243,27 @@ struct OPSyncFailure: Equatable {
   let code: CKError.Code?
   /// Diagnostic — for a log line or a status line, never for a decision.
   let reason: String
+
+  init(unitId: String?, profileId: String = "", willRetry: Bool,
+       code: CKError.Code?, reason: String) {
+    self.unitId = unitId
+    self.profileId = profileId
+    self.willRetry = willRetry
+    self.code = code
+    self.reason = reason
+  }
+
+  /// The failed unit addressed the way everything else here addresses one:
+  /// workspace AND id. nil when no unit failed. Same shape as `SyncUnit.route`.
+  var route: String? { unitId.map { "\(profileId)\u{1F}\($0)" } }
+}
+
+/// The workspace a zone holds: "" for the shared one, whose contents belong to
+/// no single workspace. Zone names ARE profile ids by construction — `start`
+/// creates one zone per profile and names it after the profile — so this is a
+/// read of an identity that was decided when the change was queued, not a guess.
+private func opProfileId(forZone zoneID: CKRecordZone.ID) -> String {
+  zoneID.zoneName == opSharedZoneName ? "" : zoneID.zoneName
 }
 
 /// Asked to move data while the transport is down: `start(profileId:)` was
@@ -791,7 +826,9 @@ extension OPSyncEngine {
           // path where both copies are compared and the loser is parked.
           forget(record.recordID)
           unreadable.append(OPSyncFailure(
-            unitId: record.recordID.recordName, willRetry: false, code: nil,
+            unitId: record.recordID.recordName,
+            profileId: opProfileId(forZone: record.recordID.zoneID),
+            willRetry: false, code: nil,
             reason: "a fetched record could not be read — most likely a large "
               + "payload whose asset did not finish downloading — and was not applied"
           ))
@@ -1063,6 +1100,11 @@ extension OPSyncEngine {
     // `willRetry: false` means on the way out.
     for failure in failures {
       let recordID = failure.record.recordID
+      // Read off the record's own zone rather than the session's current
+      // profile: one engine session sends into every workspace's zone plus the
+      // shared one, so the failing record's workspace is whatever it was queued
+      // against, not whichever one happens to be open now.
+      let profileId = opProfileId(forZone: recordID.zoneID)
       let error = failure.error
 
       switch error.code {
@@ -1072,7 +1114,8 @@ extension OPSyncEngine {
               let localUnit = unit(from: failure.record)
         else {
           reported.append(OPSyncFailure(
-            unitId: recordID.recordName, willRetry: false, code: error.code,
+            unitId: recordID.recordName, profileId: profileId,
+            willRetry: false, code: error.code,
             reason: "conflict on an unreadable record: \(error.localizedDescription)"
           ))
           continue
@@ -1104,8 +1147,8 @@ extension OPSyncEngine {
         )
         forget(recordID)
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
-                                      code: error.code,
+        reported.append(OPSyncFailure(unitId: recordID.recordName, profileId: profileId,
+                                      willRetry: true, code: error.code,
                                       reason: error.localizedDescription))
 
       case .userDeletedZone:
@@ -1116,8 +1159,8 @@ extension OPSyncEngine {
         // re-sending puts back exactly what they just removed. Nothing local is
         // touched; see `syncDidPurgeFromICloud`.
         purgeFromICloud(engine: engine, reason: "a save found the zone deleted from Settings")
-        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: false,
-                                      code: error.code,
+        reported.append(OPSyncFailure(unitId: recordID.recordName, profileId: profileId,
+                                      willRetry: false, code: error.code,
                                       reason: error.localizedDescription))
 
       case .unknownItem:
@@ -1126,8 +1169,8 @@ extension OPSyncEngine {
         // will ever match.
         forget(recordID)
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
-                                      code: error.code,
+        reported.append(OPSyncFailure(unitId: recordID.recordName, profileId: profileId,
+                                      willRetry: true, code: error.code,
                                       reason: error.localizedDescription))
 
       case .notAuthenticated, .accountTemporarilyUnavailable, .networkFailure,
@@ -1138,8 +1181,8 @@ extension OPSyncEngine {
         // in particular used to fall through to `default` and be dropped as
         // permanent — it is not: the account can come back, and the engine is
         // already waiting for it.
-        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
-                                      code: error.code,
+        reported.append(OPSyncFailure(unitId: recordID.recordName, profileId: profileId,
+                                      willRetry: true, code: error.code,
                                       reason: error.localizedDescription))
 
       case .operationCancelled, .serverResponseLost:
@@ -1150,16 +1193,16 @@ extension OPSyncEngine {
         // them as permanent, which is what `default` did, lost a local edit
         // until the unit happened to be edited again.
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: true,
-                                      code: error.code,
+        reported.append(OPSyncFailure(unitId: recordID.recordName, profileId: profileId,
+                                      willRetry: true, code: error.code,
                                       reason: error.localizedDescription))
 
       default:
         // Quota exceeded, a record over a hard limit, a rejected request, a
         // missing entitlement: none of these get better by being retried, and
         // retrying them forever would be a queue that never drains.
-        reported.append(OPSyncFailure(unitId: recordID.recordName, willRetry: false,
-                                      code: error.code,
+        reported.append(OPSyncFailure(unitId: recordID.recordName, profileId: profileId,
+                                      willRetry: false, code: error.code,
                                       reason: error.localizedDescription))
       }
     }
@@ -1376,8 +1419,7 @@ extension OPSyncEngine {
     // is still here — it was simply being dropped, and the page then answered
     // out of whatever workspace was open. Same unit id in two zones is the
     // ordinary case, not an edge one: every workspace has a `data:settings`.
-    let zoneName = recordID.zoneID.zoneName
-    let profileId = zoneName == opSharedZoneName ? "" : zoneName
+    let profileId = opProfileId(forZone: recordID.zoneID)
     guard let unit = await host?.syncUnit(withId: recordID.recordName, inProfile: profileId) else {
       // This device has nothing under that id, and nothing will build one
       // later either, so leaving it queued is a question re-asked on every
@@ -1399,7 +1441,8 @@ extension OPSyncEngine {
       // is the only arrangement in which `willRetry: false` is a true statement
       // about what happens next.
       engine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
-      report([OPSyncFailure(unitId: recordID.recordName, willRetry: false, code: nil,
+      report([OPSyncFailure(unitId: recordID.recordName, profileId: profileId,
+                            willRetry: false, code: nil,
                             reason: "could not stage the payload: \(error.localizedDescription)")])
       return nil
     }

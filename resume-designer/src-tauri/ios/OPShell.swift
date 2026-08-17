@@ -1052,8 +1052,9 @@ final class ShellModel: ObservableObject {
   /// document coming back after WebKit reclaimed its content process.
   private var syncProfileId: String?
 
-  /// Unit ids `syncDidFail` has already re-queued once. The bound on the
-  /// recovery loop; see `syncDidFail` for why there has to be one.
+  /// `OPSyncFailure.route`s — workspace AND unit — `syncDidFail` has already
+  /// re-queued once. The bound on the recovery loop; see `syncDidFail` for why
+  /// there has to be one, and why one unit id is not enough to key it by.
   private var syncRecovered: Set<String> = []
 
   /// Ids re-deferred while one persisted queue is being offered. The durable
@@ -2433,32 +2434,58 @@ extension ShellModel: OPSyncHost {
     // An explicit fetch that reports an unreadable record or fetch-level failure
     // did not establish workspace readiness, even if fetchChanges itself returns.
     syncInitialFetchRefused = true
-    var recover: [String] = []
+    // Grouped by the workspace each failure came out of, so each zone is asked
+    // for once. A recovery send is a re-send of that unit's BYTES, and
+    // `sendSync` reads them back out of the workspace it is told: sent without
+    // one, every recovery collected the OPEN workspace's unit of that name and
+    // sent it to the OPEN zone. The failed record was left un-recovered, and
+    // for the case that most needs recovering — an unreadable fetched asset,
+    // whose change token has already moved past it — its content stayed
+    // unavailable on this device until that workspace was next edited, which
+    // for a workspace this device is not in may be never.
+    var recover: [String: [String]] = [:]
     for failure in failures {
-      NSLog("[OPShell] sync failure (unit \(failure.unitId ?? "—"), "
+      // The workspace spelled out rather than the route, whose separator is a
+      // control character that Console renders as nothing at all.
+      NSLog("[OPShell] sync failure (unit \(failure.unitId ?? "—") in "
+            + "\(failure.profileId.isEmpty ? "the open workspace" : failure.profileId), "
             + "willRetry \(failure.willRetry)): \(failure.reason)")
       // Retryable, or about the zone or a fetch rather than one unit: the
       // engine is already handling the first and there is no unit to re-queue
       // for the second. Both are for the status line.
-      guard let unitId = failure.unitId, !failure.willRetry else {
+      guard let unitId = failure.unitId, let route = failure.route,
+            !failure.willRetry else {
         recordSyncFailure(failure)
         continue
       }
       // `insert` reports whether this is the first time. A second failure for
       // the same unit is where the loop would have been, so it is held for the
       // status line instead — this device has now stopped trying.
-      guard syncRecovered.insert(unitId).inserted else {
+      //
+      // Remembered by ROUTE, not by the bare id, for the same reason the send
+      // is routed: `data:settings` exists in every workspace, so one workspace
+      // failing it used to spend the single attempt every OTHER workspace's
+      // `data:settings` was entitled to — they were recorded as already tried
+      // and never recovered at all.
+      guard syncRecovered.insert(route).inserted else {
         recordSyncFailure(failure)
         continue
       }
-      recover.append(unitId)
+      recover[failure.profileId, default: []].append(unitId)
     }
 
     guard !recover.isEmpty else { return }
     // Deferred, not inline: this runs inside the engine's event handling and
     // `send` re-enters the engine. The task puts it on a later main-actor turn,
     // once the event these failures belong to has been fully handled.
-    Task { @MainActor [weak self] in await self?.sendSync(unitIds: recover) }
+    Task { @MainActor [weak self] in
+      // "" is the open workspace, which is what `sendSync` already means by nil
+      // — the same convention the `syncDirty` handler follows.
+      for (profileId, unitIds) in recover {
+        await self?.sendSync(unitIds: unitIds,
+                             inProfile: profileId.isEmpty ? nil : profileId)
+      }
+    }
   }
 
   /// Sends and fetches that landed, which is how a warning comes back DOWN.
