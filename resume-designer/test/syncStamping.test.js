@@ -16,6 +16,7 @@ import {
 } from '../src/appStorage.js';
 import {
   installStorageStamping, setStorageDirtyNotifier, applyUnits, registerEditingProbe,
+  parkLoser,
 } from '../src/sync/syncModel.js';
 import { store } from '../src/store.js';
 import {
@@ -53,6 +54,16 @@ const SYNCED_KEYS = [...new Set([...BACKUP_FIXED_KEYS, ...SYNCED_SHARED_KEYS])]
 // this rejects every attempt for that key rather than the first.
 let refusedKey = null;
 const failWritesFor = (key) => { refusedKey = key; };
+// A write that hangs until released, so a SECOND drain can queue work for the
+// same key while the first is still in flight.
+let heldKey = null;
+let heldGate = null;
+const holdWritesFor = (key) => {
+  heldKey = key;
+  let release;
+  heldGate = new Promise((resolve) => { release = resolve; });
+  return () => { heldKey = null; release(); };
+};
 
 function makeBackend(initial = {}) {
   const files = new Map(Object.entries(initial));
@@ -60,6 +71,7 @@ function makeBackend(initial = {}) {
     files,
     loadAll: vi.fn(async () => Object.fromEntries(files)),
     write: vi.fn(async (key, value) => {
+      if (key === heldKey) await heldGate;
       if (key === refusedKey) throw new Error('no space left on device');
       files.set(key, value);
     }),
@@ -99,6 +111,8 @@ beforeEach(async () => {
     }),
   });
   refusedKey = null;
+  heldKey = null;
+  heldGate = null;
   notify = vi.fn();
   installStorageStamping(setStorageWriteObserver);
   setStorageDirtyNotifier(notify);
@@ -500,5 +514,83 @@ describe('the durability barrier', () => {
     await settle();
 
     expect(allNamed()).toContain('key:resume-designer-applications');
+  });
+});
+
+describe('the failure is reported under the key its gate was built from', () => {
+  beforeEach(() => {
+    registerPersistedSaveHandler(setPersistedSaveHandler);
+    setStorageDirtyNotifier(notify);
+  });
+
+  it('survives a second drain queuing the same key before the first settles', async () => {
+    // A PROFILE MAPPING is essential to this test, not decoration. The rest of
+    // this file runs with identity mapping, where physical === logical — and
+    // under identity the bug is invisible, because falling back to the physical
+    // key yields the same string the gate holds. It only bites once the two
+    // differ, which is every real device with a workspace open.
+    setProfileMapping('p1');
+    // The metadata saying which name a physical write went in under used to be
+    // shared across batches, and the first batch's cleanup deleted the entry a
+    // LATER batch was relying on. The later failure was then reported under a
+    // name no gate matched, and the unit was announced while its bytes were
+    // only ever in memory. Captured per batch entry now, so overlap cannot
+    // confuse them.
+    const release = holdWritesFor('resume-p--p1--resume-designer-applications');
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    const firstDrain = appStorage.flush(); // batch 1 queued; its write hangs
+
+    // Batch 2 is queued BEHIND batch 1's hanging write — that is the overlap.
+    // Draining here rather than after the release is the whole point: a second
+    // flush while the first is in flight is what put two batches on the chain
+    // at once, and the first batch's cleanup ran between them.
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-2"}]');
+    // The BACKEND sees the physical, namespaced key — refusing the logical name
+    // would refuse nothing and the write would quietly succeed.
+    failWritesFor('resume-p--p1--resume-designer-applications');
+    const secondDrain = appStorage.flush();
+
+    release();
+    await Promise.all([firstDrain, secondDrain]);
+    await settle();
+
+    expect(allNamed()).not.toContain('key:resume-designer-applications');
+  });
+});
+
+describe('a conflict parked into a workspace this device is not in', () => {
+  beforeEach(() => { setStorageDirtyNotifier(notify); });
+
+  // The payload is a VARIANT RECORD, not a bare document — `resumeDocument`
+  // reads `.data` off it and parkLoser refuses anything else. Shape taken from
+  // syncModel.test.js's own helper rather than invented here.
+  const park = () => parkLoser('resume:v-9', JSON.stringify({
+    id: 'v-9', name: 'Tailored for Acme', data: { name: 'the losing copy' },
+    createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+  }), 'p2');
+
+  it('names the parked history, carrying the workspace it went into', async () => {
+    // Stamping alone left the recovery copy on this device: the conflict queues
+    // at most the résumé record, so with no later edit the parked loser — the
+    // thing that makes newer-wins non-destructive — never reached CloudKit.
+    expect(park()).toBe(true);
+    await settle();
+
+    expect(notify).toHaveBeenCalledWith([
+      { id: 'key:resume-designer-history-v-9', profileId: 'p2' },
+    ]);
+  });
+
+  it('holds it back when that workspace\u2019s disk write is refused', async () => {
+    // The gate has to be the string parkLoser actually wrote through, which for
+    // a foreign workspace is the PHYSICAL, namespaced name — appStorage reports
+    // a refusal under the name its caller used. Gated on the logical history
+    // key instead, the failure would never match and the parked history would
+    // be announced while it existed only in memory.
+    failWritesFor('resume-p--p2--resume-designer-history-v-9');
+    expect(park()).toBe(true);
+    await settle();
+
+    expect(notify).not.toHaveBeenCalled();
   });
 });

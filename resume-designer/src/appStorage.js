@@ -70,7 +70,7 @@ let mode = 'passthrough'; // 'passthrough' | 'cached'
 let readOnly = false;
 let backendImpl = null;
 let cache = new Map();
-let dirty = new Map(); // key -> 'write' | 'delete'
+let dirty = new Map(); // physical key -> { op: 'write'|'delete', name }
 let drainScheduled = false;
 let drainTimer = null; // handle for the pending coalescing setTimeout; cleared whenever a drain runs
 let chain = Promise.resolve();
@@ -286,11 +286,6 @@ function reportWriteFailure(key, err) {
   );
 }
 
-// Physical key -> the logical name it was written under. `dirty` is keyed
-// physically (profile-namespaced) while every observer above speaks logical
-// names, and a failure has to be reported in the caller's vocabulary.
-const dirtyLogical = new Map();
-
 function scheduleDrain() {
   if (drainScheduled || readOnly) return;
   drainScheduled = true;
@@ -313,7 +308,7 @@ function drain() {
   dirty.clear();
   // Keys this batch could not write, named for the observer below.
   const failedLogicalKeys = new Set();
-  for (const [key, op] of batch) {
+  for (const [key, { op, name }] of batch) {
     // Value is read from the cache at write time, so a set that happened
     // after this key was marked dirty still writes the latest value. If a
     // removeItem landed after this write op was snapshotted, the key is gone
@@ -342,12 +337,17 @@ function drain() {
           // permanently full disk must not busy-loop; the retry rides the next
           // user-triggered drain or the next flush() (which drains first).
           if (!dirty.has(key) && (op === 'delete' || cache.has(key))) {
-            dirty.set(key, op);
+            dirty.set(key, { op, name });
           }
           reportWriteFailure(key, err2);
-          const logical = dirtyLogical.get(key) ?? key;
-          failedLogicalKeys.add(logical);
-          notifyWriteFailure(logical);
+          // Reported under the name the CALLER used — captured in this batch's
+          // own entry, never looked up in shared state. An overlapping drain
+          // re-marking the same physical key would otherwise have its metadata
+          // deleted by this batch's cleanup, and the failure would surface
+          // under a name no gate matches: the unit would be announced while its
+          // bytes were only ever in memory.
+          failedLogicalKeys.add(name);
+          notifyWriteFailure(name);
         }
       }
     });
@@ -369,10 +369,7 @@ function drain() {
   // every op queued above has settled. A later drain extending `chain` cannot
   // affect this snapshot.
   const batchSettled = chain;
-  batchSettled.then(() => {
-    for (const [key] of batch) dirtyLogical.delete(key);
-    observeFlush(failedLogicalKeys);
-  });
+  batchSettled.then(() => observeFlush(failedLogicalKeys));
 }
 
 export const appStorage = {
@@ -404,7 +401,7 @@ export const appStorage = {
     // Blocked mid-restore: record the latest write and skip cache+disk (see the
     // restoreGuardActive note). The import's own writes ran before the guard armed.
     // No observer call either — nothing was stored, so nothing changed yet.
-    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'write', value: v }); return; }
+    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'write', value: v, name: logicalKey }); return; }
     // Read BEFORE the write lands, and only when someone is listening. In cached
     // mode — every shipped desktop and iOS build — this is a Map lookup.
     const previous = writeObserver ? readStored(key) : null;
@@ -424,8 +421,7 @@ export const appStorage = {
     }
     cache.set(key, v);
     if (readOnly) return; // print window: cache-only, never queued to disk
-    dirty.set(key, 'write');
-    dirtyLogical.set(key, logicalKey);
+    dirty.set(key, { op: 'write', name: logicalKey });
     scheduleDrain();
     observeWrite(logicalKey, v, previous);
   },
@@ -445,7 +441,7 @@ export const appStorage = {
     }
     cache.delete(key);
     if (readOnly) return; // print window: cache-only, never queued to disk
-    dirty.set(key, 'delete');
+    dirty.set(key, { op: 'delete', name: key });
     scheduleDrain();
   },
 
@@ -572,10 +568,10 @@ export const appStorage = {
     for (const [key, entry] of deferredDuringRestore) {
       if (entry.op === 'delete') {
         cache.delete(key);
-        dirty.set(key, 'delete');
+        dirty.set(key, { op: 'delete', name: key });
       } else {
         cache.set(key, entry.value);
-        dirty.set(key, 'write');
+        dirty.set(key, { op: 'write', name: entry.name ?? key });
       }
       applied = true;
     }

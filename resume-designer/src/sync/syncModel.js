@@ -1571,7 +1571,12 @@ export function parkLoser(unitId, payload, profileId = '') {
     // path and can park into a workspace this device is not in; an id announced
     // without one is collected out of the OPEN workspace and sent to the wrong
     // zone. Gated on the history key, which is the one these bytes went into.
-    pendingDirty.set(unitId, { key: `${HISTORY_PREFIX}${variantId}`, profileId });
+    // Gated on `storageKey` — the string this actually wrote through, which
+    // for a workspace this device is not in is the PHYSICAL, profile-namespaced
+    // name. appStorage reports a refusal under the name its caller used, so a
+    // gate built from the logical name would never match one and the parked
+    // history would be announced while it existed only in memory.
+    pendingDirty.set(unitId, { key: storageKey, profileId });
   };
 
   // The loaded variant: only the store can make this stick (see above). It
