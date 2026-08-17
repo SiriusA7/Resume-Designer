@@ -566,13 +566,28 @@ async function savePreviewedPdf(customFilename) {
       const staged = await stagePdfForShare(filename);
       sharePdf(staged);
       console.log('PDF Export: shared', staged);
+    } catch (error) {
+      // Staging CAN fail — a full temp dir, or an emptied preview slot — and a
+      // throw here used to escape before the two lines below, which are the
+      // only things that release the guard. Unlike the desktop branch there is
+      // no retry to keep it held for: the native sheet dismissed itself on the
+      // way in, so nothing is left on screen that could call back. Leaving it
+      // held meant every later export was refused as already in progress,
+      // until the app restarted.
+      console.error('PDF share staging failed:', error);
+      await notify({
+        title: 'PDF export failed',
+        type: 'error',
+        message: `Could not prepare the PDF to share: ${error.message || 'Unknown error'}.`,
+      });
     } finally {
       setExportBusy(false);
+      // Terminal either way: the share sheet is the system's now, and whether
+      // the user saves or dismisses it is not something the app is told — and
+      // a failure has nowhere to go back to.
+      await discardPdfPreview();
+      releaseExportGuard();
     }
-    // Terminal either way: the share sheet is the system's now, and whether
-    // the user saves or dismisses it is not something the app is told.
-    await discardPdfPreview();
-    releaseExportGuard();
     return;
   }
 

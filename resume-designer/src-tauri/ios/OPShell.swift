@@ -2840,6 +2840,28 @@ final class OPShell: NSObject {
     NSLog("[OPShell] presenting share sheet from \(type(of: root))")
     let url = URL(fileURLWithPath: path)
     let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    // Delete the staged copy once the sheet is finished with it.
+    //
+    // `stage_pdf_for_share` copies the preview into the temp dir under the name
+    // the person typed, and `discard_pdf_preview` only ever removed the preview
+    // SLOT — so nothing deleted this one. Every export left a second résumé PDF
+    // behind under its own name, accumulating for the life of the install: a
+    // pile of somebody's CVs sitting in a directory, which is the part that
+    // matters more than the disk.
+    //
+    // It cannot be deleted before the sheet is done: the activity reads the
+    // file when the person picks a destination, which is after presentation and
+    // possibly long after. The completion handler is the earliest safe moment,
+    // and it runs whether they shared or dismissed.
+    sheet.completionWithItemsHandler = { _, _, _, _ in
+      do {
+        try FileManager.default.removeItem(at: url)
+      } catch {
+        // Not worth surfacing: the file is in the system temp dir, which iOS
+        // reclaims on its own. Logged so a leak has a trail if one shows up.
+        NSLog("[OPShell] could not remove the staged PDF: \(error)")
+      }
+    }
     // iPad presents this as a popover and CRASHES without an anchor. Anchor it
     // to the top-trailing corner, under the PDF button that started the export.
     if let popover = sheet.popoverPresentationController {
