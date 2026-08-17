@@ -12,6 +12,13 @@ import { EDITABLE_TEXT_ATTRS } from './spellcheck.js';
 
 let isInitialized = false;
 let activeElement = null;
+// The native iOS format panel makes the web view resign first responder, so the
+// keyboard — which lives in a window ABOVE any sheet — stops covering it. That
+// blurs whatever is being edited, and `handleBlur` would then commit and
+// re-render the whole résumé, DETACHING the very node the panel's buttons are
+// aimed at. Measured: every button went quietly dead. While this is set, blur
+// leaves the session alone; main.js clears it and commits when the panel closes.
+let blurCommitSuspended = false;
 let hintDismissed = false;
 let hasEditedOnce = false;
 let hoveredElement = null;
@@ -990,13 +997,33 @@ function extractEditedValue(element, path) {
 function handleBlur(e) {
   const editable = e.target.closest('[data-editable]');
   if (!editable) return;
-  
+
   // Small delay to allow click on another editable
   setTimeout(() => {
+    // Checked HERE rather than above, because the suspension can legitimately
+    // arrive between the blur and this timer: on iOS the blur is caused by
+    // native code that suspends in the same gesture, and `evaluateJavaScript`
+    // is asynchronous. 100ms is ample for that hop.
+    if (blurCommitSuspended) return;
     if (activeElement === editable) {
       finishEditing(editable);
     }
   }, 100);
+}
+
+/**
+ * Keep the current editing session alive across a blur (see
+ * `blurCommitSuspended`). Only the iOS format panel uses this, and it must
+ * always be paired with a release — a suspension left on would mean edits stop
+ * committing when the user taps away.
+ */
+export function suspendBlurCommit(suspend) {
+  blurCommitSuspended = !!suspend;
+}
+
+/** Commit whatever is being edited, if anything. */
+export function commitActiveInlineEdit() {
+  if (activeElement) finishEditing(activeElement);
 }
 
 // Handle keydown

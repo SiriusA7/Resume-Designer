@@ -1505,6 +1505,12 @@ export function initIOSShell(deps) {
     textUnderline: () => click('text-underline'),
     textBullets: () => click('text-bullets'),
     textClearFormat: () => click('text-clear-format'),
+    // Bracket the native format panel. Opening it dismisses the keyboard, which
+    // blurs whatever is being edited — these keep that blur from ending the
+    // edit and taking the panel's target with it. See main.js
+    // `holdFormattingTarget`.
+    formatHold: () => ask('rd:format-hold'),
+    formatRelease: () => ask('rd:format-release'),
     textSizeIncrease: () => click('text-size-increase'),
     textSizeDecrease: () => click('text-size-decrease'),
 

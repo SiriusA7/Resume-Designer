@@ -3277,7 +3277,11 @@ private struct ShellView: View {
           // re-renders on every keystroke.
           switch previous {
           case .structure: model.send("setStructureOpen", ["value": "false"])
-          case .design: model.send("setDesignOpen", ["value": "false"])
+          case .design:
+            model.send("setDesignOpen", ["value": "false"])
+            // Let the held edit go and commit what the Format tab changed. The
+            // inline editor saves on finish, and finishing is what was held.
+            model.send("formatRelease")
           case .chat: model.send("setChatOpen", ["value": "false"])
           case .library: model.send("setLibraryOpen", ["value": "false"])
           case .history: model.send("setHistoryOpen", ["value": "false"])
@@ -3708,7 +3712,7 @@ private struct ShellView: View {
           }
           .accessibilityLabel("Edit structure")
 
-          styleMenu
+          styleButton
         }
         .modifier(BarCapsule())
         // Scale rather than slide: the zoom capsule is growing into the space
@@ -3778,48 +3782,35 @@ private struct ShellView: View {
   // functional regression.
   /// Text formatting and Design, behind ONE button.
   ///
-  /// They were two, side by side, and the pair could not be told apart: the
-  /// bar's `textformat` glyph opened selection formatting, while the Design
+  /// They were two buttons, side by side, and the pair could not be told apart:
+  /// the bar's `textformat` glyph opened selection formatting, while the Design
   /// sheet's own Typography row carries the SAME glyph for document fonts. Two
   /// icons, one symbol, adjacent — and the honest answer to "which one changes
   /// the text" was "both, differently".
   ///
-  /// One button, and the split inside it says which is which: the top section
-  /// acts on what is SELECTED right now, and Design opens everything that is a
-  /// property of the document. The paintbrush labels it, because that is the
-  /// larger of the two and the one that is not otherwise reachable.
-  private var styleMenu: some View {
-    Menu {
-      formatActions
-      Section {
-        Button {
-          model.send("setDesignOpen", ["value": "true"])
-          sheet = .design
-        } label: {
-          Label("Design…", systemImage: "paintpalette")
-        }
-      }
+  /// Merging them made this a MENU whose first half was formatting and whose
+  /// last item opened the sheet — a menu in front of a panel that had room for
+  /// both. Now formatting is that panel's first tab, so the button opens the
+  /// panel: one tap to the thing, instead of a tap to a list of things.
+  private var styleButton: some View {
+    Button {
+      // The keyboard lives in its own window ABOVE any presented sheet, so a
+      // panel opened while inline editing is running is drawn entirely behind
+      // it — measured: nothing of the sheet was visible but its top corner.
+      // Notes does what this does, and for the same reason.
+      //
+      // ORDER MATTERS. `formatHold` has to be in flight before the keyboard
+      // goes, because dismissing it blurs the résumé's editor, and an unheld
+      // blur commits and re-renders — which detaches the node the panel's
+      // buttons are aimed at and leaves every one of them a silent no-op.
+      model.send("formatHold")
+      webView.endEditing(true)
+      model.send("setDesignOpen", ["value": "true"])
+      sheet = .design
     } label: {
       Image(systemName: "paintbrush")
     }
     .accessibilityLabel("Style")
-  }
-
-  @ViewBuilder
-  private var formatActions: some View {
-    Group {
-      Button { model.send("textBold") } label: { Label("Bold", systemImage: "bold") }
-      Button { model.send("textItalic") } label: { Label("Italic", systemImage: "italic") }
-      Button { model.send("textUnderline") } label: { Label("Underline", systemImage: "underline") }
-      Button { model.send("textBullets") } label: { Label("Bulleted list", systemImage: "list.bullet") }
-      Section {
-        Button { model.send("textSizeIncrease") } label: { Label("Bigger text", systemImage: "textformat.size.larger") }
-        Button { model.send("textSizeDecrease") } label: { Label("Smaller text", systemImage: "textformat.size.smaller") }
-      }
-      Section {
-        Button { model.send("textClearFormat") } label: { Label("Clear formatting", systemImage: "eraser") }
-      }
-    }
   }
 
   /// Open the zoom controls, and restart the clock on closing them again.
@@ -6311,124 +6302,325 @@ private struct LibrarySheet: View {
 
 private typealias Design = ShellSnapshot.Design
 
+/// One tab of the design panel. The order is the order of the chips.
+///
+/// `format` leads because it is what the toolbar button opens onto, and because
+/// it is the only tab about the text you have SELECTED — everything after it is
+/// a property of the document.
+private enum DesignSection: String, CaseIterable, Identifiable {
+  case format, page, color, layout, header, typography, spacing, accents, photo
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .format: return "Format"
+    case .page: return "Page"
+    case .color: return "Color"
+    case .layout: return "Layout"
+    case .header: return "Header"
+    case .typography: return "Typography"
+    case .spacing: return "Spacing"
+    case .accents: return "Accents"
+    case .photo: return "Photo"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    // NOT `textformat`, which Typography has carried since this panel existed.
+    // The two were one button precisely because that glyph on both of them made
+    // "which one changes the text" unanswerable; as sibling tabs they need to
+    // be told apart at a glance, and this one draws the three things it does.
+    case .format: return "bold.italic.underline"
+    case .page: return "doc"
+    case .color: return "paintpalette"
+    case .layout: return "square.split.2x1"
+    case .header: return "rectangle.tophalf.filled"
+    case .typography: return "textformat"
+    case .spacing: return "arrow.up.and.down"
+    case .accents: return "sparkles"
+    case .photo: return "person.crop.circle"
+    }
+  }
+}
+
 /// The native design panel.
 ///
-/// A LIST of screens rather than one Form: the web panel is nine collapsing
-/// sections holding sixty-odd controls, and a phone-width form of that is a
-/// scroll nobody can hold their place in. Each row names a section and shows
-/// what it is currently set to, which is also what makes the panel worth
-/// reading without opening anything.
+/// EIGHT SECTIONS BEHIND A PICKER, not a full-height list that pushes into them.
+/// The web panel is nine collapsing sections holding sixty-odd controls, and a
+/// phone-width form of all of it is a scroll nobody can hold their place in.
+/// The drill-down list that first answered that charged a push and a pop for
+/// every change, and covered the résumé while you made it.
 ///
-/// Nothing in here previews the résumé, and nothing needs to: the canvas is
-/// directly behind the sheet and every control writes straight through to it,
-/// so a grid of layout tiles only has to name them — tapping one re-renders the
-/// page underneath.
+/// The short sheet is the point, not the styling: `presentationBackgroundInteraction`
+/// keeps the canvas live underneath, so the page you are designing can be
+/// scrolled, pinched and READ without closing what you are editing. Nothing in
+/// here previews the résumé because it does not have to — the résumé is on
+/// screen, two inches up, re-rendering as you tap. Sections with more in them
+/// than the compact height shows are one drag from `.large`.
+///
+/// Each section gets its OWN `NavigationStack` (`.id(section)`): Typography and
+/// Header still push sub-screens, and switching chips has to land on the new
+/// section's root rather than leave someone else's sub-screen on top.
 private struct DesignSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
+  @State private var section: DesignSection = .format
+
+  /// A shade over a third of the screen: the chips plus three rows of controls
+  /// with room under them, and the résumé still the larger part of what you are
+  /// looking at. Started at Notes' Format-panel proportion — about a quarter —
+  /// and came up 20% from there, because the Format tab is three rows deep
+  /// where Notes' is two and the footnote was landing below the fold.
+  ///
+  /// The sheet draws ~30pt taller than the number, so measure the result rather
+  /// than trusting it. It is a named constant because
+  /// `presentationBackgroundInteraction` has to be handed the SAME detent to
+  /// know how far up the canvas stays live.
+  private static let compactHeight: CGFloat = 296
 
   var body: some View {
+    VStack(spacing: 0) {
+      header
+      content
+    }
+    // Three stops, not two. The compact one is the panel's working height and
+    // `.large` is for the sections with a lot in them; without `.medium` the
+    // drag between them was one long throw with nothing to catch it, and the
+    // sections that want about half a screen — palettes, layouts, pairings —
+    // had to overshoot to the top to be read.
+    .presentationDetents([.height(Self.compactHeight), .medium, .large])
+    // Only the compact stop leaves the canvas live. That stop exists so the
+    // résumé can be scrolled and pinched while you work on it; dragging past it
+    // is the gesture for "I am in the panel now", and the bars underneath going
+    // inert with it is the same trade Maps makes.
+    .presentationBackgroundInteraction(.enabled(upThrough: .height(Self.compactHeight)))
+    // Without this, a swipe that starts on a Form resizes the SHEET instead of
+    // scrolling the form — which at the compact height puts the lower controls
+    // of a section out of reach of the gesture that should reach them.
+    .presentationContentInteraction(.scrolls)
+  }
+
+  private var header: some View {
+    HStack(spacing: 14) {
+      chips
+      closeButton
+    }
+    .padding(.leading, 16)
+    .padding(.trailing, 14)
+    .padding(.top, 14)
+    .padding(.bottom, 10)
+  }
+
+  private var chips: some View {
+    ScrollViewReader { proxy in
+      ScrollView(.horizontal) {
+        HStack(spacing: 8) {
+          ForEach(DesignSection.allCases) { chip($0) }
+        }
+        // The chips carry glass, which draws a little outside its own bounds;
+        // without this the first and last are clipped by the scroll view.
+        .padding(.vertical, 2)
+      }
+      .scrollIndicators(.hidden)
+      // Selecting the last chip on a 390pt screen otherwise leaves it expanded
+      // half off the trailing edge, reading as "nothing is selected".
+      .onChange(of: section) { _, selected in
+        withAnimation(.snappy(duration: 0.28)) { proxy.scrollTo(selected, anchor: .center) }
+      }
+    }
+  }
+
+  private func chip(_ which: DesignSection) -> some View {
+    let selected = which == section
+    return Button {
+      withAnimation(.snappy(duration: 0.28)) { section = which }
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: which.symbol)
+        // Only the selected chip carries its name. `fixedSize` because the
+        // label appears mid-animation, and without it the text lays out against
+        // the capsule's OLD width and truncates to an ellipsis on the way in.
+        if selected {
+          Text(which.title).fixedSize()
+        }
+      }
+      .modifier(DesignChip(selected: selected))
+    }
+    .buttonStyle(.plain)
+    .id(which)
+    .accessibilityLabel(which.title)
+    .accessibilityAddTraits(selected ? [.isSelected] : [])
+  }
+
+  private var closeButton: some View {
+    Button {
+      dismiss()
+    } label: {
+      Image(systemName: "xmark")
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .frame(width: DesignChip.height, height: DesignChip.height)
+        .glassEffect(.regular.interactive(), in: .circle)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Done")
+  }
+
+  private var content: some View {
     NavigationStack {
       Group {
-        if let design = model.snapshot.design {
-          List {
-            Section {
-              row("Page", "doc", pageSummary(design)) { PageScreen(model: model) }
-              row("Color", "paintpalette", colorSummary(design)) { ColorScreen(model: model) }
-              row("Layout", "square.split.2x1", optionName(design.layout, in: design.layouts)) {
-                LayoutScreen(model: model)
-              }
-              row("Header", "rectangle.tophalf.filled", headerSummary(design)) {
-                HeaderScreen(model: model)
-              }
-            }
-            Section {
-              row("Typography", "textformat", fontsSummary(design)) { TypographyScreen(model: model) }
-              row("Spacing", "arrow.up.and.down", spacingSummary(design)) { SpacingScreen(model: model) }
-              row("Accents", "sparkles", accentSummary(design)) { AccentsScreen(model: model) }
-              row("Photo", "person.crop.circle", photoSummary(design)) { PhotoScreen(model: model) }
-            }
-          }
+        // Every tab but Format reads the design projection, which lands a frame
+        // after the sheet opens; an empty form would read as a panel with
+        // nothing in it. Format reads none of it — and it is the tab the
+        // toolbar button opens onto, so it is the one that must never be a
+        // spinner.
+        if section != .format, model.snapshot.design == nil {
+          ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-          // The first projection lands a frame after the sheet opens; an empty
-          // list would read as a design panel with nothing in it.
-          ProgressView()
+          screen
         }
       }
-      .navigationTitle("Design")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { dismiss() }
+      // The chips ARE this sheet's title bar. A second one under them would
+      // spend a third of the compact height saying what the lit chip says.
+      .toolbar(.hidden, for: .navigationBar)
+      // A Form opens with about 35pt of inset above its first section, which is
+      // right under a navigation bar and wrong under a chip that has already
+      // named the section. Measured: it and the header's own padding were
+      // spending 52pt — a sixth of the compact sheet, and more than a row — on
+      // the gap between the chips and the first control.
+      .contentMargins(.top, 4, for: .scrollContent)
+    }
+    .id(section)
+  }
+
+  @ViewBuilder
+  private var screen: some View {
+    switch section {
+    case .format: FormatScreen(model: model)
+    case .page: PageScreen(model: model)
+    case .color: ColorScreen(model: model)
+    case .layout: LayoutScreen(model: model)
+    case .header: HeaderScreen(model: model)
+    case .typography: TypographyScreen(model: model)
+    case .spacing: SpacingScreen(model: model)
+    case .accents: AccentsScreen(model: model)
+    case .photo: PhotoScreen(model: model)
+    }
+  }
+}
+
+/// Text formatting: the only tab that is a panel of BUTTONS rather than a Form.
+///
+/// Every other section edits a property the projection reports back, so a Form
+/// bound to it is the honest shape. These are verbs with no state to read — the
+/// page does not tell us whether the selection is bold — so a row of controls
+/// that each look tapped-and-done is the honest shape for them, and it is what
+/// every text editor draws.
+///
+/// Two scopes on one tab, which is why the footnote is not decoration: the top
+/// row acts on the SELECTION, while the size buttons move the whole résumé's
+/// font scale — the same value the Spacing tab shows as a percentage. They are
+/// here because they were in the toolbar menu this replaced.
+private struct FormatScreen: View {
+  @ObservedObject var model: ShellModel
+
+  var body: some View {
+    // A ScrollView, though at the compact height the contents fit: Dynamic Type
+    // at its larger settings grows every button, and a VStack that overflows
+    // would quietly clip the last row rather than let it be reached.
+    ScrollView {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 10) {
+          action("Bold", "bold") { model.send("textBold") }
+          action("Italic", "italic") { model.send("textItalic") }
+          action("Underline", "underline") { model.send("textUnderline") }
+          action("Bulleted list", "list.bullet") { model.send("textBullets") }
         }
+        // Named, unlike the row above. `textformat.size.smaller` and
+        // `.larger` are the system's own glyphs for this and they differ by a
+        // few points of one letter — side by side and icon-only they were a
+        // coin toss. Apple only ever draws them beside a label, and so do we.
+        HStack(spacing: 10) {
+          action("Smaller text", "textformat.size.smaller", name: "Smaller") {
+            model.send("textSizeDecrease")
+          }
+          action("Bigger text", "textformat.size.larger", name: "Bigger") {
+            model.send("textSizeIncrease")
+          }
+        }
+        action("Clear formatting", "eraser", name: "Clear formatting") {
+          model.send("textClearFormat")
+        }
+        Text("Text size changes the whole resume. Everything else applies to the text you have selected.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 4)
+          .padding(.top, 2)
       }
+      .padding(.horizontal, 16)
+      .padding(.top, 6)
     }
   }
 
-  private func row<Destination: View>(
-    _ title: String, _ symbol: String, _ value: String,
-    @ViewBuilder destination: () -> Destination
+  /// Equal-width because they are peers within a row, and 44pt because that is
+  /// the tap target the rest of the bar is built on.
+  ///
+  /// `name` is what the button SHOWS; `title` is what VoiceOver reads, and it
+  /// stays the full phrase either way — "Clear formatting" is the action
+  /// whether or not the row had the width to print it.
+  private func action(
+    _ title: String, _ symbol: String, name: String? = nil, run: @escaping () -> Void
   ) -> some View {
-    NavigationLink {
-      destination()
-    } label: {
-      LabeledContent {
-        Text(value).lineLimit(1)
-      } label: {
-        Label(title, systemImage: symbol)
+    Button(action: run) {
+      HStack(spacing: 6) {
+        Image(systemName: symbol)
+        if let name { Text(name) }
       }
+      .font(.system(size: 17))
+      .lineLimit(1)
+      .foregroundStyle(.primary)
+      .frame(maxWidth: .infinity)
+      .frame(height: 44)
+      .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 12))
     }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
   }
+}
 
-  // The summaries below all fall back to the raw id. A projection that gains a
-  // value before this file learns its name should show the value rather than an
-  // empty row that looks like nothing is set.
+/// A section chip: icon alone until it is the selected one, then icon and name.
+///
+/// Two branches rather than one with a ternary `Glass`, matching
+/// `ComposerSendStyle`: the tinted and untinted glass are different values, and
+/// building them at the call site is what the codebase already avoids.
+private struct DesignChip: ViewModifier {
+  static let height: CGFloat = 38
 
-  private func pageSummary(_ design: Design) -> String {
-    optionName(design.page.size, in: design.pageSizes)
-  }
+  let selected: Bool
 
-  private func colorSummary(_ design: Design) -> String {
-    if design.color.palette == "custom" { return "Custom" }
-    return design.palettes.first { $0.id == design.color.palette }?.name ?? design.color.palette
-  }
+  func body(content: Content) -> some View {
+    let sized = content
+      .font(.subheadline.weight(.medium))
+      .lineLimit(1)
+      // Collapsed chips are CAPSULES, not circles. At 10pt of padding a chip
+      // was as wide as it was tall, and nine of those in a row read as crammed
+      // rather than as a picker — the thing this is modelled on gives its
+      // unselected chips about twice their height in width. Nine tabs cannot
+      // afford twice; they can afford this, and the row scrolls.
+      .padding(.horizontal, 18)
+      .frame(height: Self.height)
 
-  private func headerSummary(_ design: Design) -> String {
-    switch design.header.type {
-    case "solid": return "Solid"
-    case "image": return "Image"
-    default:
-      return design.headerStyles.first { $0.id == design.header.styleId }?.name
-        ?? design.header.styleId
+    if selected {
+      sized
+        .foregroundStyle(.white)
+        .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
+    } else {
+      sized
+        .foregroundStyle(.primary)
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
-  }
-
-  private func fontsSummary(_ design: Design) -> String {
-    if design.fonts.mode == "preset",
-       let pairing = design.fontPairings.first(where: { $0.id == design.fonts.pairingId }) {
-      return pairing.name
-    }
-    let names = [design.fonts.displayName, design.fonts.bodyName].filter { !$0.isEmpty }
-    return names.isEmpty ? "Default" : names.joined(separator: " + ")
-  }
-
-  private func spacingSummary(_ design: Design) -> String {
-    design.spacing.presetId.isEmpty
-      ? "Custom"
-      : optionName(design.spacing.presetId, in: design.spacingPresets)
-  }
-
-  private func accentSummary(_ design: Design) -> String {
-    let underline = optionName(design.accent.underlineStyle, in: design.underlines)
-    let bullet = design.bullets.first { $0.id == design.accent.bulletStyle }?.name
-      ?? design.accent.bulletStyle
-    return "\(underline) · \(bullet)"
-  }
-
-  private func photoSummary(_ design: Design) -> String {
-    guard design.photo.hasImage else { return "None" }
-    guard design.photo.enabled else { return "Off" }
-    return optionName(design.photo.placement, in: design.placements)
   }
 }
 

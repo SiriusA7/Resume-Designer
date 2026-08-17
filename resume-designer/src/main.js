@@ -18,7 +18,13 @@ import { renderResumeForLayout } from './renderer.js';
 import { initPdfExport } from './pdf.js';
 import { paginate, resetPaginatedState } from './pagination.js';
 import { normalizePageSize, DEFAULT_PAGE_WIDTH_IN } from './pageSetup.js';
-import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from './inlineEditor.js';
+import {
+  initInlineEditor,
+  refreshInlineEditor,
+  getActiveInlineEditable,
+  suspendBlurCommit,
+  commitActiveInlineEdit,
+} from './inlineEditor.js';
 import {
   initVariants, loadVariant, duplicateVariant, exportCurrentVariant, renameCurrentVariant,
   subscribeVariants, getVariantsSnapshot,
@@ -1275,6 +1281,21 @@ function initUndoRedo() {
 
 let lastFormattingTarget = null;
 
+// The last range the user actually selected inside a formatting target.
+//
+// Kept CONTINUOUSLY rather than read on demand, because by the time a format
+// command runs the live selection can be gone: opening the native iOS panel
+// resigns first responder so the keyboard stops covering it, and an unfocused
+// editable reports a COLLAPSED selection at the end of its text. Reading that
+// would apply every command to the wrong place — and turn "Clear formatting"
+// from clearing a word into clearing the whole field.
+let lastFormattingRange = null;
+
+// The target and range the native format panel is acting on, frozen for as long
+// as it is open. `null` whenever it is closed, which is what leaves every other
+// caller on the live selection.
+let heldFormatting = null;
+
 function isTextInputElement(element) {
   return !!element && (
     element.tagName === 'TEXTAREA' ||
@@ -1284,6 +1305,23 @@ function isTextInputElement(element) {
 
 function isEditableFormattingTarget(element) {
   return isTextInputElement(element) || !!element?.isContentEditable;
+}
+
+/**
+ * The selection's offsets in `editable`, or null when the selection is not
+ * actually in there.
+ *
+ * The difference from `getSelectionOffsetsInEditable` is the whole point: that
+ * one answers "end of the text" for a selection it cannot find, which is the
+ * right default for applying a command and exactly the wrong thing to REMEMBER.
+ * Recording it would overwrite a real range with a fake one every time focus
+ * left the element.
+ */
+function selectionOffsetsIfInside(editable) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  if (!editable.contains(selection.getRangeAt(0).commonAncestorContainer)) return null;
+  return getSelectionOffsetsInEditable(editable);
 }
 
 function getSelectionOffsetsInEditable(editable) {
@@ -1437,6 +1475,53 @@ function clearInlineFormatting(value, start, end) {
   return { value: nextValue, start: selectionStart, end: selectionStart + cleared.length };
 }
 
+/** Record the live selection, if it is genuinely inside a formatting target. */
+function rememberFormattingRange() {
+  const target = isEditableFormattingTarget(document.activeElement)
+    ? document.activeElement
+    : getActiveInlineEditable();
+  if (!target) return;
+  const range = isTextInputElement(target)
+    ? { start: target.selectionStart ?? 0, end: target.selectionEnd ?? 0 }
+    : selectionOffsetsIfInside(target);
+  if (!range) return;
+  lastFormattingRange = { target, ...range };
+}
+
+/**
+ * Freeze what the native format panel will act on, for as long as it is open.
+ *
+ * The suspension comes FIRST and unconditionally: this arrives over
+ * `evaluateJavaScript`, so it can land after the blur that opening the panel
+ * causes, and beating `handleBlur`'s 100ms timer is what keeps the target
+ * attached at all. The range is taken from what was already remembered rather
+ * than read live, for the same reason — by now there may be nothing to read.
+ */
+function holdFormattingTarget() {
+  suspendBlurCommit(true);
+  heldFormatting =
+    lastFormattingRange && document.contains(lastFormattingRange.target)
+      ? { ...lastFormattingRange }
+      : null;
+}
+
+/** Let go, and commit what the panel changed. */
+function releaseFormattingTarget() {
+  const wasHolding = heldFormatting !== null;
+  heldFormatting = null;
+  suspendBlurCommit(false);
+  // The commands wrote through to the DOM but nothing committed them: the
+  // inline editor saves on `finishEditing`, and that is precisely what was
+  // suspended. Closing the panel is the end of the edit.
+  if (wasHolding) commitActiveInlineEdit();
+}
+
+/** The frozen range, when it belongs to this target. */
+function heldOffsetsFor(target) {
+  if (!heldFormatting || heldFormatting.target !== target) return null;
+  return { start: heldFormatting.start, end: heldFormatting.end };
+}
+
 function applyTextCommand(command) {
   const active = document.activeElement;
   const inlineActive = getActiveInlineEditable();
@@ -1454,9 +1539,11 @@ function applyTextCommand(command) {
   }
   if (!target) return;
 
+  const held = heldOffsetsFor(target);
+
   if (isTextInputElement(target)) {
-    const start = target.selectionStart ?? 0;
-    const end = target.selectionEnd ?? start;
+    const start = held ? held.start : (target.selectionStart ?? 0);
+    const end = held ? held.end : (target.selectionEnd ?? start);
     let result = null;
 
     if (command === 'bold') result = toggleWrappedRange(target.value || '', start, end, '**');
@@ -1479,8 +1566,9 @@ function applyTextCommand(command) {
     )?.set;
     if (valueSetter) valueSetter.call(target, result.value);
     else target.value = result.value;
-    target.focus();
-    target.setSelectionRange(result.start, result.end);
+    advanceOrRestore(target, result, held, () => {
+      target.setSelectionRange(result.start, result.end);
+    });
     target.dispatchEvent(new Event('input', { bubbles: true }));
     return;
   }
@@ -1488,7 +1576,7 @@ function applyTextCommand(command) {
   if (!target.isContentEditable) return;
 
   const value = target.textContent || '';
-  const offsets = getSelectionOffsetsInEditable(target);
+  const offsets = held ?? getSelectionOffsetsInEditable(target);
   let result = null;
 
   if (command === 'bold') result = toggleWrappedRange(value, offsets.start, offsets.end, '**');
@@ -1499,9 +1587,29 @@ function applyTextCommand(command) {
   if (!result) return;
 
   target.textContent = result.value;
-  target.focus();
-  setSelectionInEditable(target, result.start, result.end);
+  advanceOrRestore(target, result, held, () => {
+    setSelectionInEditable(target, result.start, result.end);
+  });
   target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * After a command: put the caret back, or — when the native panel is holding
+ * this target — move the held range to where the text now is.
+ *
+ * The branch exists because `focus()` is what re-opens the keyboard, and the
+ * panel dismissed it on purpose. Advancing the held range instead is also what
+ * makes a SECOND command land correctly: bolding "Swift" makes it "**Swift**",
+ * so a following Italic has to aim at the wider range, not the original one.
+ */
+function advanceOrRestore(target, result, held, restore) {
+  if (held) {
+    heldFormatting.start = result.start;
+    heldFormatting.end = result.end;
+    return;
+  }
+  target.focus();
+  restore();
 }
 
 function adjustGlobalFontScale(delta) {
@@ -1549,8 +1657,14 @@ function initTextTools() {
   });
 
   document.addEventListener('selectionchange', () => {
+    rememberFormattingRange();
     updateTextToolbarState();
   });
+
+  // The native iOS format panel, which opens over a selection it then has to
+  // outlive. See `holdFormattingTarget`.
+  window.addEventListener('rd:format-hold', holdFormattingTarget);
+  window.addEventListener('rd:format-release', releaseFormattingTarget);
 
   toolbar.addEventListener('mousedown', (e) => {
     if (e.target.closest('.text-tool-btn')) {
