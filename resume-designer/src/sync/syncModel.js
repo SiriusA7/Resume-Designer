@@ -1418,7 +1418,23 @@ export async function applyUnits(units) {
   // from it now would move the pointer on the strength of bytes this device
   // does not hold.
   if (durable) await reconcileRemoteDeletions();
+  // DISCARDED on a non-durable flush, in the same breath as forfeiting the
+  // batch. The tombstones that populated these never reached disk, so the
+  // reactions they were going to provoke describe a world this device does not
+  // hold — and the flags are module-level, so they simply WAIT. If a newer LIVE
+  // version of that résumé or workspace lands and flushes before the tombstone
+  // is retried, the next reconciliation consumes them and navigates away from a
+  // record that is no longer deleted. A genuinely retried tombstone repopulates
+  // them, which is the whole reason dropping them is safe.
+  else forgetPendingDeletionReactions();
   return durable ? landed : nothingApplied();
+}
+
+/** See the non-durable branch above: reactions owed to writes that never landed. */
+function forgetPendingDeletionReactions() {
+  landedResumeTombstones = [];
+  deletedOpenVariant = null;
+  activeProfileDeleted = false;
 }
 
 /**
@@ -1744,6 +1760,11 @@ export async function resolveConflicts(conflicts) {
   // than a missed apply, because the transport keeps the SERVER's change tag on
   // this answer, so nothing re-delivers it.
   if (durable) reconcileRemoteDeletions();
+  // Same discard as `applyUnits`, and reached the same way: `accumulate` runs on
+  // this path, so a tombstone can populate the reaction flags here too. Wired
+  // into only the one caller the report named, a conflict-path tombstone that
+  // failed its flush would leave them waiting for the next reconciliation.
+  else forgetPendingDeletionReactions();
   return durable ? answer : nothingResolved();
 }
 

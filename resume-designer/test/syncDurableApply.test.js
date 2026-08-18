@@ -24,7 +24,7 @@ import {
 } from '../src/appStorage.js';
 import {
   applyUnits, collectUnit, installStorageStamping, registerEditingProbe,
-  isSyncEnabled, setSyncEnabled,
+  isSyncEnabled, setSyncEnabled, setResumeDeletedHandler,
 } from '../src/sync/syncModel.js';
 import { initIOSShell, SHELL_HANDLER } from '../src/iosShell.js';
 import { physicalKey } from '../src/profileKeys.js';
@@ -108,6 +108,42 @@ beforeEach(async () => {
 });
 
 describe('an apply is not confirmed until the bytes are on disk', () => {
+  it('forgets a deletion reaction the failed flush never made true', async () => {
+    // The batch is refused correctly, but the reaction flags a tombstone sets
+    // are module-level, so they WAIT rather than reset. If a newer LIVE version
+    // of that résumé lands and flushes before the tombstone is retried, the
+    // next reconciliation consumes them and navigates away from a record that
+    // is no longer deleted — acting on a deletion this device never held.
+    const onDeleted = vi.fn();
+    setResumeDeletedHandler(onDeleted);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    backend.fail.add(DATA);
+
+    // The tombstone cannot land: refused, and nothing reported.
+    expect((await applyUnits([{
+      id: 'resume:v-1',
+      kind: 'resume',
+      payload: JSON.stringify({ id: 'v-1', name: 'Gone', deletedAt: '2026-08-18T00:00:00.000Z' }),
+      modifiedAt: '2026-08-18T00:00:00.000Z',
+    }])).applied).toBe(0);
+    expect(onDeleted).not.toHaveBeenCalled();
+
+    // The disk recovers and a LIVE version of the same résumé lands.
+    backend.fail.delete(DATA);
+    expect((await applyUnits([{
+      id: 'resume:v-1',
+      kind: 'resume',
+      payload: JSON.stringify({ id: 'v-1', name: 'Back', data: { name: 'Ada' } }),
+      modifiedAt: '2026-08-18T01:00:00.000Z',
+    }])).applied).toBe(1);
+
+    // Nothing is told that v-1 was deleted: it was not, and the write that
+    // said so never reached this disk.
+    expect(onDeleted).not.toHaveBeenCalled();
+    setResumeDeletedHandler(null);
+    spy.mockRestore();
+  });
+
   it('refuses a failed flush when the fetched unit belongs to a foreign profile', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     setProfileMapping(ACTIVE_PROFILE_ID);
