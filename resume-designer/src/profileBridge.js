@@ -27,7 +27,7 @@
  */
 
 import { getUserProfile, saveUserProfile } from './persistence.js';
-import { onWriteFailure } from './appStorage.js';
+import { currentWriteSequence, onWriteFailure, onWriteSettled } from './appStorage.js';
 import { DEFAULT_PROFILE, markdownToProfile } from './profileMarkdown.js';
 import { assignGroupIds, companyKey, groupExperience } from './experienceGroups.js';
 import { buildDateFields, freeformDateFields, readEntryDates } from './experienceDates.js';
@@ -658,8 +658,11 @@ let unsavedProfile = null;
 let pendingImport = null;
 
 let flushListenerAttached = false;
-// The last profile handed to storage, kept only to retry an async refusal.
+// The last profile handed to storage, kept only to retry an async refusal, and
+// the id of the write that carried it. The id is what makes the copy belong to
+// a specific write rather than merely to a key — see `currentWriteSequence`.
 let lastCommitted = null;
+let lastCommittedSeq = 0;
 
 /**
  * Answer `rd:profile-flush` when a native write failed.
@@ -688,8 +691,30 @@ function ensureFlushListener() {
   // device, where the write is behind a cache, it heard nothing at all: the
   // banner never showed and the retry below never armed, while the person was
   // told their edits were saved.
-  onWriteFailure((logicalKey) => {
+  // The held copy stops being the last word once the disk has reached OR PASSED
+  // the write that carried it. Kept past that, it would be promoted by somebody
+  // else's later failure on the same key — the key is `resume-designer-data`,
+  // which every resume save writes too — and the `rd:profile-flush` retry would
+  // put this stale profile back over the newer one already on disk, losing
+  // every field added since.
+  //
+  // Gated on the write id, NOT on the key alone. The drain reads its value when
+  // the op's turn arrives and then awaits the disk, so a write already in
+  // flight can land bytes OLDER than this copy. Cleared on that, the sheet's
+  // own write — not yet even attempted — would be refused with nothing left to
+  // promote: no banner, no retry, and a person told their edits were saved.
+  onWriteSettled((logicalKey, seq) => {
     if (logicalKey !== PROFILE_STORAGE_KEY) return;
+    if (seq < lastCommittedSeq) return; // an older write; says nothing about mine
+    lastCommitted = null;
+  });
+  onWriteFailure((logicalKey, seq) => {
+    if (logicalKey !== PROFILE_STORAGE_KEY) return;
+    // Somebody else's earlier write failing says nothing about this copy, whose
+    // own write has not been attempted yet. `>=` rather than `===` because the
+    // drain coalesces: a later write to this key subsumes ours, so its refusal
+    // is ours as well.
+    if (seq < lastCommittedSeq) return;
     if (saveFailed) return; // already reported; the retry owns it now
     // Only now does the sheet have something true to say. Promoting the held
     // copy is what arms both the banner and the `rd:profile-flush` retry, which
@@ -759,6 +784,13 @@ function commit(profile) {
   // profile. An earlier draft of this retained it and the profileBridge suite
   // failed on exactly that.
   lastCommitted = ok ? profile : null;
+  // Asked FOR THIS KEY, never as a global "last write". `setItem` is
+  // re-entrant — it calls the sync stamper synchronously, which writes the sync
+  // state key from inside it — so by the time `saveUserProfile` returns, the
+  // most recently minted id belongs to that other key's write. Gating on it
+  // rejected the profile write's own notification, and the sheet stopped
+  // reporting its own refusals altogether.
+  lastCommittedSeq = ok ? currentWriteSequence(PROFILE_STORAGE_KEY) : 0;
 }
 
 function toIndex(value) {

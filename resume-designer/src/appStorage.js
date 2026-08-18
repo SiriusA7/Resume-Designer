@@ -90,6 +90,20 @@ let failureToastShown = false;
 // callers (backup-restore reload, PDF print window) whether their data
 // actually reached disk — see flush().
 let writeFailures = 0;
+// Monotonic id per queued write, so a settled/failed notification can say WHICH
+// write it is about and not merely which key. Anything holding a value to retry
+// needs that: the drain reads `cache.get(key)` when the op's turn arrives and
+// then awaits the disk, so an in-flight write can land bytes OLDER than what is
+// in the cache now. Keyed only by name, "a write to your key landed" was read
+// as "your write landed", and a copy was dropped whose bytes had not been
+// attempted yet — see `currentWriteSequence`.
+let writeSeq = 0;
+// logical key -> the id of the most recent write queued FOR THAT KEY. Asked per
+// key rather than globally because `setItem` is re-entrant: it calls
+// `observeWrite` synchronously, the sync stamper writes the state key from
+// inside that, and so the last id minted by the time a caller's `setItem`
+// returns routinely belongs to a DIFFERENT key's write.
+let lastSeqByKey = new Map();
 
 // Restore guard: for a caller-bounded window during a destructive backup restore,
 // appStorage BLOCKS every other ("external") writer so a late async completion (a
@@ -207,10 +221,65 @@ export function onWriteFailure(listener) {
   return () => writeFailureListeners.delete(listener);
 }
 
-function notifyWriteFailure(logicalKey) {
+/**
+ * Told when a write LANDED. The other half of `onWriteFailure`, and the same
+ * shape for the same reason.
+ *
+ * It exists because anything holding a copy of a value to retry needs to know
+ * when that copy stopped being the last word on its key, and a failure alone
+ * cannot say so. Whoever wrote it: the point is not "my write finished" but
+ * "the disk has moved on", and a retry copy is stale either way. Without this,
+ * a held copy outlives its own write and gets attributed to somebody else's
+ * later failure on the same key — see `profileBridge`, where that meant writing
+ * an old profile back over a newer one.
+ *
+ * Fired for the LOGICAL key, from this batch's own entry, exactly as failures
+ * are: the name its caller used.
+ */
+const writeSettledListeners = new Set();
+
+/**
+ * The id of the most recently QUEUED write.
+ *
+ * Read straight after a `setItem` to learn which write that call created, then
+ * compare it against the id a settled/failed notification carries. That
+ * comparison is the whole point: `>= mine` means the disk has reached or passed
+ * my write, `< mine` means the notification is about somebody else's earlier
+ * one and says nothing about mine. Without it a holder of a retry copy can only
+ * ask "was it my key?", which an in-flight write of older bytes answers yes to.
+ */
+export function currentWriteSequence(logicalKey) {
+  return lastSeqByKey.get(logicalKey) ?? 0;
+}
+
+/** Subscribe to writes that reached the backend. Returns its own unsubscribe. */
+export function onWriteSettled(listener) {
+  if (typeof listener !== 'function') return () => {};
+  writeSettledListeners.add(listener);
+  return () => writeSettledListeners.delete(listener);
+}
+
+function notifyWriteSettled(logicalKey, seq) {
+  for (const listener of writeSettledListeners) {
+    try {
+      listener(logicalKey, seq);
+    } catch (err) {
+      console.error(`[appStorage] a write-settled listener threw for "${logicalKey}":`, err);
+    }
+  }
+}
+
+/** The next id, recorded against the key it belongs to. */
+function mintSeq(logicalKey) {
+  writeSeq += 1;
+  lastSeqByKey.set(logicalKey, writeSeq);
+  return writeSeq;
+}
+
+function notifyWriteFailure(logicalKey, seq) {
   for (const listener of writeFailureListeners) {
     try {
-      listener(logicalKey);
+      listener(logicalKey, seq);
     } catch (err) {
       console.error(`[appStorage] a write-failure listener threw for "${logicalKey}":`, err);
     }
@@ -308,7 +377,7 @@ function drain() {
   dirty.clear();
   // Keys this batch could not write, named for the observer below.
   const failedLogicalKeys = new Set();
-  for (const [key, { op, name }] of batch) {
+  for (const [key, { op, name, seq }] of batch) {
     // Value is read from the cache at write time, so a set that happened
     // after this key was marked dirty still writes the latest value. If a
     // removeItem landed after this write op was snapshotted, the key is gone
@@ -316,13 +385,27 @@ function drain() {
     // the write rather than materialize a spurious '' file (which a crash
     // before that delete would leave on disk).
     chain = chain.then(async () => {
+      // Recorded rather than announced inline, so that a settled listener can
+      // never throw its way into the write's own error handling and have the
+      // write attempted a second time.
+      let landed = false;
       try {
-        if (op === 'delete') await backendImpl.delete(key);
-        else if (cache.has(key)) await backendImpl.write(key, cache.get(key));
+        // `landed` is set INSIDE each branch, not after the if/else: the third
+        // case writes nothing at all (a delete overtook this write and is
+        // queued behind it), and calling that "landed" would tell a retry-copy
+        // holder that bytes reached the disk when none did.
+        if (op === 'delete') { await backendImpl.delete(key); landed = true; }
+        else if (cache.has(key)) {
+          await backendImpl.write(key, cache.get(key));
+          landed = true;
+        }
       } catch {
         try {
-          if (op === 'delete') await backendImpl.delete(key);
-          else if (cache.has(key)) await backendImpl.write(key, cache.get(key));
+          if (op === 'delete') { await backendImpl.delete(key); landed = true; }
+          else if (cache.has(key)) {
+            await backendImpl.write(key, cache.get(key));
+            landed = true;
+          }
         } catch (err2) {
           // The write failed twice. Keep the value in cache (the session keeps
           // working) AND re-mark the key dirty so the NEXT drain/flush retries
@@ -337,7 +420,7 @@ function drain() {
           // permanently full disk must not busy-loop; the retry rides the next
           // user-triggered drain or the next flush() (which drains first).
           if (!dirty.has(key) && (op === 'delete' || cache.has(key))) {
-            dirty.set(key, { op, name });
+            dirty.set(key, { op, name, seq });
           }
           reportWriteFailure(key, err2);
           // Reported under the name the CALLER used — captured in this batch's
@@ -347,9 +430,11 @@ function drain() {
           // under a name no gate matches: the unit would be announced while its
           // bytes were only ever in memory.
           failedLogicalKeys.add(name);
-          notifyWriteFailure(name);
+          notifyWriteFailure(name, seq);
         }
       }
+      // Under the same name and the same write id, for the same reasons.
+      if (landed) notifyWriteSettled(name, seq);
     });
   }
   // The coalescing window just closed — but the writes for it have only been
@@ -421,7 +506,7 @@ export const appStorage = {
     }
     cache.set(key, v);
     if (readOnly) return; // print window: cache-only, never queued to disk
-    dirty.set(key, { op: 'write', name: logicalKey });
+    dirty.set(key, { op: 'write', name: logicalKey, seq: mintSeq(logicalKey) });
     scheduleDrain();
     observeWrite(logicalKey, v, previous);
   },
@@ -439,8 +524,11 @@ export const appStorage = {
   // is going away with its workspace and no other device should learn anything:
   // profile deletion, the wipe-before-validate restore path, the API key.
   removeItem(key) {
+    // Captured before mapping, the way setItem does it: a notification names
+    // the string its CALLER used, never the physical one it was mapped to.
+    const logicalKey = key;
     key = mapKey(activeProfileId, key);
-    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'delete' }); return; }
+    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'delete', name: logicalKey }); return; }
     if (mode === 'passthrough') {
       if (readOnly) return; // see setItem: readOnly passthrough never writes
       localStorage.removeItem(key);
@@ -448,7 +536,7 @@ export const appStorage = {
     }
     cache.delete(key);
     if (readOnly) return; // print window: cache-only, never queued to disk
-    dirty.set(key, { op: 'delete', name: key });
+    dirty.set(key, { op: 'delete', name: logicalKey, seq: mintSeq(logicalKey) });
     scheduleDrain();
   },
 
@@ -573,12 +661,16 @@ export const appStorage = {
     // previously-absent keys would lose real work done during the window.
     let applied = false;
     for (const [key, entry] of deferredDuringRestore) {
+      // A REPLAY is a new write and takes a new id — these are being queued
+      // now, long after the call that was deferred. Omitting one would leave
+      // `seq` undefined, and every `seq < mine` gate reads undefined as "not
+      // older" and lets the notification through.
       if (entry.op === 'delete') {
         cache.delete(key);
-        dirty.set(key, { op: 'delete', name: key });
+        dirty.set(key, { op: 'delete', name: entry.name ?? key, seq: mintSeq(entry.name ?? key) });
       } else {
         cache.set(key, entry.value);
-        dirty.set(key, { op: 'write', name: entry.name ?? key });
+        dirty.set(key, { op: 'write', name: entry.name ?? key, seq: mintSeq(entry.name ?? key) });
       }
       applied = true;
     }
@@ -736,6 +828,8 @@ export function __resetAppStorageForTests() {
   chain = Promise.resolve();
   failureToastShown = false;
   writeFailures = 0;
+  writeSeq = 0;
+  lastSeqByKey = new Map();
   writeObserver = null;
   restoreGuardActive = false;
   deferredDuringRestore.clear();
