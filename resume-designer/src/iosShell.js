@@ -2003,6 +2003,21 @@ export function initIOSShell(deps) {
   };
 
   subscribeVariants(publish);
+  // A job write that the DRAIN refused, which has no DOM change to notice.
+  // `jobDescriptions` flips `jobStorageFailed()` and notifies its subscribers
+  // when `onWriteFailure` fires — long after the synchronous action returned and
+  // published a snapshot that still said all was well. Without this the native
+  // sheet's failure banner waited for whatever unrelated mutation happened to
+  // publish next, and somebody could quit believing a job was saved and lose it
+  // on relaunch. Same reason the profile's save state gets a listener below.
+  //
+  // Remote adoption goes through the same notification, so this keeps an open
+  // sheet current with another device as well as with a failed write.
+  deps.subscribeJobs?.(() => { if (streamJobs) publish(); });
+  // The library's own list, for the second half of that: an application adopted
+  // from another device changes what the sheet shows and nothing else would
+  // republish it — a native sheet has no DOM for the observer below to see.
+  deps.subscribeApplications?.(() => { if (streamLibrary) publish(); });
   // Edits made in the canvas have to reach an open panel, or the two views of
   // one document silently disagree.
   deps.subscribeDocument(() => { if (streamDocument) publish(); });

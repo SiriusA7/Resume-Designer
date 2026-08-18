@@ -62,12 +62,12 @@ import {
 import { buildJobs, getJobsState, applyJobs } from './jobsBridge.js';
 import { buildProfile, getProfileState, applyProfile } from './profileBridge.js';
 import { searchLibrary } from './librarySearch.js';
-import { getAllApplications } from './applications.js';
+import { getAllApplications, subscribeApplications } from './applications.js';
 // The Workspaces sheet's stats, through the same functions the desktop Account
 // section formats with, so the two never round or label a rate differently.
 import { computeStats } from './applicationStats.js';
 import { formatRate, formatDays } from './accountStats.js';
-import { getAllJobDescriptions } from './jobDescriptions.js';
+import { getAllJobDescriptions, subscribeJobDescriptions } from './jobDescriptions.js';
 import { initWindowDrag } from './tauriDrag.js';
 import {
   migrateBuiltInVariants,
@@ -734,6 +734,11 @@ export async function init() {
     getSyncEnabled: isSyncEnabled, setSyncEnabled,
     generateId,
     subscribeDocument: (cb) => store.subscribe(cb),
+    // Both modules notify on a REFUSED disk write as well as on a change, which
+    // is the half the shell could not see: a native sheet has no DOM for the
+    // shell's mutation observer to watch.
+    subscribeJobs: (cb) => subscribeJobDescriptions(cb),
+    subscribeApplications: (cb) => subscribeApplications(cb),
     // AI change review, routed to the live session rather than a copy of it.
     // Library search, against the same searchLibrary the desktop dialog uses.
     getLibrary: (query, deep) => buildLibrary(

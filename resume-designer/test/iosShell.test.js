@@ -751,6 +751,9 @@ describe('the Design sheet commands', () => {
       getPendingChanges: () => [],
       getDesign: vi.fn(() => ({ palettes: [{ id: 'ocean', name: 'Ocean' }] })),
       applyDesign: vi.fn(),
+      subscribeJobs: vi.fn(),
+      subscribeApplications: vi.fn(),
+      getJobs: vi.fn(() => ({ jobs: [], saveFailed: false })),
       resetDesign: vi.fn(),
       setDesignImage: vi.fn(),
       clearDesignImage: vi.fn(),
@@ -983,6 +986,28 @@ describe('the Design sheet commands', () => {
     expect(deps.applyDesign).toHaveBeenCalledWith({
       group: 'spacing', property: 'fontScale', value: '1.1',
     });
+  });
+
+  it('republishes the jobs sheet when a job write is REFUSED later', async () => {
+    // A synchronous add/edit/delete publishes immediately, while
+    // `jobStorageFailed()` is still false — cached storage reports a disk-full
+    // refusal only later, through `onWriteFailure`. That flips the flag and
+    // notifies `jobDescriptions` subscribers, and the shell subscribed to none
+    // of them: the native sheet's failure banner waited for whatever unrelated
+    // mutation happened to publish next, so somebody could quit believing a job
+    // was saved and lose it on relaunch.
+    const { deps, send, postMessage } = await mount();
+    send({ type: 'setJobsOpen', value: 'true' });
+    expect(deps.subscribeJobs).toHaveBeenCalled();
+
+    deps.getJobs.mockReturnValue({ jobs: [], saveFailed: true });
+    const before = postMessage.mock.calls.length;
+    // The drain's late refusal, arriving through the module's own notification.
+    deps.subscribeJobs.mock.calls[0][0]();
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+
+    expect(postMessage.mock.calls.length).toBeGreaterThan(before);
+    expect(lastSnapshot(postMessage).jobs.saveFailed).toBe(true);
   });
 
   it('republishes once an async design write settles', async () => {

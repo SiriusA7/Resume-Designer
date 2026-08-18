@@ -223,6 +223,39 @@ export default function OnboardingWizard() {
     return { saved: true, valid: await validateOpenRouterKey(key) };
   }, []);
 
+  /**
+   * The native step's own save, because it cannot read a return value.
+   *
+   * `model.send` is a synchronous dispatcher and drops promise results, so
+   * `validateKey`'s `{ saved, error, warning, valid }` reached nobody on iOS. A
+   * keychain refusal left `hasKey` false and the notice untouched — and since
+   * `OPOnboardingSteps.swift` clears its `saving` flag only when one of those
+   * two changes, the Save button stayed disabled with no message and no retry.
+   * On a first run, which is not dismissible, that is a dead end.
+   *
+   * The outcome rides the projection instead, which is how every other native
+   * result gets home. The web card keeps handling its own return value: it can,
+   * and its wording is per-status rather than a single notice.
+   */
+  const nativeSaveKey = useCallback(async (key) => {
+    setNotice(null);
+    const result = await validateKey(key);
+    if (!result?.saved) {
+      setNotice({ kind: 'error', text: result?.error || 'Could not save your API key.' });
+      return;
+    }
+    // Saved but not stored, or saved but unverified: both are worth saying, and
+    // neither is a failure to save. Same words as the web card's, so the two
+    // screens do not describe one outcome differently.
+    if (result.warning) setNotice({ kind: 'error', text: result.warning });
+    else if (!result.valid) {
+      setNotice({
+        kind: 'error',
+        text: 'Could not validate your key. We saved it — you can re-check it later in Settings.',
+      });
+    }
+  }, [validateKey]);
+
   const chooseMode = useCallback((m) => {
     setMode(m);
     setStep(2);
@@ -507,7 +540,7 @@ export default function OnboardingWizard() {
         }
         : null,
       {
-        validateKey,
+        validateKey: nativeSaveKey,
         chooseMode,
         parseImport: nativeParseImport,
         pickedFile: nativePickedFile,
