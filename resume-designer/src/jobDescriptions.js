@@ -4,7 +4,7 @@
  */
 
 import { randomSuffix } from './store.js';
-import { appStorage } from './appStorage.js';
+import { appStorage, currentWriteSequence, onWriteFailure } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 
 const STORAGE_KEY = 'resume-designer-job-descriptions';
@@ -106,10 +106,31 @@ export function adoptStoredJobDescriptions() {
  */
 // Whether the last write reached storage. Read through `jobStorageFailed()`.
 let saveFailed = false;
+// The id of the write the flag is about — see `currentWriteSequence`.
+let lastSaveSeq = 0;
+
+// The refusal that arrives LATE, which on a device is every refusal there is.
+// `setItem` answers as soon as the write-behind cache takes the value, so the
+// assignment below is a claim about memory, not disk: out of space, the Jobs
+// sheet went on showing the job with no failure banner, and it was gone after a
+// restart. The synchronous catch covers only the browser's quota throw.
+//
+// Gated on the write id so an older write's refusal cannot speak for a newer
+// save that succeeded. Subscribers are told because nothing else will notice —
+// a disk failure is not a mutation either sheet drives.
+onWriteFailure((logicalKey, seq) => {
+  if (logicalKey !== STORAGE_KEY || seq < lastSaveSeq) return;
+  saveFailed = true;
+  subscribers.forEach((cb) => cb());
+});
 
 function save() {
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(jobDescriptions));
+    // Read straight after the write and FOR THIS KEY: `setItem` is re-entrant
+    // (the sync stamper writes its own key from inside it), so the most recent
+    // id globally belongs to somebody else's write.
+    lastSaveSeq = currentWriteSequence(STORAGE_KEY);
     saveFailed = false;
   } catch (e) {
     console.error('Failed to save job descriptions:', e);
