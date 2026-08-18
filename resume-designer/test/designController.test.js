@@ -190,3 +190,27 @@ describe('getDesignState', () => {
     expect(state().bullets.find((b) => b.id === 'arrow').char).toBe('→');
   });
 });
+
+// The "never customised" values, which are now a seam rather than a literal
+// buried in each getter: a replacement restore CLEARS an omitted design key by
+// writing what the owner calls default, so the value has to be the same one the
+// getter falls back to. Extracting it made getter and export share a source;
+// these are what say so, since a divergence would be silent — the restore would
+// write one thing and every reader would then show another.
+describe('a design service’s default is what its getter falls back to', () => {
+  it('agrees for the header style', async () => {
+    const { getHeaderStyleSettings, defaultHeaderStyleSettings } =
+      await import('../src/headerStyleService.js');
+    expect(getHeaderStyleSettings()).toEqual(defaultHeaderStyleSettings());
+    // And it is a real default, not an empty object standing in for one: the
+    // restore uploads this, so an empty payload would blank the header on every
+    // other device rather than resetting it.
+    expect(defaultHeaderStyleSettings().type).toBe('gradient');
+  });
+
+  it('agrees for the font pairing', async () => {
+    const { getCurrentFontSettings, defaultFontSettings } =
+      await import('../src/fontService.js');
+    expect(getCurrentFontSettings()).toEqual(defaultFontSettings());
+  });
+});
