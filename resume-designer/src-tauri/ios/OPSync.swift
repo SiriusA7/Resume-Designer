@@ -1372,6 +1372,45 @@ extension OPSyncEngine {
   /// can do is quote a stale tag or none — which CloudKit answers
   /// `serverRecordChanged`, routing it down the conflict path where both copies
   /// are compared. It fails toward an extra round trip, never toward an overwrite.
+  /// Ask the server for ONE record by id, outside the change feed.
+  ///
+  /// For the case above: a record this device failed to decode, whose change
+  /// token has already advanced past it. Everything it lands goes through the
+  /// same `deliver` an ordinary fetch uses, so the page decides what to keep
+  /// and the change tag is earned the same way.
+  private func refetchMissingRecord(_ recordID: CKRecord.ID, profileId: String) async {
+    do {
+      let record = try await container.privateCloudDatabase.record(for: recordID)
+      guard let unit = unit(from: record) else {
+        // Still unreadable. The asset is genuinely not coming down, and saying
+        // so is the whole of what is left — `willRetry: false`, because this
+        // device has now tried the one thing that could have worked.
+        forget(record.recordID)
+        report([OPSyncFailure(
+          unitId: recordID.recordName, profileId: profileId, willRetry: false, code: nil,
+          reason: "a record could not be read even when asked for directly — most likely a "
+            + "large payload whose asset will not download"
+        )])
+        return
+      }
+      await deliver([Arrival(record: record, unit: unit)])
+    } catch let error as CKError where error.code == .unknownItem {
+      // The server does not have it. Nothing is wrong and nothing is missing:
+      // absence is not deletion here, and there is simply nothing to fetch.
+      forget(recordID)
+    } catch {
+      // Network, quota, anything else. Worth saying, and worth saying it WILL
+      // be tried again — the id stays in the recovery memory for this session
+      // and the next start re-offers everything.
+      report([OPSyncFailure(
+        unitId: recordID.recordName, profileId: profileId, willRetry: true,
+        code: (error as? CKError)?.code,
+        reason: "could not re-fetch a record this device could not read: "
+          + error.localizedDescription
+      )])
+    }
+  }
+
   private func deliver(_ arrivals: [Arrival]) async {
     guard !arrivals.isEmpty else { return }
     // PER ARRIVAL, not per batch. The page answers with the route of every unit
@@ -1468,6 +1507,19 @@ extension OPSyncEngine {
       // later either, so leaving it queued is a question re-asked on every
       // send for the life of the app.
       engine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
+      // BUT DROPPING IT IS NOT THE WHOLE ANSWER when the reason there are no
+      // bytes is that this device could not READ the record. That is the
+      // recovery `syncDidFail` queues for an unreadable fetch — most often a
+      // large résumé whose asset did not finish downloading — and by then the
+      // change token has moved past the server record, so nothing will offer it
+      // again. Dropped silently, the résumé is unavailable here until some
+      // other device happens to modify it, while the status line goes back to
+      // reporting sync as healthy because this path raises no second failure.
+      //
+      // Asked for directly instead. A fetch by id is an ordinary database
+      // operation and owes nothing to the engine's change feed, so the advanced
+      // token does not stand in its way.
+      await refetchMissingRecord(recordID, profileId: profileId)
       return nil
     }
     // The record as it was last seen on the server, change tag and all. Without
