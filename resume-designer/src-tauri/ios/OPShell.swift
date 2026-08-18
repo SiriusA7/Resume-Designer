@@ -1511,25 +1511,18 @@ extension ShellModel {
       syncRecovered.removeAll()
       syncDeferredDrainKey = nil
       syncDeferredReowed.removeAll()
-      // Its outstanding failures go with them, because the status line is a
-      // LIVE-SESSION signal and not a durable record: the same wipe runs when
-      // the transport stops, and a fresh process reaches this branch too
-      // (`syncProfileId` starts nil), so nothing here has ever survived a
-      // restart.
+      // Outstanding failures do NOT all go with them. The replacement session
+      // covers every workspace in the registry and the shared zone, so most of
+      // these can still be landed by the very zone they name; only a workspace
+      // that has left the registry is beyond it. See `forgetSyncFailures(outside:)`.
       //
-      // What this no longer claims. It used to say that nothing in another
-      // profile's zone could ever land one of these, so holding them would be a
-      // warning with no way left to clear it. That is not true: ONE engine
-      // session covers every known profile's zone plus the shared one, and now
-      // that a scope names its zone, `resolveSyncFailure` matches the right one
-      // exactly — a workspace this device is not in can and does land its own.
-      // So this discards some warnings that were still clearable, and a
-      // non-retryable failure has no "next send" to re-report it. The sticky-
-      // line risk it really guards is narrower: a profile REMOVED from the
-      // registry leaves scopes no future session covers. Narrowing the wipe to
-      // exactly those is a behaviour change, not a rename, and is deliberately
-      // not made here.
-      forgetSyncFailures()
+      // `""` is the shared zone, which every session holds. A registry that has
+      // not arrived yet narrows this to the activating workspace alone, which
+      // errs toward the old blanket behaviour — dropping a warning, never
+      // stranding one.
+      forgetSyncFailures(
+        outside: Set(profileIdsForSession(activating: profileId)).union([""])
+      )
       syncProfileId = profileId
     }
 
@@ -1545,12 +1538,7 @@ extension ShellModel {
       return
     }
 
-    // Every workspace this device holds, open one first. The page owns the
-    // registry and names them; the active id is included because it may be the
-    // first one on this install and not yet published.
-    var seenProfileIds = Set<String>()
-    let knownProfileIds = ([profileId] + snapshot.profiles.map(\.id))
-      .filter { !$0.isEmpty && seenProfileIds.insert($0).inserted }
+    let knownProfileIds = profileIdsForSession(activating: profileId)
 
     // EVERY one of those workspaces' debt, if this device has never offered one.
     //
@@ -2014,12 +2002,47 @@ extension ShellModel {
     syncFailure = syncOutstanding.values.first
   }
 
-  /// Stop standing behind any of it. For the two moments when nothing reported
-  /// so far can still be observed: the transport going down, and the profile —
-  /// and therefore the zone — changing under it.
+  /// Stop standing behind any of it. For the one moment when nothing reported
+  /// so far can still be observed: the transport going down.
   private func forgetSyncFailures() {
     syncOutstanding.removeAll()
     syncFailure = nil
+  }
+
+  /// Stop standing behind only what the next session will not be able to see.
+  ///
+  /// A profile switch is NOT that moment, which is what the blanket version
+  /// used to treat it as. One engine session covers every workspace in the
+  /// registry plus the shared zone, and the replacement session covers them
+  /// again — so a failure in a workspace this device is not in is still
+  /// landable, by that workspace's own zone, exactly as `OPSyncScope` names it.
+  /// Wiping it said "everything is fine" about content that had not reached
+  /// iCloud, at the worst possible moment: a unit that already spent its one
+  /// recovery attempt has no pending send left to raise the warning again, so
+  /// switching INTO a workspace silently cleared its own warning.
+  ///
+  /// What genuinely cannot be seen again is a workspace no longer in the
+  /// registry: nothing will fetch or save its zone, so its scopes would be a
+  /// warning with no way left to clear it. Those, and only those, are dropped.
+  private func forgetSyncFailures(outside covered: Set<String>) {
+    syncOutstanding = syncOutstanding.filter { covered.contains($0.key.profileId) }
+    // Republished from what is LEFT, the same arbitrary survivor
+    // `resolveSyncFailure` picks — the line stands for "something is
+    // outstanding" and never names which.
+    syncFailure = syncOutstanding.values.first
+  }
+
+  /// Every workspace the engine session for `profileId` will cover: the one
+  /// being activated first, then the registry. The active id is included
+  /// because it may be the first on this install and not yet published.
+  ///
+  /// One derivation, used both to decide which failures survive a switch and to
+  /// tell the transport which zones to open, so the two cannot drift into
+  /// disagreeing about what this session can observe.
+  private func profileIdsForSession(activating profileId: String) -> [String] {
+    var seen = Set<String>()
+    return ([profileId] + snapshot.profiles.map(\.id))
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 
   /// The one status line Settings shows — or "", which draws no row at all,
