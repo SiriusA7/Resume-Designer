@@ -113,6 +113,8 @@ export default function Header() {
   // are rebuilt every render, so a dependency-free listener would keep calling
   // the first render's copy and delete against a stale variant list.
   const flowsRef = useRef({});
+  // The résumé the rename dialog was opened for. See `openRename`.
+  const renameTargetRef = useRef(null);
   useEffect(() => {
     const run = (key) => () => flowsRef.current[key]?.();
     const handlers = {
@@ -144,10 +146,21 @@ export default function Header() {
   const newVariant = () => window.showOnboardingWizard?.({ skipApiKeyStep: true });
   const openRename = () => {
     setRenameValue(currentName);
+    // Pinned, exactly as the delete below is. The dialog stays open as long as
+    // the person keeps typing, and a focused rename field is not an inline
+    // editing session — so `isBusyEditing` lets sync through, another device's
+    // tombstone for this résumé loads a replacement, and
+    // `renameCurrentVariant` puts this résumé's new name on that one.
+    renameTargetRef.current = getCurrentId();
     setRenameOpen(true);
   };
   const submitRename = (e) => {
     e.preventDefault();
+    if (getCurrentId() !== renameTargetRef.current) {
+      setRenameOpen(false);
+      toast.error(`"${currentName}" is no longer open — nothing was renamed.`);
+      return;
+    }
     if (renameCurrentVariant(renameValue)) setRenameOpen(false);
   };
   const pickImport = () => {
