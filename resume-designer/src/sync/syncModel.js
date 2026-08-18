@@ -17,7 +17,7 @@ import {
 // the mapping, because that is what `appStorage` reads and writes through. The
 // pointer is where the app will be after the next reload, which is a question
 // nothing here is asking.
-import { getActiveProfileId, listProfiles } from '../profiles.js';
+import { getActiveProfileId, listProfiles, purgeTombstonedProfiles } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
 // key from it on every edit, so parking a loser for that variant has to go
 // through it — see parkLoser.
@@ -1289,6 +1289,19 @@ async function reconcileRemoteDeletions() {
       console.error('[sync] could not settle a remotely deleted résumé:', err);
     }
   }
+  // The bytes of every workspace whose tombstone has arrived, active one
+  // excepted — it is still mapped and still being read, and the switch below
+  // deals with it. Left alone these sat on every OTHER device for ever: hidden
+  // from the list, counted against storage, and copied into every backup, which
+  // enumerates physical keys and knows nothing about the registry.
+  //
+  // Here rather than in `landRegistry` because the tombstone has to be DURABLE
+  // first. Purging on a merge that never reached disk would delete the content
+  // and then read a registry, on the next launch, that still lists the
+  // workspace it belonged to.
+  const purged = purgeTombstonedProfiles();
+  if (purged.length) console.info(`[profiles] purged ${purged.length} deleted workspace(s)`);
+
   if (activeProfileDeleted) {
     activeProfileDeleted = false;
     try {

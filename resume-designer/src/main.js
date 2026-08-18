@@ -29,7 +29,7 @@ import {
 import {
   initVariants, loadVariant, duplicateVariant, exportCurrentVariant, renameCurrentVariant,
   subscribeVariants, getVariantsSnapshot,
-  getVariantList, getCurrentId, refreshVariants,
+  getVariantList, getCurrentId, refreshVariants, createVariant,
 } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
@@ -146,10 +146,15 @@ setResumeDeletedHandler((deletedIds, openVariantId) => {
 
   const live = Object.keys(getVariants()).filter((id) => !deletedIds.includes(id));
   if (live.length === 0) {
-    // Nothing left to open. Leaving it on screen is the least bad option — the
-    // persistence path refuses to write over a tombstone, so nothing here can
-    // resurrect it, and a reload lands on the empty state.
-    console.warn('[variants] the open résumé was deleted elsewhere and none remain');
+    // A FRESH ONE, not the deleted one left on screen. Leaving it there looked
+    // harmless — the persistence path refuses to write over a tombstone, so it
+    // cannot be resurrected — but that is exactly what makes it cruel: the
+    // editor still accepts typing and the auto-save silently discards every
+    // keystroke, so the work is gone at the next reload with nothing having
+    // said so. The app's own invariant is that there is always at least one
+    // résumé, which is why the header refuses to delete the last one.
+    console.warn('[variants] every résumé was deleted elsewhere — starting a fresh one');
+    createVariant('My Resume');
     return;
   }
   loadVariant(live[0]);

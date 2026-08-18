@@ -52,6 +52,10 @@ vi.mock('../src/appStorage.js', () => ({
       mockWriteSeq += 1;
     },
     keys: () => [...disk.keys()],
+    // Real, not a stub: `purgeTombstonedProfiles` removes a deleted workspace's
+    // physical keys through this, and the per-key try/catch there would have
+    // swallowed a missing function and left the test asserting nothing.
+    removeItem: (k) => { disk.delete(physical(k)); },
     // This mock's `setItem` IS the disk — there is no write-behind cache in
     // front of it — so a flush here has nothing to wait for and is always
     // durable. The real facade's is neither, which is why the durability of an
@@ -393,6 +397,29 @@ describe('a tombstone for the workspace this device has open', () => {
     // The merge itself still landed — the reaction is in addition to it.
     const merged = JSON.parse(disk.get(physical('resume-designer-profiles')));
     expect(merged.find((p) => p.id === PROFILE).deletedAt).toBe(DELETED.deletedAt);
+  });
+
+  it('purges an INACTIVE deleted workspace, but never the active one', async () => {
+    // A tombstone hides a listing; on the device that ran the delete the content
+    // went with it. On every other device only the listing changed, so the
+    // résumés sat in `resume-p--<id>--…` for ever — counted against storage and
+    // copied into every backup, which enumerates physical keys and knows nothing
+    // about the registry.
+    //
+    // The ACTIVE one is skipped even when tombstoned: appStorage is still mapped
+    // to it and the app is still reading it. The switch away happens first.
+    disk.set(physical('x'), 'ignored'); // a same-named key outside any profile
+    disk.set('resume-p--pother--resume-designer-data', '{"variants":{}}');
+    disk.set(`resume-p--${PROFILE}--resume-designer-data`, '{"variants":{}}');
+
+    await applyUnits([registryUnit([
+      { ...DELETED },
+      { ...OTHER_LIVE, deletedAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z' },
+    ])]);
+
+    expect(disk.has('resume-p--pother--resume-designer-data')).toBe(false);
+    // Still mapped, still being read — its bytes stay until it is not active.
+    expect(disk.has(`resume-p--${PROFILE}--resume-designer-data`)).toBe(true);
   });
 
   it('reports it when the tombstone arrives as a CONFLICT, not only as a fetch', async () => {

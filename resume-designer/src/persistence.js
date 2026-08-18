@@ -619,9 +619,18 @@ export function exportFullBackup(filename) {
   const profiles = Object.create(null);
   const shared = {};
   const activeId = getActiveProfileId();
+  // A deleted workspace's bytes are not part of a backup. They linger until the
+  // purge runs — which skips the active one, and cannot run at all before the
+  // tombstone arrives — and a backup enumerates PHYSICAL keys, which know
+  // nothing about the registry. Exported, they come back on the next restore
+  // and the workspace the person deleted is simply there again.
+  const deletedProfileIds = new Set(
+    (loadRegistry() || []).filter((p) => p?.deletedAt && p.id).map((p) => p.id),
+  );
   for (const k of appStorage.keys()) {
     if (!k) continue;
     const split = splitPhysicalKey(k);
+    if (split && deletedProfileIds.has(split.profileId)) continue;
     if (split && isOwnedKey(split.logicalKey)) {
       const v = appStorage.getItem(k);
       if (v !== null) {

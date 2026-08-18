@@ -745,6 +745,40 @@ export async function switchToProfileDurably(id) {
   return activateProfileDurably(id, activeId);
 }
 
+/**
+ * Remove the stored bytes of every workspace whose tombstone has arrived.
+ *
+ * A tombstone hides a listing; on the device that ran `deleteProfile` the
+ * content was removed in the same breath. On every OTHER device only the
+ * listing changed, so the résumés sat in `resume-p--<id>--…` for ever —
+ * consuming storage, and copied into every backup, which enumerates physical
+ * keys and knows nothing about the registry.
+ *
+ * The ACTIVE workspace is skipped even when tombstoned: `appStorage` is still
+ * mapped to it and the app is still reading it, so pulling its bytes out from
+ * underneath is how a live session starts answering null. The switch away
+ * happens first, and the next start purges it as an inactive one.
+ *
+ * Returns the ids it emptied, for the caller's log.
+ */
+export function purgeTombstonedProfiles() {
+  const activeId = getActiveProfileId();
+  const tombstoned = (loadRegistry() || [])
+    .filter((p) => p?.deletedAt && p.id && p.id !== activeId)
+    .map((p) => p.id);
+  const purged = [];
+  for (const id of tombstoned) {
+    const prefix = physicalKey(id, '');
+    const keys = appStorage.keys().filter((k) => k && k.startsWith(prefix));
+    if (keys.length === 0) continue;
+    for (const k of keys) {
+      try { appStorage.removeItem(k); } catch { /* keep going */ }
+    }
+    purged.push(id);
+  }
+  return purged;
+}
+
 export function createProfile({ name, emoji = '🙂' }) {
   // During a restore the registry write would only be deferred (and discarded on
   // reload); throw so callers (incl. importProfileBackup) surface it rather than
