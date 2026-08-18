@@ -7900,6 +7900,13 @@ private struct HeaderScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
+  /// The résumé the removal prompt was raised for.
+  ///
+  /// The prompt is an unbounded wait and `clearDesignImage` carries no id — it
+  /// clears whatever is open when it arrives. A CloudKit tombstone for this
+  /// résumé loads a replacement without closing this sheet or the prompt on top
+  /// of it, so Remove deleted the replacement's image instead.
+  @State private var removeFrom: String?
 
   var body: some View {
     Form { content }
@@ -7934,6 +7941,11 @@ private struct HeaderScreen: View {
         "Remove the header image?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
+          guard removeFrom == model.snapshot.variantId else {
+            removeFrom = nil
+            return
+          }
+          removeFrom = nil
           model.beginImageRequest("header")
           model.send("clearDesignImage", ["target": "header"])
         }
@@ -8000,7 +8012,10 @@ private struct HeaderScreen: View {
             Text("Tile").tag("tile")
           }
           .pickerStyle(.segmented)
-          Button("Remove image", role: .destructive) { confirmRemove = true }
+          Button("Remove image", role: .destructive) {
+            removeFrom = model.snapshot.variantId
+            confirmRemove = true
+          }
         }
       } header: {
         Text("Image")
@@ -8408,6 +8423,13 @@ private struct PhotoScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
+  /// The résumé the removal prompt was raised for.
+  ///
+  /// The prompt is an unbounded wait and `clearDesignImage` carries no id — it
+  /// clears whatever is open when it arrives. A CloudKit tombstone for this
+  /// résumé loads a replacement without closing this sheet or the prompt on top
+  /// of it, so Remove deleted the replacement's image instead.
+  @State private var removeFrom: String?
 
   var body: some View {
     Form { content }
@@ -8435,6 +8457,11 @@ private struct PhotoScreen: View {
         "Remove the photo?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
+          guard removeFrom == model.snapshot.variantId else {
+            removeFrom = nil
+            return
+          }
+          removeFrom = nil
           model.beginImageRequest("photo")
           model.send("clearDesignImage", ["target": "photo"])
         }
@@ -8456,7 +8483,10 @@ private struct PhotoScreen: View {
         }
         if design.photo.hasImage {
           Toggle("Show the photo", isOn: designFlag(model, "photo", "enabled") { $0.photo.enabled })
-          Button("Remove photo", role: .destructive) { confirmRemove = true }
+          Button("Remove photo", role: .destructive) {
+            removeFrom = model.snapshot.variantId
+            confirmRemove = true
+          }
         }
       } footer: {
         Text(
