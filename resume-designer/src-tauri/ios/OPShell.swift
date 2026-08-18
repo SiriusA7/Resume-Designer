@@ -4771,8 +4771,14 @@ private struct StructureSheet: View {
     if !removal.identity.isEmpty {
       return candidates.first { $0.removeId == removal.identity }?.removeIndex
     }
-    // Older documents have no ids. The title at the same position is the only
-    // check left, and it still catches a replaced or reordered array.
+    // Older documents have no ids, so the title at the same position is the only
+    // check left — and it is only a check while the title is UNIQUE. Two roles
+    // called "Engineer" and a synced replacement that removed the one the alert
+    // named leave the other sitting at that index answering to the same string,
+    // which is a wrong delete dressed up as a verified one. Refuse instead: a
+    // legacy document with duplicate titles is precisely where a positional
+    // guess is least defensible.
+    guard candidates.filter({ $0.removeTitle == removal.title }).count == 1 else { return nil }
     return candidates.first {
       $0.removeIndex == removal.index && $0.removeTitle == removal.title
     }?.removeIndex
