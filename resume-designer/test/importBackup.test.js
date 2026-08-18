@@ -534,6 +534,24 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     expect(blob.variants.gone.data).toBeUndefined();
   });
 
+  it('tombstones a dropped résumé on the FORMAT-1 path too', () => {
+    // Format 1 has no registry and writes the blob directly, so it needed the
+    // rule stated separately. A replacement restore is still a deletion for
+    // what it omits, whichever envelope carries it.
+    localStorage.setItem(DATA, JSON.stringify({
+      variants: { keep: { id: 'keep', name: 'Kept' }, gone: { id: 'gone', name: 'Dropped' } },
+    }));
+
+    importFullBackupFromEnvelope({
+      backupFormat: 1,
+      keys: { [DATA]: JSON.stringify({ variants: { keep: { id: 'keep', name: 'Kept' } } }) },
+    });
+
+    const blob = JSON.parse(localStorage.getItem(DATA));
+    expect(blob.variants.keep.name).toBe('Kept');
+    expect(blob.variants.gone.deletedAt).toEqual(expect.any(String));
+  });
+
   it('tombstones a workspace the backup leaves out', () => {
     localStorage.setItem('resume-designer-profiles', JSON.stringify([
       { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },

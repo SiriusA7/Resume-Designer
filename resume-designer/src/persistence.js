@@ -1158,7 +1158,16 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
   let historySkipped = 0;
   try {
     for (const [k, v] of nonHistory) {
-      appStorage.setItem(k, normalizeImportedValue(k, v, keepCredential));
+      let normalized = normalizeImportedValue(k, v, keepCredential);
+      // The same rule format 2 follows, and this path needs it just as much:
+      // a replacement restore is a deletion for every résumé it omits, and only
+      // a tombstone makes that travel. `priorValues` is the pre-wipe snapshot
+      // taken above, keyed the way this path writes — the active workspace's
+      // blob, mapped or unprefixed depending on the install.
+      if (k === STORAGE_KEY || splitPhysicalKey(k)?.logicalKey === STORAGE_KEY) {
+        normalized = withTombstonesForDroppedVariants(priorValues.get(k), normalized);
+      }
+      appStorage.setItem(k, normalized);
       written.push(k);
     }
     for (const [k, v] of history) {
