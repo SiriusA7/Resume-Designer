@@ -371,6 +371,48 @@ describe('boot migration (localStorage → disk adoption)', () => {
   });
 });
 
+describe('a disk load that fails has somewhere to fall back to, or refuses', () => {
+  const failingBackend = () => ({
+    loadAll: vi.fn(async () => { throw new Error('storage_load_all failed'); }),
+    write: vi.fn(async () => {}),
+    delete: vi.fn(async () => {}),
+    clear: vi.fn(async () => {}),
+  });
+
+  it('uses localStorage when localStorage is still where the data is', async () => {
+    // The pre-adoption install: the disk store has never been populated, so
+    // localStorage genuinely holds the resumes and passthrough over it is the
+    // real data rather than a blank slate.
+    localStorage.setItem('resume-designer-data', '{"variants":{"v-1":{}}}');
+    await initAppStorage({ backend: failingBackend() });
+
+    expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"v-1":{}}}');
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    expect(localStorage.getItem('resume-designer-applications')).toBe('[{"id":"a-1"}]');
+  });
+
+  it('refuses to accept work when localStorage was already emptied by adoption', async () => {
+    // The established install, and the case that lost data. Adoption empties
+    // localStorage once the disk store owns the keys, so passthrough here is not
+    // a fallback — it is a blank, WRITABLE store. Edits went into localStorage,
+    // the next launch found the disk store non-empty and skipped adoption, and
+    // they were never read again: the session's work gone and the older disk
+    // data back in its place.
+    expect(localStorage.length).toBe(0);
+    await initAppStorage({ backend: failingBackend() });
+
+    // Reads answer empty — there is genuinely nothing loaded.
+    expect(appStorage.getItem('resume-designer-data')).toBeNull();
+
+    // …and a write goes NOWHERE durable. Not to localStorage, where the next
+    // launch would never look, and not to the disk store, which must stay
+    // exactly as it is for that launch to load.
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    expect(localStorage.getItem('resume-designer-applications')).toBeNull();
+    await expect(appStorage.flush()).resolves.toBe(true);
+  });
+});
+
 describe('storage-ready mount gate', () => {
   it('stays closed after initAppStorage and opens only via markStorageReady', async () => {
     // The React gate must cover the legacy Electron migration that init()

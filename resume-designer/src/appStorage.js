@@ -774,13 +774,43 @@ export async function initAppStorage({ backend = null, readOnly: ro = false } = 
       // emit `print-error` and abort the export instead of silently succeeding.
       throw err;
     }
-    // Main window (the sole writer): degrade to passthrough localStorage rather
-    // than booting with an empty store (which would look like total data loss),
-    // and warn the user that this session's changes may not persist.
+    // Main window. Falling back to passthrough localStorage is only a fallback
+    // while localStorage still HOLDS something — which is true on exactly one
+    // kind of install: one where the one-time adoption below has not run yet.
+    // Once it has, it EMPTIES localStorage (see the clear after the copy), so
+    // this branch on an established install does not avoid an empty store, it
+    // manufactures a writable one: a blank workspace that accepts edits into
+    // localStorage, and a next launch that finds the disk store non-empty,
+    // skips adoption, and never reads them again. The older disk data comes
+    // back and the session's work is gone — the loss this branch was written to
+    // prevent, caused by the branch.
+    const stillInLocalStorage = (() => {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(OWNED_PREFIX)) return true;
+      }
+      return false;
+    })();
+    if (stillInLocalStorage) {
+      showFailureToastOnce(
+        'Stored data could not be loaded from disk — running on a fallback '
+        + 'store, and changes made this session may not persist. Check the '
+        + 'app data folder, then restart.',
+      );
+      return;
+    }
+    // Nothing to fall back TO. Refuse to accept work rather than take it
+    // somewhere it will be silently dropped: cached mode over an empty cache,
+    // read-only, so reads answer empty, writes stay in memory, and the disk
+    // store is left exactly as it is for the next launch to load. A restart
+    // recovers everything; this session simply cannot save.
+    mode = 'cached';
+    readOnly = true;
     showFailureToastOnce(
-      'Stored data could not be loaded from disk — running on a fallback '
-      + 'store, and changes made this session may not persist. Check the '
-      + 'app data folder, then restart.',
+      'Stored data could not be loaded from disk. On Paper has not opened your '
+      + 'resumes and will not save anything this session, so nothing is lost — '
+      + 'please restart the app. If it keeps happening, check the app data '
+      + 'folder.',
     );
     return;
   }
