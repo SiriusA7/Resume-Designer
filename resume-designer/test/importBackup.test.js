@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   importFullBackupFromEnvelope, importFullBackupMerge, credentialFromEnvelope,
-  setRestoreStampHandler,
+  setRestoreStampHandler, commitRestoredTombstones,
 } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 
@@ -598,7 +598,7 @@ describe('a replacement restore deletes what it omits, and says so', () => {
       variants: { gone: { id: 'gone', name: 'Dropped' } },
     }));
 
-    importFullBackupFromEnvelope({
+    const result = importFullBackupFromEnvelope({
       backupFormat: 2,
       kind: 'full',
       registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
@@ -606,9 +606,54 @@ describe('a replacement restore deletes what it omits, and says so', () => {
       shared: {},
       profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
     });
+
+    // NOT announced by the import itself — in cached mode nothing there throws,
+    // so announcing at that point uploads deletions for a restore that may
+    // still be rolled back, and a rollback cannot recall them. The durable
+    // wrapper commits them once the flush has answered.
+    expect(stamped).toEqual([]);
+    commitRestoredTombstones(result.restoredTombstones);
+    setRestoreStampHandler(null);
+    expect(stamped).toEqual([['pmine', ['resume:gone']]]);
+  });
+
+  it('keeps tombstones for the SAME résumé id in two workspaces', () => {
+    // The same id lives in two workspaces as soon as one backup was imported
+    // into both. Collected by unit id alone, the second overwrote the first and
+    // one of the two deletions was never stamped — the identity mistake this
+    // branch has already corrected in `pendingDirty`, `syncOutstanding` and
+    // `syncRecovered`, made once more.
+    const stamped = [];
+    setRestoreStampHandler((profileId, unitIds) => stamped.push([profileId, unitIds]));
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pone', name: 'One', emoji: '🙂', createdAt: 'x' },
+      { id: 'ptwo', name: 'Two', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pone');
+    for (const pid of ['pone', 'ptwo']) {
+      localStorage.setItem(`resume-p--${pid}--${DATA}`, JSON.stringify({
+        variants: { shared: { id: 'shared', name: 'Same id both sides' } },
+      }));
+    }
+
+    const result = importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [
+        { id: 'pone', name: 'One', emoji: '🙂' },
+        { id: 'ptwo', name: 'Two', emoji: '🙂' },
+      ],
+      activeProfile: 'pone',
+      shared: {},
+      profiles: {},
+    });
+    commitRestoredTombstones(result.restoredTombstones);
     setRestoreStampHandler(null);
 
-    expect(stamped).toEqual([['pmine', ['resume:gone']]]);
+    expect(stamped.sort()).toEqual([
+      ['pone', ['resume:shared']],
+      ['ptwo', ['resume:shared']],
+    ]);
   });
 
   it('tombstones a workspace the backup leaves out', () => {

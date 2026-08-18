@@ -35,6 +35,26 @@ export function setRestoreStampHandler(handler) {
   restoreStampHandler = typeof handler === 'function' ? handler : null;
 }
 
+/**
+ * Announce the tombstones a restore produced, once that restore is DURABLE.
+ *
+ * Never during the restore. In cached mode nothing in the import throws —
+ * failures surface at the flush — so announcing there uploads deletions for a
+ * restore that may still be rolled back, and a rollback cannot recall them.
+ * Keyed by workspace, because the same résumé id lives in more than one.
+ */
+export function commitRestoredTombstones(restoredTombstones) {
+  if (!restoreStampHandler || !restoredTombstones?.size) return;
+  for (const [profileId, ids] of restoredTombstones) {
+    if (!ids?.length) continue;
+    try {
+      restoreStampHandler(profileId, ids.map((id) => `resume:${id}`));
+    } catch (e) {
+      console.error('[backup] could not stamp restored tombstones:', e);
+    }
+  }
+}
+
 // `setSyncDirtyNotifier` stood here, and this module no longer names a dirty
 // unit at all: the handler above queues them for the storage drain, which is
 // the only place that knows the bytes reached disk. The notifier now has ONE
@@ -1011,6 +1031,9 @@ function importFullBackupV2(parsed, keepCredential = false) {
 
   let keysImported = 0;
   let historySkipped = 0;
+  // profileId -> the unit ids tombstoned in THAT workspace. Declared out here
+  // so the return below can hand them to the durable caller.
+  const restoredTombstones = new Map();
   try {
     // A workspace the restore OMITS is a workspace the restore deletes — and
     // `mergeRegistry` is a union, so a merely-absent entry reads as "keep the
@@ -1044,9 +1067,17 @@ function importFullBackupV2(parsed, keepCredential = false) {
     const history = profileEntries.filter(
       ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
     );
-    // unitId -> profileId, for the stamping below. Absence does not travel on
-    // its own; only a stamped, announced tombstone does.
-    const restoredTombstones = new Map();
+    // profileId -> the unit ids tombstoned in THAT workspace. Keyed by
+    // workspace, never by unit id alone: the same résumé id exists in two
+    // workspaces as soon as one backup was imported into both, and a
+    // unitId-keyed map silently kept only the last of them — so one of the two
+    // deletions was never stamped and never travelled. The same identity
+    // mistake this branch has already corrected in `pendingDirty`,
+    // `syncOutstanding` and `syncRecovered`.
+    const noteTombstone = (pid, unitId) => {
+      if (!restoredTombstones.has(pid)) restoredTombstones.set(pid, []);
+      restoredTombstones.get(pid).push(unitId);
+    };
     const blobWritten = new Set();
     for (const { physicalKey: key, logicalKey, value } of nonHistory) {
       let normalized = normalizeImportedValue(logicalKey, value, keepCredential);
@@ -1057,7 +1088,7 @@ function importFullBackupV2(parsed, keepCredential = false) {
         const dropped = [];
         normalized = withTombstonesForDroppedVariants(priorValues.get(key), normalized, dropped);
         blobWritten.add(pid);
-        for (const id of dropped) restoredTombstones.set(id, pid);
+        for (const id of dropped) noteTombstone(pid, id);
       }
       writeTracked(key, normalized);
       keysImported++;
@@ -1073,7 +1104,7 @@ function importFullBackupV2(parsed, keepCredential = false) {
       const rebuilt = withTombstonesForDroppedVariants(priorValues.get(key), null, dropped);
       if (dropped.length === 0) continue;
       writeTracked(key, rebuilt);
-      for (const id of dropped) restoredTombstones.set(id, pid);
+      for (const id of dropped) noteTombstone(pid, id);
     }
     for (const { physicalKey: key, value } of history) {
       if (writeOwnedKeyOrSkip(key, value)) {
@@ -1081,21 +1112,6 @@ function importFullBackupV2(parsed, keepCredential = false) {
         keysImported++;
       } else {
         historySkipped++;
-      }
-    }
-    // AFTER the writes, so nothing is announced for bytes that never landed.
-    // Grouped by workspace because a unit id alone does not name a record —
-    // every workspace has its own résumés.
-    if (restoreStampHandler && restoredTombstones.size) {
-      const byProfile = new Map();
-      for (const [unitId, pid] of restoredTombstones) {
-        if (!byProfile.has(pid)) byProfile.set(pid, []);
-        byProfile.get(pid).push(`resume:${unitId}`);
-      }
-      for (const [pid, ids] of byProfile) {
-        try { restoreStampHandler(pid, ids); } catch (e) {
-          console.error('[backup] could not stamp restored tombstones:', e);
-        }
       }
     }
   } catch (err) {
@@ -1107,6 +1123,12 @@ function importFullBackupV2(parsed, keepCredential = false) {
   // function for the durability check to restore from.
   return {
     keysImported, removedExistingKeys, historySkipped,
+    // HANDED BACK, not announced here. In cached mode nothing above throws —
+    // failures surface at the flush — so announcing at this point uploads
+    // deletions for a restore that may still be rolled back, and a rollback
+    // cannot recall them. `commitRestoredTombstones` is called once the flush
+    // has answered.
+    restoredTombstones,
     rollback: () => rollbackWipedImport(written, priorValues),
     // For the guard's read isolation: pre-restore values (of removed keys) + the
     // keys written; appStorage normalizes both to physical form and marks the
@@ -1226,6 +1248,11 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
   const written = [];
   let historySkipped = 0;
   const droppedHere = [];
+  // Format 1 restores the ACTIVE workspace only, so everything it drops belongs
+  // to the workspace the mapping names — '' when there is none, the same
+  // convention the collection uses for the open one.
+  const activeWorkspace = getProfileMapping() ?? '';
+  const restoredTombstones = new Map();
   try {
     for (const [k, v] of nonHistory) {
       let normalized = normalizeImportedValue(k, v, keepCredential);
@@ -1246,15 +1273,21 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
       if (writeOwnedKeyOrSkip(k, v)) written.push(k);
       else historySkipped++;
     }
-    // Format 1 restores the ACTIVE workspace only, so its tombstones belong to
-    // whichever one the mapping names — '' when there is none, which is the
-    // same convention the collection uses for the open workspace.
-    if (restoreStampHandler && droppedHere.length) {
-      try {
-        restoreStampHandler(getProfileMapping() ?? '', droppedHere.map((id) => `resume:${id}`));
-      } catch (e) {
-        console.error('[backup] could not stamp restored tombstones:', e);
+    // An envelope that carries NO blob at all is still a replacement, and still
+    // a deletion of everything the workspace held. The write loop never sees it,
+    // so the tombstones are synthesized from the snapshot alone — the same gap
+    // format 2 had, and this path needed it stated separately for the same
+    // reason it needed the rule stated separately in the first place.
+    if (!nonHistory.some(([k]) => k === STORAGE_KEY || splitPhysicalKey(k)?.logicalKey === STORAGE_KEY)) {
+      const key = activeWorkspace ? physicalKey(activeWorkspace, STORAGE_KEY) : STORAGE_KEY;
+      const rebuilt = withTombstonesForDroppedVariants(priorValues.get(key), null, droppedHere);
+      if (droppedHere.length) {
+        appStorage.setItem(STORAGE_KEY, rebuilt);
+        written.push(STORAGE_KEY);
       }
+    }
+    if (droppedHere.length) {
+      restoredTombstones.set(activeWorkspace, droppedHere.slice());
     }
   } catch (err) {
     rollbackWipedImport(written, priorValues);
@@ -1267,6 +1300,7 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     keysImported: entries.length - historySkipped,
     removedExistingKeys: priorValues.size,
     historySkipped,
+    restoredTombstones, // see the format-2 path
     rollback: () => rollbackWipedImport(written, priorValues),
     preRestore: priorValues, // see the format-2 path
     writtenKeys: written,
@@ -1320,6 +1354,10 @@ export async function importFullBackupDurably(parsed, { keepCredential = false }
   // queued AI/chat completion could clobber the restored cache. The boot Electron
   // migration (non-reloading) releases the guard itself right after this returns.
   appStorage.clearPreRestoreSnapshot();
+  // Only NOW. The restore is on disk, so the deletions it implies can be
+  // announced without the risk that a rollback takes the content back while the
+  // transport has already uploaded their tombstones — which nothing can recall.
+  commitRestoredTombstones(result.restoredTombstones);
   return result;
 }
 
