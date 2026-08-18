@@ -203,6 +203,16 @@ struct ProfileSheet: View {
   /// straight to `pendingImport` re-presents itself the moment it is dismissed
   /// any way other than through its own buttons.
   @State private var groupingQuestion: Int?
+  /// Whether one of the dialog's own buttons answered the grouping question.
+  ///
+  /// The binding's setter has to cancel a dismissal nobody answered — tapping
+  /// outside the popover on iPad — but it also runs when a button dismisses the
+  /// dialog, and SwiftUI does not promise whether the action or the binding
+  /// write happens first. So the setter defers its decision by one main-actor
+  /// turn and reads this, which is set synchronously by every button either way
+  /// round. Checked rather than ordered, because ordering is the part that
+  /// cannot be verified from here.
+  @State private var groupingAnswered = false
 
   private var profile: ProfileView? { model.snapshot.profile }
 
@@ -287,19 +297,36 @@ struct ProfileSheet: View {
           : "\(groupingQuestion ?? 0) employers have more than one role",
         isPresented: Binding(
           get: { groupingQuestion != nil },
-          set: { if !$0 { groupingQuestion = nil } }
+          set: { presented in
+            guard !presented else { return }
+            groupingQuestion = nil
+            // EVERY way out, including the one with no button: tapping outside
+            // the popover on iPad dismisses it, and that used to clear only the
+            // Swift state while `profileBridge` went on holding `pendingImport`.
+            // Its projected `runCount` does not change, so no later snapshot
+            // re-triggers the question — not even another import with the same
+            // number of multi-role employers — and the import can then neither
+            // be completed nor cancelled.
+            Task { @MainActor in
+              if !groupingAnswered { model.profile("cancelImport") }
+              groupingAnswered = false
+            }
+          }
         ),
         titleVisibility: .visible
       ) {
         Button("Group") {
+          groupingAnswered = true
           model.profile("resolveImport", ["group": "true"])
         }
         Button("Keep separate") {
+          groupingAnswered = true
           model.profile("resolveImport", ["group": "false"])
         }
-        // Explicit, so every way out of this dialog reaches the bridge and
-        // releases the parse it is holding.
+        // Explicit as well as covered by the setter: this one says what the
+        // person chose, rather than inferring it from a dismissal.
         Button("Cancel", role: .cancel) {
+          groupingAnswered = true
           model.profile("cancelImport")
         }
       } message: {
