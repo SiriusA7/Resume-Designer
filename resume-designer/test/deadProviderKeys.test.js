@@ -142,6 +142,39 @@ describe('export boundary', () => {
     localStorage.setItem('resume-p--pmine--resume-designer-data', dirty);
   };
 
+  it('keeps a deleted workspace out, but never the one still on screen', async () => {
+    // Two halves, and getting the second wrong is worse than not filtering.
+    // A tombstoned workspace's bytes must not travel — restored, the workspace
+    // the person deleted is simply back. But the ACTIVE one is exempt, because
+    // `purgeTombstonedProfiles` deliberately leaves it full: it is still mapped
+    // and still holding what is on screen.
+    //
+    // The path that makes this bite: when the switch away from a remotely
+    // deleted workspace fails — a failed disk write — the app STAYS on it, and
+    // its own response to a failed disk write is a toast telling the person to
+    // export a backup. Filtering the active one dropped everything they were
+    // looking at, reported success, and a restore of that file then replaced
+    // the local copy with an empty workspace.
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x', deletedAt: '2026-08-18T00:00:00.000Z' },
+      { id: 'pgone', name: 'Old', emoji: '🙂', createdAt: 'x', deletedAt: '2026-08-18T00:00:00.000Z' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem('resume-p--pmine--resume-designer-data', JSON.stringify({
+      variants: { v1: { name: 'On screen right now' } },
+    }));
+    localStorage.setItem('resume-p--pgone--resume-designer-data', JSON.stringify({
+      variants: { v9: { name: 'Deleted elsewhere' } },
+    }));
+    const readDownload = captureDownload();
+
+    exportFullBackup();
+    const json = await readDownload();
+
+    expect(json).toContain('On screen right now');
+    expect(json).not.toContain('Deleted elsewhere');
+  });
+
   it('keeps them out of a whole-app backup', async () => {
     seed();
     const readDownload = captureDownload();

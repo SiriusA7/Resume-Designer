@@ -762,6 +762,13 @@ export async function switchToProfileDurably(id) {
  * Returns the ids it emptied, for the caller's log.
  */
 export function purgeTombstonedProfiles() {
+  // Not during a restore. `removeItem` is DEFERRED while the guard is armed, so
+  // these deletes would be recorded and replayed later — against a registry the
+  // restore may have replaced, and a rollback may have put back. Its three
+  // siblings (`createProfile`, `activateProfileDurably`, `deleteProfileDurably`)
+  // all refuse for the same reason; this is the one that deletes, so it refuses
+  // hardest. The next start purges instead.
+  if (appStorage.isRestoreGuardActive()) return [];
   // BOTH notions of "in use", because they diverge exactly when this is most
   // dangerous. `getActiveProfileId` is the PERSISTED pointer, which during a
   // durable switch already names the next boot — while this process stays

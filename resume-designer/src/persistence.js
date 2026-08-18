@@ -619,13 +619,27 @@ export function exportFullBackup(filename) {
   const profiles = Object.create(null);
   const shared = {};
   const activeId = getActiveProfileId();
-  // A deleted workspace's bytes are not part of a backup. They linger until the
-  // purge runs — which skips the active one, and cannot run at all before the
-  // tombstone arrives — and a backup enumerates PHYSICAL keys, which know
-  // nothing about the registry. Exported, they come back on the next restore
-  // and the workspace the person deleted is simply there again.
+  // A deleted workspace's bytes are not part of a backup: exported, they come
+  // back on the next restore and the workspace the person deleted is simply
+  // there again. A backup enumerates PHYSICAL keys, which know nothing about
+  // the registry, so the registry is what has to say.
+  //
+  // THE ACTIVE ONE IS EXEMPT, and getting that wrong is worse than not
+  // filtering at all. `purgeTombstonedProfiles` refuses to touch the active
+  // workspace precisely because it is still mapped and still holds live content
+  // on screen — so it is the one tombstoned namespace guaranteed to be full,
+  // and filtering it here threw away exactly what the purge was protecting.
+  //
+  // The path is not hypothetical: when the switch away from a remotely deleted
+  // workspace FAILS — most often a failed disk write — the app stays on it, and
+  // the app's own response to a failed disk write is a toast telling the person
+  // to export a backup. That backup would have omitted everything on their
+  // screen, announced success, and then destroyed the local copy on restore,
+  // because a registry id with no bucket restores as an empty workspace.
   const deletedProfileIds = new Set(
-    (loadRegistry() || []).filter((p) => p?.deletedAt && p.id).map((p) => p.id),
+    (loadRegistry() || [])
+      .filter((p) => p?.deletedAt && p.id && p.id !== activeId)
+      .map((p) => p.id),
   );
   for (const k of appStorage.keys()) {
     if (!k) continue;
