@@ -7579,6 +7579,9 @@ private struct HeaderScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
+  /// Bumped by every pick and every Remove; a load that finishes holding an old
+  /// number has been overtaken.
+  @State private var imageRequest = 0
 
   var body: some View {
     Form { content }
@@ -7586,15 +7589,27 @@ private struct HeaderScreen: View {
       .navigationBarTitleDisplayMode(.inline)
       .onChange(of: pick) { _, item in
         guard let item else { return }
+        // STAMPED, and the stamp is checked on the way out. Reading a photo out
+        // of the library is asynchronous and the screen stays live throughout,
+        // so two picks overlap and the one that lands is whichever the LIBRARY
+        // finished first — an earlier, larger photo could arrive after a newer
+        // one and replace it. Remove bumps it too: without that, a pick still in
+        // flight when the image is removed comes back and undoes the removal.
+        imageRequest += 1
+        let request = imageRequest
         Task {
           let url = await designImageDataURL(for: item)
           // Cleared either way, or picking the same photo twice in a row is the
-          // same item and never fires this again.
+          // same item and never fires this again. NOT gated on the stamp below:
+          // a stale task clearing the binding is harmless — the newer task
+          // clears it to the same nil — while a stale task that skipped this
+          // could leave `pick` holding a photo the user then cannot re-pick.
           pick = nil
           guard let url else {
             NSLog("[OPShell] could not read the picked header image")
             return
           }
+          guard request == imageRequest else { return }
           model.send("setDesignImage", ["target": "header", "dataUrl": url])
         }
       }
@@ -7602,6 +7617,7 @@ private struct HeaderScreen: View {
         "Remove the header image?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
+          imageRequest += 1
           model.send("clearDesignImage", ["target": "header"])
         }
       } message: {
@@ -8075,6 +8091,9 @@ private struct PhotoScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
+  /// Bumped by every pick and every Remove; a load that finishes holding an old
+  /// number has been overtaken. See the header screen.
+  @State private var imageRequest = 0
 
   var body: some View {
     Form { content }
@@ -8082,6 +8101,12 @@ private struct PhotoScreen: View {
       .navigationBarTitleDisplayMode(.inline)
       .onChange(of: pick) { _, item in
         guard let item else { return }
+        // Stamped and checked, exactly as on the header screen — the reasoning
+        // is written out there. The two picks are the same code because they are
+        // the same problem, and this one is the reason the header's is not a
+        // one-off.
+        imageRequest += 1
+        let request = imageRequest
         Task {
           let url = await designImageDataURL(for: item)
           pick = nil
@@ -8089,6 +8114,7 @@ private struct PhotoScreen: View {
             NSLog("[OPShell] could not read the picked photo")
             return
           }
+          guard request == imageRequest else { return }
           model.send("setDesignImage", ["target": "photo", "dataUrl": url])
         }
       }
@@ -8096,6 +8122,7 @@ private struct PhotoScreen: View {
         "Remove the photo?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
+          imageRequest += 1
           model.send("clearDesignImage", ["target": "photo"])
         }
       } message: {
