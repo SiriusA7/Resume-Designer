@@ -1434,10 +1434,21 @@ extension OPSyncEngine {
         )])
         return
       }
-      // It came down. Nothing left to ask for.
+      // It came down — but the marker stays until the PAGE says it accounted
+      // for it, for the same reason `deliver` settles a change tag per arrival
+      // and `onStorageFlush` notifies before it clears: the bookkeeping that
+      // says "this is handled" must come after the thing it claims.
+      //
+      // Decoding is not delivering. The page can refuse this — a web view being
+      // reclaimed, a disk write that fails — and then nothing has landed while
+      // the change token has already moved past the record. Cleared here, the
+      // next start would find neither local bytes nor a marker, `recordToSend`
+      // would drop the pending save, and nothing would ever ask for the record
+      // again. Held, the refusal is just another round trip.
+      let accounted = await deliver([Arrival(record: record, unit: unit)])
+      guard accounted.contains(unit.route) else { return }
       unreadableRecords.remove(recordID)
       saveUnreadableRecords()
-      await deliver([Arrival(record: record, unit: unit)])
     } catch let error as CKError where error.code == .unknownItem {
       // The server does not have it. Nothing is wrong and nothing is missing:
       // absence is not deletion here, and there is simply nothing to fetch.
@@ -1458,8 +1469,12 @@ extension OPSyncEngine {
     }
   }
 
-  private func deliver(_ arrivals: [Arrival]) async {
-    guard !arrivals.isEmpty else { return }
+  /// Returns the routes the page ACCOUNTED FOR, so a caller that holds recovery
+  /// state for one of these units can release it on the same answer the change
+  /// tag is settled on rather than on the delivery merely having been attempted.
+  @discardableResult
+  private func deliver(_ arrivals: [Arrival]) async -> Set<String> {
+    guard !arrivals.isEmpty else { return [] }
     // PER ARRIVAL, not per batch. The page answers with the route of every unit
     // it has ACCOUNTED FOR — written, or settled because nothing will ever land
     // it — and only those keep their change tags.
@@ -1475,6 +1490,7 @@ extension OPSyncEngine {
       if accounted.contains(arrival.unit.route) { remember(arrival.record) }
       else { forget(arrival.recordID) }
     }
+    return accounted
   }
 
   private func report(_ failures: [OPSyncFailure]) {
