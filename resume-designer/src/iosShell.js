@@ -1703,8 +1703,17 @@ export function initIOSShell(deps) {
     setDesign: ({ group, property, value }) => {
       if (typeof group !== 'string' || !group) throw new Error('setDesign needs a group');
       if (typeof property !== 'string' || !property) throw new Error('setDesign needs a property');
-      deps.applyDesign({ group, property, value: String(value ?? '') });
+      const result = deps.applyDesign({ group, property, value: String(value ?? '') });
+      // Published on the way out AND when it settles, the same shape
+      // `jobsAction` uses above and for the same reason: `applyDesign` is async
+      // for a Google font or a preset, which WAIT for the face to load before
+      // writing their settings. Publishing only on the way out sent the sheet
+      // the snapshot from before that write, and nothing followed — so the
+      // checkmark and labels stayed on the previous font until it was closed
+      // and reopened. In continuous page mode the delayed repagination does not
+      // rebuild the DOM either, so nothing else corrected it.
       publish();
+      if (result && typeof result.then === 'function') result.then(publish, publish);
     },
     resetDesign: ({ group }) => { deps.resetDesign(String(group ?? '')); publish(); },
     // Images travel native → web only. Swift reads the picked photo and sends a

@@ -985,6 +985,46 @@ describe('the Design sheet commands', () => {
     });
   });
 
+  it('republishes once an async design write settles', async () => {
+    // `applyDesign` is async for a Google font or a preset — both WAIT for the
+    // face to load before writing their settings. Publishing only on the way
+    // out sent the sheet the snapshot from BEFORE that write, and nothing
+    // followed, so its checkmark and labels stayed on the previous font until
+    // it was closed and reopened. In continuous page mode the delayed
+    // repagination does not rebuild the DOM either, so nothing else corrected
+    // it. Same shape as `jobsAction`: publish on the way out, publish again
+    // when it settles.
+    //
+    // Asserted on the CONTINUATION rather than on a later snapshot, and that is
+    // deliberate: a great many things publish — the mutation observer, the
+    // variant subscription, a zoom — so any assertion of the form "the new
+    // value arrives eventually" passes without this fix. The first version of
+    // this test did exactly that and survived its own mutation. What is unique
+    // to the fix is that the promise is CONSUMED at all.
+    const { deps, send } = await mount();
+    send({ type: 'setDesignOpen', value: 'true' });
+
+    const then = vi.fn(() => {});
+    deps.applyDesign.mockReturnValueOnce({ then });
+    send({ type: 'setDesign', group: 'font', property: 'pairingId', value: 'newsreader' });
+
+    expect(then).toHaveBeenCalledTimes(1);
+    // Both arms, so a rejected font load republishes too rather than leaving
+    // the sheet on a value the write never reached.
+    expect(then.mock.calls[0]).toHaveLength(2);
+    expect(typeof then.mock.calls[0][0]).toBe('function');
+    expect(typeof then.mock.calls[0][1]).toBe('function');
+  });
+
+  it('does not touch a synchronous design write', async () => {
+    // The ordinary case: everything except a Google font or a preset writes
+    // straight through and returns undefined, and must not be awaited.
+    const { deps, send } = await mount();
+    deps.applyDesign.mockReturnValueOnce(undefined);
+    expect(send({ type: 'setDesign', group: 'spacing', property: 'fontScale', value: '1.1' }))
+      .toEqual({ ok: true });
+  });
+
   it('sends an empty string rather than undefined when a value is cleared', async () => {
     const { deps, send } = await mount();
     send({ type: 'setDesign', group: 'color', property: 'customColor' });
