@@ -1184,10 +1184,18 @@ function importFullBackupV2(parsed, keepCredential = false) {
     const priorRegistry = parseJSONSafe(priorValues.get(PROFILES_KEY)) || [];
     const restoredIds = new Set(registry.map((p) => p.id));
     const stamp = new Date().toISOString();
+    // An ALREADY-tombstoned entry is carried across UNCHANGED rather than
+    // skipped. Dropping it looks like tidying — the profile is gone, the backup
+    // does not mention it — but the tombstone is the only thing standing between
+    // that deletion and a device which still holds the live entry: `mergeRegistry`
+    // unions, so the entry this device no longer carries is simply re-adopted
+    // from the other one and the workspace comes back. Kept verbatim, not
+    // re-stamped: the deletion happened when it happened, and moving its time
+    // forward would have it win arguments it should not.
     const withRemovals = registry.concat(
       priorRegistry
-        .filter((p) => p?.id && !restoredIds.has(p.id) && !p.deletedAt)
-        .map((p) => ({ ...p, deletedAt: stamp, updatedAt: stamp })),
+        .filter((p) => p?.id && !restoredIds.has(p.id))
+        .map((p) => (p.deletedAt ? p : { ...p, deletedAt: stamp, updatedAt: stamp })),
     );
     writeTracked(PROFILES_KEY, JSON.stringify(withRemovals));
     const active = registry.some((p) => p.id === parsed.activeProfile)

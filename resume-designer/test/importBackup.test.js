@@ -687,6 +687,38 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     ]);
   });
 
+  it('keeps a tombstone the backup leaves out, instead of tidying it away', () => {
+    // The tombstone is the ONLY thing standing between a deletion and a device
+    // that still holds the live entry: `mergeRegistry` unions, so an entry this
+    // device stops carrying is simply re-adopted from the other one and the
+    // workspace comes back. Dropping an already-tombstoned profile looks like
+    // tidying — it is gone, and the backup does not mention it — and is how the
+    // deletion gets undone by the very device that performed it.
+    const deletedAt = '2020-01-01T00:00:00.000Z';
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+      { id: 'pgone', name: 'Deleted a while ago', emoji: '🙂', createdAt: 'x', deletedAt, updatedAt: deletedAt },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: {},
+    });
+
+    const registry = JSON.parse(localStorage.getItem('resume-designer-profiles'));
+    const gone = registry.find((p) => p.id === 'pgone');
+    expect(gone).toBeDefined();
+    // Carried across VERBATIM, not re-stamped: the deletion happened when it
+    // happened, and moving its time forward would have it win arguments it
+    // should not.
+    expect(gone.deletedAt).toBe(deletedAt);
+  });
+
   it('tombstones a workspace the backup leaves out', () => {
     localStorage.setItem('resume-designer-profiles', JSON.stringify([
       { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
