@@ -8,7 +8,7 @@ import { parseResume } from './parser.js';
 import { isTauri, isIOSPlatform, stageTextForShare, notify } from './native.js';
 // The share sheet, for the exports iOS cannot download. `iosShell` does not
 // import this module, so the edge only goes one way.
-import { sharePdf } from './iosShell.js';
+import { sharePdf, isNativeShellAvailable } from './iosShell.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 // The API key lives in the OS keychain, not beside the resume data on disk.
@@ -1484,7 +1484,17 @@ function shouldShareInsteadOfDownload() {
 /** Stage the text and hand it to the native share sheet, reporting a failure. */
 async function shareTextFile(content, filename) {
   try {
+    // ASKED BEFORE STAGING, not after. Staging writes a real file into the temp
+    // directory, and with no shell to hand it to there is nothing left that
+    // could clean it up — the share sheet's completion handler is what deletes
+    // it, and that only exists once a sheet has been presented. Checking first
+    // means the file is never created in the case that cannot use it.
+    if (!isNativeShellAvailable()) throw new Error('the share sheet is unavailable');
     const staged = await stageTextForShare(filename, String(content));
+    // A shell that disappeared during the staging await would leak this one
+    // file. Nothing can be done about it from here — deleting by a
+    // renderer-supplied path would be a wider hole than the leak — and iOS
+    // reclaims the temp directory on its own.
     if (sharePdf(staged)) return;
     throw new Error('the share sheet is unavailable');
   } catch (error) {

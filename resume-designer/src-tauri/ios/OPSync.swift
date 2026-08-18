@@ -244,17 +244,30 @@ struct OPSyncFailure: Equatable {
   let code: CKError.Code?
   /// Diagnostic — for a log line or a status line, never for a decision.
   let reason: String
+  /// This one needs the HOST to persist the retry, because nothing else will.
+  ///
+  /// `willRetry` usually means the engine kept the change and owns the backoff.
+  /// A direct refetch is outside the engine entirely, and the send it recovers
+  /// was already dropped — so a transient failure there has nothing holding it,
+  /// and `willRetry: true` alone would be a statement about nobody. The host
+  /// puts the id in that profile's durable deferred queue; draining it
+  /// re-enters `recordToSend`, finds no local unit again, and refetches. The
+  /// loop closes.
+  let needsDurableRetry: Bool
 
   /// No default for `profileId`, deliberately. Every failure knows its zone —
   /// the record carries one and so does the fetch — and a default would let the
   /// next site added quietly answer "" (the SHARED zone) for a workspace's own
   /// failure. That silent wrong answer is this bug, and it has now been written
   /// four separate times in this file; a missing argument should not compile.
+  /// `needsDurableRetry` DOES default, and to the safe answer: the engine holds
+  /// its own retries, so only the one path outside it has to ask.
   init(unitId: String?, profileId: String, willRetry: Bool,
-       code: CKError.Code?, reason: String) {
+       code: CKError.Code?, reason: String, needsDurableRetry: Bool = false) {
     self.unitId = unitId
     self.profileId = profileId
     self.willRetry = willRetry
+    self.needsDurableRetry = needsDurableRetry
     self.code = code
     self.reason = reason
   }
@@ -1406,7 +1419,8 @@ extension OPSyncEngine {
         unitId: recordID.recordName, profileId: profileId, willRetry: true,
         code: (error as? CKError)?.code,
         reason: "could not re-fetch a record this device could not read: "
-          + error.localizedDescription
+          + error.localizedDescription,
+        needsDurableRetry: true
       )])
     }
   }

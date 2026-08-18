@@ -2502,6 +2502,16 @@ extension ShellModel: OPSyncHost {
       // Retryable, or about the zone or a fetch rather than one unit: the
       // engine is already handling the first and there is no unit to re-queue
       // for the second. Both are for the status line.
+      // A refetch that failed transiently is the one retryable failure nothing
+      // is holding — see `needsDurableRetry`. Written into that profile's
+      // durable queue, which the next start drains straight back into the path
+      // that will refetch it.
+      if failure.needsDurableRetry, let unitId = failure.unitId {
+        let profileId = failure.profileId
+        Task { @MainActor [weak self] in
+          await self?.deferSync([unitId], inProfile: profileId.isEmpty ? nil : profileId)
+        }
+      }
       guard let unitId = failure.unitId, !failure.willRetry else {
         recordSyncFailure(failure)
         continue
