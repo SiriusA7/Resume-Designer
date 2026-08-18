@@ -260,18 +260,57 @@ describe('the data blob is split, not double-handled', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('stamps NOTHING for a blob write that only touched a résumé', async () => {
-    // The résumé units are the persistence path's to stamp — it knows the
-    // variant id. Stamping data:settings here on every auto-save would give an
-    // unchanged settings record a fresh time and let it beat a real edit made
-    // on another device.
+  it('stamps the résumé a blob write touched, and no data: field', async () => {
+    // TWO guarantees, and the older version of this bought the second by giving
+    // up the first. `data:settings` must NOT be stamped when only a résumé
+    // changed — an unchanged settings record with a fresh time beats a real
+    // settings edit made on another device, which is a silent loss. That still
+    // holds, and it is the comparison that provides it.
+    //
+    // But the résumé itself MUST be stamped here, and used not to be: leaving
+    // every `resume:` unit to the persistence handler covered only the editor's
+    // auto-save, so a résumé created, duplicated, imported, renamed or analysed
+    // — all direct blob writes — never reached CloudKit until some later
+    // document edit happened to trigger one.
     const blob = JSON.parse(appStorage.getItem(DATA));
     blob.variants['v-1'].data.name = 'Ada Lovelace';
     appStorage.setItem(DATA, JSON.stringify(blob));
     await settle();
 
-    expect(stampedIds()).toEqual([]);
-    expect(notify).not.toHaveBeenCalled();
+    expect(stampedIds()).toEqual(['resume:v-1']);
+    expect(allNamed()).toEqual(['resume:v-1']);
+  });
+
+  it('stamps a résumé added by a direct blob write, with no auto-save involved', async () => {
+    // `createVariant` / duplicate / import, in the shape the storage layer sees
+    // them: a blob write with a variant that was not there before, and no
+    // persisted-save callback anywhere near it.
+    const blob = JSON.parse(appStorage.getItem(DATA));
+    blob.variants['v-2'] = { name: 'Tailored for Acme', data: { name: 'Ada' } };
+    appStorage.setItem(DATA, JSON.stringify(blob));
+    await settle();
+
+    expect(stampedIds()).toEqual(['resume:v-2']);
+    expect(allNamed()).toEqual(['resume:v-2']);
+  });
+
+  it('stamps nothing when only the OPEN résumé changed, which is a device fact', async () => {
+    // `currentVariantId` is deliberately absent from the unit list, so merely
+    // switching résumés must not name anything — otherwise every device would
+    // fight over whose selection is newest.
+    const blob = JSON.parse(appStorage.getItem(DATA));
+    blob.currentVariantId = 'v-1';
+    blob.variants['v-9'] = { name: 'Untouched', data: {} };
+    appStorage.setItem(DATA, JSON.stringify(blob));
+    await settle();
+    notify.mockClear();
+
+    const again = JSON.parse(appStorage.getItem(DATA));
+    again.currentVariantId = 'v-9';
+    appStorage.setItem(DATA, JSON.stringify(again));
+    await settle();
+
+    expect(allNamed()).toEqual([]);
   });
 
   it('never stamps a key: unit for the blob, which has no such unit', async () => {

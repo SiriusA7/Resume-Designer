@@ -32,6 +32,11 @@ vi.mock('../src/appStorage.js', () => ({
   // distinction that cannot arise here — see syncStamping.test.js, which runs
   // the real thing against a backend whose writes can hang and fail.
   currentWriteSequence: () => mockWriteSeq,
+  // jobDescriptions.js subscribes at import to hear late refusals. This mock's
+  // writes are durable the instant they return, so there are none to deliver —
+  // the real listener is exercised in jobDescriptions.test.js.
+  onWriteFailure: () => () => {},
+  onWriteSettled: () => () => {},
   appStorage: {
     getItem: (k) => (disk.has(physical(k)) ? disk.get(physical(k)) : null),
     // `String(value)` mirrors the real setItem — the reason applyUnits has to

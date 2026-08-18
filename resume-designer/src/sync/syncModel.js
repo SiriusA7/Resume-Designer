@@ -785,14 +785,25 @@ function dataFieldPayloads(raw) {
   const payloads = new Map();
   const blob = parseJSON(raw, null);
   if (!blob || typeof blob !== 'object') return payloads;
-  for (const unit of splitData({ ...blob, variants: undefined })) {
-    payloads.set(unit.id, unit.payload);
-  }
+  // VARIANTS INCLUDED. They used to be stripped here and left entirely to
+  // `registerPersistedSaveHandler`, on the grounds that it knows the variant id
+  // — but it only fires for the editor's auto-save. `createVariant`, duplicate,
+  // import, `renameVariant` and `saveVariantAnalysis` all write the blob
+  // directly, so a résumé created or renamed never reached CloudKit until some
+  // later document edit happened to trigger an auto-save.
+  //
+  // The reason given for stripping them — that stamping here "would name every
+  // résumé on every save" — is what the comparison below already prevents, and
+  // has prevented for the `data:` fields all along. It costs one stringify per
+  // variant per blob write, on both sides of the comparison; the résumés are
+  // already being parsed here either way.
+  for (const unit of splitData(blob)) payloads.set(unit.id, unit.payload);
   return payloads;
 }
 
 /**
- * The `data:` units a blob write actually changed.
+ * The units a blob write actually changed — its résumés as well as its `data:`
+ * fields.
  *
  * Compared rather than stamped unconditionally, because `resume-designer-data`
  * is rewritten whole on every résumé auto-save. Stamping `data:settings` there
@@ -818,12 +829,16 @@ function changedDataUnits(previous, next) {
  * covers, and each is handled here by exactly the half it does NOT:
  *
  * - `resume-designer-data` holds every résumé plus `settings` and
- *   `userProfile`. Its `resume:<id>` units are stamped by
- *   registerPersistedSaveHandler, which knows the variant id this layer never
- *   sees, so they are left to it — stamping them here as well would name every
- *   résumé on every save. There is no `key:resume-designer-data` unit at all
- *   (`collectKeyUnit` refuses the blob), so the write maps to its `data:`
- *   fields or to nothing.
+ *   `userProfile`, and every one of those is compared here. The `resume:<id>`
+ *   units used to be left to registerPersistedSaveHandler because it knows the
+ *   variant id — but that handler fires only for the editor's auto-save, and
+ *   `createVariant`, duplicate, import, `renameVariant` and
+ *   `saveVariantAnalysis` write the blob without it. Comparing is what makes
+ *   covering them here safe: an unchanged résumé is not named, so this does not
+ *   become "every résumé on every save". Double-stamping with the handler on an
+ *   auto-save is harmless — same unit, same gating key. There is no
+ *   `key:resume-designer-data` unit at all (`collectKeyUnit` refuses the blob),
+ *   so the write maps to its units or to nothing.
  * - `HISTORY_PREFIX + variantId` is left alone too, but the premise is narrower
  *   than "saveHistory for the loaded variant is its only writer". THREE things
  *   write a history key, and each is already answered for: store.js's
