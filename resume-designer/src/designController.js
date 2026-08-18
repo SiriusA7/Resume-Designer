@@ -524,9 +524,10 @@ export async function applyDesign({ group, property, value } = {}) {
 /**
  * Drop a whole group back to its service's defaults.
  *
- * Only the two groups whose service exports a reset: both remove their storage
- * key and re-apply the defaults themselves, so all that is composed here is the
- * re-paginate they leave behind.
+ * Only the two groups whose service exports a reset: both WRITE their defaults
+ * to storage and re-apply them themselves, so all that is composed here is the
+ * re-paginate they leave behind. They write rather than remove because these
+ * keys are synced and a removal announces nothing — see `resetSpacingSettings`.
  *
  * @param {string} group 'spacing' | 'accent'
  */

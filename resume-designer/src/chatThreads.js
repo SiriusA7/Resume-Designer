@@ -302,9 +302,17 @@ export function adoptStoredThreads() {
 }
 
 // Clear the legacy single-thread history key (used by /clear).
+//
+// EMPTIED, not removed. The key is synced and `removeItem` announces nothing,
+// so a clear left the old messages on the server. Nothing reads them again on
+// THIS device — the migration above runs only when there are no threads at all
+// — but a device joining the workspace later starts with none, reads the key
+// that was never cleared for it, and resurrects a conversation the person
+// explicitly deleted. An empty array is what the migration already treats as
+// "nothing to carry over", so this is the same state, said out loud.
 export function clearLegacyHistory() {
   try {
-    appStorage.removeItem(STORAGE_KEY);
+    appStorage.setItem(STORAGE_KEY, '[]');
   } catch {
     /* ignore */
   }

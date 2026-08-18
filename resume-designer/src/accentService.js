@@ -117,7 +117,12 @@ export function applyAccentSettings(settings) {
  * Reset accent settings to defaults
  */
 export function resetAccentSettings() {
-  appStorage.removeItem('resume-accent-settings');
+  // WRITTEN, not removed — see `resetSpacingSettings` for the whole reason.
+  // Short version: this key is synced, `removeItem` announces nothing, so a
+  // clear left the old accents on the server for every other device to keep and
+  // to send back. `getAccentSettings` spreads DEFAULT_ACCENT first, so writing
+  // the default reads exactly as absence did.
+  saveAccentSettings(DEFAULT_ACCENT);
   applyAccentSettings(DEFAULT_ACCENT);
   return DEFAULT_ACCENT;
 }

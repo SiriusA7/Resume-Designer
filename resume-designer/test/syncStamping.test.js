@@ -23,6 +23,9 @@ import {
   initPersistence, setPersistedSaveHandler,
 } from '../src/persistence.js';
 import { registerPersistedSaveHandler } from '../src/sync/syncModel.js';
+import { resetSpacingSettings } from '../src/spacingService.js';
+import { resetAccentSettings } from '../src/accentService.js';
+import { clearLegacyHistory } from '../src/chatThreads.js';
 import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
 import { SYNCED_SHARED_KEYS, classifyKey } from '../src/sync/syncKeys.js';
 
@@ -555,6 +558,50 @@ describe('the failure is reported under the key its gate was built from', () => 
     await settle();
 
     expect(allNamed()).not.toContain('key:resume-designer-applications');
+  });
+});
+
+describe('clearing a synced key travels, because deletion does not', () => {
+  beforeEach(() => { setStorageDirtyNotifier(notify); });
+
+  // `appStorage.removeItem` is deliberately unobserved: it neither stamps nor
+  // announces, and there is no tombstone in this protocol. So a reset that
+  // REMOVED its key left the server holding the old customisation — every other
+  // device kept showing it, and the next edit on any of them could send it back
+  // and undo the reset. Each of these writes the value the reset means instead,
+  // which is a change the interceptor can see. Asserted at the SYNC layer, not
+  // at storage: that a value landed on disk was never the thing in doubt.
+
+  it('names the spacing unit when spacing is reset to defaults', async () => {
+    const defaults = resetSpacingSettings();
+    await settle();
+
+    expect(allNamed()).toContain('key:resume-spacing-settings');
+    // And the bytes say "default" rather than being absent — a receiving device
+    // applies what arrives, so an announcement with nothing behind it is worse
+    // than silence.
+    expect(JSON.parse(appStorage.getItem('resume-spacing-settings'))).toEqual(defaults);
+  });
+
+  it('names the accent unit when accents are reset to defaults', async () => {
+    const defaults = resetAccentSettings();
+    await settle();
+
+    expect(allNamed()).toContain('key:resume-accent-settings');
+    expect(JSON.parse(appStorage.getItem('resume-accent-settings'))).toEqual(defaults);
+  });
+
+  it('names the legacy chat key when /clear empties it', async () => {
+    // Nothing reads this again on THIS device — the migration in chatThreads
+    // runs only when there are no threads at all — so the damage is on the
+    // device that joins the workspace LATER: it starts with no threads, reads
+    // the key that was never cleared for it, and resurrects a conversation the
+    // person explicitly deleted.
+    clearLegacyHistory();
+    await settle();
+
+    expect(allNamed()).toContain('key:resume-designer-chat-history');
+    expect(JSON.parse(appStorage.getItem('resume-designer-chat-history'))).toEqual([]);
   });
 });
 

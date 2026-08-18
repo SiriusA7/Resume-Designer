@@ -431,6 +431,13 @@ export const appStorage = {
   // that key on every receiving device — so a stamped removal names a unit the
   // model would then decline to build. Deletion does not propagate in this
   // design; nothing here is a tombstone.
+  //
+  // WHICH MEANS: clearing a SYNCED key is not a way to reset one. The server
+  // keeps what it had, every other device keeps showing it, and the next edit
+  // anywhere can send it back. A reset has to WRITE the value it means — see
+  // `resetSpacingSettings`. What belongs here is local disposal, where the key
+  // is going away with its workspace and no other device should learn anything:
+  // profile deletion, the wipe-before-validate restore path, the API key.
   removeItem(key) {
     key = mapKey(activeProfileId, key);
     if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'delete' }); return; }
