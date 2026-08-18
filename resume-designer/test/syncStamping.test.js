@@ -1632,6 +1632,40 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain('resume:v-9');
     });
 
+    it('does not quietly reset settings for a workspace the backup omits', async () => {
+      // The absent-blob synthesis built the tombstones on an empty object, so
+      // `settings` and `userProfile` — which live in the same blob — were
+      // dropped with them. That deletion cannot travel: `changedDataUnits`
+      // compares the fields present in the NEXT blob, and a field that is
+      // simply gone is never named. So the server kept them and the next fetch
+      // put them back — a local loss that undoes itself, which is the worst of
+      // both. Tombstoning the résumés is what the omission means; inventing a
+      // reset of everything else alongside it is not.
+      withOneResume();
+      appStorage.setItem(DATA, JSON.stringify({
+        variants: { 'v-9': { id: 'v-9', name: 'Dropped by the restore' } },
+        settings: { pageSize: 'a4' },
+        userProfile: { contactInfo: { fullName: 'Ada' } },
+      }));
+      await settle();
+
+      // A backup that represents this workspace as empty — no blob at all.
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: {} } },
+      });
+      await settle();
+
+      const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
+      expect(blob.variants['v-9'].deletedAt).toEqual(expect.any(String));
+      expect(blob.settings).toEqual({ pageSize: 'a4' });
+      expect(blob.userProfile).toEqual({ contactInfo: { fullName: 'Ada' } });
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();
