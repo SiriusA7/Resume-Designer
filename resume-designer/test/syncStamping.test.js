@@ -1854,6 +1854,50 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain('data:userProfile');
     });
 
+    it('clears an omitted field for a workspace this device has NO blob for', async () => {
+      // The last place the reset was gated on local state: the function bailed
+      // early when there was no prior blob at all. Only the tombstone loop needs
+      // one — it compares against what this workspace held — while the reset is
+      // about what the BACKUP omits, which is true whatever this device happens
+      // to have. A device with no blob for a workspace, restoring a backup whose
+      // blob omits `settings`, is exactly the device that cannot know another
+      // holds a customised record for it.
+      setProfileMapping(PID);
+      appStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+        { id: 'pnew', name: 'Never opened here', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      appStorage.setItem('resume-designer-active-profile', PID);
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      notify.mockClear();
+
+      // pnew has no blob on this device at all, and the backup's blob for it
+      // carries no settings.
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [
+          { id: PID, name: 'Ash', emoji: '\uD83D\uDE42' },
+          { id: 'pnew', name: 'Never opened here', emoji: '\uD83D\uDE42' },
+        ],
+        activeProfile: PID,
+        shared: {},
+        profiles: {
+          [PID]: { keys: {} },
+          pnew: { keys: { [DATA]: JSON.stringify({ variants: { 'v-n': { id: 'v-n', name: 'Theirs' } } }) } },
+        },
+      });
+      await settle();
+
+      const blob = JSON.parse(backend.files.get('resume-p--pnew--resume-designer-data'));
+      expect(blob.settings.pageSize).toBe('continuous');
+      expect(blob.variants['v-n'].name).toBe('Theirs');
+      const named = notify.mock.calls.flatMap((c) => c[0])
+        .filter((u) => u.profileId === 'pnew').map((u) => u.id);
+      expect(named).toContain('data:settings');
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();

@@ -47,6 +47,17 @@ async function seedTwoProfiles() {
   return { ashId, partnerId: partner.id };
 }
 
+// A replacement restore NORMALISES the two data fields that live in the blob:
+// `settings` and `userProfile` absent from a backup mean "the defaults", and
+// the restore writes them so that reset has a unit to travel as — an absent
+// field announces nothing, so the server's copy would otherwise come back. The
+// normalisation is stable (a re-export carries them, a second import changes
+// nothing), so these compare the parts a backup actually carries.
+const blobWithoutDefaults = (raw) => {
+  const { settings: _s, userProfile: _u, ...rest } = JSON.parse(raw);
+  return JSON.stringify(rest);
+};
+
 describe('format-2 export/restore', () => {
   it('round-trips both profiles, the registry, and shared keys', async () => {
     const { ashId, partnerId } = await seedTwoProfiles();
@@ -68,7 +79,7 @@ describe('format-2 export/restore', () => {
     const result = importFullBackupFromEnvelope(envelope);
     expect(result.keysImported).toBeGreaterThan(0);
     expect(loadRegistry()).toHaveLength(2);
-    expect(localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+    expect(blobWithoutDefaults(localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`))).toBe('{"variants":{"v2":{}}}');
     expect(localStorage.getItem('resume-designer-theme')).toBe('dark');
     expect(localStorage.getItem(ACTIVE_PROFILE_KEY)).toBe(ashId);
   });
@@ -357,7 +368,7 @@ describe('format-2 export/restore', () => {
       },
     });
 
-    expect(localStorage.getItem('resume-p--b--resume-designer-data')).toBe('{"variants":{}}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-p--b--resume-designer-data'))).toBe('{"variants":{}}');
     expect(result.historySkipped).toBe(1);
   });
 });
@@ -388,7 +399,7 @@ describe('format-1 import scoping', () => {
     // are the same string, and so proved nothing about this.
     expect(restored.variants.v1.deletedAt).toEqual(expect.any(String));
     // …partner untouched, registry intact…
-    expect(localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+    expect(blobWithoutDefaults(localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`))).toBe('{"variants":{"v2":{}}}');
     expect(loadRegistry()).toHaveLength(2);
     // …shared owned keys in the envelope still land (theme is shared)…
     expect(localStorage.getItem('resume-designer-theme')).toBe('light');
@@ -409,7 +420,7 @@ describe('per-profile export/import', () => {
     const imported = await importProfileBackup(envelope);
     expect(imported.id).not.toBe(partnerId);
     expect(loadRegistry()).toHaveLength(3);
-    expect(localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
+    expect(blobWithoutDefaults(localStorage.getItem(`resume-p--${imported.id}--resume-designer-data`))).toBe('{"variants":{"v2":{}}}');
   });
 
   // This is the WORST case for a blob-held credential: a per-profile export
@@ -710,7 +721,7 @@ describe('exportFullBackup orphan reconciliation', () => {
     __resetAppStorageForTests();
     const result = importFullBackupFromEnvelope(envelope); // must not throw on the orphan
     expect(result.keysImported).toBeGreaterThan(0);
-    expect(localStorage.getItem('resume-p--orphan1--resume-designer-data')).toBe('{"variants":{"vo":{}}}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-p--orphan1--resume-designer-data'))).toBe('{"variants":{"vo":{}}}');
   });
 });
 
@@ -768,7 +779,7 @@ describe('importFullBackupDurably', () => {
     const result = await importFullBackupDurably(envelope());
     expect(result.keysImported).toBeGreaterThan(0);
     expect(result.rollback).toBeUndefined();
-    expect(backend.files.get('resume-p--pA--resume-designer-data')).toBe('{"a":1}');
+    expect(blobWithoutDefaults(backend.files.get('resume-p--pA--resume-designer-data'))).toBe('{"a":1}');
   });
 
   it('keeps the guard armed on success; a non-reloading caller releases it to keep writing', async () => {
@@ -877,7 +888,7 @@ describe('exportFullBackup markerless recovery', () => {
     localStorage.clear();
     __resetAppStorageForTests();
     expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
-    expect(localStorage.getItem(`resume-p--${recovered.id}--resume-designer-data`)).toBe('{"variants":{"LIVE":{}}}');
+    expect(blobWithoutDefaults(localStorage.getItem(`resume-p--${recovered.id}--resume-designer-data`))).toBe('{"variants":{"LIVE":{}}}');
   });
 });
 
@@ -969,7 +980,7 @@ describe('format-2 prototype-name ids', () => {
     localStorage.clear();
     __resetAppStorageForTests();
     expect(() => importFullBackupFromEnvelope(envelope)).not.toThrow();
-    expect(localStorage.getItem('resume-p--constructor--resume-designer-data')).toBe('{"c":1}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-p--constructor--resume-designer-data'))).toBe('{"c":1}');
   });
 
   it('treats a keyless "toString" profile as a valid empty workspace on import', () => {
@@ -984,6 +995,6 @@ describe('format-2 prototype-name ids', () => {
       profiles: { real1: { keys: { 'resume-designer-data': '{"r":1}' } } },
     })).not.toThrow();
     expect(loadRegistry().map((p) => p.id).sort()).toEqual(['real1', 'toString']);
-    expect(localStorage.getItem('resume-p--real1--resume-designer-data')).toBe('{"r":1}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-p--real1--resume-designer-data'))).toBe('{"r":1}');
   });
 });

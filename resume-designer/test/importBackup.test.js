@@ -6,6 +6,15 @@ import {
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 import { stampRestoredWrites } from '../src/sync/syncModel.js';
 
+// A replacement restore NORMALISES the blob's two data fields: `settings` and
+// `userProfile` absent from a backup mean "the defaults", and the restore writes
+// them so that reset has a unit to travel as — an absent field announces
+// nothing, so the server's copy would otherwise come back.
+const blobWithoutDefaults = (raw) => {
+  const { settings: _s, userProfile: _u, ...rest } = JSON.parse(raw);
+  return JSON.stringify(rest);
+};
+
 beforeEach(() => {
   localStorage.clear();
 });
@@ -286,7 +295,7 @@ describe('importFullBackupFromEnvelope', () => {
         'evil-key': 'pwned',
       },
     });
-    expect(localStorage.getItem('resume-designer-data')).toBe('{"summary":"hi"}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-designer-data'))).toBe('{"summary":"hi"}');
     expect(localStorage.getItem('evil-key')).toBeNull();
     expect(result.keysImported).toBe(1);
   });
@@ -298,7 +307,7 @@ describe('importFullBackupFromEnvelope', () => {
       keys: { 'resume-designer-data': '{}' },
     });
     expect(localStorage.getItem('resume-zoom')).toBeNull();
-    expect(localStorage.getItem('resume-designer-data')).toBe('{}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-designer-data'))).toBe('{}');
   });
 
   // Legacy Electron stores can hold job descriptions as an id-keyed object map

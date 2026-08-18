@@ -1003,7 +1003,14 @@ function priorSnapshotFor(logicalKey, priorValues) {
 
 function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   const prior = parseJSONSafe(priorRaw);
-  if (!prior?.variants) return nextRaw;
+  // NO EARLY RETURN on a missing prior blob. Only the tombstone loop below
+  // needs one — it is comparing against what this workspace held — while the
+  // field reset is about what the BACKUP omits, which is a fact about the
+  // backup and true whatever this device happens to have. A device with no blob
+  // for a workspace (clean, or a profile it has never opened) is exactly the one
+  // that cannot know another device holds customised settings for it, and
+  // bailing here left the restore with nothing to stamp or announce, so that
+  // record came back on the next fetch.
   // An ABSENT incoming blob is a workspace the backup represents as empty, and
   // that is still a deletion of everything in it. Treated as "nothing to
   // compare", the wipe removed the résumés locally and no tombstone was written
@@ -1057,7 +1064,7 @@ function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   }
   const now = new Date().toISOString();
   let carried = 0;
-  for (const [id, variant] of Object.entries(prior.variants)) {
+  for (const [id, variant] of Object.entries(prior?.variants ?? {})) {
     if (nextVariants[id]) continue;
     if (isDeletedVariant(variant)) {
       // CARRIED FORWARD UNCHANGED, not skipped — the same mistake the registry
@@ -1080,12 +1087,22 @@ function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   // no résumés would otherwise return `null` here, both callers would skip the
   // write, and the local wipe would look like a reset that no unit was ever
   // stamped or announced for — so the stale server copies come back.
-  if (nextRaw == null) return JSON.stringify({ ...next, variants: nextVariants });
+  // `variants` is only forced onto the blob when there is something to put in it
+  // or it was already there. A blob that never carried the key should not
+  // acquire an empty one just because this ran.
+  const rebuild = () => {
+    const out = { ...next };
+    if (Object.keys(nextVariants).length > 0 || next.variants !== undefined) {
+      out.variants = nextVariants;
+    }
+    return JSON.stringify(out);
+  };
+  if (nextRaw == null) return rebuild();
   // `reset` counts too, or a backup that omits `settings` while dropping no
   // résumés would fall through to `nextRaw` and discard the default this just
   // decided on.
   if (droppedIds.length === 0 && carried === 0 && reset === 0) return nextRaw;
-  return JSON.stringify({ ...next, variants: nextVariants });
+  return rebuild();
 }
 
 function parseJSONSafe(raw) {
