@@ -612,6 +612,10 @@ final class OPSyncEngine {
     // That costs a round trip and cannot lose anything, which is the trade every
     // forfeited tag in this file makes.
     self.systemFields = Self.loadSystemFields(profileId: profileId)
+    // Beside them, and for the same session: a record this device could not
+    // read is still unread after a relaunch, and the deferred id that comes
+    // back needs the marker to still be here.
+    self.unreadableRecords = loadUnreadableRecords(profileId: profileId)
 
     let delegate = OPSyncDelegate(owner: self)
     let engine = CKSyncEngine(
@@ -895,6 +899,7 @@ extension OPSyncEngine {
           // Marked as ours to ask for again. `recordToSend` cannot tell on its
           // own why the page had no unit — see `unreadableRecords`.
           unreadableRecords.insert(record.recordID)
+          saveUnreadableRecords()
           unreadable.append(OPSyncFailure(
             unitId: record.recordID.recordName,
             profileId: opProfileId(forZone: record.recordID.zoneID),
@@ -1420,6 +1425,7 @@ extension OPSyncEngine {
         // device has now tried the one thing that could have worked. Terminal,
         // so the marker goes.
         unreadableRecords.remove(recordID)
+        saveUnreadableRecords()
         forget(record.recordID)
         report([OPSyncFailure(
           unitId: recordID.recordName, profileId: profileId, willRetry: false, code: nil,
@@ -1430,11 +1436,13 @@ extension OPSyncEngine {
       }
       // It came down. Nothing left to ask for.
       unreadableRecords.remove(recordID)
+      saveUnreadableRecords()
       await deliver([Arrival(record: record, unit: unit)])
     } catch let error as CKError where error.code == .unknownItem {
       // The server does not have it. Nothing is wrong and nothing is missing:
       // absence is not deletion here, and there is simply nothing to fetch.
       unreadableRecords.remove(recordID)
+      saveUnreadableRecords()
       forget(recordID)
     } catch {
       // Network, quota, anything else. Worth saying, and worth saying it WILL
@@ -1716,6 +1724,42 @@ extension OPSyncEngine {
 extension OPSyncEngine {
   private static func stateKey(_ profileId: String) -> String { "op-sync-state-\(profileId)" }
   private static func recordsKey(_ profileId: String) -> String { "op-sync-records-\(profileId)" }
+  private static func unreadableKey(_ profileId: String) -> String {
+    "op-sync-unreadable-\(profileId)"
+  }
+
+  /// The unreadable-record markers, on disk beside the deferred queue they pair
+  /// with.
+  ///
+  /// Held only in memory, the marker did not survive the thing the durable
+  /// retry exists FOR. The queue outlives a launch; the marker did not, so the
+  /// id came back on the next start, found nothing, and the change was dropped
+  /// — the same stranded record, defeated a third way. Full record identity for
+  /// the same reason `systemFieldsKey` uses it: one engine session covers every
+  /// zone and the same record name exists in all of them.
+  private func loadUnreadableRecords(profileId: String) -> Set<CKRecord.ID> {
+    let raw = UserDefaults.standard.stringArray(forKey: Self.unreadableKey(profileId)) ?? []
+    var out: Set<CKRecord.ID> = []
+    for entry in raw {
+      let parts = entry.components(separatedBy: "\u{1F}")
+      guard parts.count == 3 else { continue }
+      let zone = CKRecordZone.ID(zoneName: parts[1], ownerName: parts[0])
+      out.insert(CKRecord.ID(recordName: parts[2], zoneID: zone))
+    }
+    return out
+  }
+
+  private func saveUnreadableRecords() {
+    guard let profileId else { return }
+    let key = Self.unreadableKey(profileId)
+    guard !unreadableRecords.isEmpty else {
+      UserDefaults.standard.removeObject(forKey: key)
+      return
+    }
+    UserDefaults.standard.set(
+      unreadableRecords.map(Self.systemFieldsKey).sorted(), forKey: key
+    )
+  }
   static func deferredKey(_ profileId: String) -> String { "op-sync-deferred-\(profileId)" }
   /// NOT per profile: an iCloud account is a property of the device, and every
   /// profile's zone lives in whichever one is signed in.
@@ -1856,7 +1900,7 @@ extension OPSyncEngine {
   /// rewrites its state and record keys on its next event.
   static func forgetEverythingAboutTheServer() {
     let defaults = UserDefaults.standard
-    let prefixes = [stateKey(""), recordsKey(""), deferredKey("")]
+    let prefixes = [stateKey(""), recordsKey(""), deferredKey(""), unreadableKey("")]
     for key in defaults.dictionaryRepresentation().keys
     where prefixes.contains(where: key.hasPrefix) {
       defaults.removeObject(forKey: key)
