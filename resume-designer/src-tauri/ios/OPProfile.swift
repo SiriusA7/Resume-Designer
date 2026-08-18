@@ -745,6 +745,31 @@ private struct ProfileExperienceScreen: View {
     // Leaving the screen with the keyboard still up never fires the focus
     // change, and an employer name is the one field here that is not written
     // per keystroke.
+    // AND when the app goes away, which `onDisappear` does not cover. The
+    // company field is the one control on this screen that is not written per
+    // keystroke, so a rename typed and then interrupted — a call, a swipe to
+    // another app — exists only in `companyDrafts`, in Swift, where the page's
+    // own background flush cannot reach it. iOS terminating the suspended
+    // process then loses the whole rename, while every ordinary profile field
+    // typed in the same minute survived.
+    //
+    // `willResignActive` rather than `didEnterBackground`: it fires first and
+    // also covers the interruptions that do not become a background at all, and
+    // the cost of committing early is a write that was going to happen anyway.
+    //
+    // The notification rather than `scenePhase`, for the reason written out at
+    // the shell's own foreground handler: this view tree is installed into a
+    // UIHostingController by hand, so how much of SwiftUI's scene environment
+    // reaches it is an inference.
+    //
+    // The guard is NOT released here. The field may still be focused and the app
+    // may come straight back, and releasing while a draft is still on screen is
+    // the overwrite this guard exists to prevent.
+    .onReceive(NotificationCenter.default.publisher(
+      for: UIApplication.willResignActiveNotification
+    )) { _ in
+      for id in Array(companyDrafts.keys) { commitCompany(id) }
+    }
     .onDisappear {
       for id in Array(companyDrafts.keys) { commitCompany(id) }
       // …and the guard is released with them, or leaving this way would stall
