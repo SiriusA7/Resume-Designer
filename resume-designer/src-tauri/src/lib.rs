@@ -101,6 +101,7 @@ pub fn run() {
             commands::pdf_preview_path,
             commands::save_pdf_preview,
             commands::stage_pdf_for_share,
+            commands::stage_text_for_share,
             commands::discard_pdf_preview,
             commands::migration::probe_legacy_electron_data,
             commands::migration::import_legacy_electron_data,

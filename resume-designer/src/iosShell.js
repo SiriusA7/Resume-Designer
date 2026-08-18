@@ -1472,7 +1472,13 @@ export function initIOSShell(deps) {
     renameVariant: ({ name }) => deps.renameCurrentVariant(String(name ?? '')),
     duplicateVariant: () => duplicateVariant(),
     deleteVariant: () => ask('rd:variant-delete'),
+    // The web `<input type="file">` does nothing in WKWebView, so the shell
+    // picks the file and sends its TEXT here. `ask('rd:variant-import')` stays
+    // for any build without a native picker.
     importVariant: () => ask('rd:variant-import'),
+    importVariantText: ({ text, name }) => window.dispatchEvent(
+      new CustomEvent('rd:variant-import-text', { detail: { text: String(text ?? ''), name } }),
+    ),
     exportVariant: ({ format }) => exportCurrentVariant(format === 'md' ? 'md' : 'json'),
 
     // Tools. All of these already have a single entry point used by the web
@@ -1762,6 +1768,12 @@ export function initIOSShell(deps) {
     replayOnboarding: () => window.showOnboardingWizard?.(),
     exportBackup: () => deps.exportFullBackupWithFeedback(),
     importBackup: () => pickBackupFile(deps.importBackupFromFile),
+    // Same reason, same shape: a File is built from the picked text so the whole
+    // existing import — parse, key count, destructive confirm, restore — runs
+    // unchanged instead of being written a second time for one platform.
+    importBackupText: ({ text, name }) => deps.importBackupFromFile(
+      new File([String(text ?? '')], name || 'backup.json', { type: 'application/json' }),
+    ),
 
     // CloudKit sync. Swift calls these and never parses a payload: a unit is
     // `{ id, kind, payload, modifiedAt }` and the payload is an opaque string.

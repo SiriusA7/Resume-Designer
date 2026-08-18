@@ -118,6 +118,16 @@ export default function Header() {
       'rd:variant-rename': run('openRename'),
       'rd:variant-delete': run('handleDelete'),
       'rd:variant-import': run('pickImport'),
+      // iOS picks the file NATIVELY and sends its text: the hidden
+      // `<input type="file">` above does nothing in WKWebView, so the menu item
+      // accepted a tap and never supplied a file. A File is built from the text
+      // so the whole existing pipeline — including the grouping confirm — runs
+      // unchanged rather than being written a second time for one platform.
+      'rd:variant-import-text': (e) => {
+        const { text, name } = e.detail || {};
+        if (typeof text !== 'string' || !text) return;
+        importPicked(new File([text], name || 'resume.json', { type: 'application/json' }));
+      },
     };
     for (const [name, fn] of Object.entries(handlers)) window.addEventListener(name, fn);
     return () => {
@@ -143,20 +153,25 @@ export default function Header() {
   const onImportChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      importVariant(file, {
-        confirmGrouping: (runCount) => confirmDestructive({
-          title: runCount === 1
-            ? '1 employer has more than one role'
-            : `${runCount} employers have more than one role`,
-          description: 'Group each employer’s roles under a single company heading? Keep them separate if any of them are return stints rather than promotions.',
-          actionLabel: 'Group',
-          cancelLabel: 'Keep separate',
-          destructive: false,
-        }),
-      });
+      importPicked(file);
       e.target.value = ''; // allow re-importing the same file
     }
   };
+
+  /** One import path for both pickers — the web input and the native one. */
+  function importPicked(file) {
+    importVariant(file, {
+      confirmGrouping: (runCount) => confirmDestructive({
+        title: runCount === 1
+          ? '1 employer has more than one role'
+          : `${runCount} employers have more than one role`,
+        description: 'Group each employer’s roles under a single company heading? Keep them separate if any of them are return stints rather than promotions.',
+        actionLabel: 'Group',
+        cancelLabel: 'Keep separate',
+        destructive: false,
+      }),
+    });
+  }
 
   // deleteCurrentVariant() is unconditional now (the confirm was lifted out of
   // variantManager into the caller), so the Header owns the confirmation + the

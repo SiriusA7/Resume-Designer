@@ -5,7 +5,10 @@
 
 import { store, generateId } from './store.js';
 import { parseResume } from './parser.js';
-import { isTauri } from './native.js';
+import { isTauri, isIOSPlatform, stageTextForShare, notify } from './native.js';
+// The share sheet, for the exports iOS cannot download. `iosShell` does not
+// import this module, so the edge only goes one way.
+import { sharePdf, isNativeShellAvailable } from './iosShell.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 // The API key lives in the OS keychain, not beside the resume data on disk.
@@ -1434,6 +1437,21 @@ function generateMarkdown(data) {
 
 // Download file utility
 export function downloadFile(content, filename, mimeType) {
+  // iOS HAS NO DOWNLOAD. WKWebView does nothing with an `<a download>` blob
+  // click — no file, no error, no sign that anything was asked for — so every
+  // export here (résumé JSON, résumé Markdown, and the full backup, which all
+  // funnel through this one call) silently produced nothing at all.
+  //
+  // Staged to a temp file and handed to the share sheet instead, which is the
+  // same route the PDF export already takes and where "Save to Files" lives.
+  // Fire-and-forget by necessity — this function's callers are synchronous —
+  // so the failure path reports rather than throws into nobody's catch.
+  if (shouldShareInsteadOfDownload()) {
+    shareTextFile(content, filename).catch((error) => {
+      console.error('[export] could not share the file:', error);
+    });
+    return;
+  }
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -1443,6 +1461,29 @@ export function downloadFile(content, filename, mimeType) {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Whether this build must share rather than download — iOS under the native
+ * shell, which is the only place both halves are true.
+ */
+function shouldShareInsteadOfDownload() {
+  return isIOSPlatform() && isNativeShellAvailable();
+}
+
+/** Stage the text and hand it to the native share sheet, reporting a failure. */
+async function shareTextFile(content, filename) {
+  try {
+    const staged = await stageTextForShare(filename, String(content));
+    if (sharePdf(staged)) return;
+    throw new Error('the share sheet is unavailable');
+  } catch (error) {
+    await notify({
+      title: 'Export failed',
+      type: 'error',
+      message: `Could not share ${filename}: ${error.message || 'Unknown error'}.`,
+    });
+  }
 }
 
 // Import from JSON file

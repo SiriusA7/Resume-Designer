@@ -618,6 +618,18 @@ export async function stagePdfForShare(fileName) {
   return await core.invoke('stage_pdf_for_share', { fileName });
 }
 
+/**
+ * Write text to a temp file and return its path, for the iOS share sheet.
+ *
+ * The counterpart of `stagePdfForShare` for content the page already holds. See
+ * `downloadFile` (persistence.js) for why iOS cannot use the ordinary route.
+ */
+export async function stageTextForShare(fileName, contents) {
+  if (!isTauri) throw new Error('Sharing a file is only available in the app');
+  const { core } = await tauri();
+  return await core.invoke('stage_text_for_share', { fileName, contents });
+}
+
 /** Delete the preview temp PDF (user cancelled). Best-effort; never throws. */
 export async function discardPdfPreview() {
   if (!isTauri) return;

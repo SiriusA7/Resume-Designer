@@ -351,6 +351,46 @@ pub async fn stage_pdf_for_share(
     Ok(dest.to_string_lossy().into_owned())
 }
 
+/// Write renderer-supplied TEXT to a temp file and return its path, so iOS can
+/// hand it to the share sheet.
+///
+/// The web export path is `downloadFile`, an `<a download>` blob click, and
+/// WKWebView does nothing with one — so every "Export as JSON / Markdown /
+/// backup" on iOS silently produced no file at all. This is the same staging
+/// `stage_pdf_for_share` does, for content the renderer already holds rather
+/// than a file the Rust side made.
+///
+/// The renderer names the file but cannot choose where it lands: only the final
+/// component is taken and everything that could redirect the write is dropped,
+/// exactly as above. An extension supplied by the caller is kept — the share
+/// sheet needs `.json` vs `.md` to offer sensible destinations — but only from a
+/// short allow-list, so a name cannot smuggle in an executable one.
+#[tauri::command]
+pub async fn stage_text_for_share(file_name: String, contents: String) -> Result<String, String> {
+    let path = std::path::Path::new(&file_name);
+    let stem: String = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
+        .take(80)
+        .collect();
+    let stem = stem.trim().trim_matches('.');
+    let stem = if stem.is_empty() { "Export" } else { stem };
+
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .filter(|e| matches!(e.as_str(), "json" | "md" | "txt"))
+        .unwrap_or_else(|| "txt".to_string());
+
+    let dest = std::env::temp_dir().join(format!("{}.{}", stem, ext));
+    std::fs::write(&dest, contents.as_bytes())
+        .map_err(|e| format!("Failed to stage export: {}", e))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 /// Copy the preview temp PDF to the user-confirmed path (from `pick_pdf_save_path`),
 /// then delete the temp. The renderer supplies neither the bytes nor the path.
 #[tauri::command]

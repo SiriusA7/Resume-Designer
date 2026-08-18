@@ -3213,6 +3213,11 @@ private struct ShellView: View {
   /// silently does nothing. Measured: chat and structure both no-op'd while
   /// settings worked.
   @State private var sheet: Sheet?
+  /// The résumé file picker. The web import is a hidden `<input type="file">`,
+  /// which does nothing in WKWebView — the menu item accepted a tap and never
+  /// supplied a file — so the pick happens here and only the TEXT crosses. Same
+  /// arrangement `OPProfile` already uses for its own import.
+  @State private var importingVariant = false
   /// The New-workspace prompt. An `.alert` with a text field rather than a
   /// sheet: naming a workspace is one short answer, and a whole sheet for one
   /// field reads as a bigger commitment than creating one actually is.
@@ -3372,6 +3377,17 @@ private struct ShellView: View {
         // of a native app, and the last web surface reachable from this bar.
         // Pre-filled with the current name, because a rename is nearly always
         // an edit of what is there rather than a fresh sentence.
+        .fileImporter(
+          isPresented: $importingVariant,
+          allowedContentTypes: [.json],
+          allowsMultipleSelection: false
+        ) { result in
+          guard let picked = readPickedText(result, label: "resume") else { return }
+          // Only the TEXT crosses. The parse, the employer-grouping question
+          // and the write all stay in JS, so the native picker and the web one
+          // end in the same code rather than in two imports that drift.
+          model.send("importVariantText", ["text": picked.text, "name": picked.name])
+        }
         .alert("Rename resume", isPresented: $renamingVariant) {
           TextField("Name", text: $renameDraft)
             .textInputAutocapitalization(.words)
@@ -3692,7 +3708,7 @@ private struct ShellView: View {
       // done that often — they live in the bottom bar now, one tap from the
       // canvas.
       Section("File") {
-        Button { model.send("importVariant") } label: { Label("Import…", systemImage: "square.and.arrow.down") }
+        Button { importingVariant = true } label: { Label("Import…", systemImage: "square.and.arrow.down") }
         Button { model.send("exportVariant", ["format": "json"]) } label: { Label("Export as JSON", systemImage: "curlybraces") }
         Button { model.send("exportVariant", ["format": "md"]) } label: { Label("Export as Markdown", systemImage: "text.alignleft") }
       }
@@ -4186,6 +4202,30 @@ private struct PDFDocumentView: UIViewRepresentable {
 /// what actually landed in the store rather than what it optimistically set.
 /// The one exception is the API-key field, which has no snapshot to render
 /// from: only whether a key exists comes back.
+/// A picked file's text and name, or nil when nothing usable was chosen.
+///
+/// Shared by the two importers so the security-scoped read — which a file from
+/// outside the app's container fails without — is written once rather than
+/// twice. Same pair `OPProfile.handleImport` opens.
+private func readPickedText(
+  _ result: Result<[URL], Error>,
+  label: String
+) -> (text: String, name: String)? {
+  guard case .success(let urls) = result, let url = urls.first else {
+    if case .failure(let error) = result {
+      NSLog("[OPShell] \(label) import failed: \(error)")
+    }
+    return nil
+  }
+  let scoped = url.startAccessingSecurityScopedResource()
+  defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+  guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+    NSLog("[OPShell] \(label) import could not be read as text")
+    return nil
+  }
+  return (text, url.lastPathComponent)
+}
+
 private struct SettingsSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
@@ -4196,6 +4236,9 @@ private struct SettingsSheet: View {
   /// The last save was refused. Cleared on the next attempt, not on a timer —
   /// the message has to outlive the tap that caused it.
   @State private var apiKeyFailed = false
+  /// The backup file picker, here for the same reason as the résumé one: the
+  /// web input never opens under the shell.
+  @State private var importingBackup = false
 
   private var settings: ShellSnapshot.Settings { model.snapshot.settings }
 
@@ -4289,7 +4332,7 @@ private struct SettingsSheet: View {
 
         Section("Data") {
           Button("Export backup…") { model.send("exportBackup") }
-          Button("Import backup…") { model.send("importBackup") }
+          Button("Import backup…") { importingBackup = true }
         }
 
         Section {
@@ -4308,6 +4351,19 @@ private struct SettingsSheet: View {
         }
       }
       .navigationTitle("Settings")
+      .fileImporter(
+        isPresented: $importingBackup,
+        allowedContentTypes: [.json],
+        allowsMultipleSelection: false
+      ) { result in
+        guard let picked = readPickedText(result, label: "backup") else { return }
+        // DISMISSED FIRST. The import asks for a destructive confirmation, and
+        // that dialog is web — it renders in the canvas UNDER this sheet, where
+        // it cannot be seen or answered, so the import simply stalled. The
+        // "Replay welcome guide" button already does this for the same reason.
+        dismiss()
+        model.send("importBackupText", ["text": picked.text, "name": picked.name])
+      }
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
