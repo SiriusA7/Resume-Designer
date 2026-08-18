@@ -645,6 +645,13 @@ function adoptLoadedDocument(unit) {
   // the person would be editing into nothing. Noted here and reconciled after
   // the flush, exactly like a deleted workspace.
   if (resumeTombstone(unit.payload)) {
+    // EVERY landed tombstone, not only the one on screen. `getVariants` stops
+    // returning it immediately, but the variant list the header and the library
+    // render is a CACHED snapshot that only `variantManager`'s own mutations
+    // refresh — so a résumé deleted on another device went on being listed, and
+    // the "you can't delete your only resume" guard went on counting it. The
+    // one on screen additionally has to be navigated away from.
+    landedResumeTombstones.push(variantId);
     if (store.isLoadedVariant(variantId)) deletedOpenVariant = variantId;
     return;
   }
@@ -655,20 +662,22 @@ function adoptLoadedDocument(unit) {
   store.adoptDocument(variantId, document);
 }
 
-// Set when a landed tombstone names the résumé on screen; consumed once, after
-// the apply's flush, by the handler below.
+// Résumés whose tombstone landed in this batch, and separately the one that was
+// on screen. Both consumed once, after the flush, by the handler below.
+let landedResumeTombstones = [];
 let deletedOpenVariant = null;
-let openVariantDeletedHandler = null;
+let resumeDeletedHandler = null;
 
 /**
- * Install what to do when another device deletes the résumé open here.
+ * Install what to do when another device deletes a résumé here.
  *
- * main.js owns it for the same reason it owns the deleted-workspace handler:
- * choosing what to open instead is the variant list's question, not this
- * module's.
+ * Called with every id whose tombstone landed, and separately the one that was
+ * on screen (or null). main.js owns it for the same reason it owns the
+ * deleted-workspace handler: refreshing the list and choosing what to open
+ * instead are the variant list's questions, not this module's.
  */
-export function setOpenVariantDeletedHandler(handler) {
-  openVariantDeletedHandler = typeof handler === 'function' ? handler : null;
+export function setResumeDeletedHandler(handler) {
+  resumeDeletedHandler = typeof handler === 'function' ? handler : null;
 }
 
 /**
@@ -1269,13 +1278,15 @@ export async function applyUnits(units) {
  * this device does not hold.
  */
 async function reconcileRemoteDeletions() {
-  if (deletedOpenVariant) {
-    const variantId = deletedOpenVariant;
+  if (landedResumeTombstones.length) {
+    const deleted = landedResumeTombstones;
+    const openId = deletedOpenVariant;
+    landedResumeTombstones = [];
     deletedOpenVariant = null;
     try {
-      openVariantDeletedHandler?.(variantId);
+      resumeDeletedHandler?.(deleted, openId);
     } catch (err) {
-      console.error('[sync] could not move off a remotely deleted résumé:', err);
+      console.error('[sync] could not settle a remotely deleted résumé:', err);
     }
   }
   if (activeProfileDeleted) {

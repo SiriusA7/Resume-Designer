@@ -77,6 +77,7 @@ vi.mock('../src/appStorage.js', () => ({
 const {
   collectUnit, collectUnits, unitScopes, applyUnits, parkLoser, registerPersistedSaveHandler,
   registerEditingProbe, touchUnit, resolveConflict, setActiveProfileDeletedHandler,
+  setResumeDeletedHandler,
   resolveConflicts,
 } = await import('../src/sync/syncModel.js');
 // The résumé store, not the storage map above: parking into the LOADED
@@ -332,6 +333,20 @@ describe('a deleted résumé travels', () => {
     const blob = JSON.parse(disk.get(physical(DATA)));
     expect(blob.variants['v-1'].deletedAt).toBe('2026-08-18T00:00:00.000Z');
     expect(blob.variants['v-1'].data).toBeUndefined();
+  });
+
+  it('reports a deletion for a résumé that is NOT the one on screen', async () => {
+    // The list the header and the library render is a CACHED snapshot that only
+    // variantManager's own mutations refresh. Reported only for the loaded
+    // variant, a résumé deleted on another device stayed on that list — and the
+    // "you can't delete your only resume" guard went on counting it.
+    const onDeleted = vi.fn();
+    setResumeDeletedHandler(onDeleted);
+    await applyUnits([tombstone('v-other')]);
+    setResumeDeletedHandler(null);
+
+    // Named, with null for "none of them was on screen".
+    expect(onDeleted).toHaveBeenCalledWith(['v-other'], null);
   });
 
   it('still refuses a record that is merely broken', async () => {

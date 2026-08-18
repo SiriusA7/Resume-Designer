@@ -29,7 +29,7 @@ import {
 import {
   initVariants, loadVariant, duplicateVariant, exportCurrentVariant, renameCurrentVariant,
   subscribeVariants, getVariantsSnapshot,
-  getVariantList, getCurrentId,
+  getVariantList, getCurrentId, refreshVariants,
 } from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
@@ -52,7 +52,7 @@ import {
   registerPersistedSaveHandler, touchUnit,
   registerEditingProbe, isSyncEnabled, setSyncEnabled,
   installStorageStamping, setStorageDirtyNotifier, setActiveProfileDeletedHandler,
-  setOpenVariantDeletedHandler,
+  setResumeDeletedHandler,
 } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
@@ -135,12 +135,20 @@ registerEditingProbe(() => getActiveInlineEditable() !== null);
 // The résumé on screen, deleted on another device. Same division as the
 // workspace handler below: the sync layer lands the tombstone and says so, and
 // what to open instead is the variant list's question.
-setOpenVariantDeletedHandler((variantId) => {
-  const live = Object.keys(getVariants()).filter((id) => id !== variantId);
+setResumeDeletedHandler((deletedIds, openVariantId) => {
+  // The list first, and for EVERY deletion. `getVariants` already stops
+  // returning them, but what the header and the library render is a cached
+  // snapshot that only variantManager's own mutations refresh — so without this
+  // a résumé deleted elsewhere stayed on the list, and the last-résumé guard
+  // kept counting it.
+  refreshVariants();
+  if (!openVariantId) return;
+
+  const live = Object.keys(getVariants()).filter((id) => !deletedIds.includes(id));
   if (live.length === 0) {
-    // Nothing left to open. Leaving the deleted résumé on screen is the least
-    // bad option — the persistence path refuses to write over its tombstone, so
-    // nothing here can resurrect it, and a reload lands on the empty state.
+    // Nothing left to open. Leaving it on screen is the least bad option — the
+    // persistence path refuses to write over a tombstone, so nothing here can
+    // resurrect it, and a reload lands on the empty state.
     console.warn('[variants] the open résumé was deleted elsewhere and none remain');
     return;
   }
