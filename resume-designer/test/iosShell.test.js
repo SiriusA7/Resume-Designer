@@ -75,6 +75,7 @@ describe('buildSnapshot', () => {
       modalOpen: false,
       settings: {
         theme: 'system', hasApiKey: false, autoFallback: false, syncEnabled: false, version: '',
+        saveFailed: false,
       },
       document: null,
       chat: null,
@@ -384,13 +385,16 @@ describe('buildSettings', () => {
     expect(projected.hasApiKey).toBe(true);
     expect(JSON.stringify(projected)).not.toContain('sk-or');
     expect(Object.keys(projected).sort()).toEqual(
-      ['autoFallback', 'hasApiKey', 'syncEnabled', 'theme', 'version']
+      ['autoFallback', 'hasApiKey', 'saveFailed', 'syncEnabled', 'theme', 'version']
     );
   });
 
   it('defaults to a shape Swift can decode when given nothing', () => {
     expect(buildSettings()).toEqual({
       theme: 'system', hasApiKey: false, autoFallback: false, syncEnabled: false, version: '',
+      // Storage's answer, not a setting: every control here writes through the
+      // cache, so the sheet has to be told when one of those writes was refused.
+      saveFailed: false,
     });
   });
 
@@ -1063,6 +1067,19 @@ describe('the Design sheet commands', () => {
     // Its own scope only — the structure sheet is still up.
     expect(nativeEditingBusy('document')).toBe(true);
     send({ type: 'setNativeEditing', scope: 'document', value: 'false' });
+  });
+
+  it('reports an unsent native chat draft as work in flight', async () => {
+    // The draft lives only in Swift, so `threadHolderBusy` — which asks the
+    // React hook — could not see it. A thread list adopted from another device
+    // would select a different current thread underneath the text, and Send
+    // would post it into that conversation instead.
+    const { send } = await mount();
+    const { nativeEditingBusy } = await import('../src/iosShell.js');
+    send({ type: 'setNativeEditing', scope: 'chat', holder: 'composer', value: 'true' });
+    expect(nativeEditingBusy('chat')).toBe(true);
+    send({ type: 'setNativeEditing', scope: 'chat', holder: 'composer', value: 'false' });
+    expect(nativeEditingBusy('chat')).toBe(false);
   });
 
   it('refuses a hold that does not say whose it is', async () => {

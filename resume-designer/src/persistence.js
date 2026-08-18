@@ -211,18 +211,24 @@ function reportDataWrite(ok) {
   window.dispatchEvent(new CustomEvent(DATA_SAVE_STATE_EVENT));
 }
 
+// The blob AND the theme. Settings live in the blob, except the theme, which
+// `theme.js` keeps in a key of its own so the first paint can read it without
+// parsing the résumé — and the native Settings sheet writes both, so either
+// refusal means a control on that sheet is showing a value that is not stored.
+const SETTINGS_BEARING_KEYS = [STORAGE_KEY, 'resume-designer-theme'];
+
 function listenForDataWrites() {
   if (watchingDataWrites) return;
   watchingDataWrites = true;
   onWriteFailure((logicalKey) => {
-    if (logicalKey === STORAGE_KEY) reportDataWrite(false);
+    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(false);
   });
   onWriteSettled((logicalKey) => {
-    if (logicalKey === STORAGE_KEY) reportDataWrite(true);
+    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(true);
   });
 }
 
-/** True while the résumé on screen is known not to have reached disk. */
+/** True while the résumé or the settings on screen are not known to be on disk. */
 export function dataSaveFailed() {
   listenForDataWrites();
   return dataUnsaved;

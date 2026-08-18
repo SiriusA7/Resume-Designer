@@ -327,6 +327,7 @@ export function buildOnboarding({
  */
 export function buildSettings({
   theme, hasApiKey = false, autoFallback = false, syncEnabled = false, version = '',
+  saveFailed = false,
 } = {}) {
   return {
     theme: theme === 'light' || theme === 'dark' ? theme : 'system',
@@ -334,6 +335,11 @@ export function buildSettings({
     autoFallback: !!autoFallback,
     syncEnabled: !!syncEnabled,
     version: typeof version === 'string' ? version : '',
+    // Every control on the native Settings sheet writes through the cache, so
+    // each one reports success the moment the value is taken rather than
+    // stored. The refusal arrives later, and the toast that would carry it
+    // renders under the sheet.
+    saveFailed: !!saveFailed,
   };
 }
 
@@ -1686,7 +1692,7 @@ export function initIOSShell(deps) {
     // adoption for that scope until the sheet closed.
     setNativeEditing: ({ scope, value, holder }) => {
       const name = String(scope ?? '');
-      if (name !== 'document' && name !== 'profile') {
+      if (name !== 'document' && name !== 'profile' && name !== 'chat') {
         throw new Error('setNativeEditing needs a known scope');
       }
       const who = String(holder ?? '');
@@ -2028,7 +2034,7 @@ export function initIOSShell(deps) {
         accountStats: deps.getAccountStats?.() ?? null,
         ...buildSnapshot({
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
-          settings: readSettings(),
+          settings: { ...readSettings(), saveFailed: (deps.dataSaveFailed || dataSaveFailed)() },
           document: streamDocument
             ? project('document', () => ({
               ...deps.getDocument(),

@@ -513,9 +513,15 @@ struct ShellSnapshot: Decodable, Equatable {
     var autoFallback: Bool
     var syncEnabled: Bool
     var version: String
+    /// A settings-bearing key is not on disk. Every control on the sheet writes
+    /// through the cache and reports success on the value being TAKEN, so the
+    /// refusal arrives afterwards — and the toast that carries it on desktop
+    /// renders under this sheet.
+    var saveFailed: Bool
 
     static let empty = Settings(
-      theme: "system", hasApiKey: false, autoFallback: false, syncEnabled: false, version: ""
+      theme: "system", hasApiKey: false, autoFallback: false, syncEnabled: false, version: "",
+      saveFailed: false
     )
   }
 
@@ -3628,7 +3634,9 @@ private struct ShellView: View {
             // Let the held edit go and commit what the Format tab changed. The
             // inline editor saves on finish, and finishing is what was held.
             model.send("formatRelease")
-          case .chat: model.send("setChatOpen", ["value": "false"])
+          case .chat:
+            model.send("setChatOpen", ["value": "false"])
+            model.send("setNativeEditing", ["scope": "chat", "value": "false"])
           case .library: model.send("setLibraryOpen", ["value": "false"])
           case .history: model.send("setHistoryOpen", ["value": "false"])
           case .jobs: model.send("setJobsOpen", ["value": "false"])
@@ -4454,6 +4462,25 @@ private func readPickedText(
   return (text, url.lastPathComponent)
 }
 
+/// "These settings are not on disk." The third of these, worded like
+/// `JobsSaveWarning` and `DocumentSaveWarning`, because it is the same failure
+/// on the keys this sheet writes.
+private struct SettingsSaveWarning: View {
+  var body: some View {
+    Label {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Not being saved").font(.subheadline.weight(.semibold))
+        Text("Storage is full, so these settings are not on disk. Free up space — they will go back to their old values on the next launch.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    } icon: {
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+    }
+    .padding(.vertical, 2)
+  }
+}
+
 private struct SettingsSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
@@ -4477,6 +4504,12 @@ private struct SettingsSheet: View {
   var body: some View {
     NavigationStack {
       Form {
+        // FIRST, and standing: every control below reports success on the cache
+        // taking the value, so without this the sheet looks saved right up until
+        // the settings revert on the next launch.
+        if settings.saveFailed {
+          Section { SettingsSaveWarning() }
+        }
         Section("Appearance") {
           Picker("Theme", selection: themeBinding) {
             Text("System").tag("system")
@@ -5886,6 +5919,19 @@ private struct ChatSheet: View {
         ToolbarItem(placement: .topBarLeading) { threadsMenu }
         ToolbarItem(placement: .principal) { titleMenu }
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }
+      // UNSENT TEXT IS WORK, and it is Swift state — `threadHolderBusy` asks the
+      // React hook, which can only see a stream in flight. So a thread list
+      // adopted from another device could select a different current thread
+      // underneath this draft, and Send would post words written for one
+      // conversation into another. Reported while the field holds anything, and
+      // released when it is emptied — including by `sendDraft`, which clears it.
+      .onChange(of: draft) { _, text in
+        model.send("setNativeEditing", [
+          "scope": "chat", "holder": "composer",
+          "value": text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "false" : "true",
+        ])
       }
       .sheet(isPresented: $showReview) {
         ChangeReviewSheet(model: model)
