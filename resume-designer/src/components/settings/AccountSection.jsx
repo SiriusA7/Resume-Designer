@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Check, Download, MoreHorizontal, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -360,7 +361,11 @@ export function AccountSection() {
                 <Plus className="size-3.5" /> New profile
               </Button>
               <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={onImport} />
-              <Button variant="outline" size="sm" className="h-8" disabled={adopting} onClick={() => fileRef.current?.click()}>
+              <Button variant="outline" size="sm" className="h-8" disabled={adopting} onClick={() => {
+                const blocked = filePickBlockedReason();
+                if (blocked) { toast.error(blocked); return; }
+                fileRef.current?.click();
+              }}>
                 <Upload className="size-3.5" /> Import profile
               </Button>
             </>

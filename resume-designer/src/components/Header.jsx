@@ -5,6 +5,7 @@ import {
   ChevronDown, Settings, FileDown, User, Briefcase, History, Menu, Check, Loader2, LibraryBig,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
@@ -149,7 +150,14 @@ export default function Header() {
     e.preventDefault();
     if (renameCurrentVariant(renameValue)) setRenameOpen(false);
   };
-  const pickImport = () => importInputRef.current?.click();
+  const pickImport = () => {
+    // On iOS the shell picks natively and sends the TEXT; without the shell this
+    // input is dead in WKWebView, so say so rather than accept the tap and do
+    // nothing. See filePickGuard.
+    const blocked = filePickBlockedReason();
+    if (blocked) { toast.error(blocked); return; }
+    importInputRef.current?.click();
+  };
   const onImportChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {

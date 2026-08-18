@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 import {
   Sun, Moon, Monitor, Eye, EyeOff, X,
   SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3, UserCircle,
@@ -713,7 +715,17 @@ export default function SettingsDialog() {
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={exportFullBackupWithFeedback}>Export full backup</Button>
-                  <Button asChild variant="outline">
+                  <Button
+                    asChild
+                    variant="outline"
+                    onClick={(e) => {
+                      // Same dead-input problem as the résumé import: without the
+                      // native shell this label's file input never calls back, so
+                      // stop the tap and say why. See filePickGuard.
+                      const blocked = filePickBlockedReason();
+                      if (blocked) { e.preventDefault(); toast.error(blocked); }
+                    }}
+                  >
                     <label className="cursor-pointer">
                       Import backup…
                       <input
