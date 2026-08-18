@@ -641,6 +641,13 @@ function rollbackWipedImport(writtenKeys, priorValues) {
     try { appStorage.removeItem(k); } catch { /* keep going */ }
   }
   for (const [k, v] of priorValues) {
+    // A null here is a key that did NOT exist before the restore — the snapshot
+    // resolves each name to the address appStorage would use, and an unprefixed
+    // owned key whose physical twin is absent reads as null. `setItem` stringifies,
+    // so replaying it wrote the four characters "null" into a key that should not
+    // exist at all: readable, stampable, and uploadable to every other device as
+    // that unit's payload. The wipe above is what restores absence.
+    if (v == null) continue;
     try { appStorage.setItem(k, v); } catch { /* keep going */ }
   }
 }

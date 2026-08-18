@@ -1392,6 +1392,122 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).not.toContain('key:resume-designer-onboarding-complete');
     });
 
+    it('stamps and announces a workspace this device is NOT in, under its own id', async () => {
+      // The identity half, and it had no test at all: hard-coding both the
+      // stamped and the announced workspace to the open one left the whole suite
+      // green. A format-2 restore rewrites EVERY workspace, and a unit id is the
+      // same string in all of them — so a stamp routed to the open workspace
+      // lands in the wrong table (leaving the real one at -Infinity, where the
+      // remote wins) and an announcement routed there has the transport collect
+      // that id out of the wrong zone and upload someone else's résumé over it.
+      // The mistake this branch has already made in `pendingDirty`,
+      // `syncOutstanding`, `syncRecovered` and `restoredTombstones`.
+      setProfileMapping(PID);
+      appStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+        { id: 'pother', name: 'Other', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      appStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }));
+      appStorage.setItem('resume-p--pother--resume-designer-data', JSON.stringify({
+        variants: { 'v-9': { id: 'v-9', name: 'Theirs, SAME id' } },
+      }));
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      notify.mockClear();
+
+      // The backup changes the OTHER workspace's résumé and leaves the open one
+      // byte for byte, so anything named for the open workspace is a bug.
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [
+          { id: PID, name: 'Ash', emoji: '\uD83D\uDE42' },
+          { id: 'pother', name: 'Other', emoji: '\uD83D\uDE42' },
+        ],
+        activeProfile: PID,
+        shared: {},
+        profiles: {
+          [PID]: { keys: { [DATA]: JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }) } },
+          pother: {
+            keys: {
+              [DATA]: JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Theirs, EDITED' } } }),
+            },
+          },
+        },
+      });
+      await settle();
+
+      // Stamped in the OTHER workspace's table…
+      const theirs = JSON.parse(backend.files.get(`resume-p--pother--${STATE}`) || '{}');
+      expect(theirs['resume:v-9']?.modifiedAt).toEqual(expect.any(String));
+      // …and NOT in the open one, whose résumé did not change.
+      const mine = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
+      expect(mine['resume:v-9']).toBeUndefined();
+      // Announced under that workspace, so the transport reads the bytes out of
+      // the zone they actually live in.
+      const routes = notify.mock.calls.flatMap((c) => c[0])
+        .filter((u) => u.id === 'resume:v-9')
+        .map((u) => u.profileId);
+      expect(routes).toEqual(['pother']);
+    });
+
+    it('tombstones a format-1 envelope that carries no blob at all', async () => {
+      // Added because format 1 never synthesized tombstones for an absent blob,
+      // and then covered by nothing — deleting the branch again left the suite
+      // green. An envelope with no `resume-designer-data` is still a replacement,
+      // and still a deletion of everything the workspace held.
+      withOneResume();
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 1,
+        keys: { 'resume-designer-applications': '[]' },
+      });
+      await settle();
+
+      const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
+      expect(blob.variants['v-9'].deletedAt).toEqual(expect.any(String));
+      expect(allNamed()).toContain('resume:v-9');
+    });
+
+    it('restores ABSENCE, not the four characters \u201cnull\u201d', async () => {
+      // The snapshot resolves each name to the address appStorage would use, so
+      // an unprefixed owned key whose physical twin does not exist is recorded
+      // as null. Replayed through `setItem`, which stringifies, that wrote the
+      // literal "null" into a key that should not exist — and it is a real
+      // write, so the interceptor stamps it and the transport uploads "null" as
+      // that unit's payload to every other device.
+      setProfileMapping(PID);
+      appStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      appStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }));
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      // An unprefixed owned key with no physical twin — the incomplete-adoption
+      // shape, which the snapshot resolves to an address that is not there.
+      localStorage.setItem('resume-designer-applications', '[{"id":"stray"}]');
+
+      failWritesFor(`resume-p--${PID}--${DATA}`);
+      await expect(importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      })).rejects.toThrow(/could not be written/i);
+      failWritesFor(null);
+      await settle();
+
+      for (const [key, value] of backend.files) {
+        expect(`${key}=${value}`).not.toBe(`${key}=null`);
+      }
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();
