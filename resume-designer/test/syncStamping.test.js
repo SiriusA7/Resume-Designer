@@ -1582,18 +1582,24 @@ describe('deleting a résumé produces something that can travel', () => {
       });
       await settle();
 
-      // Stamped in the OTHER workspace's table…
+      // Each workspace stamps its OWN v-9, in its own table. Both are stamped
+      // because the restore wiped both tables — see "stamps unchanged keys
+      // anyway when the backup carries NO stamp table" — so the routing is what
+      // this checks, not the count.
       const theirs = JSON.parse(backend.files.get(`resume-p--pother--${STATE}`) || '{}');
-      expect(theirs['resume:v-9']?.modifiedAt).toEqual(expect.any(String));
-      // …and NOT in the open one, whose résumé did not change.
       const mine = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
-      expect(mine['resume:v-9']).toBeUndefined();
-      // Announced under that workspace, so the transport reads the bytes out of
-      // the zone they actually live in.
+      expect(theirs['resume:v-9']?.modifiedAt).toEqual(expect.any(String));
+      expect(mine['resume:v-9']?.modifiedAt).toEqual(expect.any(String));
+
+      // And announced under one route EACH. Routed to the open workspace, the
+      // transport would collect that id out of the wrong zone and upload one
+      // workspace's résumé over the other's — the failure that a shared unit id
+      // makes invisible unless the route is asserted.
       const routes = notify.mock.calls.flatMap((c) => c[0])
         .filter((u) => u.id === 'resume:v-9')
-        .map((u) => u.profileId);
-      expect(routes).toEqual(['pother']);
+        .map((u) => u.profileId)
+        .sort();
+      expect(routes).toEqual(['', 'pother']);
     });
 
     it('tombstones a format-1 envelope that carries no blob at all', async () => {

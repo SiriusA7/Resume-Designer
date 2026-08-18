@@ -747,13 +747,30 @@ export function stampRestoredWrites(profileId, writes, noteKeyWritten) {
     // so the parked conflict losers a backup carries would travel from nowhere.
     if (logicalKey.startsWith(HISTORY_PREFIX)) {
       // `unitsFor` declines history because the save path that writes it names
-      // its own unit as it goes; a restore is not that path. The unchanged
-      // check that used to live here is now `unitsFor`'s own first rule, so
-      // this only has to answer the "who names it" question.
+      // its own unit as it goes; a restore is not that path, so this answers
+      // the "who names it" question on its behalf.
       if (value !== previous) add(`${KEY_UNIT_PREFIX}${logicalKey}`);
-      continue;
+    } else {
+      for (const unitId of unitsFor(logicalKey, value, previous)) add(unitId);
     }
-    for (const unitId of unitsFor(logicalKey, value, previous, stamped)) add(unitId);
+    // AND anything this key carries that has no stamp AT ALL, changed or not.
+    //
+    // Only the restore does this, because only the restore wipes the table:
+    // `resume-designer-sync-state` is a fixed backup key, and no backup written
+    // before this branch existed carries a replacement. Restoring one of those
+    // leaves content on disk with no time anywhere — `collectUnit` answers
+    // `modifiedAt: null`, `resolveConflict` reads that as -Infinity, and any
+    // remote copy however old lands on top of it, while the unit is never named
+    // so the correct local content cannot win the round trip back.
+    //
+    // Both KINDS of unit, which is the half a scoped-to-key-units version of
+    // this missed: an unstamped résumé whose bytes did not change is exactly as
+    // undefendable as an unstamped applications list. Once the restore has
+    // stamped everything it wrote, the ordinary interceptor is reading a
+    // populated table again, so pure change detection is right everywhere else.
+    for (const unitId of unitsCarriedBy(logicalKey, value)) {
+      if (!stamped(unitId)) add(unitId);
+    }
   }
   if (ids.length) {
     // NAMED BACK to the restore before the write, so its rollback set contains
@@ -988,14 +1005,6 @@ function changedDataUnits(previous, next) {
 /**
  * Does this workspace already hold a modification time for `unitId`?
  *
- * Scoped to the plain `key:` units on purpose. The blob's `resume:`/`data:`
- * units are compared field by field by `changedDataUnits` and have had the same
- * exposure since long before the unchanged-write rule existed — an unstamped
- * résumé whose bytes do not change is equally undefendable. That is a real gap
- * and a separate one: closing it makes every blob write name every unit until
- * the table is populated, which is a broad behavioural change rather than a
- * regression fix, so it is reported rather than folded in here.
- *
  * The unchanged-write rule leans on this and cannot be stated without it. "The
  * bytes did not change, so the stamp still describes them" is only true when
  * there IS a stamp — and a restore wipes the stamp table, because
@@ -1006,6 +1015,12 @@ function changedDataUnits(previous, next) {
  * copy however old lands on top of it — while the unit is never named, so the
  * correct local content cannot win the round trip back either.
  */
+function unitsCarriedBy(logicalKey, value) {
+  if (logicalKey === DATA_KEY) return [...dataFieldPayloads(value).keys()];
+  if (logicalKey.startsWith(HISTORY_PREFIX)) return [`${KEY_UNIT_PREFIX}${logicalKey}`];
+  return [`${KEY_UNIT_PREFIX}${logicalKey}`];
+}
+
 function stampedIn(profileId) {
   const table = stateFor(profileId);
   return (unitId) => Boolean(table?.[unitId]?.modifiedAt);
@@ -1039,7 +1054,7 @@ function stampedIn(profileId) {
  *   time — which `resolveConflict` reads as -Infinity, so the archive that
  *   makes newer-wins safe would have lost every conflict it ever met.
  */
-function unitsFor(logicalKey, value, previous, isStamped) {
+function unitsFor(logicalKey, value, previous) {
   if (classifyKey(logicalKey) !== 'synced') return [];
   // A write that changed nothing IS nothing, whatever kind of key it was.
   //
@@ -1059,18 +1074,13 @@ function unitsFor(logicalKey, value, previous, isStamped) {
   // supplies the right `previous` and this discarded it.
   if (logicalKey === DATA_KEY) return changedDataUnits(previous, value);
   if (logicalKey.startsWith(HISTORY_PREFIX)) return [];
-  const unitId = `${KEY_UNIT_PREFIX}${logicalKey}`;
-  // UNCHANGED **AND ALREADY STAMPED**. The second half is not belt and braces:
-  // without it the rule silently asserts a stamp exists, and the one flow that
-  // rewrites keys byte for byte — a restore — is also the one that wipes the
-  // stamp table. See `stampedIn`.
-  if (value === previous && isStamped(unitId)) return [];
-  return [unitId];
+  if (value === previous) return [];
+  return [`${KEY_UNIT_PREFIX}${logicalKey}`];
 }
 
 function onStorageWrite(logicalKey, value, previous) {
   if (applying) return;
-  const unitIds = unitsFor(logicalKey, value, previous, stampedIn(''));
+  const unitIds = unitsFor(logicalKey, value, previous);
   // Stamped BEFORE it is queued for notification: a unit named to the transport
   // but never stamped goes up with no modification time, and `resolveConflict`
   // reads that as -Infinity — it would lose every conflict it met. If the stamp
