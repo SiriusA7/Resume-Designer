@@ -1103,30 +1103,56 @@ final class ShellModel: ObservableObject {
   /// `sendAllUnits`.
   private var syncFullUploadOwe: [String: Int] = [:]
 
-  /// The current image request per target ("header", "photo").
+  /// What a picked image has to still be true of before it is written.
   ///
-  /// ON THE MODEL, not on the screen. It first lived in each screen's `@State`,
+  /// The RÉSUMÉ as well as the target, because `setDesignImage` writes to
+  /// whichever résumé is open when it arrives — it carries no id. Moving this
+  /// counter onto the model let a request survive the screen, which was the
+  /// point; it also let it survive a résumé switch, which was not. Pick a slow
+  /// image, close Design, change résumé, and it lands on the new one.
+  struct ImageRequest {
+    let variantId: String?
+    let target: String
+    let token: Int
+  }
+
+  /// The newest request per (résumé, target).
+  ///
+  /// ON THE MODEL, not on a screen. It first lived in each screen's `@State`,
   /// which cannot do the job it was added for: leave Photo while a load is in
   /// flight and that screen's counter goes with it, so reopening it starts a
   /// fresh one — commonly at the same number — and the abandoned task passes a
-  /// guard that is no longer comparing it against anything. The model outlives
-  /// every screen that reads it, which is the property this needs.
+  /// guard that is no longer comparing it against anything.
   ///
   /// Per target, because the header image and the photo are independent: a
   /// header pick must not supersede a photo still loading.
   private var imageRequests: [String: Int] = [:]
 
-  /// Claim the newest request for `target`. Every pick and every Remove calls
-  /// this; the token it returns is what a finished load checks itself against.
-  func beginImageRequest(_ target: String) -> Int {
-    let next = (imageRequests[target] ?? 0) + 1
-    imageRequests[target] = next
-    return next
+  private func imageRequestKey(_ variantId: String?, _ target: String) -> String {
+    "\(variantId ?? "")|\(target)"
   }
 
-  /// Whether `token` is still the newest request for `target`.
-  func isCurrentImageRequest(_ token: Int, for target: String) -> Bool {
-    imageRequests[target] == token
+  /// Claim the newest request for `target` on the open résumé. Every pick and
+  /// every Remove calls this; what it returns is what a finished load checks
+  /// itself against.
+  @discardableResult
+  func beginImageRequest(_ target: String) -> ImageRequest {
+    let variantId = snapshot.variantId
+    let key = imageRequestKey(variantId, target)
+    let next = (imageRequests[key] ?? 0) + 1
+    imageRequests[key] = next
+    return ImageRequest(variantId: variantId, target: target, token: next)
+  }
+
+  /// Whether this request is still the one that should be allowed to write.
+  ///
+  /// Both halves matter. The résumé test refuses a load that finishes after a
+  /// switch; the token test refuses one overtaken by a newer pick or a Remove.
+  /// Coming BACK to the originating résumé makes an outstanding load valid
+  /// again, which is right — it is that résumé's image, and it is open.
+  func isCurrentImageRequest(_ request: ImageRequest) -> Bool {
+    guard snapshot.variantId == request.variantId else { return false }
+    return imageRequests[imageRequestKey(request.variantId, request.target)] == request.token
   }
 
   /// A drain is between its first offer and its last settlement. See
@@ -7885,7 +7911,7 @@ private struct HeaderScreen: View {
             NSLog("[OPShell] could not read the picked header image")
             return
           }
-          guard model.isCurrentImageRequest(request, for: "header") else { return }
+          guard model.isCurrentImageRequest(request) else { return }
           model.send("setDesignImage", ["target": "header", "dataUrl": url])
         }
       }
@@ -7893,7 +7919,7 @@ private struct HeaderScreen: View {
         "Remove the header image?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
-          _ = model.beginImageRequest("header")
+          model.beginImageRequest("header")
           model.send("clearDesignImage", ["target": "header"])
         }
       } message: {
@@ -8386,7 +8412,7 @@ private struct PhotoScreen: View {
             NSLog("[OPShell] could not read the picked photo")
             return
           }
-          guard model.isCurrentImageRequest(request, for: "photo") else { return }
+          guard model.isCurrentImageRequest(request) else { return }
           model.send("setDesignImage", ["target": "photo", "dataUrl": url])
         }
       }
@@ -8394,7 +8420,7 @@ private struct PhotoScreen: View {
         "Remove the photo?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
-          _ = model.beginImageRequest("photo")
+          model.beginImageRequest("photo")
           model.send("clearDesignImage", ["target": "photo"])
         }
       } message: {
