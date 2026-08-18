@@ -740,8 +740,17 @@ export function stampRestoredWrites(profileId, writes, noteKeyWritten) {
   // being decided against the table as the restore found it.
   const stamped = stampedIn(profileId);
   const add = (unitId) => { if (unitId && !ids.includes(unitId)) ids.push(unitId); };
-  for (const { logicalKey, value, previous } of writes || []) {
+  for (const { logicalKey, value, previous, forced } of writes || []) {
     if (classifyKey(logicalKey) !== 'synced') continue;
+    // A FORCED write is a restore asserting the workspace's state rather than
+    // reporting a change — the cleared payload for a key the backup omits. Its
+    // bytes may already match what is here, and change detection would name
+    // nothing, while the whole point is to outrank whatever another device has
+    // put on the server since.
+    if (forced) {
+      for (const unitId of unitsCarriedBy(logicalKey, value)) add(unitId);
+      continue;
+    }
     // The one kind `unitsFor` deliberately declines, because the save path that
     // writes history names its own unit as it goes. A restore is not that path,
     // so the parked conflict losers a backup carries would travel from nowhere.

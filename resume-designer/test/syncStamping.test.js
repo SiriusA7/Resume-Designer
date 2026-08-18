@@ -1420,14 +1420,29 @@ describe('deleting a résumé produces something that can travel', () => {
         .toBe('[{"id":"from-the-backup"}]');
     });
 
-    it('says nothing about a key that was already empty', async () => {
-      // A `key:` unit is named unconditionally by `unitsFor` — there is no
-      // comparison for it the way there is inside the blob — so clearing an
-      // already-empty key would upload a no-op and, worse, stamp it with a
-      // fresh time that outranks another device's real edit to it.
+    it('clears a key that is ALREADY at its cleared value, and says so', async () => {
+      // I had this the other way round, asserting that an already-empty key was
+      // left alone — reasoning imported from ordinary writes, where a no-op
+      // upload would stamp a fresh time over another device's real edit.
+      //
+      // A restore is not an ordinary write. It is an assertion about the
+      // WORKSPACE, not a diff against this device, and outranking whatever
+      // another device has put on the server since is the INTENT rather than a
+      // hazard. Skipping on local equality made the assertion conditional on
+      // the one copy that was already correct, so the stale server record came
+      // back on the next fetch.
+      //
+      // The ordinary-write rule is untouched and still holds — see "an
+      // unchanged write is not a change". The two differ by context, which is
+      // exactly what the `forced` flag carries.
       withOneResume();
       appStorage.setItem('resume-designer-applications', '[]');
       await settle();
+      // The backup carries the STAMP TABLE, which a backup taken by this branch
+      // does. Without it the restore wipes the table, every unit reads as
+      // unstamped, and the missing-stamp sweep would name this key for an
+      // unrelated reason — so the test would pass with the clearing removed.
+      const stampTable = appStorage.getItem(STATE);
       notify.mockClear();
 
       await importFullBackupDurably({
@@ -1436,11 +1451,15 @@ describe('deleting a résumé produces something that can travel', () => {
         registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
         activeProfile: PID,
         shared: {},
-        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+        profiles: {
+          [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }), [STATE]: stampTable } },
+        },
       });
       await settle();
 
-      expect(allNamed()).not.toContain('key:resume-designer-applications');
+      expect(allNamed()).toContain('key:resume-designer-applications');
+      const written = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
+      expect(written['key:resume-designer-applications']?.modifiedAt).toEqual(expect.any(String));
     });
 
     it('leaves a workspace the restore DELETES entirely alone', async () => {

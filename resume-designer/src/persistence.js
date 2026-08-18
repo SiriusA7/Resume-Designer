@@ -927,13 +927,16 @@ function clearOmittedSyncedKeys(priorValues, writtenAddresses, write, workspaces
       if (writtenAddresses.has(address)) continue;
       const cleared = clearedPayloadFor(logicalKey);
       if (cleared === undefined) continue;
-      // Nothing to say for a key already at its cleared value: a `key:` unit is
-      // named unconditionally, so a no-op write would upload nothing and stamp
-      // it with a fresh time that outranks another device's real edit. An
-      // ABSENT key is not that case — absence is what the server may disagree
-      // with, and the whole reason this enumerates rather than reads.
-      if (priorValues.get(address) === cleared) continue;
-      write(address, cleared, profileId, logicalKey);
+      // WRITTEN AND NAMED even when this device already holds the cleared
+      // value. That looks like churn and is not: a replacement restore is an
+      // assertion about the WORKSPACE, not a diff against this device, and the
+      // thing it has to outrank is whatever another device has written to
+      // CloudKit since. Skipping on local equality made the assertion
+      // conditional on the one copy that is already correct — so the stale
+      // server record simply came back. The `forced` flag is what carries that
+      // through the ordinary change detection, which would otherwise see
+      // identical bytes and name nothing.
+      write(address, cleared, profileId, logicalKey, true);
     }
   }
 }
@@ -1246,17 +1249,17 @@ function importFullBackupV2(parsed, keepCredential = false) {
   // by the ordinary path. Recorded here because the restore is the only thing
   // that knows which workspace each key belongs to.
   const restoredWrites = new Map();
-  const noteWrite = (pid, logicalKey, value, previous) => {
+  const noteWrite = (pid, logicalKey, value, previous, forced = false) => {
     if (!restoredWrites.has(pid)) restoredWrites.set(pid, []);
-    restoredWrites.get(pid).push({ logicalKey, value, previous });
+    restoredWrites.get(pid).push({ logicalKey, value, previous, forced });
   };
   // `k` is the ADDRESS appStorage resolves to for every call here — physical for
   // a profile's key, unchanged for a shared one — so the pre-wipe snapshot,
   // which `snapshotAndWipeOwnedKeys` keys by address, answers directly.
-  const writeTracked = (k, v, pid = '', logicalKey = k) => {
+  const writeTracked = (k, v, pid = '', logicalKey = k, forced = false) => {
     appStorage.setItem(k, v);
     written.push(k);
-    noteWrite(pid, logicalKey, v, priorPhysicalSnapshot(k, logicalKey, pid, priorValues) ?? null);
+    noteWrite(pid, logicalKey, v, priorPhysicalSnapshot(k, logicalKey, pid, priorValues) ?? null, forced);
   };
 
   let keysImported = 0;
@@ -1565,10 +1568,12 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     clearOmittedSyncedKeys(
       priorValues,
       new Set(written.map((k) => mapKey(getProfileMapping(), k))),
-      (address, value, profileId, logicalKey) => {
+      (address, value, profileId, logicalKey, forced = false) => {
         appStorage.setItem(address, value);
         written.push(address);
-        writes.push({ logicalKey, value, previous: priorValues.get(address) ?? null });
+        writes.push({
+          logicalKey, value, previous: priorValues.get(address) ?? null, forced,
+        });
       },
       [activeWorkspace],
     );
