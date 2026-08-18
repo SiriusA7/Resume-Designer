@@ -1808,6 +1808,44 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain('data:userProfile');
     });
 
+    it('resets a data FIELD the backup\u2019s blob omits, dropping no résumé', async () => {
+      // The two units that live inside the blob, given the same treatment as
+      // every whole key. A backup whose blob carries no `settings` clears it —
+      // and an absence announces nothing, because `changedDataUnits` compares
+      // the fields present in the NEXT blob. So the wipe removed it here, the
+      // server kept it, and the next fetch put it back. No résumé is dropped in
+      // this case, which is the half that fell through to the unchanged blob
+      // and discarded the default entirely.
+      withOneResume();
+      appStorage.setItem(DATA, JSON.stringify({
+        variants: { 'v-9': { id: 'v-9', name: 'Mine' } },
+        settings: { pageSize: 'a4' },
+      }));
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: {
+          [PID]: {
+            // Same résumé, no settings.
+            keys: { [DATA]: JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }) },
+          },
+        },
+      });
+      await settle();
+
+      const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
+      expect(blob.settings.pageSize).toBe('continuous');
+      expect(allNamed()).toContain('data:settings');
+      // And a field neither side ever had is not invented.
+      expect(blob.userProfile).toBeUndefined();
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();

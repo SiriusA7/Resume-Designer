@@ -1033,6 +1033,20 @@ function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   };
   if (typeof next !== 'object') return nextRaw;
   const nextVariants = next.variants && typeof next.variants === 'object' ? next.variants : {};
+  // The two units that live INSIDE this blob get the same treatment as every
+  // whole key: a field the backup omits is a field it clears, and an absence
+  // announces nothing. `changedDataUnits` compares the fields present in the
+  // NEXT blob, so one that is simply gone is never named — the wipe removes it
+  // here, the server keeps it, and the next fetch puts it back. Defaulted only
+  // when the workspace actually HAD one, so a blob that never carried the field
+  // does not acquire it.
+  let reset = 0;
+  for (const field of ['settings', 'userProfile']) {
+    if (next[field] === undefined && prior[field] !== undefined) {
+      next[field] = DEFAULT_STORAGE[field];
+      reset++;
+    }
+  }
   const now = new Date().toISOString();
   let carried = 0;
   for (const [id, variant] of Object.entries(prior.variants)) {
@@ -1059,7 +1073,10 @@ function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   // write, and the local wipe would look like a reset that no unit was ever
   // stamped or announced for — so the stale server copies come back.
   if (nextRaw == null) return JSON.stringify({ ...next, variants: nextVariants });
-  if (droppedIds.length === 0 && carried === 0) return nextRaw;
+  // `reset` counts too, or a backup that omits `settings` while dropping no
+  // résumés would fall through to `nextRaw` and discard the default this just
+  // decided on.
+  if (droppedIds.length === 0 && carried === 0 && reset === 0) return nextRaw;
   return JSON.stringify({ ...next, variants: nextVariants });
 }
 

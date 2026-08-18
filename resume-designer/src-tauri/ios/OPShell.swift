@@ -1686,6 +1686,18 @@ extension ShellModel {
     // An answered collection can legitimately be empty. There is no transport
     // work to do, and treating that as sent lets its persisted debt settle.
     guard !unitIds.isEmpty else { return true }
+    // RESOLVED NOW, before the send suspends, and carried into the catch.
+    //
+    // The `syncDirty` handler maps the open workspace to nil, and `deferSync`
+    // used to resolve a nil against `syncProfileId` when its own body ran. That
+    // is a different moment: `send` suspends asking the page for scopes, and a
+    // restore that also switches workspaces ends in a reload whose `activated`
+    // assigns a NEW `syncProfileId` with no await in front of it. The deferral
+    // could therefore resume after the switch and file the OLD workspace's debt
+    // under the NEW workspace's key — where the next drain collects the wrong
+    // bytes for those ids, or none, and settles the debt either way. Nothing
+    // names those units again, so the content simply never leaves the device.
+    let owning = profileId ?? syncProfileId
     do {
       try await sync.send(unitIds: unitIds, inProfile: profileId)
       return true
@@ -1706,7 +1718,7 @@ extension ShellModel {
       // again until it is edited again. So they wait for the next start instead
       // of being dropped — under the profile this send was FOR, which is the
       // open one only when nobody named another.
-      await deferSync(unitIds, inProfile: profileId)
+      await deferSync(unitIds, inProfile: owning)
       NSLog("[OPShell] sync send postponed; \(unitIds.count) unit(s) held durably")
       return false
     }
