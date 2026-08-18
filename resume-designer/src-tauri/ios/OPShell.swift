@@ -1026,10 +1026,17 @@ final class ShellModel: ObservableObject {
   private var conflictNoticeGeneration = 0
 
   /// Every failure the status line is still standing behind, keyed the way
-  /// `OPSyncFailure` names what failed: a unit id, or nil for the zone or a
-  /// fetch, which applies to every unit in it. `Optional<String>` is a perfectly
-  /// good key, so the key IS `failure.unitId` — no sentinel to explain and no
-  /// second property to keep in step.
+  /// Keyed by `OPSyncFailure.scope` — the workspace AND what failed in it: one
+  /// unit, or the whole zone. The bare unit id is NOT enough, and neither side
+  /// of this may use it: every workspace has a `data:settings`, so workspace A's
+  /// save landing took down workspace B's outstanding warning and Settings
+  /// reported sync healthy while B had never reached iCloud. The zone entries
+  /// were worse — all of them shared one nil key, so any single zone's fetch
+  /// succeeding cleared every other zone's failure too.
+  ///
+  /// `syncDidLand` names landings with the SAME type, and that pairing is the
+  /// whole design: a key that only one side can build is a warning that either
+  /// never comes down or comes down for the wrong reason.
   ///
   /// This exists so the warning can come DOWN. It used to be one value cleared
   /// only by switching sync off, so a network blip left "some changes haven't
@@ -1043,7 +1050,7 @@ final class ShellModel: ObservableObject {
   /// to publish an `OPSyncFailure`, and synthesising one to stand for an id is a
   /// worse lie than keeping the one that was reported. A dictionary is the same
   /// set with the reported value still attached.
-  private var syncOutstanding: [String?: OPSyncFailure] = [:]
+  private var syncOutstanding: [OPSyncScope: OPSyncFailure] = [:]
 
   /// The profile the page last activated with. The engine may not be running
   /// for it — sync suspended, or no iCloud account — but it is what a later
@@ -1052,10 +1059,10 @@ final class ShellModel: ObservableObject {
   /// document coming back after WebKit reclaimed its content process.
   private var syncProfileId: String?
 
-  /// `OPSyncFailure.route`s — workspace AND unit — `syncDidFail` has already
+  /// The `OPSyncScope`s — workspace AND unit — `syncDidFail` has already
   /// re-queued once. The bound on the recovery loop; see `syncDidFail` for why
   /// there has to be one, and why one unit id is not enough to key it by.
-  private var syncRecovered: Set<String> = []
+  private var syncRecovered: Set<OPSyncScope> = []
 
   /// Ids re-deferred while one persisted queue is being offered. The durable
   /// set stays intact during the await — a kill there must leave every id owed
@@ -1504,12 +1511,24 @@ extension ShellModel {
       syncRecovered.removeAll()
       syncDeferredDrainKey = nil
       syncDeferredReowed.removeAll()
-      // Its outstanding failures go with them, for the same reason and one more:
-      // an outstanding failure comes down when the thing it names next reaches
-      // iCloud, and nothing in another profile's zone can ever be that. Held, it
-      // would be a warning with no way left to clear it — which is the sticky
-      // line this whole arrangement exists to stop. Anything still wrong there
-      // is reported again by that profile's own next send.
+      // Its outstanding failures go with them, because the status line is a
+      // LIVE-SESSION signal and not a durable record: the same wipe runs when
+      // the transport stops, and a fresh process reaches this branch too
+      // (`syncProfileId` starts nil), so nothing here has ever survived a
+      // restart.
+      //
+      // What this no longer claims. It used to say that nothing in another
+      // profile's zone could ever land one of these, so holding them would be a
+      // warning with no way left to clear it. That is not true: ONE engine
+      // session covers every known profile's zone plus the shared one, and now
+      // that a scope names its zone, `resolveSyncFailure` matches the right one
+      // exactly — a workspace this device is not in can and does land its own.
+      // So this discards some warnings that were still clearable, and a
+      // non-retryable failure has no "next send" to re-report it. The sticky-
+      // line risk it really guards is narrower: a profile REMOVED from the
+      // registry leaves scopes no future session covers. Narrowing the wipe to
+      // exactly those is a behaviour change, not a rename, and is deliberately
+      // not made here.
       forgetSyncFailures()
       syncProfileId = profileId
     }
@@ -1976,19 +1995,22 @@ extension ShellModel {
   /// Stand behind one more failure. The published value is the one just
   /// reported, which is the closest thing to "most recent" this keeps.
   private func recordSyncFailure(_ failure: OPSyncFailure) {
-    syncOutstanding[failure.unitId] = failure
+    syncOutstanding[failure.scope] = failure
     syncFailure = failure
   }
 
-  /// `key` — a unit id, or nil for the zone-and-fetch entry — reached iCloud, so
-  /// whatever was outstanding against it is not outstanding any more.
+  /// `scope` — one unit in one workspace, or one workspace's whole zone —
+  /// reached iCloud, so whatever was outstanding against it is not outstanding
+  /// any more. Against IT, and nothing else: this is the lookup that used to be
+  /// done by bare name, where one workspace's success answered for every
+  /// workspace that shared the name.
   ///
   /// Republishing from what is LEFT is the whole point: the line stays up while
   /// anything remains, and `values.first` is an arbitrary survivor because the
   /// line does not name one. Cheap by construction — the guard means this runs
   /// only when something actually cleared, not on every successful save.
-  private func resolveSyncFailure(_ key: String?) {
-    guard syncOutstanding.removeValue(forKey: key) != nil else { return }
+  private func resolveSyncFailure(_ scope: OPSyncScope) {
+    guard syncOutstanding.removeValue(forKey: scope) != nil else { return }
     syncFailure = syncOutstanding.values.first
   }
 
@@ -2453,8 +2475,7 @@ extension ShellModel: OPSyncHost {
       // Retryable, or about the zone or a fetch rather than one unit: the
       // engine is already handling the first and there is no unit to re-queue
       // for the second. Both are for the status line.
-      guard let unitId = failure.unitId, let route = failure.route,
-            !failure.willRetry else {
+      guard let unitId = failure.unitId, !failure.willRetry else {
         recordSyncFailure(failure)
         continue
       }
@@ -2462,12 +2483,12 @@ extension ShellModel: OPSyncHost {
       // the same unit is where the loop would have been, so it is held for the
       // status line instead — this device has now stopped trying.
       //
-      // Remembered by ROUTE, not by the bare id, for the same reason the send
+      // Remembered by SCOPE, not by the bare id, for the same reason the send
       // is routed: `data:settings` exists in every workspace, so one workspace
       // failing it used to spend the single attempt every OTHER workspace's
       // `data:settings` was entitled to — they were recorded as already tried
       // and never recovered at all.
-      guard syncRecovered.insert(route).inserted else {
+      guard syncRecovered.insert(failure.scope).inserted else {
         recordSyncFailure(failure)
         continue
       }
@@ -2496,12 +2517,12 @@ extension ShellModel: OPSyncHost {
   /// or already cleared, resolves to nothing: `resolveSyncFailure` is a lookup,
   /// so every ordinary successful save costs one.
   ///
-  /// A unit id that reached iCloud after failing is settled and says nothing
-  /// about any other unit. A nil is the zone or a fetch — the same scope the
-  /// failure had, because the failure that names no unit is a failure of
-  /// everything in the zone.
-  func syncDidLand(_ unitIds: [String?]) {
-    for unitId in unitIds { resolveSyncFailure(unitId) }
+  /// A unit that reached iCloud after failing is settled and says nothing about
+  /// any other unit, or about the same unit in another workspace. A zone scope
+  /// is the zone or a fetch — the same scope the failure had, because a failure
+  /// that names no unit is a failure of everything in THAT zone.
+  func syncDidLand(_ scopes: [OPSyncScope]) {
+    for scope in scopes { resolveSyncFailure(scope) }
   }
 
   /// A different iCloud account is underneath the transport now.

@@ -221,8 +221,9 @@ struct OPSyncFailure: Equatable {
   /// applies to every unit in it — or to a fetch.
   let unitId: String?
   /// The workspace this failed out of: "" for the shared zone, a profile id for
-  /// a workspace's own. Only meaningful beside a `unitId` — the zone-and-fetch
-  /// failures name no single workspace — and "" for those.
+  /// a workspace's own. Every failure has one, including the zone-and-fetch
+  /// failures — those name the zone they happened in, which is the whole point
+  /// of them.
   ///
   /// Carried because a unit id is NOT an identity. Every workspace has a
   /// `data:settings`, and one engine session covers every zone, so a bare
@@ -244,7 +245,12 @@ struct OPSyncFailure: Equatable {
   /// Diagnostic — for a log line or a status line, never for a decision.
   let reason: String
 
-  init(unitId: String?, profileId: String = "", willRetry: Bool,
+  /// No default for `profileId`, deliberately. Every failure knows its zone —
+  /// the record carries one and so does the fetch — and a default would let the
+  /// next site added quietly answer "" (the SHARED zone) for a workspace's own
+  /// failure. That silent wrong answer is this bug, and it has now been written
+  /// four separate times in this file; a missing argument should not compile.
+  init(unitId: String?, profileId: String, willRetry: Bool,
        code: CKError.Code?, reason: String) {
     self.unitId = unitId
     self.profileId = profileId
@@ -253,9 +259,38 @@ struct OPSyncFailure: Equatable {
     self.reason = reason
   }
 
-  /// The failed unit addressed the way everything else here addresses one:
-  /// workspace AND id. nil when no unit failed. Same shape as `SyncUnit.route`.
-  var route: String? { unitId.map { "\(profileId)\u{1F}\($0)" } }
+  /// What this failure NAMES — see `OPSyncScope`.
+  var scope: OPSyncScope { OPSyncScope(profileId: profileId, unitId: unitId) }
+}
+
+/// What a failure or a landing names: one unit in one workspace, or a whole
+/// workspace's zone (`unitId == nil`, which stands for every unit in it).
+///
+/// ONE type for both directions, because they are a matched pair. The status
+/// line stands behind a failure until the same thing lands, so "the same thing"
+/// has to mean the same key on both sides — and a bare record name is not one.
+/// Every workspace has a `data:settings`, so workspace A's save landing took
+/// down workspace B's outstanding warning and Settings reported sync healthy
+/// while B had never reached iCloud. The zone entries collapsed further still:
+/// every zone in the session shared the single nil key, so any one zone's fetch
+/// succeeding cleared all of them.
+struct OPSyncScope: Hashable {
+  /// "" for the shared zone; a profile id for a workspace's own.
+  let profileId: String
+  /// nil for the zone itself — a zone save or a fetch — which covers every unit
+  /// in it, and is therefore a different thing from any one of them.
+  let unitId: String?
+
+  /// The zone as a whole, which is what a fetch or a zone save answers for.
+  static func zone(_ zoneID: CKRecordZone.ID) -> OPSyncScope {
+    OPSyncScope(profileId: opProfileId(forZone: zoneID), unitId: nil)
+  }
+
+  /// One record, named by the zone it actually lives in.
+  static func record(_ recordID: CKRecord.ID) -> OPSyncScope {
+    OPSyncScope(profileId: opProfileId(forZone: recordID.zoneID),
+                unitId: recordID.recordName)
+  }
 }
 
 /// The workspace a zone holds: "" for the shared one, whose contents belong to
@@ -386,8 +421,10 @@ protocol OPSyncHost: AnyObject {
   func syncDidFail(_ failures: [OPSyncFailure])
 
   /// Sends and fetches that DID land, named the way `OPSyncFailure` names the
-  /// ones that did not: a unit id, or nil for the ZONE or a fetch — which covers
-  /// every unit in it.
+  /// ones that did not — as an `OPSyncScope`: a unit in a workspace, or a whole
+  /// zone. The two sides MUST agree on the naming, or the status line stands
+  /// behind a failure that nothing can take down, or takes one down that is
+  /// still true.
   ///
   /// The counterpart to `syncDidFail`, and it exists because a warning raised by
   /// a failure otherwise has nothing that could ever take it down again. The
@@ -400,7 +437,7 @@ protocol OPSyncHost: AnyObject {
   /// It says only that THESE names got through, never that sync is healthy. A
   /// caller that cleared every warning on any success would hide a unit that
   /// still cannot reach iCloud behind a unit that just did.
-  func syncDidLand(_ unitIds: [String?])
+  func syncDidLand(_ scopes: [OPSyncScope])
 
   /// A DIFFERENT iCloud account is underneath the transport than the one this
   /// device last synced against — switched in Settings, or signed out and back
@@ -858,7 +895,7 @@ extension OPSyncEngine {
       // the failures below so that a batch which both saved and failed ends with
       // the failure standing — the two lists name different records, so this is
       // an ordering rule rather than a conflict.
-      land(sent.savedRecords.map(\.recordID.recordName))
+      land(sent.savedRecords.map { OPSyncScope.record($0.recordID) })
       await handleFailedSaves(sent.failedRecordSaves, engine: engine)
 
     case .sentDatabaseChanges(let sent):
@@ -871,19 +908,24 @@ extension OPSyncEngine {
         engine.state.add(pendingDatabaseChanges: [.saveZone(failure.zone)])
       }
       // A zone that saved is the good news that matches a failure reported
-      // against no unit in particular, and it is named the same way — nil, the
-      // whole zone. Before the report for the same reason as above.
-      if !sent.savedZones.isEmpty { land([nil]) }
+      // against no unit in particular, and it is named the same way — THAT
+      // zone, whole. Not "a zone": the session holds one per workspace plus the
+      // shared one, so one of them saving says nothing about the others, and a
+      // single nameless key for all of them had any one of them clear the lot.
+      // Before the report for the same reason as above.
+      land(sent.savedZones.map { OPSyncScope.zone($0.zoneID) })
       report(sent.failedZoneSaves.map { failure in
-        OPSyncFailure(unitId: nil, willRetry: true, code: failure.error.code,
+        OPSyncFailure(unitId: nil, profileId: opProfileId(forZone: failure.zone.zoneID),
+                      willRetry: true, code: failure.error.code,
                       reason: failure.error.localizedDescription)
       })
 
     case .didFetchRecordZoneChanges(let done):
       guard let error = done.error else {
         // The other zone-wide good news: this fetch reached the server and got
-        // everything it asked for.
-        land([nil])
+        // everything it asked for — from THIS zone, which is the only one it
+        // can speak for.
+        land([.zone(done.zoneID)])
         break
       }
       // The zone was deleted in the Settings app (CKError.h). That is the
@@ -899,7 +941,8 @@ extension OPSyncEngine {
       // is the server agreeing it has not happened yet — so it neither reports
       // nor lands. Everything else the caller should hear about.
       if error.code != .zoneNotFound {
-        report([OPSyncFailure(unitId: nil, willRetry: true, code: error.code,
+        report([OPSyncFailure(unitId: nil, profileId: opProfileId(forZone: done.zoneID),
+                              willRetry: true, code: error.code,
                               reason: error.localizedDescription)])
       }
 
@@ -1355,9 +1398,9 @@ extension OPSyncEngine {
 
   /// `report`'s opposite, and deliberately as small: what got through, by the
   /// same name a failure would have carried. See `syncDidLand`.
-  private func land(_ unitIds: [String?]) {
-    guard !unitIds.isEmpty else { return }
-    host?.syncDidLand(unitIds)
+  private func land(_ scopes: [OPSyncScope]) {
+    guard !scopes.isEmpty else { return }
+    host?.syncDidLand(scopes)
   }
 }
 
@@ -1604,8 +1647,11 @@ extension OPSyncEngine {
     do {
       return try JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: data)
     } catch {
+      // Against THAT profile's zone: the state file is per profile
+      // (`stateKey`), so this is not a fact about any other workspace and must
+      // not be cleared by one of them landing.
       report([OPSyncFailure(
-        unitId: nil, willRetry: false, code: nil,
+        unitId: nil, profileId: profileId, willRetry: false, code: nil,
         reason: "the stored sync state could not be read, so this device is "
           + "starting over and will refetch everything: \(error.localizedDescription)"
       )])
@@ -1620,7 +1666,7 @@ extension OPSyncEngine {
                                 forKey: Self.stateKey(profileId))
     } catch {
       report([OPSyncFailure(
-        unitId: nil, willRetry: false, code: nil,
+        unitId: nil, profileId: profileId, willRetry: false, code: nil,
         reason: "the sync state could not be saved, so the next launch will "
           + "refetch and re-send everything: \(error.localizedDescription)"
       )])
