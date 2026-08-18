@@ -106,7 +106,9 @@ const {
 const { registerUserProfileHolder } = await import('../src/userProfileHolder.js');
 const {
   initJobDescriptions, addJobDescription, getAllJobDescriptions, subscribeJobDescriptions,
+  registerJobEditHolder,
 } = await import('../src/jobDescriptions.js');
+const { registerApplicationNoteHolder } = await import('../src/applications.js');
 const {
   loadThreads, persistThreads, makeThread, registerThreadHolder,
 } = await import('../src/chatThreads.js');
@@ -1226,6 +1228,52 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       expect(applied).toBe(0);
       expect(storedIdsOrNothing(JOBS_KEY)).toEqual([mine]);
       expect(initJobDescriptions().map((j) => j.id)).toEqual([mine]);
+    });
+  });
+
+  describe('a live draft defers adoption, for owners other than the chat', () => {
+    // The chat has had a busy holder since it landed. The application note and
+    // the job-edit dialog seed a draft from the record ONCE and had none — so a
+    // unit adopted underneath left the draft showing pre-sync text, and the
+    // next save wrote all of it back over the adopted copy and stamped the
+    // overwrite as a fresh local change. Same shape, same answer.
+
+    it('refuses an applications unit while a note draft is focused', async () => {
+      const draft = { busy: true };
+      const release = registerApplicationNoteHolder({ isBusy: () => draft.busy });
+
+      const unit = {
+        id: 'key:resume-designer-applications',
+        kind: 'plain',
+        payload: '[{"id":"a-remote"}]',
+        modifiedAt: AT,
+      };
+      expect((await applyUnits([unit])).applied).toBe(0);
+      // REFUSED, not settled: the transport forfeits the tag and re-offers it.
+      expect(disk.get(physical('resume-designer-applications')) ?? '[]').not.toContain('a-remote');
+
+      draft.busy = false;
+      expect((await applyUnits([unit])).applied).toBe(1);
+      expect(disk.get(physical('resume-designer-applications'))).toContain('a-remote');
+      release();
+    });
+
+    it('refuses a job-descriptions unit while the edit dialog is open', async () => {
+      const dialog = { busy: true };
+      const release = registerJobEditHolder({ isBusy: () => dialog.busy });
+
+      const unit = {
+        id: 'key:resume-designer-job-descriptions',
+        kind: 'plain',
+        payload: '[{"id":"jd-remote","title":"From the iPhone"}]',
+        modifiedAt: AT,
+      };
+      expect((await applyUnits([unit])).applied).toBe(0);
+
+      dialog.busy = false;
+      expect((await applyUnits([unit])).applied).toBe(1);
+      expect(disk.get(physical('resume-designer-job-descriptions'))).toContain('jd-remote');
+      release();
     });
   });
 

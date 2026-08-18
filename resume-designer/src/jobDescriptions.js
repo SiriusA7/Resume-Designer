@@ -94,6 +94,33 @@ export function initJobDescriptions() {
  * this device holds is then still the one the next local write puts back on
  * disk, so the bad bytes are corrected rather than inherited.
  */
+/**
+ * The live job-edit draft, if `JobEditDialog` has one open — `{ isBusy() }`.
+ *
+ * `JobsDialog` holds `editingJd` and the child seeds title/company/description
+ * from it once. A unit adopted while that dialog is open replaced the module
+ * list underneath them, and saving afterwards wrote all three stale fields back
+ * over the adopted job and stamped the overwrite as a new local update.
+ *
+ * Asked BEFORE the write, like the chat's and the application note's: refusing
+ * forfeits the change tag and the unit is re-offered once the dialog closes.
+ */
+let editHolder = null;
+
+export function registerJobEditHolder(next) {
+  const installed = next && typeof next.isBusy === 'function' ? next : null;
+  editHolder = installed;
+  // See registerThreadHolder: cleared only while this holder is the installed
+  // one, because React mounts a replacement before unmounting the old one.
+  return () => {
+    if (editHolder === installed) editHolder = null;
+  };
+}
+
+export function jobEditBusy() {
+  return editHolder?.isBusy?.() === true;
+}
+
 export function adoptStoredJobDescriptions() {
   const list = parseList(appStorage.getItem(STORAGE_KEY));
   if (!list) return;

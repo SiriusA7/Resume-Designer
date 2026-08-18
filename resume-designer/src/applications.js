@@ -126,6 +126,39 @@ export function initApplications() {
  * The list this device holds is then still the one the next local write puts
  * back on disk, so the bad bytes are corrected rather than inherited.
  */
+/**
+ * The live note draft, if a card has one open — `{ isBusy() }`.
+ *
+ * The same shape `registerThreadHolder` uses, and needed for the same reason
+ * one level down. `DetailPane` seeds its `notes` state from the application and
+ * re-seeds it only when the id CHANGES, so a unit adopted for the id already on
+ * screen re-rendered the card while the textarea went on showing the pre-sync
+ * note — and the next keystroke wrote that stale text back over the adopted
+ * one, and stamped the overwrite as a fresh local change.
+ *
+ * Asked BEFORE the write, like the chat's: a refusal shortens `applied`, the
+ * transport forfeits the change tag, and the unit is re-offered once the draft
+ * is closed. Nothing is lost by waiting; the note on screen is the only copy of
+ * what the person is part-way through typing.
+ */
+let noteHolder = null;
+
+export function registerApplicationNoteHolder(next) {
+  const installed = next && typeof next.isBusy === 'function' ? next : null;
+  noteHolder = installed;
+  // Cleared only while THIS holder is still the one installed — React mounts a
+  // replacement before unmounting the old one, so an unconditional clear in the
+  // departing cleanup would deregister the survivor. Same rule, same reason, as
+  // registerThreadHolder.
+  return () => {
+    if (noteHolder === installed) noteHolder = null;
+  };
+}
+
+export function applicationNoteBusy() {
+  return noteHolder?.isBusy?.() === true;
+}
+
 export function adoptStoredApplications() {
   const stored = readStoredApplications();
   if (!stored) return;

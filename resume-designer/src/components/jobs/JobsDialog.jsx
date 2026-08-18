@@ -23,6 +23,7 @@ import {
   addJobDescription, updateJobDescription, deleteJobDescription, toggleJobDescriptionActive,
   parseJobDescriptionText, exportJobDescriptions, importJobDescriptions,
   subscribeJobDescriptions,
+  registerJobEditHolder,
 } from '../../jobDescriptions.js';
 import {
   getConfiguredProviders, getAllModels, isConfigured, validateModelId, getDefaultModelId,
@@ -118,6 +119,15 @@ export default function JobsDialog() {
   const [showRecentOnly, setShowRecentOnly] = useState(true);
   const [selectionOpen, setSelectionOpen] = useState(false);
   const [editingJd, setEditingJd] = useState(null);
+  // The edit dialog seeds title/company/description from `editingJd` ONCE, so a
+  // unit adopted underneath it left those fields showing pre-sync text and the
+  // save wrote all three back over the adopted job, stamped as a new local
+  // update. Held for as long as the dialog is open — it is a modal, so the
+  // window is bounded, and the refusal only defers: the transport forfeits the
+  // change tag and re-offers the unit once it closes.
+  const editingRef = useRef(null);
+  editingRef.current = editingJd;
+  useEffect(() => registerJobEditHolder({ isBusy: () => !!editingRef.current }), []);
   const [addError, setAddError] = useState(false);
   const collapseInit = useRef(false);
 

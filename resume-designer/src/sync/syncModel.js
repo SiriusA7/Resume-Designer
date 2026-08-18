@@ -24,8 +24,12 @@ import { getActiveProfileId, listProfiles, purgeTombstonedProfiles } from '../pr
 import { store, CHANGE_TYPES } from '../store.js';
 // The four modules that hold their whole key in memory the way the store holds
 // the loaded document — see KEY_OWNERS below.
-import { adoptStoredApplications, landsAsApplications } from '../applications.js';
-import { adoptStoredJobDescriptions, landsAsJobDescriptions } from '../jobDescriptions.js';
+import {
+  adoptStoredApplications, landsAsApplications, applicationNoteBusy,
+} from '../applications.js';
+import {
+  adoptStoredJobDescriptions, landsAsJobDescriptions, jobEditBusy,
+} from '../jobDescriptions.js';
 import { adoptStoredThreads, threadHolderBusy, landsAsThreads } from '../chatThreads.js';
 import { adoptStoredLearnedAnswers, landsAsLearnedAnswers } from '../learnedAnswers.js';
 // The same ownership, one field further in: `data:userProfile` is a unit too,
@@ -407,9 +411,12 @@ function interruptsProfileEditing(unit) {
  * does: the transport forfeits the change tag and re-offers the unit.
  *
  * `isBusy()` is the résumé's `interruptsLiveEditing` rule for a different
- * screen, and only the chat needs one: adopting there replaces the thread list
- * a streamed reply commits into, and that reply exists nowhere else until it
- * does. It is asked BEFORE the write, never after — a unit that reaches storage
+ * screen. The chat needs one because adopting there replaces the thread list a
+ * streamed reply commits into, and that reply exists nowhere else until it
+ * does — and the application note and the job-edit dialog need one for the same
+ * reason a level down: each seeds a draft from the record ONCE, so a unit
+ * adopted underneath leaves the draft showing pre-sync text that the next save
+ * writes back over the adopted copy, stamped as a fresh local change. It is asked BEFORE the write, never after — a unit that reaches storage
  * is on disk whatever the owner then does with it, and disk disagreeing with
  * memory is the failure this whole path exists to avoid.
  *
@@ -418,9 +425,11 @@ function interruptsProfileEditing(unit) {
  * all, and nothing caches it.
  */
 const KEY_OWNERS = new Map([
-  ['resume-designer-applications', { lands: landsAsApplications, adopt: adoptStoredApplications }],
+  ['resume-designer-applications', {
+    lands: landsAsApplications, isBusy: applicationNoteBusy, adopt: adoptStoredApplications,
+  }],
   ['resume-designer-job-descriptions', {
-    lands: landsAsJobDescriptions, adopt: adoptStoredJobDescriptions,
+    lands: landsAsJobDescriptions, isBusy: jobEditBusy, adopt: adoptStoredJobDescriptions,
   }],
   ['resume-designer-chat-threads', {
     lands: landsAsThreads, isBusy: threadHolderBusy, adopt: adoptStoredThreads,
