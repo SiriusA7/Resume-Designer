@@ -1417,7 +1417,9 @@ extension OPSyncEngine {
       guard let unit = unit(from: record) else {
         // Still unreadable. The asset is genuinely not coming down, and saying
         // so is the whole of what is left — `willRetry: false`, because this
-        // device has now tried the one thing that could have worked.
+        // device has now tried the one thing that could have worked. Terminal,
+        // so the marker goes.
+        unreadableRecords.remove(recordID)
         forget(record.recordID)
         report([OPSyncFailure(
           unitId: recordID.recordName, profileId: profileId, willRetry: false, code: nil,
@@ -1426,10 +1428,13 @@ extension OPSyncEngine {
         )])
         return
       }
+      // It came down. Nothing left to ask for.
+      unreadableRecords.remove(recordID)
       await deliver([Arrival(record: record, unit: unit)])
     } catch let error as CKError where error.code == .unknownItem {
       // The server does not have it. Nothing is wrong and nothing is missing:
       // absence is not deletion here, and there is simply nothing to fetch.
+      unreadableRecords.remove(recordID)
       forget(recordID)
     } catch {
       // Network, quota, anything else. Worth saying, and worth saying it WILL
@@ -1544,7 +1549,12 @@ extension OPSyncEngine {
       // ONLY for a record this device could not read. Any other nil — above all
       // a page that did not answer in time — keeps the old behaviour exactly,
       // which is what ends the retry loop.
-      guard unreadableRecords.remove(recordID) != nil else { return nil }
+      // CONSULTED, not consumed. The durable retry re-enters here on the next
+      // start, and a marker taken on the first attempt would be gone by then —
+      // the retry would find nothing, drop the change, and the record would be
+      // stranded exactly as before, with the two fixes cancelling each other.
+      // `refetchMissingRecord` clears it on the outcomes that end the matter.
+      guard unreadableRecords.contains(recordID) else { return nil }
       // Dropping it is not the whole answer when the reason there are no bytes
       // is that this device could not READ the record. That is the
       // recovery `syncDidFail` queues for an unreadable fetch — most often a

@@ -11,7 +11,7 @@ import {
 import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
-  hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId,
+  hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId, purgeTombstonedProfiles,
   listProfiles, switchToProfileDurably,
   markInitialProfileFetchSettled, whenInitialProfileFetchSettled,
 } from './profiles.js';
@@ -457,6 +457,18 @@ export async function init() {
     await maybeAutoMigrateLegacyData();
     await ensureProfilesInitialized({ askAccount: askAccountProfiles });
     reportProfilesResolved();            // profiles resolve BEFORE the React gate opens
+    // The workspace that was ACTIVE when its tombstone arrived. The purge in
+    // the sync reconciliation skips it on purpose — it was still mapped and
+    // still being read — and that reconciliation only runs when a NEW tombstone
+    // lands, so nothing ever came back for it: the switch away happened, the
+    // reload happened, and its bytes stayed for good. Here it is no longer
+    // active, and this runs on every start rather than only on a fetch.
+    try {
+      const purged = purgeTombstonedProfiles();
+      if (purged.length) console.info(`[profiles] purged ${purged.length} deleted workspace(s) at start`);
+    } catch (err) {
+      console.error('[profiles] could not purge deleted workspaces:', err);
+    }
     // ensureProfilesInitialized runs extractSharedApiKey on its HAPPY paths
     // only: an adoption that cannot finish (browser quota, a Tauri disk
     // failure) returns early without it. Left to that, a credential still

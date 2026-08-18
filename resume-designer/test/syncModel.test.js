@@ -419,6 +419,11 @@ describe('a tombstone for the workspace this device has open', () => {
 
     expect(disk.has('resume-p--pother--resume-designer-data')).toBe(false);
     // Still mapped, still being read — its bytes stay until it is not active.
+    // The mock reports PROFILE for BOTH `getActiveProfileId` (the persisted
+    // pointer, seeded above) and `getProfileMapping` (the live mapping), and
+    // the purge has to honour both: they diverge during a durable switch, where
+    // the pointer already names the next boot while this process is still
+    // reading the workspace it is leaving.
     expect(disk.has(`resume-p--${PROFILE}--resume-designer-data`)).toBe(true);
   });
 

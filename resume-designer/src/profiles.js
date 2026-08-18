@@ -3,7 +3,7 @@
  * here so desktop and the native shell share the same save-before-pointer
  * ordering; each UI still owns its own reload.
  */
-import { appStorage, setProfileMapping } from './appStorage.js';
+import { appStorage, setProfileMapping, getProfileMapping } from './appStorage.js';
 import { store } from './store.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
 import {
@@ -762,9 +762,16 @@ export async function switchToProfileDurably(id) {
  * Returns the ids it emptied, for the caller's log.
  */
 export function purgeTombstonedProfiles() {
-  const activeId = getActiveProfileId();
+  // BOTH notions of "in use", because they diverge exactly when this is most
+  // dangerous. `getActiveProfileId` is the PERSISTED pointer, which during a
+  // durable switch already names the next boot — while this process stays
+  // mapped to the workspace it is leaving until the reload (see
+  // `getProfileMapping`, which says so). Skipping only the pointer would let a
+  // tombstone purge the bytes the live session is still reading, and the
+  // symptom is storage answering null mid-edit.
+  const inUse = new Set([getActiveProfileId(), getProfileMapping()].filter(Boolean));
   const tombstoned = (loadRegistry() || [])
-    .filter((p) => p?.deletedAt && p.id && p.id !== activeId)
+    .filter((p) => p?.deletedAt && p.id && !inUse.has(p.id))
     .map((p) => p.id);
   const purged = [];
   for (const id of tombstoned) {
