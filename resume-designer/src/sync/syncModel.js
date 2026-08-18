@@ -736,6 +736,9 @@ export function setResumeDeletedHandler(handler) {
  */
 export function stampRestoredWrites(profileId, writes, noteKeyWritten) {
   const ids = [];
+  // Read ONCE, before any of this restore's own stamping: every unit here is
+  // being decided against the table as the restore found it.
+  const stamped = stampedIn(profileId);
   const add = (unitId) => { if (unitId && !ids.includes(unitId)) ids.push(unitId); };
   for (const { logicalKey, value, previous } of writes || []) {
     if (classifyKey(logicalKey) !== 'synced') continue;
@@ -750,7 +753,7 @@ export function stampRestoredWrites(profileId, writes, noteKeyWritten) {
       if (value !== previous) add(`${KEY_UNIT_PREFIX}${logicalKey}`);
       continue;
     }
-    for (const unitId of unitsFor(logicalKey, value, previous)) add(unitId);
+    for (const unitId of unitsFor(logicalKey, value, previous, stamped)) add(unitId);
   }
   if (ids.length) {
     // NAMED BACK to the restore before the write, so its rollback set contains
@@ -983,6 +986,32 @@ function changedDataUnits(previous, next) {
 }
 
 /**
+ * Does this workspace already hold a modification time for `unitId`?
+ *
+ * Scoped to the plain `key:` units on purpose. The blob's `resume:`/`data:`
+ * units are compared field by field by `changedDataUnits` and have had the same
+ * exposure since long before the unchanged-write rule existed — an unstamped
+ * résumé whose bytes do not change is equally undefendable. That is a real gap
+ * and a separate one: closing it makes every blob write name every unit until
+ * the table is populated, which is a broad behavioural change rather than a
+ * regression fix, so it is reported rather than folded in here.
+ *
+ * The unchanged-write rule leans on this and cannot be stated without it. "The
+ * bytes did not change, so the stamp still describes them" is only true when
+ * there IS a stamp — and a restore wipes the stamp table, because
+ * `resume-designer-sync-state` is a fixed backup key and every backup written
+ * before this branch existed carries no replacement for it. Restoring one of
+ * those left content on disk with no time anywhere: `collectUnit` answers
+ * `modifiedAt: null`, `resolveConflict` reads that as -Infinity, and any remote
+ * copy however old lands on top of it — while the unit is never named, so the
+ * correct local content cannot win the round trip back either.
+ */
+function stampedIn(profileId) {
+  const table = stateFor(profileId);
+  return (unitId) => Boolean(table?.[unitId]?.modifiedAt);
+}
+
+/**
  * Which units a write to `logicalKey` makes locally modified.
  *
  * The blob and the history keys are the two the persistence path already
@@ -1010,7 +1039,7 @@ function changedDataUnits(previous, next) {
  *   time — which `resolveConflict` reads as -Infinity, so the archive that
  *   makes newer-wins safe would have lost every conflict it ever met.
  */
-function unitsFor(logicalKey, value, previous) {
+function unitsFor(logicalKey, value, previous, isStamped) {
   if (classifyKey(logicalKey) !== 'synced') return [];
   // A write that changed nothing IS nothing, whatever kind of key it was.
   //
@@ -1028,15 +1057,20 @@ function unitsFor(logicalKey, value, previous) {
   // `rollbackWipedImport` puts the pre-wipe values straight back, which is what
   // `removedForComparison` in appStorage.js exists to make comparable — it
   // supplies the right `previous` and this discarded it.
-  if (value === previous) return [];
   if (logicalKey === DATA_KEY) return changedDataUnits(previous, value);
   if (logicalKey.startsWith(HISTORY_PREFIX)) return [];
-  return [`${KEY_UNIT_PREFIX}${logicalKey}`];
+  const unitId = `${KEY_UNIT_PREFIX}${logicalKey}`;
+  // UNCHANGED **AND ALREADY STAMPED**. The second half is not belt and braces:
+  // without it the rule silently asserts a stamp exists, and the one flow that
+  // rewrites keys byte for byte — a restore — is also the one that wipes the
+  // stamp table. See `stampedIn`.
+  if (value === previous && isStamped(unitId)) return [];
+  return [unitId];
 }
 
 function onStorageWrite(logicalKey, value, previous) {
   if (applying) return;
-  const unitIds = unitsFor(logicalKey, value, previous);
+  const unitIds = unitsFor(logicalKey, value, previous, stampedIn(''));
   // Stamped BEFORE it is queued for notification: a unit named to the transport
   // but never stamped goes up with no modification time, and `resolveConflict`
   // reads that as -Infinity — it would lose every conflict it met. If the stamp
@@ -1068,6 +1102,26 @@ function onStorageFlush(failedLogicalKeys = new Set()) {
   // once and will not name it again until it is edited again. The set is bounded
   // by the number of units, so holding costs nothing.
   if (!dirtyNotifier) return;
+  // HELD, not dropped, while a restore is still deciding — the same treatment
+  // as having no notifier yet, and for a related reason: there is nowhere safe
+  // to send these YET.
+  //
+  // `importFullBackupDurably` arms the guard and then awaits `flush()`, so this
+  // runs from the drain INSIDE that await, with the verdict not yet in. The
+  // restore's own units are held for exactly this and announced by
+  // `commitRestoredUnits` once the flush answers — but a restore also writes
+  // keys under their LOGICAL names (all of format 1, and format 2's shared and
+  // registry keys), and those go through `onStorageWrite` like any other write
+  // and queue here. Announced from this drain, a restore that then FAILS has
+  // already told the transport about the keys that happened to land, and no
+  // rollback can recall an upload. The server would hold content from an import
+  // the person was told had failed.
+  //
+  // Nothing is lost by holding: `restoredWrites` records every write the restore
+  // made, logical names included, so `commitRestoredUnits` names a superset of
+  // what is held here. And a rollback releases the guard BEFORE it writes, so
+  // the reverted bytes announce normally, which is what should travel.
+  if (appStorage.isRestoreGuardActive()) return;
   // Notified BEFORE the set is cleared, for the same reason onStorageWrite
   // stamps before it queues: the bookkeeping that says "this is handled" must
   // come after the thing it claims. Cleared first, a notifier that threw took a

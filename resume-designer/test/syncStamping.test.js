@@ -1190,6 +1190,11 @@ describe('deleting a résumé produces something that can travel', () => {
       await settle();
       const blob = appStorage.getItem(DATA);
       const apps = appStorage.getItem('resume-designer-applications');
+      // The backup carries the STAMP TABLE too, which a backup taken by this
+      // branch does. That is what makes "unchanged" a complete statement: the
+      // restore wipes the table (a fixed backup key) and this puts it back, so
+      // the units still have the times that describe those unchanged bytes.
+      const stampTable = appStorage.getItem(STATE);
       notify.mockClear();
 
       await importFullBackupDurably({
@@ -1198,12 +1203,47 @@ describe('deleting a résumé produces something that can travel', () => {
         registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
         activeProfile: PID,
         shared: {},
-        profiles: { [PID]: { keys: { [DATA]: blob, 'resume-designer-applications': apps } } },
+        profiles: {
+          [PID]: {
+            keys: { [DATA]: blob, 'resume-designer-applications': apps, [STATE]: stampTable },
+          },
+        },
       });
       await settle();
 
       expect(allNamed()).not.toContain('resume:v-9');
       expect(allNamed()).not.toContain('key:resume-designer-applications');
+    });
+
+    it('stamps unchanged keys anyway when the backup carries NO stamp table', async () => {
+      // Every backup written before this branch existed — which is every backup
+      // any shipped version produced — has no `resume-designer-sync-state`. The
+      // restore wipes that key because it is a fixed backup key, and nothing
+      // puts it back. So after restoring one, content sits on disk with no time
+      // anywhere: `collectUnit` answers modifiedAt null, `resolveConflict` reads
+      // that as -Infinity, and ANY remote copy however old lands on top of it —
+      // while the unit is never named, so the correct local content cannot even
+      // win the round trip back. "The bytes did not change, so the stamp still
+      // describes them" is only true when there IS a stamp.
+      withOneResume();
+      appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+      await settle();
+      const apps = appStorage.getItem('resume-designer-applications');
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { 'resume-designer-applications': apps } } },
+      });
+      await settle();
+
+      const written = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
+      expect(written['key:resume-designer-applications']?.modifiedAt).toEqual(expect.any(String));
+      expect(allNamed()).toContain('key:resume-designer-applications');
     });
 
     it('stamps and announces the version history a backup carries', async () => {
