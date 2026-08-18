@@ -615,7 +615,7 @@ final class OPSyncEngine {
     // Beside them, and for the same session: a record this device could not
     // read is still unread after a relaunch, and the deferred id that comes
     // back needs the marker to still be here.
-    self.unreadableRecords = loadUnreadableRecords(profileId: profileId)
+    self.unreadableRecords = loadUnreadableRecords()
 
     let delegate = OPSyncDelegate(owner: self)
     let engine = CKSyncEngine(
@@ -1724,9 +1724,16 @@ extension OPSyncEngine {
 extension OPSyncEngine {
   private static func stateKey(_ profileId: String) -> String { "op-sync-state-\(profileId)" }
   private static func recordsKey(_ profileId: String) -> String { "op-sync-records-\(profileId)" }
-  private static func unreadableKey(_ profileId: String) -> String {
-    "op-sync-unreadable-\(profileId)"
-  }
+  /// ONE key, not one per profile. The other two are genuinely per profile —
+  /// change tokens and remembered records belong to the session that earned
+  /// them — but a single engine session covers EVERY workspace's zone plus the
+  /// shared one, so an unreadable record can belong to workspace B while the
+  /// session was started from A. Keyed by the session's profile, B's marker was
+  /// written under A and never loaded again once the app next started on B: the
+  /// deferred id came back, found nothing, and the record was stranded for the
+  /// fourth time. Record identity is already full — owner, zone, name — so one
+  /// set needs no partitioning.
+  private static let unreadableKey = "op-sync-unreadable" 
 
   /// The unreadable-record markers, on disk beside the deferred queue they pair
   /// with.
@@ -1737,8 +1744,8 @@ extension OPSyncEngine {
   /// — the same stranded record, defeated a third way. Full record identity for
   /// the same reason `systemFieldsKey` uses it: one engine session covers every
   /// zone and the same record name exists in all of them.
-  private func loadUnreadableRecords(profileId: String) -> Set<CKRecord.ID> {
-    let raw = UserDefaults.standard.stringArray(forKey: Self.unreadableKey(profileId)) ?? []
+  private func loadUnreadableRecords() -> Set<CKRecord.ID> {
+    let raw = UserDefaults.standard.stringArray(forKey: Self.unreadableKey) ?? []
     var out: Set<CKRecord.ID> = []
     for entry in raw {
       let parts = entry.components(separatedBy: "\u{1F}")
@@ -1750,14 +1757,12 @@ extension OPSyncEngine {
   }
 
   private func saveUnreadableRecords() {
-    guard let profileId else { return }
-    let key = Self.unreadableKey(profileId)
     guard !unreadableRecords.isEmpty else {
-      UserDefaults.standard.removeObject(forKey: key)
+      UserDefaults.standard.removeObject(forKey: Self.unreadableKey)
       return
     }
     UserDefaults.standard.set(
-      unreadableRecords.map(Self.systemFieldsKey).sorted(), forKey: key
+      unreadableRecords.map(Self.systemFieldsKey).sorted(), forKey: Self.unreadableKey
     )
   }
   static func deferredKey(_ profileId: String) -> String { "op-sync-deferred-\(profileId)" }
@@ -1900,7 +1905,8 @@ extension OPSyncEngine {
   /// rewrites its state and record keys on its next event.
   static func forgetEverythingAboutTheServer() {
     let defaults = UserDefaults.standard
-    let prefixes = [stateKey(""), recordsKey(""), deferredKey(""), unreadableKey("")]
+    let prefixes = [stateKey(""), recordsKey(""), deferredKey("")]
+    defaults.removeObject(forKey: unreadableKey)
     for key in defaults.dictionaryRepresentation().keys
     where prefixes.contains(where: key.hasPrefix) {
       defaults.removeObject(forKey: key)
