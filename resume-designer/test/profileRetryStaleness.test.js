@@ -159,6 +159,39 @@ describe('the profile retry copy belongs to the write that failed', () => {
     expect(getProfileState().saveFailed).toBe(false);
   });
 
+  it('is not fooled by an older write landing while its own is deferred', async () => {
+    // A backup restore arms a guard that DEFERS every other writer, and the
+    // window is a real one — it spans the restore's own `await flush()`. A
+    // profile edit made inside it is deferred, not cancelled, and `saveToStorage`
+    // still answers true, so the sheet holds a copy and an id for it.
+    //
+    // The id has to be the deferred write's OWN. Minted only when something is
+    // queued, `currentWriteSequence` would answer with the restore's earlier
+    // write id, the sheet would record that as its own, and the settle for the
+    // restore would read as "mine landed" — dropping a copy whose bytes were
+    // never attempted, exactly as clearing on a bare key did.
+    appStorage.setItem(DATA, JSON.stringify({
+      ...JSON.parse(appStorage.getItem(DATA)),
+      touched: 'the restore',
+    }));
+    appStorage.beginRestoreGuard(new Map([[DATA, appStorage.getItem(DATA)]]), [DATA]);
+
+    applyProfile({ action: 'setField', path: 'personalSummary', value: 'edited mid-restore' });
+
+    // The restore's own write lands; the profile edit is still only deferred.
+    await settle();
+
+    // The restore fails, so its writes are rolled back and the deferred edit is
+    // replayed — into a disk that now refuses it.
+    appStorage.endRestoreGuard();
+    failWritesFor(DATA);
+    appStorage.flushDeferredWrites();
+    await settle();
+
+    expect(backend.files.get(DATA)).not.toContain('edited mid-restore');
+    expect(getProfileState().saveFailed).toBe(true);
+  });
+
   it('is not fooled by an older write of the same key landing first', async () => {
     // The interleaving that makes "a write to your key landed" and "YOUR write
     // landed" different statements, and the reason the copy is gated on a write
