@@ -490,6 +490,19 @@ function createStore() {
 
       data = deepClone(migrateSectionAreas(document));
       isDirty = false;
+      // BEFORE the render, and a signal of its own. 'change' is deliberately
+      // what this emits (see above) so subscribers do not treat an adoption as a
+      // variant switch — but an AI proposal under review is anchored to the
+      // document it was made against, and this replaced that document. Left
+      // standing, Apply acts on whatever now occupies the recorded position:
+      // `resolveAnchoredPath` falls back to the index when its anchor is gone,
+      // so a role deleted on the other device means the edit lands on the role
+      // that moved up into its place.
+      //
+      // A third event rather than promoting this to 'dataLoaded': that would
+      // also re-settle the chat threads for a variant that has not changed,
+      // which is the reason 'change' was chosen in the first place.
+      this.emit('documentAdopted', data);
       this.emit('change', data);
       return true;
     },

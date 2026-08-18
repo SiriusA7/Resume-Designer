@@ -33,8 +33,12 @@ let requestRerender = () => {};
 // (notifying React listeners that set state) and re-renders — none of which
 // call setData. On first load / no session it never fires. Named (not inline)
 // so repeated init calls dedupe in the store's listener Set.
+// 'documentAdopted' is the same event for this module's purposes: a different
+// document is backing the render, and every anchor in the pending change set
+// was resolved against the one it replaced.
 function endSessionOnDataLoaded(event) {
-  if (event !== 'dataLoaded' || !session.getChangeSet()) return;
+  if (event !== 'dataLoaded' && event !== 'documentAdopted') return;
+  if (!session.getChangeSet()) return;
   hideInlineChanges();
 }
 
