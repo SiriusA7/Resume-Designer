@@ -10,7 +10,7 @@
  */
 
 import { isElectron, isIOSPlatform, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, pdfPreviewPath, savePdfPreview, stagePdfForShare, discardPdfPreview, notify } from './native.js';
-import { openNativePdfPreview, sharePdf } from './iosShell.js';
+import { openNativePdfPreview, sharePdf, isNativeShellAvailable } from './iosShell.js';
 import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
@@ -563,16 +563,19 @@ async function savePreviewedPdf(customFilename) {
   if (isIOSPlatform()) {
     setExportBusy(true);
     try {
-      const staged = await stagePdfForShare(filename);
-      // ANSWERED, not fired and forgotten. `sharePdf` reports false when there
-      // is no native shell to hand the file to — `OP_NATIVE_SHELL=0`, which is
-      // a supported control, or an install where the shell never came up. This
-      // branch is still taken there, because `isIOSPlatform` is a user-agent
-      // test and knows nothing about the shell: the preview fell back to the
-      // web dialog, and confirming it arrives here anyway. Ignored, the `finally`
-      // below then deleted the staged PDF, so Save produced no sheet, no file
-      // and no error — indistinguishable from the button doing nothing.
-      if (!sharePdf(staged)) {
+      // CHECKED BEFORE STAGING, the same order `shareTextFile` uses, and the
+      // order is the whole of this. `isIOSPlatform` is a user-agent test and
+      // knows nothing about the shell, so this branch is still taken when there
+      // is none — `OP_NATIVE_SHELL=0`, a supported control, or an install where
+      // the shell never came up. Staged first, the failure left a second,
+      // user-named copy of the résumé behind: `discardPdfPreview` in the
+      // `finally` deletes only the SOURCE the preview slot holds, and the staged
+      // copy is deleted by the share sheet's completion handler, which in this
+      // case is never installed. Sensitive PDFs then accumulate in the temp
+      // directory, one per attempt. Not staging at all is the fix; there is no
+      // command to delete an arbitrary staged file, and adding one would be
+      // more surface than simply not creating it.
+      if (!isNativeShellAvailable()) {
         await notify({
           title: 'PDF export failed',
           type: 'error',
@@ -581,6 +584,19 @@ async function savePreviewedPdf(customFilename) {
         });
         // Terminal, like every other outcome here. There is nothing to retry
         // against: a second attempt finds the shell still missing.
+        return;
+      }
+      const staged = await stagePdfForShare(filename);
+      // ANSWERED, not fired and forgotten — the check above cannot rule out the
+      // shell going away between it and this call, and an ignored answer is
+      // what made Save produce no sheet, no file and no error.
+      if (!sharePdf(staged)) {
+        await notify({
+          title: 'PDF export failed',
+          type: 'error',
+          message: 'On Paper could not open the share sheet, so the PDF was not '
+            + 'saved. Please restart the app and try again.',
+        });
         return;
       }
       console.log('PDF Export: shared', staged);
