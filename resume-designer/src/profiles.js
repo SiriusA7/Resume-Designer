@@ -893,10 +893,18 @@ export async function deleteProfileDurably(id) {
 // Deliberately NOT async: an unknown id throws synchronously (programmer
 // error), while the returned promise covers only the download itself.
 export function exportProfileBackup(profileId, filename) {
-  // listProfiles(): a tombstoned entry's physical keys are already gone (see
-  // deleteProfile), so finding it in the raw registry would silently produce
-  // an empty export instead of the "unknown profile" error a stale id should get.
-  const profile = listProfiles().find((p) => p.id === profileId);
+  // listProfiles() PLUS the workspace still in use. The premise of the old
+  // comment — "a tombstoned entry's physical keys are already gone (see
+  // deleteProfile)" — holds only for a workspace deleted HERE. A tombstone that
+  // arrived from another device leaves the bytes in place, deliberately, while
+  // this device is still mapped to them: `purgeTombstonedProfiles` refuses to
+  // touch the active one for exactly that reason. Refusing to export it threw
+  // "unknown profile" over content that is demonstrably still there, and it is
+  // the one workspace whose export somebody might urgently need.
+  const inUse = new Set([getActiveProfileId(), getProfileMapping()].filter(Boolean));
+  const profile = (loadRegistry() || []).find(
+    (p) => p?.id === profileId && (!p.deletedAt || inUse.has(p.id)),
+  );
   if (!profile) throw new Error(`Unknown profile id: ${profileId}`);
   const prefix = physicalKey(profileId, '');
   const keys = {};

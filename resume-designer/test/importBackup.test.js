@@ -501,3 +501,59 @@ describe('the device identity in a restored sync-state key', () => {
     expect(localStorage.getItem(SYNC_STATE)).toBe('{ not json');
   });
 });
+
+describe('a replacement restore deletes what it omits, and says so', () => {
+  // A restore that replaces a synced workspace is a DELETION for anything it
+  // leaves out — but it writes a new blob and a new registry rather than going
+  // through `deleteVariant`/`deleteProfile`, so nothing produced the tombstone
+  // that makes a deletion travel. Absence alone reads as "keep the local copy"
+  // on every other device, and the next fetch hands the removed thing back.
+  const DATA = 'resume-designer-data';
+
+  it('tombstones a résumé the backup leaves out', () => {
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { keep: { id: 'keep', name: 'Kept' }, gone: { id: 'gone', name: 'Dropped' } },
+    }));
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: { keep: { id: 'keep', name: 'Kept' } } }) } } },
+    });
+
+    const blob = JSON.parse(localStorage.getItem(`resume-p--pmine--${DATA}`));
+    expect(blob.variants.keep.name).toBe('Kept');
+    expect(blob.variants.gone.deletedAt).toEqual(expect.any(String));
+    expect(blob.variants.gone.data).toBeUndefined();
+  });
+
+  it('tombstones a workspace the backup leaves out', () => {
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+      { id: 'pgone', name: 'Old', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: {},
+    });
+
+    const registry = JSON.parse(localStorage.getItem('resume-designer-profiles'));
+    expect(registry.find((p) => p.id === 'pmine').deletedAt).toBeUndefined();
+    // Present and tombstoned, not merely absent: `mergeRegistry` is a union, so
+    // an absent entry is "keep the local one" on every other device.
+    expect(registry.find((p) => p.id === 'pgone').deletedAt).toEqual(expect.any(String));
+  });
+});

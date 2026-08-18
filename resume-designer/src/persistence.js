@@ -807,6 +807,39 @@ function normalizeImportedValue(key, value, keepCredential = false) {
   return sanitized;
 }
 
+/**
+ * The incoming blob, with a tombstone for every résumé the restore DROPS.
+ *
+ * A replacement restore is a deletion for anything it omits — but it writes a
+ * new blob rather than calling `deleteVariant`, so nothing produced the
+ * tombstone that makes a deletion travel. `changedDataUnits` only compares ids
+ * present in the new value, so the dropped résumé was not even named: CloudKit
+ * kept its record, and the next fetch on any device handed it straight back.
+ *
+ * The tombstone carries no `data`, exactly as `deleteVariant`'s does, so every
+ * reader hides it and `landsAsResume` still accepts it on the other side.
+ */
+function withTombstonesForDroppedVariants(priorRaw, nextRaw) {
+  const prior = parseJSONSafe(priorRaw);
+  const next = parseJSONSafe(nextRaw);
+  if (!prior?.variants || !next || typeof next !== 'object') return nextRaw;
+  const nextVariants = next.variants && typeof next.variants === 'object' ? next.variants : {};
+  const now = new Date().toISOString();
+  let dropped = 0;
+  for (const [id, variant] of Object.entries(prior.variants)) {
+    if (nextVariants[id] || isDeletedVariant(variant)) continue;
+    nextVariants[id] = { id, name: variant?.name, deletedAt: now, updatedAt: now };
+    dropped++;
+  }
+  if (dropped === 0) return nextRaw;
+  return JSON.stringify({ ...next, variants: nextVariants });
+}
+
+function parseJSONSafe(raw) {
+  if (typeof raw !== 'string') return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 function importFullBackupV2(parsed, keepCredential = false) {
   const registry = parsed.registry;
   // A PRESENT emoji must be a string: the switcher renders it directly as a
@@ -946,7 +979,20 @@ function importFullBackupV2(parsed, keepCredential = false) {
   let keysImported = 0;
   let historySkipped = 0;
   try {
-    writeTracked(PROFILES_KEY, JSON.stringify(registry));
+    // A workspace the restore OMITS is a workspace the restore deletes — and
+    // `mergeRegistry` is a union, so a merely-absent entry reads as "keep the
+    // local one". Other devices went on showing it, and their next registry
+    // edit uploaded it back for fresh ones. Written as tombstones so the
+    // removal travels the way `deleteProfile`'s does.
+    const priorRegistry = parseJSONSafe(priorValues.get(PROFILES_KEY)) || [];
+    const restoredIds = new Set(registry.map((p) => p.id));
+    const stamp = new Date().toISOString();
+    const withRemovals = registry.concat(
+      priorRegistry
+        .filter((p) => p?.id && !restoredIds.has(p.id) && !p.deletedAt)
+        .map((p) => ({ ...p, deletedAt: stamp, updatedAt: stamp })),
+    );
+    writeTracked(PROFILES_KEY, JSON.stringify(withRemovals));
     const active = registry.some((p) => p.id === parsed.activeProfile)
       ? parsed.activeProfile : registry[0].id;
     writeTracked(ACTIVE_PROFILE_KEY, active);
@@ -966,7 +1012,13 @@ function importFullBackupV2(parsed, keepCredential = false) {
       ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
     );
     for (const { physicalKey: key, logicalKey, value } of nonHistory) {
-      writeTracked(key, normalizeImportedValue(logicalKey, value, keepCredential));
+      let normalized = normalizeImportedValue(logicalKey, value, keepCredential);
+      // Same rule one level down: a résumé the restore omits is a résumé it
+      // deletes, and only a tombstone makes that travel.
+      if (logicalKey === STORAGE_KEY) {
+        normalized = withTombstonesForDroppedVariants(priorValues.get(key), normalized);
+      }
+      writeTracked(key, normalized);
       keysImported++;
     }
     for (const { physicalKey: key, value } of history) {

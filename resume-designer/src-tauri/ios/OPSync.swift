@@ -1733,7 +1733,7 @@ extension OPSyncEngine {
   /// deferred id came back, found nothing, and the record was stranded for the
   /// fourth time. Record identity is already full — owner, zone, name — so one
   /// set needs no partitioning.
-  private static let unreadableKey = "op-sync-unreadable" 
+  private static let unreadableKey = "op-sync-unreadable"
 
   /// The unreadable-record markers, on disk beside the deferred queue they pair
   /// with.
@@ -1905,7 +1905,9 @@ extension OPSyncEngine {
   /// rewrites its state and record keys on its next event.
   static func forgetEverythingAboutTheServer() {
     let defaults = UserDefaults.standard
-    let prefixes = [stateKey(""), recordsKey(""), deferredKey("")]
+    // `op-sync-unreadable-<profileId>` too: a build before the markers became
+    // one set wrote them per profile, and nothing else would ever reclaim them.
+    let prefixes = [stateKey(""), recordsKey(""), deferredKey(""), "\(unreadableKey)-"]
     defaults.removeObject(forKey: unreadableKey)
     for key in defaults.dictionaryRepresentation().keys
     where prefixes.contains(where: key.hasPrefix) {
