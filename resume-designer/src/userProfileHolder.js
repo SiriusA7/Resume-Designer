@@ -94,10 +94,29 @@ export function userProfileHolderBusy() {
 }
 
 /**
+ * How many times a working copy has been replaced by an adoption.
+ *
+ * The dialog's tab is keyed on its version, so an adoption REMOUNTS it — and a
+ * handler suspended on a confirmation belongs to the component that is now
+ * gone, holding the array that is now detached. It cannot see the replacement
+ * through a prop or a ref, and mutating what it holds writes into nothing while
+ * `refresh()` saves the adopted copy unchanged: the deletion silently does not
+ * happen. This counter is what such a handler can compare against.
+ */
+let adoptions = 0;
+
+/** The adoption count, for a handler that suspended across one. */
+export function userProfileAdoptions() {
+  return adoptions;
+}
+
+/**
  * Ask the holder to take the profile now in storage. A no-op when nothing holds
  * a copy, which is the honest answer: every other reader calls getUserProfile(),
  * which reads storage each time.
  */
 export function adoptStoredUserProfile() {
-  holder?.adopt();
+  if (!holder) return;
+  adoptions += 1;
+  holder.adopt();
 }

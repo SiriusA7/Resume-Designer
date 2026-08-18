@@ -10,6 +10,8 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { confirmDestructive } from '@/components/ui/confirm';
+import { toast } from 'sonner';
+import { userProfileAdoptions } from '../../userProfileHolder.js';
 
 import { shouldSpellcheck, EDITABLE_TEXT_ATTRS } from '../../spellcheck.js';
 import { groupExperience, companyKey } from '../../experienceGroups.js';
@@ -502,12 +504,24 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
     // the re-render, so a just-typed name would not be reflected here and this
     // dialog would name the wrong employer while asking to destroy it.
     const liveCompany = items[group.roles[0]?.index]?.company || group.company;
+    // The confirmation is an unbounded wait, and an adopted `data:userProfile`
+    // unit replaces the dialog's working copy during one. The tab is keyed on
+    // its version, so that REMOUNTS it — and this handler belongs to the
+    // component that is now gone, holding an `items` array that is no longer
+    // attached to anything. Splicing it writes into nothing while `refresh()`
+    // saves the adopted copy unchanged, so the employer the person confirmed
+    // deleting is simply still there, with no error and nothing to retry.
+    const adoptions = userProfileAdoptions();
     const ok = await confirmDestructive({
       title: `Delete ${liveCompany || 'this employer'}?`,
       description: `All ${count} positions at this employer will be permanently removed from your profile.`,
       actionLabel: 'Delete',
     });
     if (!ok) return;
+    if (userProfileAdoptions() !== adoptions) {
+      toast.error('Your profile changed on another device while that was open — nothing was deleted.');
+      return;
+    }
     rewrite(removeEntries(items, group.roles.map((r) => r.index)));
   };
 
