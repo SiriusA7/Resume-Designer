@@ -687,6 +687,39 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     ]);
   });
 
+  it('FAILS the restore when the stamping throws, instead of persisting it unstamped', () => {
+    // The stamp is not incidental bookkeeping here — it is what makes the
+    // restored content outrank what the server still holds. Suppressed, the
+    // restore is reported as successful, persisted, and unstamped, so the next
+    // fetch reads it as -Infinity and overwrites it with the very records it
+    // just replaced. A QuotaExceededError is the plausible trigger: passthrough
+    // mode's `setItem` throws synchronously, and the sync-state key is written
+    // last, when the store is at its fullest.
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { keep: { id: 'keep', name: 'Mine' } },
+    }));
+    setRestoreStampHandler(() => { throw new Error('QuotaExceededError'); });
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+    })).toThrow(/quota/i);
+    setRestoreStampHandler(null);
+
+    // Rolled back, not half-applied: the workspace still holds what it did.
+    const blob = JSON.parse(localStorage.getItem(`resume-p--pmine--${DATA}`));
+    expect(blob.variants.keep.name).toBe('Mine');
+    expect(blob.variants.keep.deletedAt).toBeUndefined();
+  });
+
   it('keeps a tombstone the backup leaves out, instead of tidying it away', () => {
     // The tombstone is the ONLY thing standing between a deletion and a device
     // that still holds the live entry: `mergeRegistry` unions, so an entry this

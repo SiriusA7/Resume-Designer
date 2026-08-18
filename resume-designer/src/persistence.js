@@ -46,18 +46,26 @@ export function setRestoreStampHandler(handler, announceHandler) {
  * Returns the unit ids per workspace so the durable caller can announce exactly
  * what was stamped, rather than recomputing it against a store that has since
  * moved.
+ *
+ * THROWS RATHER THAN LOGGING, unlike the announcement below, and the asymmetry
+ * is the point. `appStorage` swallows its own observer's failures because the
+ * bytes are already stored by then and a bookkeeping error surfacing at some
+ * unrelated call site reads as a lost edit. Here the stamp is not incidental:
+ * it is what makes the restored content outrank what the server still holds. A
+ * suppressed failure — a QuotaExceededError in passthrough mode is the
+ * plausible one, since that mode's `setItem` throws synchronously — leaves a
+ * restore reported as successful, persisted, and unstamped, so the next fetch
+ * reads it as -Infinity and overwrites it with the records it just replaced.
+ * Letting it reach the caller's `try` runs the rollback, which is the outcome
+ * a person can see and retry.
  */
 function stampRestoredWrites(restoredWrites, noteKeyWritten) {
   const stamped = new Map();
   if (!restoreStampHandler || !restoredWrites?.size) return stamped;
   for (const [profileId, writes] of restoredWrites) {
     if (!writes?.length) continue;
-    try {
-      const ids = restoreStampHandler(profileId, writes, noteKeyWritten);
-      if (ids?.length) stamped.set(profileId, ids);
-    } catch (e) {
-      console.error('[backup] could not stamp restored units:', e);
-    }
+    const ids = restoreStampHandler(profileId, writes, noteKeyWritten);
+    if (ids?.length) stamped.set(profileId, ids);
   }
   return stamped;
 }
@@ -69,6 +77,12 @@ function stampRestoredWrites(restoredWrites, noteKeyWritten) {
  * failures surface at the flush — so announcing there uploads deletions for a
  * restore that may still be rolled back, and a rollback cannot recall them.
  * Keyed by workspace, because the same résumé id lives in more than one.
+ *
+ * LOGS rather than throwing, unlike the stamping above. By this point the
+ * restore is on disk and correct; there is nothing to roll back to, and failing
+ * it here would report a restore that actually succeeded as a failure. The
+ * stamp is durable, so a lost announcement costs immediacy and not the content
+ * — the unit still outranks the server whenever it is next collected.
  */
 export function commitRestoredUnits(restoredUnits) {
   if (!restoreAnnounceHandler || !restoredUnits?.size) return;
