@@ -5868,6 +5868,8 @@ private struct ChatSheet: View {
   @State private var showDeleteConfirm = false
   /// The chat the delete prompt was raised for. See the dialog's own comment.
   @State private var pendingDeleteThread: String?
+  /// The chat the rename alert was raised for, for the same reason.
+  @State private var pendingRenameThread: String?
   /// Unsent text, per chat. A draft belongs to the conversation it was written
   /// for; see the switch handler.
   @State private var drafts: [String: String] = [:]
@@ -5964,11 +5966,16 @@ private struct ChatSheet: View {
       }
       .alert("Rename chat", isPresented: $showRename) {
         TextField("Name", text: $renameDraft)
-        Button("Cancel", role: .cancel) {}
+        Button("Cancel", role: .cancel) { pendingRenameThread = nil }
         Button("Rename") {
           let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !title.isEmpty, let id = currentThread?.id else { return }
+          guard !title.isEmpty, let id = pendingRenameThread,
+                chat?.threads.contains(where: { $0.id == id }) == true else {
+            pendingRenameThread = nil
+            return
+          }
           model.send("chatRenameThread", ["id": id, "title": title])
+          pendingRenameThread = nil
         }
       }
       .confirmationDialog(
@@ -6171,6 +6178,12 @@ private struct ChatSheet: View {
     Menu {
       Button {
         renameDraft = currentTitle
+        // Pinned when the alert opens, exactly as the delete beside it is. An
+        // empty composer means the chat guard allows adoption, so a synced
+        // thread list can remove this chat and select a replacement while the
+        // alert is up — and resolving `currentThread` on Rename would then put
+        // this chat's drafted title on that replacement.
+        pendingRenameThread = currentThread?.id
         showRename = true
       } label: {
         Label("Rename", systemImage: "pencil")
