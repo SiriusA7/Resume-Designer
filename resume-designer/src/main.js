@@ -52,6 +52,7 @@ import {
   registerPersistedSaveHandler, touchUnit,
   registerEditingProbe, isSyncEnabled, setSyncEnabled,
   installStorageStamping, setStorageDirtyNotifier, setActiveProfileDeletedHandler,
+  setOpenVariantDeletedHandler,
 } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
@@ -131,6 +132,21 @@ registerEditingProbe(() => getActiveInlineEditable() !== null);
 // shows, `appStorage` stays mapped to its namespace, and every edit lands in
 // `resume-p--<dead>--…` until the next launch resolves elsewhere and they are
 // gone — written where nothing will ever read them.
+// The résumé on screen, deleted on another device. Same division as the
+// workspace handler below: the sync layer lands the tombstone and says so, and
+// what to open instead is the variant list's question.
+setOpenVariantDeletedHandler((variantId) => {
+  const live = Object.keys(getVariants()).filter((id) => id !== variantId);
+  if (live.length === 0) {
+    // Nothing left to open. Leaving the deleted résumé on screen is the least
+    // bad option — the persistence path refuses to write over its tombstone, so
+    // nothing here can resurrect it, and a reload lands on the empty state.
+    console.warn('[variants] the open résumé was deleted elsewhere and none remain');
+    return;
+  }
+  loadVariant(live[0]);
+});
+
 setActiveProfileDeletedHandler(async () => {
   const replacement = listProfiles().find((p) => p.id !== getActiveProfileId());
   if (!replacement) {

@@ -110,10 +110,42 @@ export function saveToStorage(data) {
   }
 }
 
+/**
+ * A deleted résumé, kept as a record rather than removed.
+ *
+ * Absence cannot travel. A unit that is simply gone from the blob emits nothing,
+ * and the transport treats a missing unit as "nothing to say" rather than
+ * "delete this" — deliberately, because that is the only reading under which a
+ * device that has not finished syncing cannot wipe another device's work. So a
+ * delete that removed the entry never reached anywhere: the résumé stayed on
+ * every other device, and a fresh device or a forced refetch handed it back to
+ * the one that deleted it.
+ *
+ * A tombstone is the same `resume:<id>` unit carrying `deletedAt`. It travels,
+ * merges and resolves like any other record — newest wins, so a delete beats an
+ * older edit and loses to a newer one — and it is never pruned, because a
+ * pruned tombstone is a résumé that comes back. Same shape the profile registry
+ * already uses (see `mergeRegistry`).
+ */
+export const isDeletedVariant = (variant) => Boolean(variant && variant.deletedAt);
+
+/** Only the résumés that still exist. Tombstones are storage, not content. */
+function liveVariants(storage) {
+  const out = {};
+  for (const [id, variant] of Object.entries(storage.variants || {})) {
+    if (!isDeletedVariant(variant)) out[id] = variant;
+  }
+  return out;
+}
+
 // Get all variants
 export function getVariants() {
-  const storage = loadFromStorage();
-  return storage.variants || {};
+  return liveVariants(loadFromStorage());
+}
+
+/** The raw map, tombstones included — for the paths that must see them. */
+export function getVariantsIncludingDeleted() {
+  return loadFromStorage().variants || {};
 }
 
 // Get current variant ID
@@ -132,7 +164,7 @@ export function setCurrentVariantId(id) {
 // Save a variant
 export function saveVariant(id, name, data) {
   const storage = loadFromStorage();
-  const existingVariant = storage.variants[id];
+  const existingVariant = isDeletedVariant(storage.variants[id]) ? null : storage.variants[id];
   const now = new Date().toISOString();
   
   storage.variants[id] = {
@@ -191,14 +223,24 @@ export function generateUniqueVariantName(baseName, variants = null) {
 // Delete a variant
 export function deleteVariant(id) {
   const storage = loadFromStorage();
-  delete storage.variants[id];
-  
-  // If deleted variant was current, switch to another
+  if (!storage.variants[id]) return storage.currentVariantId;
+  // REPLACED by a tombstone, not removed — see `isDeletedVariant`. The name is
+  // kept so a conflict notice or a log line can say WHICH résumé went; nothing
+  // renders it, because every reader goes through `getVariants`.
+  const now = new Date().toISOString();
+  storage.variants[id] = {
+    id,
+    name: storage.variants[id].name,
+    deletedAt: now,
+    updatedAt: now,
+  };
+
+  // If deleted variant was current, switch to another LIVE one.
   if (storage.currentVariantId === id) {
-    const variantIds = Object.keys(storage.variants);
+    const variantIds = Object.keys(liveVariants(storage));
     storage.currentVariantId = variantIds.length > 0 ? variantIds[0] : null;
   }
-  
+
   saveToStorage(storage);
   return storage.currentVariantId;
 }
@@ -206,7 +248,7 @@ export function deleteVariant(id) {
 // Rename a variant
 export function renameVariant(id, newName) {
   const storage = loadFromStorage();
-  if (storage.variants[id]) {
+  if (storage.variants[id] && !isDeletedVariant(storage.variants[id])) {
     storage.variants[id].name = newName;
     storage.variants[id].updatedAt = new Date().toISOString();
     saveToStorage(storage);
@@ -216,7 +258,7 @@ export function renameVariant(id, newName) {
 // Save job analysis results for a specific variant
 export function saveVariantAnalysis(variantId, analysis) {
   const storage = loadFromStorage();
-  if (storage.variants[variantId]) {
+  if (storage.variants[variantId] && !isDeletedVariant(storage.variants[variantId])) {
     storage.variants[variantId].jobAnalysis = analysis;
     storage.variants[variantId].analysisUpdatedAt = new Date().toISOString();
     saveToStorage(storage);
@@ -227,13 +269,14 @@ export function saveVariantAnalysis(variantId, analysis) {
 export function getVariantAnalysis(variantId) {
   const storage = loadFromStorage();
   const variant = storage.variants[variantId];
+  if (isDeletedVariant(variant)) return null;
   return variant?.jobAnalysis || null;
 }
 
 // Clear job analysis results for a specific variant
 export function clearVariantAnalysis(variantId) {
   const storage = loadFromStorage();
-  if (storage.variants[variantId]) {
+  if (storage.variants[variantId] && !isDeletedVariant(storage.variants[variantId])) {
     storage.variants[variantId].jobAnalysis = null;
     storage.variants[variantId].analysisUpdatedAt = null;
     saveToStorage(storage);
@@ -372,7 +415,7 @@ export function initPersistence(variantId) {
     if (variantId) {
       const storage = loadFromStorage();
       const variant = storage.variants[variantId];
-      if (variant) {
+      if (variant && !isDeletedVariant(variant)) {
         // The debounced auto-save is the path that persists ongoing EDITS.
         // When the write fails (browser passthrough at storage quota), the
         // user must hear about it once — otherwise everything typed from now

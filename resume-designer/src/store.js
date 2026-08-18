@@ -421,6 +421,15 @@ function createStore() {
     // transport forfeits the record's change tag, and the next save — which the
     // in-flight edit is about to trigger — meets the conflict path, where both
     // copies are compared and the loser is parked.
+    // Whether `variantId` is the résumé on screen. The one question only this
+    // module can answer — `currentVariantId` is private to it — and the sync
+    // layer needs it without a side effect: a landed TOMBSTONE has no document
+    // to adopt, so `adoptDocument`'s false cannot distinguish "not the loaded
+    // one" from "nothing to adopt".
+    isLoadedVariant(variantId) {
+      return Boolean(variantId) && variantId === currentVariantId;
+    },
+
     isBusyEditing(variantId, sessionActive = false) {
       if (!variantId || variantId !== currentVariantId) return false;
       return isDirty || sessionActive === true;

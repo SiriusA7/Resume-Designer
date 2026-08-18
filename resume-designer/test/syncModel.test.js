@@ -314,6 +314,43 @@ describe('collecting a profile that is not the open one', () => {
   });
 });
 
+describe('a deleted résumé travels', () => {
+  const tombstone = (id, at = '2026-08-18T00:00:00.000Z') => ({
+    id: `resume:${id}`, kind: 'resume',
+    payload: JSON.stringify({ id, name: 'Tailored for Acme', deletedAt: at, updatedAt: at }),
+  });
+
+  it('lands a tombstone, which the no-document rule used to refuse outright', async () => {
+    // `landsAsResume` refuses a record with no `data` — a broken unit must not
+    // blank a résumé. A tombstone IS a record with no document, so without an
+    // explicit clause every delete was written and uploaded here and then
+    // declined by every device that fetched it: the deletion reached nobody.
+    const landed = await applyUnits([tombstone('v-1')]);
+
+    expect(landed.applied).toBe(1);
+    const blob = JSON.parse(disk.get(physical(DATA)));
+    expect(blob.variants['v-1'].deletedAt).toBe('2026-08-18T00:00:00.000Z');
+    expect(blob.variants['v-1'].data).toBeUndefined();
+  });
+
+  it('still refuses a record that is merely broken', async () => {
+    // The rule the clause above sits next to, and it has to keep holding: a
+    // record with neither a document nor a `deletedAt` is a damaged unit, and
+    // landing it would overwrite a good résumé with nothing.
+    const landed = await applyUnits([{
+      id: 'resume:v-1', kind: 'resume', payload: JSON.stringify({ id: 'v-1', name: 'Broken' }),
+    }]);
+
+    expect(landed.applied).toBe(0);
+    // Untouched — not overwritten by the record that carried nothing. Asserted
+    // on the NAME because this fixture's variant has no `data` of its own, so a
+    // `.data` check here would pass whether the write happened or not.
+    const blob = JSON.parse(disk.get(physical(DATA)));
+    expect(blob.variants['v-1'].name).toBe('Design Engineer');
+    expect(blob.variants['v-1'].deletedAt).toBeUndefined();
+  });
+});
+
 describe('a tombstone for the workspace this device has open', () => {
   const registryUnit = (entries) => ({
     id: 'key:resume-designer-profiles', kind: 'plain', payload: JSON.stringify(entries),

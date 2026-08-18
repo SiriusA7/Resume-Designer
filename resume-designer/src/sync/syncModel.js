@@ -302,7 +302,27 @@ function resumeDocument(payload) {
  * `landsAsDataField` was written.
  */
 function landsAsResume(unit) {
+  // A TOMBSTONE is a record with no document, and it is the one such record
+  // that must land. Without this clause the rule above — "a record with no
+  // document is a broken unit" — refused every delete: the tombstone was
+  // written and uploaded here, and then declined by every device that fetched
+  // it, so a deletion still reached nobody. It is told apart from a genuinely
+  // broken record by `deletedAt`, which nothing else produces.
+  if (resumeTombstone(unit.payload)) return true;
   return resumeDocument(unit.payload) !== null;
+}
+
+/** The `deletedAt` of a tombstoned résumé record, or null for anything else. */
+function resumeTombstone(payload) {
+  let record;
+  try {
+    record = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  return record && typeof record === 'object' && typeof record.deletedAt === 'string'
+    ? record.deletedAt
+    : null;
 }
 
 // Whether a person is typing into the résumé right now. Installed by main.js
@@ -619,10 +639,36 @@ function adoptLoadedDocument(unit) {
   const variantId = unit.id.slice(RESUME_UNIT_PREFIX.length);
   if (!variantId) return;
 
+  // Deleted elsewhere. There is no document to adopt, and the screen must not
+  // go on showing a résumé that no longer exists — the store would keep saving
+  // it, and although the persistence path now refuses to write over a tombstone,
+  // the person would be editing into nothing. Noted here and reconciled after
+  // the flush, exactly like a deleted workspace.
+  if (resumeTombstone(unit.payload)) {
+    if (store.isLoadedVariant(variantId)) deletedOpenVariant = variantId;
+    return;
+  }
+
   const document = resumeDocument(unit.payload);
   if (!document) return;
 
   store.adoptDocument(variantId, document);
+}
+
+// Set when a landed tombstone names the résumé on screen; consumed once, after
+// the apply's flush, by the handler below.
+let deletedOpenVariant = null;
+let openVariantDeletedHandler = null;
+
+/**
+ * Install what to do when another device deletes the résumé open here.
+ *
+ * main.js owns it for the same reason it owns the deleted-workspace handler:
+ * choosing what to open instead is the variant list's question, not this
+ * module's.
+ */
+export function setOpenVariantDeletedHandler(handler) {
+  openVariantDeletedHandler = typeof handler === 'function' ? handler : null;
 }
 
 /**
@@ -1209,6 +1255,15 @@ export async function applyUnits(units) {
   // launch reads a registry that still lists the workspace, and switching away
   // from it now would move the pointer on the strength of bytes this device
   // does not hold.
+  if (durable && deletedOpenVariant) {
+    const variantId = deletedOpenVariant;
+    deletedOpenVariant = null;
+    try {
+      openVariantDeletedHandler?.(variantId);
+    } catch (err) {
+      console.error('[sync] could not move off a remotely deleted résumé:', err);
+    }
+  }
   if (durable && activeProfileDeleted) {
     activeProfileDeleted = false;
     try {

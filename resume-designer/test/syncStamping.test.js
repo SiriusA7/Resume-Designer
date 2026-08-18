@@ -20,7 +20,7 @@ import {
 } from '../src/sync/syncModel.js';
 import { store } from '../src/store.js';
 import {
-  initPersistence, setPersistedSaveHandler,
+  initPersistence, setPersistedSaveHandler, deleteVariant, getVariants, renameVariant,
 } from '../src/persistence.js';
 import { registerPersistedSaveHandler } from '../src/sync/syncModel.js';
 import { resetSpacingSettings } from '../src/spacingService.js';
@@ -843,5 +843,51 @@ describe('a conflict parked into a workspace this device is not in', () => {
       { id: 'key:resume-designer-history-v-9', profileId: 'p2' },
       { id: 'key:resume-designer-applications', profileId: '' },
     ]);
+  });
+});
+
+describe('deleting a résumé produces something that can travel', () => {
+  beforeEach(() => {
+    registerPersistedSaveHandler(setPersistedSaveHandler);
+    setStorageDirtyNotifier(notify);
+  });
+
+  it('leaves a tombstone the sync layer can name, not an absence', async () => {
+    // Absence emits nothing, and the transport reads a missing unit as "nothing
+    // to say" rather than "delete this" — deliberately, so a half-synced device
+    // cannot wipe another's work. So a delete that REMOVED the entry reached
+    // nobody: the résumé stayed everywhere else and came back on a refetch.
+    const blob = JSON.parse(appStorage.getItem(DATA));
+    blob.variants['v-2'] = { id: 'v-2', name: 'Tailored for Acme', data: { name: 'Ada' } };
+    appStorage.setItem(DATA, JSON.stringify(blob));
+    await settle();
+    notify.mockClear();
+
+    expect(deleteVariant('v-2')).toBe('v-1');
+    await settle();
+
+    // The record is still there, marked — and it is named to the transport, so
+    // the delete actually goes up.
+    const after = JSON.parse(appStorage.getItem(DATA));
+    expect(after.variants['v-2'].deletedAt).toEqual(expect.any(String));
+    expect(after.variants['v-2'].data).toBeUndefined();
+    expect(allNamed()).toContain('resume:v-2');
+  });
+
+  it('hides it from every reader, so nothing renders or re-saves it', async () => {
+    const blob = JSON.parse(appStorage.getItem(DATA));
+    blob.variants['v-3'] = { id: 'v-3', name: 'Gone', data: { name: 'Ada' } };
+    appStorage.setItem(DATA, JSON.stringify(blob));
+    await settle();
+
+    deleteVariant('v-3');
+
+    expect(Object.keys(getVariants())).not.toContain('v-3');
+    // And a rename cannot bring it back: writing over a tombstone is how a
+    // deleted résumé resurrects itself locally and then wins on the wire.
+    renameVariant('v-3', 'Back from the dead');
+    const after = JSON.parse(appStorage.getItem(DATA));
+    expect(after.variants['v-3'].name).toBe('Gone');
+    expect(after.variants['v-3'].deletedAt).toEqual(expect.any(String));
   });
 });
