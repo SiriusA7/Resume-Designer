@@ -131,12 +131,25 @@ targets:
         # when it happens to fetch: at launch, on returning to the foreground,
         # or on CKSyncEngine's own schedule, which is where the half-minute lag
         # between two devices came from.
-        aps-environment: development
+        # PER CONFIGURATION, via the build setting below. This entitlement is
+        # written once into a file both configurations share, so hard-coding it
+        # asks for the DEVELOPMENT APNs environment in an archive as well — and
+        # a distribution profile grants production, so the export either fails
+        # on mismatched entitlements or ships a build whose silent pushes never
+        # arrive. The second is the dangerous one: sync still works, just with
+        # the half-minute lag this entitlement exists to remove, and nothing
+        # says so.
+        aps-environment: $(APS_ENVIRONMENT)
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
         RUST_LOG: info
     settings:
+      configs:
+        debug:
+          APS_ENVIRONMENT: development
+        release:
+          APS_ENVIRONMENT: production
       base:
         ENABLE_BITCODE: false
         ARCHS: [arm64]

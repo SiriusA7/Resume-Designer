@@ -212,18 +212,18 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_4E7F2713-C56A-443F-950E-2D5F668CBF03" /* x86_64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = x86_64;
-			sourceTree = "<group>";
-		};
-		"TEMP_C0AADE4A-9054-46B2-8242-22DFDACD1E4F" /* arm64 */ = {
+		"TEMP_7863DD7E-D60C-4E2A-B820-EF84105432C5" /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = arm64;
+			sourceTree = "<group>";
+		};
+		"TEMP_D9A158D5-05C1-440B-9DC4-056FEB1F5874" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -342,6 +342,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				APS_ENVIRONMENT = production;
 				ARCHS = (
 					arm64,
 				);
@@ -374,6 +375,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				APS_ENVIRONMENT = development;
 				ARCHS = (
 					arm64,
 				);
