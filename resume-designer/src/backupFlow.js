@@ -16,8 +16,11 @@ import { getSecret, hasNoCredentialConfigured, recoverSecretStore } from './secr
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
-import { probeLegacyElectronData, importLegacyElectronData, notify } from './native.js';
+import {
+  probeLegacyElectronData, importLegacyElectronData, notify, isIOSPlatform,
+} from './native.js';
 import { confirmDestructive } from '@/components/ui/confirm';
+import { isSyncEnabled } from './sync/syncModel.js';
 
 /**
  * Bridge the visual gap between "user clicked OK on the post-import alert" and
@@ -255,6 +258,19 @@ export async function importBackupFromFile(file) {
         `This backup contains ${incoming} keys${profileNote} `
         + `(created ${preview.createdAt || 'unknown date'}). `
         + `Your current resumes, job descriptions, history, and settings will be REPLACED. `
+        // Said out loud because a replace is no longer a local act. The résumés
+        // this backup omits are now tombstoned, and a tombstone TRAVELS — it
+        // removes them on every device signed into the same account, not just
+        // this one. Nothing in the old copy suggested that, and it is not a
+        // consequence anyone would infer from the word "replace".
+        // Gated on the PLATFORM as well, and not redundantly: `isSyncEnabled`
+        // reads a suspension flag whose absence means "running", so it answers
+        // true on desktop — where there is no CloudKit transport at all — and
+        // the sentence would be describing something that cannot happen.
+        + (isIOSPlatform() && isSyncEnabled()
+          ? `Because iCloud sync is on, resumes this backup does not contain will `
+            + `also be removed from your other devices. `
+          : '')
         + `The app will reload after import.`,
       actionLabel: 'Replace and reload',
       cancelLabel: 'Cancel',
