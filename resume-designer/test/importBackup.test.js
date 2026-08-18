@@ -589,7 +589,11 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     // tombstone then reads as -Infinity against the remote's real stamp, the
     // live copy wins, and the deletion undoes itself on the next fetch.
     const stamped = [];
-    setRestoreStampHandler((profileId, unitIds) => stamped.push([profileId, unitIds]));
+    const announced = [];
+    setRestoreStampHandler(
+      (profileId, unitIds) => stamped.push([profileId, unitIds]),
+      (profileId, unitIds) => announced.push([profileId, unitIds]),
+    );
     localStorage.setItem('resume-designer-profiles', JSON.stringify([
       { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
     ]));
@@ -607,14 +611,19 @@ describe('a replacement restore deletes what it omits, and says so', () => {
       profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
     });
 
-    // NOT announced by the import itself — in cached mode nothing there throws,
-    // so announcing at that point uploads deletions for a restore that may
+    // STAMPED by the import itself, because the stamp is an appStorage write and
+    // the durable wrapper arms the restore guard the moment this returns — a
+    // guard that defers every other writer, and the reload the restore ends with
+    // discards what it deferred.
+    expect(stamped).toEqual([['pmine', ['resume:gone']]]);
+    // NOT announced there. In cached mode nothing in the import throws, so
+    // naming the deletions at that point uploads them for a restore that may
     // still be rolled back, and a rollback cannot recall them. The durable
     // wrapper commits them once the flush has answered.
-    expect(stamped).toEqual([]);
+    expect(announced).toEqual([]);
     commitRestoredTombstones(result.restoredTombstones);
     setRestoreStampHandler(null);
-    expect(stamped).toEqual([['pmine', ['resume:gone']]]);
+    expect(announced).toEqual([['pmine', ['resume:gone']]]);
   });
 
   it('keeps tombstones for the SAME résumé id in two workspaces', () => {

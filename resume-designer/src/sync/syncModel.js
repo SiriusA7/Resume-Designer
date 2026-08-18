@@ -711,7 +711,38 @@ export function stampRestoredUnits(profileId, unitIds) {
   const ids = Array.isArray(unitIds) ? unitIds.filter(Boolean) : [];
   if (ids.length === 0) return;
   touchUnitsForProfile(profileId, ids);
-  for (const unitId of ids) queueDirty(unitId, DATA_KEY, profileId);
+}
+
+/**
+ * Name restored tombstones to the transport, once the restore is durable.
+ *
+ * SPLIT from the stamping above, and the split is the whole point. The stamp is
+ * itself a storage write, so it has to happen while the restore's own writes do
+ * — before the guard is armed — or `appStorage` DEFERS it and the reload the
+ * restore ends with discards it, leaving the tombstone unstamped and reading as
+ * -Infinity against the remote's real time. The announcement is the opposite: it
+ * must NOT happen until the flush has answered, because an upload cannot be
+ * recalled by the rollback a failed flush triggers.
+ *
+ * Announced DIRECTLY rather than through `queueDirty`, because the whole point
+ * of that queue is to hold a unit until the write carrying its bytes reaches
+ * disk — and the caller has already awaited exactly that. Queued, these would
+ * wait for a drain that never comes: the restore just flushed everything, so
+ * nothing is left dirty to trigger one, and the reload destroys the queue.
+ * `queueDirty` is still the fallback for the boot restores that run before the
+ * shell installs a notifier, where holding the ids IS the only way to keep them.
+ */
+export function announceRestoredUnits(profileId, unitIds) {
+  const ids = Array.isArray(unitIds) ? unitIds.filter(Boolean) : [];
+  if (ids.length === 0) return;
+  if (!dirtyNotifier) {
+    for (const unitId of ids) queueDirty(unitId, DATA_KEY, profileId);
+    return;
+  }
+  // Same canonical workspace as `queueDirty` uses: '' for the open one, so the
+  // transport collects it out of the workspace it is actually in.
+  const route = !profileId || profileId === getProfileMapping() ? '' : profileId;
+  dirtyNotifier(ids.map((id) => ({ id, profileId: route })));
 }
 
 function touchUnitsForProfile(profileId, unitIds) {

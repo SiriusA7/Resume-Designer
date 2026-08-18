@@ -21,7 +21,9 @@ import {
 import { store } from '../src/store.js';
 import {
   initPersistence, setPersistedSaveHandler, deleteVariant, getVariants, renameVariant,
+  setRestoreStampHandler, importFullBackupDurably,
 } from '../src/persistence.js';
+import { stampRestoredUnits, announceRestoredUnits } from '../src/sync/syncModel.js';
 import { registerPersistedSaveHandler } from '../src/sync/syncModel.js';
 import { resetSpacingSettings } from '../src/spacingService.js';
 import { resetAccentSettings } from '../src/accentService.js';
@@ -94,6 +96,9 @@ function stamps() {
 const stampedIds = () => Object.keys(stamps()).sort();
 
 let notify;
+// Kept so a test can assert what reached DISK, not just what the cache holds —
+// a deferred write is visible in neither.
+let backend;
 
 beforeEach(async () => {
   __resetAppStorageForTests();
@@ -102,8 +107,7 @@ beforeEach(async () => {
   // Identity mapping (no active profile) keeps physical == logical here; the
   // profile-namespacing asymmetry is syncModel.test.js's subject, not this
   // file's.
-  await initAppStorage({
-    backend: makeBackend({
+  backend = makeBackend({
       [DATA]: JSON.stringify({
         variants: { 'v-1': { name: 'Design Engineer', data: { name: 'Ada' } } },
         currentVariantId: 'v-1',
@@ -111,8 +115,8 @@ beforeEach(async () => {
         userProfile: { contactInfo: { fullName: 'Ada' } },
       }),
       'resume-designer-applications': '[]',
-    }),
   });
+  await initAppStorage({ backend });
   refusedKey = null;
   heldKey = null;
   heldGate = null;
@@ -964,5 +968,83 @@ describe('deleting a résumé produces something that can travel', () => {
     const after = JSON.parse(appStorage.getItem(DATA));
     expect(after.variants['v-3'].name).toBe('Gone');
     expect(after.variants['v-3'].deletedAt).toEqual(expect.any(String));
+  });
+
+  describe('a restore\u2019s tombstones, through the REAL stamp and announce', () => {
+    // The seam test in importBackup.test.js installs a capturing fake, so it can
+    // see that the handlers are CALLED and nothing about whether calling them
+    // achieves anything. Both ways this was inert are invisible from there: a
+    // stamp swallowed by the restore guard, and an announcement gated on a key
+    // the bytes were never written under. So these run the real pair, against
+    // real appStorage, with the profile mapping ON — which is the only
+    // configuration where the logical and physical names differ at all — and
+    // where one cache slot answers to two names, which is its own trap: the
+    // fixture's unprefixed blob and this workspace's physical key ARE the same
+    // entry, and a wipe that walked both names snapshotted the second as null
+    // and wrote no tombstones for anything.
+    const PID = 'pmine';
+
+    const withOneResume = () => {
+      setProfileMapping(PID);
+      localStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      localStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({
+        variants: { 'v-9': { id: 'v-9', name: 'Dropped by the restore' } },
+        currentVariantId: 'v-9',
+      }));
+      setRestoreStampHandler(stampRestoredUnits, announceRestoredUnits);
+    };
+
+    const replacementDropping = () => importFullBackupDurably({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+      activeProfile: PID,
+      shared: {},
+      profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+    });
+
+    afterEach(() => setRestoreStampHandler(null, null));
+
+    it('stamps them despite the restore guard the durable wrapper leaves armed', async () => {
+      withOneResume();
+      await settle();
+
+      await replacementDropping();
+
+      // The guard is STILL armed here — the durable wrapper keeps it through the
+      // caller's modal and reload — so a stamp attempted after the import would
+      // be deferred, and the reload discards what was deferred. Riding the
+      // restore's own writes is what makes this survive.
+      expect(appStorage.isRestoreGuardActive()).toBe(true);
+      const written = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
+      expect(written['resume:v-9']?.modifiedAt).toEqual(expect.any(String));
+      // And it must be a FRESH time, not the empty table the backup carried:
+      // the restore replaces the stamp table wholesale, so a stamp written
+      // before that write would be erased by it and read as -Infinity against
+      // the remote's real stamp — the live copy wins and the deletion undoes
+      // itself on the next fetch.
+      expect(Date.parse(written['resume:v-9'].modifiedAt)).toBeGreaterThan(Date.now() - 60_000);
+    });
+
+    it('announces them, past the barrier that has nothing left to gate', async () => {
+      withOneResume();
+      await settle();
+
+      notify.mockClear();
+      await replacementDropping();
+      await settle();
+
+      // Queued into the write-behind barrier instead, this waits for a drain
+      // that never comes: the restore has just flushed everything, so no write
+      // is left dirty to trigger one, and the reload the restore ends with
+      // destroys the queue. Nothing would ever upload the tombstone, CloudKit
+      // would keep the live record, and the next fetch would hand the résumé
+      // back — the restore quietly undone. The barrier is for units queued
+      // BEFORE their bytes land; this caller has already awaited exactly that.
+      expect(allNamed()).toContain('resume:v-9');
+    });
   });
 });

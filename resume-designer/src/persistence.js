@@ -31,8 +31,23 @@ export function setPersistedSaveHandler(handler) {
 // blob goes in under a PHYSICAL key, which the interceptor classifies
 // 'unknown', so nothing is stamped and nothing is queued.
 let restoreStampHandler = null;
-export function setRestoreStampHandler(handler) {
+let restoreAnnounceHandler = null;
+export function setRestoreStampHandler(handler, announceHandler) {
   restoreStampHandler = typeof handler === 'function' ? handler : null;
+  restoreAnnounceHandler = typeof announceHandler === 'function' ? announceHandler : null;
+}
+
+/** Stamp them with the restore's own writes, so the stamp rides its flush. */
+function stampRestoredTombstones(restoredTombstones) {
+  if (!restoreStampHandler || !restoredTombstones?.size) return;
+  for (const [profileId, ids] of restoredTombstones) {
+    if (!ids?.length) continue;
+    try {
+      restoreStampHandler(profileId, ids.map((id) => `resume:${id}`));
+    } catch (e) {
+      console.error('[backup] could not stamp restored tombstones:', e);
+    }
+  }
 }
 
 /**
@@ -44,13 +59,13 @@ export function setRestoreStampHandler(handler) {
  * Keyed by workspace, because the same résumé id lives in more than one.
  */
 export function commitRestoredTombstones(restoredTombstones) {
-  if (!restoreStampHandler || !restoredTombstones?.size) return;
+  if (!restoreAnnounceHandler || !restoredTombstones?.size) return;
   for (const [profileId, ids] of restoredTombstones) {
     if (!ids?.length) continue;
     try {
-      restoreStampHandler(profileId, ids.map((id) => `resume:${id}`));
+      restoreAnnounceHandler(profileId, ids.map((id) => `resume:${id}`));
     } catch (e) {
-      console.error('[backup] could not stamp restored tombstones:', e);
+      console.error('[backup] could not announce restored tombstones:', e);
     }
   }
 }
@@ -852,6 +867,32 @@ function normalizeImportedValue(key, value, keepCredential = false) {
  * reader hides it and `landsAsResume` still accepts it on the other side.
  */
 /**
+ * Snapshot and wipe a set of owned keys, ONE ENTRY PER ADDRESS.
+ *
+ * Two different names can address the same cache slot: with a profile mapping
+ * on, `appStorage` resolves an unprefixed owned key to that workspace's
+ * physical key — so on an install carrying both (the incomplete-adoption
+ * recovery state `exportFullBackup` documents, where the live workspace still
+ * sits under UNPREFIXED keys), the naive loop snapshotted the value under the
+ * first name, REMOVED it, and then recorded `null` for the second. Both restore
+ * formats then read that null as "there was nothing here", wrote no tombstone
+ * for any résumé the backup drops, and left every one of those CloudKit records
+ * alive to come back on the next fetch. Resolving first and skipping repeats
+ * keeps one real value per slot.
+ */
+function snapshotAndWipeOwnedKeys(keys) {
+  const priorValues = new Map();
+  const mapping = getProfileMapping();
+  for (const k of keys) {
+    const address = mapping && !splitPhysicalKey(k) && isOwnedKey(k) ? mapKey(mapping, k) : k;
+    if (priorValues.has(address)) continue;
+    priorValues.set(address, appStorage.getItem(address));
+    appStorage.removeItem(address);
+  }
+  return priorValues;
+}
+
+/**
  * The pre-wipe value for a key the caller names LOGICALLY.
  *
  * `collectActiveOwnedKeys` snapshots what `appStorage.keys()` reports, which is
@@ -1008,19 +1049,15 @@ function importFullBackupV2(parsed, keepCredential = false) {
   // backup can exceed a browser origin's quota), and without the snapshot
   // that throw would leave the store wiped or half-restored — losing the
   // user's CURRENT profiles on a failed import.
-  const priorValues = new Map();
-  for (const k of appStorage.keys()) {
+  // OPENROUTER_KEY_KEY is deliberately NOT wiped. The credential is no longer
+  // backup data, so nothing would restore it — wiping it here would let an
+  // import silently destroy a working key. (Post-migration it is not in
+  // appStorage at all; this matters for an install that has not migrated yet.)
+  const priorValues = snapshotAndWipeOwnedKeys(appStorage.keys().filter((k) => {
     const split = splitPhysicalKey(k);
     const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
-    // OPENROUTER_KEY_KEY is deliberately NOT wiped. The credential is no longer
-    // backup data, so nothing would restore it — wiping it here would let an
-    // import silently destroy a working key. (Post-migration it is not in
-    // appStorage at all; this matters for an install that has not migrated yet.)
-    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY) {
-      priorValues.set(k, appStorage.getItem(k));
-      appStorage.removeItem(k);
-    }
-  }
+    return owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY;
+  }));
   const removedExistingKeys = priorValues.size;
 
   const written = [];
@@ -1114,6 +1151,15 @@ function importFullBackupV2(parsed, keepCredential = false) {
         historySkipped++;
       }
     }
+    // Stamped HERE, with the restore's own writes and inside its try, and the
+    // placement is the whole point. The stamp is itself an appStorage write, so
+    // it has to happen before `importFullBackupDurably` arms the restore guard —
+    // the guard DEFERS every other writer, and the reload the restore ends with
+    // discards what was deferred, leaving the tombstone unstamped and reading as
+    // -Infinity against the remote's real time. Riding this flush also makes it
+    // roll back correctly: the sync-state key is a fixed backup key, so it is in
+    // the pre-wipe snapshot. Only the ANNOUNCEMENT waits for durability.
+    stampRestoredTombstones(restoredTombstones);
   } catch (err) {
     rollbackWipedImport(written, priorValues);
     throw err;
@@ -1188,11 +1234,7 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
   // Snapshot each removed value first — pass 1 below can throw
   // QuotaExceededError in passthrough mode, and the rollback restores this
   // snapshot so a failed import can't leave the workspace wiped.
-  const priorValues = new Map();
-  for (const k of collectActiveOwnedKeys()) {
-    priorValues.set(k, appStorage.getItem(k));
-    appStorage.removeItem(k);
-  }
+  const priorValues = snapshotAndWipeOwnedKeys(collectActiveOwnedKeys());
 
   // Two-pass write to handle the localStorage quota safely:
   //
@@ -1289,6 +1331,15 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     if (droppedHere.length) {
       restoredTombstones.set(activeWorkspace, droppedHere.slice());
     }
+    // Stamped HERE, with the restore's own writes and inside its try, and the
+    // placement is the whole point. The stamp is itself an appStorage write, so
+    // it has to happen before `importFullBackupDurably` arms the restore guard —
+    // the guard DEFERS every other writer, and the reload the restore ends with
+    // discards what was deferred, leaving the tombstone unstamped and reading as
+    // -Infinity against the remote's real time. Riding this flush also makes it
+    // roll back correctly: the sync-state key is a fixed backup key, so it is in
+    // the pre-wipe snapshot. Only the ANNOUNCEMENT waits for durability.
+    stampRestoredTombstones(restoredTombstones);
   } catch (err) {
     rollbackWipedImport(written, priorValues);
     throw err;
@@ -1354,9 +1405,10 @@ export async function importFullBackupDurably(parsed, { keepCredential = false }
   // queued AI/chat completion could clobber the restored cache. The boot Electron
   // migration (non-reloading) releases the guard itself right after this returns.
   appStorage.clearPreRestoreSnapshot();
-  // Only NOW. The restore is on disk, so the deletions it implies can be
-  // announced without the risk that a rollback takes the content back while the
-  // transport has already uploaded their tombstones — which nothing can recall.
+  // Only NOW, and only the ANNOUNCEMENT — the stamp already rode the restore's
+  // own flush. The restore is on disk, so the deletions it implies can be named
+  // to the transport without the risk that a rollback takes the content back
+  // while it has already uploaded their tombstones, which nothing can recall.
   commitRestoredTombstones(result.restoredTombstones);
   return result;
 }
