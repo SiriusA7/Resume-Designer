@@ -882,6 +882,45 @@ describe('a wipe-and-rewrite stamps only what actually changed', () => {
   });
 });
 
+describe('a write deferred by a restore is named when it finally lands', () => {
+  beforeEach(() => { setStorageDirtyNotifier(notify); });
+
+  it('stamps and announces the replayed value, not just the rollback', async () => {
+    // The guard DEFERS other writers while a restore runs, and a failed restore
+    // rolls back and then replays them. That replayed value is the person's own
+    // work — a chat reply, a token record, a design edit — landing for the first
+    // time. Installed straight into the cache it reached disk with no stamp and
+    // no queued unit, so it could never go up, and a later fetch of the older
+    // remote copy would beat it.
+    //
+    // It hid behind a bug: the rollback's own remove-and-rewrite used to stamp
+    // everything in the key, so the unit was named even though the value was
+    // wrong. Fixing that over-stamp is what exposed this.
+    // THE BLOB, not a plain key. A plain synced key stamps on every write with
+    // no comparison, so the rollback alone would name it and the test would pass
+    // whether the replay was observed or not — measuring the wrong write. Only
+    // the blob's per-field comparison makes the rollback silent, leaving the
+    // replay as the one thing that can name anything.
+    const prior = appStorage.getItem(DATA);
+    const during = JSON.parse(prior);
+    during.settings = { pageSize: 'a4' };
+
+    appStorage.beginRestoreGuard(new Map([[DATA, prior]]), [DATA]);
+    appStorage.setItem(DATA, JSON.stringify(during)); // deferred, not written
+    notify.mockClear();
+
+    appStorage.endRestoreGuard();
+    appStorage.removeItem(DATA);
+    appStorage.setItem(DATA, prior);   // the rollback — identical bytes
+    appStorage.flushDeferredWrites();  // the replay — the person's own work
+    await settle();
+
+    expect(JSON.parse(appStorage.getItem(DATA)).settings).toEqual({ pageSize: 'a4' });
+    expect(allNamed()).toEqual(['data:settings']);
+    expect(stampedIds()).toContain('data:settings');
+  });
+});
+
 describe('deleting a résumé produces something that can travel', () => {
   beforeEach(() => {
     registerPersistedSaveHandler(setPersistedSaveHandler);

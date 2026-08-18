@@ -746,8 +746,20 @@ export const appStorage = {
         cache.delete(key);
         dirty.set(key, { op: 'delete', name, seq });
       } else {
+        // THROUGH THE OBSERVER, against the rolled-back value. This is the
+        // caller's own work — a chat reply, a token-usage record, a design edit
+        // made while the restore held the guard — and it is landing now, for the
+        // first time. Installed straight into the cache it reached disk with no
+        // stamp and no queued unit, so it could never go up and would later lose
+        // to an older remote snapshot.
+        //
+        // It went unnoticed because the rollback's own remove-and-rewrite used
+        // to stamp everything in the key: the value was wrong but the unit was
+        // named. Fixing that over-stamp is what exposed this.
+        const previous = writeObserver ? readStored(key) : null;
         cache.set(key, entry.value);
         dirty.set(key, { op: 'write', name, seq });
+        observeWrite(name, entry.value, previous);
       }
       applied = true;
     }
