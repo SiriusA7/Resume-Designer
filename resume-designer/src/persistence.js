@@ -1034,12 +1034,32 @@ function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   if (typeof next !== 'object') return nextRaw;
   const nextVariants = next.variants && typeof next.variants === 'object' ? next.variants : {};
   const now = new Date().toISOString();
+  let carried = 0;
   for (const [id, variant] of Object.entries(prior.variants)) {
-    if (nextVariants[id] || isDeletedVariant(variant)) continue;
+    if (nextVariants[id]) continue;
+    if (isDeletedVariant(variant)) {
+      // CARRIED FORWARD UNCHANGED, not skipped — the same mistake the registry
+      // path made with already-deleted profiles. A résumé deleted here whose
+      // tombstone has not reached CloudKit yet is one the server still holds
+      // live; dropping the tombstone from the rebuilt blob leaves nothing to
+      // upload, and the next fetch brings the résumé back. Verbatim, so its
+      // original `deletedAt` stands: the deletion happened when it happened,
+      // and moving the time forward would have it win arguments it should not.
+      nextVariants[id] = variant;
+      carried++;
+      continue;
+    }
     nextVariants[id] = { id, name: variant?.name, deletedAt: now, updatedAt: now };
     droppedIds.push(id);
   }
-  if (droppedIds.length === 0) return nextRaw;
+  // An ABSENT incoming blob always writes, even with nothing to tombstone. The
+  // synthesized blob carries the DEFAULT settings and userProfile, and that
+  // reset is the whole point of it: a workspace holding customised values and
+  // no résumés would otherwise return `null` here, both callers would skip the
+  // write, and the local wipe would look like a reset that no unit was ever
+  // stamped or announced for — so the stale server copies come back.
+  if (nextRaw == null) return JSON.stringify({ ...next, variants: nextVariants });
+  if (droppedIds.length === 0 && carried === 0) return nextRaw;
   return JSON.stringify({ ...next, variants: nextVariants });
 }
 
@@ -1268,7 +1288,11 @@ function importFullBackupV2(parsed, keepCredential = false) {
       const rebuilt = withTombstonesForDroppedVariants(
         priorPhysicalSnapshot(key, STORAGE_KEY, pid, priorValues), null, dropped,
       );
-      if (dropped.length === 0) continue;
+      // Gated on there being something TO write, not on there being a tombstone
+      // in it: the synthesized blob also resets settings and userProfile, and a
+      // workspace with customised values and no résumés needs that written just
+      // as much. `null` here means there was no prior blob at all.
+      if (rebuilt == null) continue;
       writeTracked(key, rebuilt, pid, STORAGE_KEY);
     }
     for (const { physicalKey: key, logicalKey, value } of history) {
@@ -1473,7 +1497,10 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     if (!nonHistory.some(([k]) => k === STORAGE_KEY || splitPhysicalKey(k)?.logicalKey === STORAGE_KEY)) {
       const key = activeWorkspace ? physicalKey(activeWorkspace, STORAGE_KEY) : STORAGE_KEY;
       const rebuilt = withTombstonesForDroppedVariants(priorValues.get(key), null, droppedHere);
-      if (droppedHere.length) {
+      // See format 2: written whenever there is anything to write, because the
+      // synthesized blob's default settings and userProfile are a reset in
+      // their own right.
+      if (rebuilt != null) {
         appStorage.setItem(STORAGE_KEY, rebuilt);
         written.push(STORAGE_KEY);
         noteWrite(key, rebuilt);

@@ -1737,6 +1737,77 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain('data:userProfile');
     });
 
+    it('carries an EXISTING résumé tombstone into the rebuilt blob', async () => {
+      // The same mistake the registry path made with already-deleted profiles,
+      // one level down. A résumé deleted here whose tombstone has not reached
+      // CloudKit yet is one the server still holds LIVE — so dropping the
+      // tombstone from the rebuilt blob leaves nothing to upload, and the next
+      // fetch brings the deleted résumé back.
+      withOneResume();
+      const deletedAt = '2020-01-01T00:00:00.000Z';
+      appStorage.setItem(DATA, JSON.stringify({
+        variants: {
+          'v-9': { id: 'v-9', name: 'Mine' },
+          'v-old': { id: 'v-old', name: 'Deleted a while ago', deletedAt, updatedAt: deletedAt },
+        },
+      }));
+      await settle();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
+      // Verbatim: the deletion happened when it happened, and moving its time
+      // forward would have it win arguments it should not.
+      expect(blob.variants['v-old']?.deletedAt).toBe(deletedAt);
+      // And the one this restore deleted is tombstoned fresh beside it.
+      expect(blob.variants['v-9'].deletedAt).toEqual(expect.any(String));
+    });
+
+    it('resets an omitted workspace that had NO résumés to tombstone', async () => {
+      // With nothing to tombstone the synthesis used to answer `null`, both
+      // callers skipped the write, and the customised settings simply stayed —
+      // no reset, and nothing stamped or announced either way, so the stale
+      // server copies come back. The synthesized blob's defaults are a reset in
+      // their own right and have to be written whether or not a résumé went
+      // with them.
+      setProfileMapping(PID);
+      appStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      appStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({
+        variants: {},
+        settings: { pageSize: 'a4' },
+        userProfile: { contactInfo: { fullName: 'Ada' } },
+      }));
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: {} } },
+      });
+      await settle();
+
+      const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
+      expect(blob.settings.pageSize).toBe('continuous');
+      expect(allNamed()).toContain('data:settings');
+      expect(allNamed()).toContain('data:userProfile');
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();
