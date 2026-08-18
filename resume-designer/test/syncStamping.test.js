@@ -1479,7 +1479,11 @@ describe('deleting a résumé produces something that can travel', () => {
 
       expect(backend.files.get('resume-p--pgone--resume-designer-applications')).toBeUndefined();
       expect(backend.files.get(`resume-p--pgone--${STATE}`)).toBeUndefined();
-      expect(allNamed()).not.toContain('key:resume-designer-applications');
+      // By ROUTE, not by id: the surviving workspace clears its own copy of the
+      // same key, so the bare id says nothing about which workspace was touched.
+      const pgoneNamed = notify.mock.calls.flatMap((c) => c[0])
+        .filter((u) => u.profileId === 'pgone');
+      expect(pgoneNamed).toEqual([]);
       // The deletion still travels — as the profile tombstone it belongs to.
       const registry = JSON.parse(backend.files.get('resume-designer-profiles'));
       expect(registry.find((p) => p.id === 'pgone').deletedAt).toEqual(expect.any(String));
@@ -1896,6 +1900,33 @@ describe('deleting a résumé produces something that can travel', () => {
       const named = notify.mock.calls.flatMap((c) => c[0])
         .filter((u) => u.profileId === 'pnew').map((u) => u.id);
       expect(named).toContain('data:settings');
+    });
+
+    it('clears a key this device never stored, because the SERVER may hold one', async () => {
+      // The last place clearing was gated on local state. `clearOmittedSyncedKeys`
+      // read the pre-wipe snapshot, which only contains addresses this device
+      // already had — so a clean or offline device restoring a backup wrote,
+      // stamped and announced nothing for a key it had never stored, and another
+      // device's copy came back on the next fetch. It enumerates the clearable
+      // set per retained workspace now, rather than reading what is on disk.
+      withOneResume();
+      await settle();
+      // Deliberately never stored here.
+      expect(appStorage.getItem('resume-designer-applications')).toBeNull();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      expect(backend.files.get(`resume-p--${PID}--resume-photo-settings`)).toEqual(expect.any(String));
+      expect(allNamed()).toContain('key:resume-photo-settings');
     });
 
     it('announces them, past the barrier that has nothing left to gate', async () => {

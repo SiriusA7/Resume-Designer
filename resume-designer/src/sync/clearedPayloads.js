@@ -61,3 +61,16 @@ const CLEARED = new Map([
 export function clearedPayloadFor(logicalKey) {
   return CLEARED.get(logicalKey)?.();
 }
+
+/**
+ * Every key a replacement restore can clear.
+ *
+ * The restore enumerates THIS rather than what happens to be on disk. Clearing
+ * only what this device already had made the reset conditional on local state,
+ * and what it has to outrank lives on the SERVER: a clean or offline device
+ * restoring a backup is exactly the one that cannot know another device holds a
+ * customised record for a key it has never stored.
+ */
+export function clearableKeys() {
+  return [...CLEARED.keys()];
+}

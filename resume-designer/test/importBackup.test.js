@@ -5,6 +5,13 @@ import {
 } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 import { stampRestoredWrites } from '../src/sync/syncModel.js';
+import { clearableKeys } from '../src/sync/clearedPayloads.js';
+
+// Every key a replacement restore clears for a RETAINED workspace, DERIVED
+// rather than listed: the restore enumerates the clearable set rather than
+// reading what happens to be on disk, so a key added to that map has to show up
+// here or the map and the restore have silently diverged.
+const CLEARED_UNITS = clearableKeys().map((k) => `key:${k}`);
 
 // A replacement restore NORMALISES the blob's two data fields: `settings` and
 // `userProfile` absent from a backup mean "the defaults", and the restore writes
@@ -640,7 +647,7 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     // blob omits" in syncStamping.test.js.
     expect(stamped).toEqual([
       ['', ['key:resume-designer-profiles']],
-      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile']],
+      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
     ]);
     // NOT announced there. In cached mode nothing in the import throws, so
     // naming the deletions at that point uploads them for a restore that may
@@ -651,7 +658,7 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     setRestoreStampHandler(null);
     expect(announced).toEqual([
       ['', ['key:resume-designer-profiles']],
-      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile']],
+      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
     ]);
   });
 
@@ -697,8 +704,8 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     // workspace the backup omits" in syncStamping.test.js.
     expect(stamped.sort()).toEqual([
       ['', ['key:resume-designer-profiles']],
-      ['pone', ['resume:shared', 'data:settings', 'data:userProfile']],
-      ['ptwo', ['resume:shared', 'data:settings', 'data:userProfile']],
+      ['pone', ['resume:shared', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
+      ['ptwo', ['resume:shared', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
     ]);
   });
 

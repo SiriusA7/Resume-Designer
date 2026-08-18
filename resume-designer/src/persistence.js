@@ -560,7 +560,7 @@ import {
   withoutDeviceIdentity,
   mapKey,
 } from './profileKeys.js';
-import { clearedPayloadFor } from './sync/clearedPayloads.js';
+import { clearedPayloadFor, clearableKeys } from './sync/clearedPayloads.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 import { getProfileMapping } from './appStorage.js';
 
@@ -915,24 +915,26 @@ function normalizeImportedValue(key, value, keepCredential = false) {
  * @param writtenAddresses the addresses this restore has already rewritten
  * @param write (address, value, profileId, logicalKey) => void
  */
-function clearOmittedSyncedKeys(priorValues, writtenAddresses, write, keepsWorkspace = () => true) {
-  for (const [address, priorValue] of priorValues) {
-    if (priorValue == null || writtenAddresses.has(address)) continue;
-    const split = splitPhysicalKey(address);
-    const logicalKey = split?.logicalKey ?? address;
-    // A workspace the restore DELETES needs none of this, and doing it anyway
-    // is not merely wasteful. The profile's own tombstone is what carries that
-    // deletion, and its zone goes with it — so writing cleared payloads there
-    // re-creates files on disk for a profile that no longer exists, stamps a
-    // fresh table beside them, and announces a unit into a zone the deletion is
-    // about to remove, which could land after it and bring the zone back.
-    if (!keepsWorkspace(split?.profileId ?? '')) continue;
-    const cleared = clearedPayloadFor(logicalKey);
-    // Nothing to say for a key already at its cleared value: a `key:` unit is
-    // named unconditionally, so a no-op write would upload nothing and stamp it
-    // with a fresh time that outranks another device's real edit.
-    if (cleared === undefined || priorValue === cleared) continue;
-    write(address, cleared, split?.profileId ?? '', logicalKey);
+function clearOmittedSyncedKeys(priorValues, writtenAddresses, write, workspaces) {
+  for (const profileId of workspaces) {
+    for (const logicalKey of clearableKeys()) {
+      // The ADDRESS this workspace's key lives at. '' is the open one, where
+      // `mapKey` answers with whatever the mapping currently says — which is
+      // also what `snapshotAndWipeOwnedKeys` keyed the snapshot by.
+      const address = profileId
+        ? physicalKey(profileId, logicalKey)
+        : mapKey(getProfileMapping(), logicalKey);
+      if (writtenAddresses.has(address)) continue;
+      const cleared = clearedPayloadFor(logicalKey);
+      if (cleared === undefined) continue;
+      // Nothing to say for a key already at its cleared value: a `key:` unit is
+      // named unconditionally, so a no-op write would upload nothing and stamp
+      // it with a fresh time that outranks another device's real edit. An
+      // ABSENT key is not that case — absence is what the server may disagree
+      // with, and the whole reason this enumerates rather than reads.
+      if (priorValues.get(address) === cleared) continue;
+      write(address, cleared, profileId, logicalKey);
+    }
   }
 }
 
@@ -1357,9 +1359,14 @@ function importFullBackupV2(parsed, keepCredential = false) {
     // -Infinity against the remote's real time. Riding this flush also makes it
     // roll back correctly: the sync-state key is a fixed backup key, so it is in
     // the pre-wipe snapshot. Only the ANNOUNCEMENT waits for durability.
+    // EVERY RETAINED workspace, not every key on disk. A workspace the restore
+    // deletes is skipped entirely: its profile tombstone carries that deletion
+    // and its zone goes with it, so writing cleared payloads there re-creates
+    // files for a profile that no longer exists and announces into a zone the
+    // deletion is about to remove.
     clearOmittedSyncedKeys(
       priorValues, new Set(written), writeTracked,
-      (pid) => pid === '' || restoredIds.has(pid),
+      registry.map((p) => p.id),
     );
     restoredUnits = stampRestoredWrites(restoredWrites, (k) => written.push(k));
   } catch (err) {
@@ -1554,6 +1561,7 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     // `written` holds the names this path PASSED to setItem, which are logical
     // for most keys, while the snapshot is keyed by address — so they are
     // compared in address form or every rewritten key reads as omitted.
+    // Format 1 restores the ACTIVE workspace only, so that is the one list.
     clearOmittedSyncedKeys(
       priorValues,
       new Set(written.map((k) => mapKey(getProfileMapping(), k))),
@@ -1562,6 +1570,7 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
         written.push(address);
         writes.push({ logicalKey, value, previous: priorValues.get(address) ?? null });
       },
+      [activeWorkspace],
     );
     restoredUnits = stampRestoredWrites(
       new Map([[activeWorkspace, writes]]), (k) => written.push(k),
