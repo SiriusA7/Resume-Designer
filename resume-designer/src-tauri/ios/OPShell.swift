@@ -3455,7 +3455,24 @@ private struct ShellView: View {
         // point routes through one always-mounted web dialog, so its own
         // `open` is the signal. A sheet rather than a cover: unlike a first
         // run this is dismissible, and closing it decides nothing.
-        .sheet(isPresented: .constant(snapshot.diff?.open == true)) {
+        // WRITABLE, unlike the cover above, because this one can be dismissed
+        // by swiping. `.constant` discards the `false` SwiftUI writes back on a
+        // swipe, so the page never heard that its dialog had closed: the web
+        // `DiffDialog` stayed open with its Radix modal and `modalOpen` state
+        // live — invisible, because `native-shell.css` hides it — which leaves
+        // the native chrome withdrawn and lets a later snapshot present the
+        // sheet again. The Close button was the only exit that told anyone.
+        //
+        // The setter routes through the SAME `diffClose` that button sends, so
+        // the page stays the single source of truth: it closes its dialog, the
+        // next snapshot reports `open == false`, and the getter agrees.
+        //
+        // The onboarding cover above stays `.constant` on purpose — a genuine
+        // first run is non-dismissible, so there is no write to lose.
+        .sheet(isPresented: Binding(
+          get: { snapshot.diff?.open == true },
+          set: { presented in if !presented { model.send("diffClose") } }
+        )) {
           if let review = snapshot.diff {
             DiffReviewSheet(model: model, review: review)
           }
