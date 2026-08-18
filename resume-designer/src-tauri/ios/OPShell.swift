@@ -2958,10 +2958,32 @@ final class OPShell: NSObject {
       )
       popover.permittedArrowDirections = [.up]
     }
-    // A dialog may still be dismissing; present from whatever is frontmost.
+    // A dialog may still be dismissing, and "frontmost" was not enough: a
+    // controller on its way out is still `presentedViewController` until the
+    // transition finishes, so this walked onto the preview sheet that Save had
+    // just closed and presented against it — a presentation UIKit can refuse.
+    // The web side hears none of that: `sharePdf` reports true for POSTING the
+    // message, so it discards the preview, `completionWithItemsHandler` is
+    // never installed, and the person is left with no share sheet and a staged
+    // résumé nothing will clean up.
+    //
+    // `pdfSave` is sent BEFORE `dismiss()` (see `settle`), so this is the
+    // ordinary case rather than a race worth ignoring.
     var presenter: UIViewController = root
-    while let next = presenter.presentedViewController { presenter = next }
-    presenter.present(sheet, animated: true)
+    while let next = presenter.presentedViewController, !next.isBeingDismissed {
+      presenter = next
+    }
+    // And the presenter itself may be mid-transition — dismissing that child is
+    // exactly what gives it a coordinator. Presenting from the completion is
+    // the supported way to say "after this finishes".
+    let target = presenter
+    if let coordinator = target.transitionCoordinator {
+      coordinator.animate(alongsideTransition: nil) { _ in
+        target.present(sheet, animated: true)
+      }
+    } else {
+      target.present(sheet, animated: true)
+    }
   }
 
   @MainActor private static var handedOver = false
