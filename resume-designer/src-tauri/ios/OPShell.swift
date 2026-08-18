@@ -1260,11 +1260,19 @@ final class ShellModel: ObservableObject {
   /// Ask the page to run the shared save-before-pointer switch path. The page
   /// answers true only after both editors and the active pointer are durable;
   /// this side owns the WKWebView reload and must not reload on any other reply.
-  func switchToProfile(_ id: String) async {
+  ///
+  /// ANSWERED, like its three siblings below. A `false` means the workspace on
+  /// screen is the one still open, and the menu that asked has already closed —
+  /// so with the result dropped, a refused switch and a switch that had not
+  /// happened yet looked exactly alike. Deliberately NOT `@discardableResult`:
+  /// there is one caller, and a second one that ignored this would be the bug
+  /// this comment is about.
+  func switchToProfile(_ id: String) async -> Bool {
     guard case .answered(let value) = await sendForResult("switchProfile", ["id": id]),
-          value as? Bool == true else { return }
+          value as? Bool == true else { return false }
     coverForProfileReload()
     webView?.reload()
+    return true
   }
 
   /// Create a workspace and open it. Reloads for the same reason a switch does:
@@ -3259,9 +3267,10 @@ private struct ShellView: View {
   @State private var renamingVariant = false
   @State private var renameDraft = ""
   @State private var creatingProfile = false
-  /// A refused profile creation, shown after the alert that asked for it has
-  /// gone. Named apart from `ProfilesSheet`'s own `failure` because they are
-  /// different screens; the wording is deliberately the same.
+  /// A refused profile creation or switch, shown after the menu or alert that
+  /// asked for it has gone. Named apart from `ProfilesSheet`'s own `failure`
+  /// because they are different screens; the wording is deliberately the same,
+  /// including the neutral title over a message that names the operation.
   @State private var profileFailure: String?
   @State private var newProfileName = ""
   /// The zoom a pinch started from; nil when no pinch is in flight.
@@ -3447,7 +3456,7 @@ private struct ShellView: View {
           Text("A separate profile with its own résumés, job descriptions and chats.")
         }
         .alert(
-          "Could not create that profile",
+          "Couldn't save",
           isPresented: Binding(
             get: { profileFailure != nil },
             set: { if !$0 { profileFailure = nil } }
@@ -3779,7 +3788,16 @@ private struct ShellView: View {
       Menu {
         ForEach(snapshot.profiles) { profile in
           Button {
-            Task { await model.switchToProfile(profile.id) }
+            Task {
+              // "may not have reached disk", not "did not": the page also
+              // refuses a switch while a first-run adoption is still finishing,
+              // where nothing is unsaved. The one thing true of every refusal is
+              // that the open workspace did not change.
+              if await model.switchToProfile(profile.id) == false {
+                profileFailure = "Could not switch to \(profile.name) — your "
+                  + "latest changes may not have reached disk."
+              }
+            }
           } label: {
             if profile.isActive {
               Label(profile.name, systemImage: "checkmark")
