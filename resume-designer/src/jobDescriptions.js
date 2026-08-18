@@ -105,20 +105,25 @@ export function initJobDescriptions() {
  * Asked BEFORE the write, like the chat's and the application note's: refusing
  * forfeits the change tag and the unit is re-offered once the dialog closes.
  */
-let editHolder = null;
+// A SET, for the same reason the application note's is: there is more than one
+// editor. The web `JobsDialog` is one; the iOS shell's own `JobEditorScreen`
+// keeps its draft in Swift `@State` and is another, and on that platform the
+// React dialog stays mounted with `editingJd == null` — so a single slot would
+// have whichever registered last speak for both.
+const editHolders = new Set();
 
 export function registerJobEditHolder(next) {
-  const installed = next && typeof next.isBusy === 'function' ? next : null;
-  editHolder = installed;
-  // See registerThreadHolder: cleared only while this holder is the installed
-  // one, because React mounts a replacement before unmounting the old one.
-  return () => {
-    if (editHolder === installed) editHolder = null;
-  };
+  if (!next || typeof next.isBusy !== 'function') return () => {};
+  editHolders.add(next);
+  return () => { editHolders.delete(next); };
 }
 
+/** Busy if ANY editor — web dialog or native sheet — holds a draft. */
 export function jobEditBusy() {
-  return editHolder?.isBusy?.() === true;
+  for (const holder of editHolders) {
+    if (holder.isBusy?.() === true) return true;
+  }
+  return false;
 }
 
 export function adoptStoredJobDescriptions() {

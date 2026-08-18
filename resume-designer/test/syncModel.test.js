@@ -1258,6 +1258,32 @@ describe('applyUnits and the modules that hold a synced key IN MEMORY', () => {
       release();
     });
 
+    it('sees a draft in ANY card, not just the last one mounted', async () => {
+      // `DetailPane` renders a card per application, so every one registers.
+      // Copied from the chat — which is a singleton because there is exactly one
+      // chat — the slot held only the newest, and focusing any earlier card
+      // reported not-busy while it still held a draft.
+      const first = { busy: false };
+      const second = { busy: false };
+      const releaseFirst = registerApplicationNoteHolder({ isBusy: () => first.busy });
+      const releaseSecond = registerApplicationNoteHolder({ isBusy: () => second.busy });
+
+      const unit = {
+        id: 'key:resume-designer-applications',
+        kind: 'plain',
+        payload: '[{"id":"a-remote"}]',
+        modifiedAt: AT,
+      };
+      // The EARLIER card is the one being typed into.
+      first.busy = true;
+      expect((await applyUnits([unit])).applied).toBe(0);
+
+      first.busy = false;
+      expect((await applyUnits([unit])).applied).toBe(1);
+      releaseFirst();
+      releaseSecond();
+    });
+
     it('refuses a job-descriptions unit while the edit dialog is open', async () => {
       const dialog = { busy: true };
       const release = registerJobEditHolder({ isBusy: () => dialog.busy });

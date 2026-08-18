@@ -141,22 +141,27 @@ export function initApplications() {
  * is closed. Nothing is lost by waiting; the note on screen is the only copy of
  * what the person is part-way through typing.
  */
-let noteHolder = null;
+// A SET, not the single slot `registerThreadHolder` uses. That one is a
+// singleton because there is exactly one chat; `DetailPane` renders a card per
+// application, so every one of them registers. Holding only the newest left
+// every other card invisible to the guard: focusing any but the last-mounted
+// one reported not-busy, sync adopted the list underneath it, and the next
+// keystroke wrote the stale note back. The chat's shape was right for the chat
+// and wrong here, which is only obvious once you look at the call site.
+const noteHolders = new Set();
 
 export function registerApplicationNoteHolder(next) {
-  const installed = next && typeof next.isBusy === 'function' ? next : null;
-  noteHolder = installed;
-  // Cleared only while THIS holder is still the one installed — React mounts a
-  // replacement before unmounting the old one, so an unconditional clear in the
-  // departing cleanup would deregister the survivor. Same rule, same reason, as
-  // registerThreadHolder.
-  return () => {
-    if (noteHolder === installed) noteHolder = null;
-  };
+  if (!next || typeof next.isBusy !== 'function') return () => {};
+  noteHolders.add(next);
+  return () => { noteHolders.delete(next); };
 }
 
+/** Busy if ANY mounted card holds a live draft. */
 export function applicationNoteBusy() {
-  return noteHolder?.isBusy?.() === true;
+  for (const holder of noteHolders) {
+    if (holder.isBusy?.() === true) return true;
+  }
+  return false;
 }
 
 export function adoptStoredApplications() {

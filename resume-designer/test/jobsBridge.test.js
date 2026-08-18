@@ -430,3 +430,36 @@ describe('buildJobs — a write that did not land', () => {
     expect(buildJobs(undefined).saveFailed).toBe(false);
   });
 });
+
+describe('the native editor holds sync off while it has a draft', () => {
+  // `OPJobs.swift`'s JobEditorScreen keeps title/company/description in Swift
+  // @State, and on iOS the React JobsDialog stays mounted with `editingJd ==
+  // null` — so the web dialog's holder speaks for nothing there. A job unit
+  // adopted mid-edit replaced the list underneath the Swift draft, and Save
+  // wrote all three stale fields back over the adopted job.
+  //
+  // Asserted through `jobEditBusy`, which is what `applyUnits` actually calls,
+  // rather than through the module's own flag — the flag existing proves
+  // nothing about whether the sync layer can see it.
+  it('is busy from opening a draft until it is saved or cleared', async () => {
+    const { jobEditBusy } = await import('../src/jobDescriptions.js');
+
+    expect(jobEditBusy()).toBe(false);
+
+    applyJobs({ action: 'newDraft' });
+    expect(jobEditBusy()).toBe(true);
+
+    applyJobs({ action: 'clearDraft' });
+    expect(jobEditBusy()).toBe(false);
+  });
+
+  it('stops being busy once the sheet itself closes', async () => {
+    const { jobEditBusy } = await import('../src/jobDescriptions.js');
+
+    applyJobs({ action: 'newDraft' });
+    expect(jobEditBusy()).toBe(true);
+
+    applyJobs({ action: 'closed' });
+    expect(jobEditBusy()).toBe(false);
+  });
+});

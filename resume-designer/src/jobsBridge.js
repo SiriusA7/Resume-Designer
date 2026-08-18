@@ -29,7 +29,7 @@
 import {
   initJobDescriptions, getAllJobDescriptions, getActiveJobDescriptions, getJobDescription,
   addJobDescription, updateJobDescription, deleteJobDescription, toggleJobDescriptionActive,
-  parseJobDescriptionText, jobStorageFailed,
+  parseJobDescriptionText, jobStorageFailed, registerJobEditHolder,
 } from './jobDescriptions.js';
 import {
   analyzeAgainstJobs, generateResumeChanges, getAllModels, getConfiguredProviders,
@@ -76,6 +76,21 @@ let applied = new Set();
 /** The résumé `applied`/`lastRun` belong to — see the reset in `getJobsState`. */
 let appliedFor = null;
 let draft = null;
+
+// The NATIVE editor's half of the sync busy guard.
+//
+// `OPJobs.swift`'s `JobEditorScreen` keeps title, company and description in
+// Swift `@State`, and on iOS the React `JobsDialog` stays mounted with
+// `editingJd == null` — so the web dialog's holder speaks for nothing there. A
+// job unit adopted mid-edit replaced the list underneath the Swift draft, and
+// Save wrote all three stale fields back over the adopted job and stamped the
+// overwrite as a new local update.
+//
+// `draft` is already exactly "a native editor is open with a draft": set by
+// `newDraft`/`editDraft`, cleared by `clearDraft`, `saveDraft` and the sheet
+// closing. So this needs no new message across the bridge — only to say what
+// the module already knows.
+registerJobEditHolder({ isBusy: () => draft !== null });
 /** One-shot fields. Consumed by the read that puts them on the wire, so they
  * ride exactly one snapshot and cannot fire twice or go stale in a sheet that
  * was closed and reopened an hour later. */
