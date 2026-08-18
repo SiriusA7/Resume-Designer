@@ -1103,6 +1103,32 @@ final class ShellModel: ObservableObject {
   /// `sendAllUnits`.
   private var syncFullUploadOwe: [String: Int] = [:]
 
+  /// The current image request per target ("header", "photo").
+  ///
+  /// ON THE MODEL, not on the screen. It first lived in each screen's `@State`,
+  /// which cannot do the job it was added for: leave Photo while a load is in
+  /// flight and that screen's counter goes with it, so reopening it starts a
+  /// fresh one — commonly at the same number — and the abandoned task passes a
+  /// guard that is no longer comparing it against anything. The model outlives
+  /// every screen that reads it, which is the property this needs.
+  ///
+  /// Per target, because the header image and the photo are independent: a
+  /// header pick must not supersede a photo still loading.
+  private var imageRequests: [String: Int] = [:]
+
+  /// Claim the newest request for `target`. Every pick and every Remove calls
+  /// this; the token it returns is what a finished load checks itself against.
+  func beginImageRequest(_ target: String) -> Int {
+    let next = (imageRequests[target] ?? 0) + 1
+    imageRequests[target] = next
+    return next
+  }
+
+  /// Whether `token` is still the newest request for `target`.
+  func isCurrentImageRequest(_ token: Int, for target: String) -> Bool {
+    imageRequests[target] == token
+  }
+
   /// A drain is between its first offer and its last settlement. See
   /// `drainSyncDeferred()` for why overlapping drains lose data, and why a
   /// request that arrives during one is remembered instead of dropped.
@@ -7833,9 +7859,6 @@ private struct HeaderScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
-  /// Bumped by every pick and every Remove; a load that finishes holding an old
-  /// number has been overtaken.
-  @State private var imageRequest = 0
 
   var body: some View {
     Form { content }
@@ -7849,8 +7872,7 @@ private struct HeaderScreen: View {
         // finished first — an earlier, larger photo could arrive after a newer
         // one and replace it. Remove bumps it too: without that, a pick still in
         // flight when the image is removed comes back and undoes the removal.
-        imageRequest += 1
-        let request = imageRequest
+        let request = model.beginImageRequest("header")
         Task {
           let url = await designImageDataURL(for: item)
           // Cleared either way, or picking the same photo twice in a row is the
@@ -7863,7 +7885,7 @@ private struct HeaderScreen: View {
             NSLog("[OPShell] could not read the picked header image")
             return
           }
-          guard request == imageRequest else { return }
+          guard model.isCurrentImageRequest(request, for: "header") else { return }
           model.send("setDesignImage", ["target": "header", "dataUrl": url])
         }
       }
@@ -7871,7 +7893,7 @@ private struct HeaderScreen: View {
         "Remove the header image?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
-          imageRequest += 1
+          _ = model.beginImageRequest("header")
           model.send("clearDesignImage", ["target": "header"])
         }
       } message: {
@@ -8345,9 +8367,6 @@ private struct PhotoScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
-  /// Bumped by every pick and every Remove; a load that finishes holding an old
-  /// number has been overtaken. See the header screen.
-  @State private var imageRequest = 0
 
   var body: some View {
     Form { content }
@@ -8359,8 +8378,7 @@ private struct PhotoScreen: View {
         // is written out there. The two picks are the same code because they are
         // the same problem, and this one is the reason the header's is not a
         // one-off.
-        imageRequest += 1
-        let request = imageRequest
+        let request = model.beginImageRequest("photo")
         Task {
           let url = await designImageDataURL(for: item)
           pick = nil
@@ -8368,7 +8386,7 @@ private struct PhotoScreen: View {
             NSLog("[OPShell] could not read the picked photo")
             return
           }
-          guard request == imageRequest else { return }
+          guard model.isCurrentImageRequest(request, for: "photo") else { return }
           model.send("setDesignImage", ["target": "photo", "dataUrl": url])
         }
       }
@@ -8376,7 +8394,7 @@ private struct PhotoScreen: View {
         "Remove the photo?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
-          imageRequest += 1
+          _ = model.beginImageRequest("photo")
           model.send("clearDesignImage", ["target": "photo"])
         }
       } message: {
