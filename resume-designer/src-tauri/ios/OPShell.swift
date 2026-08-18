@@ -1699,7 +1699,16 @@ extension ShellModel {
     // names those units again, so the content simply never leaves the device.
     let owning = profileId ?? syncProfileId
     do {
-      try await sync.send(unitIds: unitIds, inProfile: profileId)
+      // `owning`, not `profileId`. Passing the original nil made the SEND
+      // resolve late too — against `OPSyncEngine.profileId`, which during a
+      // profile switch still names the previous workspace until `sync.start`
+      // has finished stopping and replacing the engine, while `syncProfileId`
+      // has already moved. The send then queued these ids in the old
+      // workspace's zone, or dropped one that does not exist there, and
+      // returned success either way: not deferred, not uploaded, not reported.
+      // Capturing the workspace and then not using it for the one call that
+      // routes the bytes was half a fix.
+      try await sync.send(unitIds: unitIds, inProfile: owning)
       return true
     } catch {
       // Four things reach here, and three of them queued nothing at all before

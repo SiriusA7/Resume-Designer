@@ -626,9 +626,12 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     // The shared registry write is a synced unit too — it carries the profile
     // tombstones for any workspace the backup omits — so it is named under the
     // '' workspace alongside the résumé tombstone in pmine's.
+    // The backup's blob carries no `settings` or `userProfile`, so both reset to
+    // their defaults and travel as units — see "resets a data FIELD the backup's
+    // blob omits" in syncStamping.test.js.
     expect(stamped).toEqual([
       ['', ['key:resume-designer-profiles']],
-      ['pmine', ['resume:gone']],
+      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile']],
     ]);
     // NOT announced there. In cached mode nothing in the import throws, so
     // naming the deletions at that point uploads them for a restore that may
@@ -639,7 +642,7 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     setRestoreStampHandler(null);
     expect(announced).toEqual([
       ['', ['key:resume-designer-profiles']],
-      ['pmine', ['resume:gone']],
+      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile']],
     ]);
   });
 

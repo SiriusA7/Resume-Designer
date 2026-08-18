@@ -1842,8 +1842,16 @@ describe('deleting a résumé produces something that can travel', () => {
       const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
       expect(blob.settings.pageSize).toBe('continuous');
       expect(allNamed()).toContain('data:settings');
-      // And a field neither side ever had is not invented.
-      expect(blob.userProfile).toBeUndefined();
+      // The field NEITHER side had is written too, and that is the point rather
+      // than an accident: what the reset has to outrank lives on the server, and
+      // a device that never stored the field locally is exactly the one that
+      // cannot know another device has a customised record. Absent, nothing is
+      // stamped or announced and that record comes back.
+      // The blank default, not the person's — asserted on a field the default
+      // defines rather than on the whole object, so this does not fail every
+      // time an unrelated profile field is added.
+      expect(blob.userProfile.contactInfo.fullName).toBe('');
+      expect(allNamed()).toContain('data:userProfile');
     });
 
     it('announces them, past the barrier that has nothing left to gate', async () => {

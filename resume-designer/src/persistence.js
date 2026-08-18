@@ -1037,12 +1037,20 @@ function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   // whole key: a field the backup omits is a field it clears, and an absence
   // announces nothing. `changedDataUnits` compares the fields present in the
   // NEXT blob, so one that is simply gone is never named — the wipe removes it
-  // here, the server keeps it, and the next fetch puts it back. Defaulted only
-  // when the workspace actually HAD one, so a blob that never carried the field
-  // does not acquire it.
+  // here, the server keeps it, and the next fetch puts it back.
+  //
+  // Written whether or not THIS device had one, which is the part that looks
+  // like inventing a field and is not. What the reset has to outrank lives on
+  // the SERVER, and a device that never stored the field locally — a clean or
+  // offline one restoring an older backup before its first fetch — is exactly
+  // the device that cannot know another has a customised record. Absent, the
+  // restore stamps and announces nothing and that record comes back. The
+  // default is also what every reader already falls back to, so writing it
+  // explicitly changes no behaviour here; it only gives the reset something to
+  // travel as.
   let reset = 0;
   for (const field of ['settings', 'userProfile']) {
-    if (next[field] === undefined && prior[field] !== undefined) {
+    if (next[field] === undefined) {
       next[field] = DEFAULT_STORAGE[field];
       reset++;
     }
