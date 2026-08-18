@@ -692,6 +692,28 @@ export function setResumeDeletedHandler(handler) {
  * Every unit stamped together gets the SAME instant, which is the honest
  * reading — they were made dirty by one storage write.
  */
+/**
+ * Stamp and announce units a RESTORE produced, for one workspace.
+ *
+ * The restore writes each workspace's blob under its PHYSICAL key, which
+ * `classifyKey` answers 'unknown' for — so the interceptor stamps nothing and
+ * queues nothing, and the tombstones a replacement restore writes never
+ * travelled at all. It also replaces that workspace's stamp table with the
+ * backup's, which has no entry for a résumé the backup never knew, so
+ * `resolveConflict` read the tombstone as -Infinity and the remote live copy
+ * won: the deletion undid itself on the next fetch.
+ *
+ * Called by persistence through main.js, the same graph edge
+ * `registerPersistedSaveHandler` uses and for the same reason — this module
+ * must not import persistence, nor persistence this one.
+ */
+export function stampRestoredUnits(profileId, unitIds) {
+  const ids = Array.isArray(unitIds) ? unitIds.filter(Boolean) : [];
+  if (ids.length === 0) return;
+  touchUnitsForProfile(profileId, ids);
+  for (const unitId of ids) queueDirty(unitId, DATA_KEY, profileId);
+}
+
 function touchUnitsForProfile(profileId, unitIds) {
   if (unitIds.length === 0) return;
   const next = stateFor(profileId);

@@ -25,6 +25,16 @@ export function setPersistedSaveHandler(handler) {
   persistedSaveHandler = typeof handler === 'function' ? handler : null;
 }
 
+// Stamps and announces the units a RESTORE produced. Injected for the same
+// reason the save handler is: this module must not import the sync layer.
+// Without it the tombstones a replacement restore writes never travel — the
+// blob goes in under a PHYSICAL key, which the interceptor classifies
+// 'unknown', so nothing is stamped and nothing is queued.
+let restoreStampHandler = null;
+export function setRestoreStampHandler(handler) {
+  restoreStampHandler = typeof handler === 'function' ? handler : null;
+}
+
 // `setSyncDirtyNotifier` stood here, and this module no longer names a dirty
 // unit at all: the handler above queues them for the storage drain, which is
 // the only place that knows the bytes reached disk. The notifier now has ONE
@@ -487,8 +497,10 @@ import {
   physicalKey,
   withoutStoredCredentials,
   withoutDeviceIdentity,
+  mapKey,
 } from './profileKeys.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
+import { getProfileMapping } from './appStorage.js';
 
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
@@ -819,19 +831,40 @@ function normalizeImportedValue(key, value, keepCredential = false) {
  * The tombstone carries no `data`, exactly as `deleteVariant`'s does, so every
  * reader hides it and `landsAsResume` still accepts it on the other side.
  */
-function withTombstonesForDroppedVariants(priorRaw, nextRaw) {
+/**
+ * The pre-wipe value for a key the caller names LOGICALLY.
+ *
+ * `collectActiveOwnedKeys` snapshots what `appStorage.keys()` reports, which is
+ * the PHYSICAL key once a profile mapping is on — while the format-1 restore
+ * writes through the logical one. Looking the snapshot up by the logical name
+ * therefore found nothing on every ordinary profiled install, and the tombstones
+ * this exists for were silently never written. The first test for it missed this
+ * because it ran with mapping OFF, where the two names are the same string.
+ */
+function priorSnapshotFor(logicalKey, priorValues) {
+  if (priorValues.has(logicalKey)) return priorValues.get(logicalKey);
+  const mapping = getProfileMapping();
+  return mapping ? priorValues.get(mapKey(mapping, logicalKey)) : undefined;
+}
+
+function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   const prior = parseJSONSafe(priorRaw);
-  const next = parseJSONSafe(nextRaw);
-  if (!prior?.variants || !next || typeof next !== 'object') return nextRaw;
+  if (!prior?.variants) return nextRaw;
+  // An ABSENT incoming blob is a workspace the backup represents as empty, and
+  // that is still a deletion of everything in it. Treated as "nothing to
+  // compare", the wipe removed the résumés locally and no tombstone was written
+  // for any of them, so every CloudKit record survived and the next fetch
+  // brought the whole workspace back.
+  const next = parseJSONSafe(nextRaw) ?? {};
+  if (typeof next !== 'object') return nextRaw;
   const nextVariants = next.variants && typeof next.variants === 'object' ? next.variants : {};
   const now = new Date().toISOString();
-  let dropped = 0;
   for (const [id, variant] of Object.entries(prior.variants)) {
     if (nextVariants[id] || isDeletedVariant(variant)) continue;
     nextVariants[id] = { id, name: variant?.name, deletedAt: now, updatedAt: now };
-    dropped++;
+    droppedIds.push(id);
   }
-  if (dropped === 0) return nextRaw;
+  if (droppedIds.length === 0) return nextRaw;
   return JSON.stringify({ ...next, variants: nextVariants });
 }
 
@@ -1011,15 +1044,36 @@ function importFullBackupV2(parsed, keepCredential = false) {
     const history = profileEntries.filter(
       ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
     );
+    // unitId -> profileId, for the stamping below. Absence does not travel on
+    // its own; only a stamped, announced tombstone does.
+    const restoredTombstones = new Map();
+    const blobWritten = new Set();
     for (const { physicalKey: key, logicalKey, value } of nonHistory) {
       let normalized = normalizeImportedValue(logicalKey, value, keepCredential);
       // Same rule one level down: a résumé the restore omits is a résumé it
       // deletes, and only a tombstone makes that travel.
       if (logicalKey === STORAGE_KEY) {
-        normalized = withTombstonesForDroppedVariants(priorValues.get(key), normalized);
+        const pid = splitPhysicalKey(key)?.profileId ?? '';
+        const dropped = [];
+        normalized = withTombstonesForDroppedVariants(priorValues.get(key), normalized, dropped);
+        blobWritten.add(pid);
+        for (const id of dropped) restoredTombstones.set(id, pid);
       }
       writeTracked(key, normalized);
       keysImported++;
+    }
+    // A workspace the backup represents as EMPTY writes no blob at all, so the
+    // loop above never sees it — and the wipe already removed its résumés. The
+    // tombstones have to be synthesized from the snapshot alone, or every one of
+    // those CloudKit records outlives the restore and the next fetch undoes it.
+    for (const { id: pid } of registry) {
+      if (blobWritten.has(pid)) continue;
+      const key = physicalKey(pid, STORAGE_KEY);
+      const dropped = [];
+      const rebuilt = withTombstonesForDroppedVariants(priorValues.get(key), null, dropped);
+      if (dropped.length === 0) continue;
+      writeTracked(key, rebuilt);
+      for (const id of dropped) restoredTombstones.set(id, pid);
     }
     for (const { physicalKey: key, value } of history) {
       if (writeOwnedKeyOrSkip(key, value)) {
@@ -1027,6 +1081,21 @@ function importFullBackupV2(parsed, keepCredential = false) {
         keysImported++;
       } else {
         historySkipped++;
+      }
+    }
+    // AFTER the writes, so nothing is announced for bytes that never landed.
+    // Grouped by workspace because a unit id alone does not name a record —
+    // every workspace has its own résumés.
+    if (restoreStampHandler && restoredTombstones.size) {
+      const byProfile = new Map();
+      for (const [unitId, pid] of restoredTombstones) {
+        if (!byProfile.has(pid)) byProfile.set(pid, []);
+        byProfile.get(pid).push(`resume:${unitId}`);
+      }
+      for (const [pid, ids] of byProfile) {
+        try { restoreStampHandler(pid, ids); } catch (e) {
+          console.error('[backup] could not stamp restored tombstones:', e);
+        }
       }
     }
   } catch (err) {
@@ -1156,6 +1225,7 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
 
   const written = [];
   let historySkipped = 0;
+  const droppedHere = [];
   try {
     for (const [k, v] of nonHistory) {
       let normalized = normalizeImportedValue(k, v, keepCredential);
@@ -1165,7 +1235,9 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
       // taken above, keyed the way this path writes — the active workspace's
       // blob, mapped or unprefixed depending on the install.
       if (k === STORAGE_KEY || splitPhysicalKey(k)?.logicalKey === STORAGE_KEY) {
-        normalized = withTombstonesForDroppedVariants(priorValues.get(k), normalized);
+        normalized = withTombstonesForDroppedVariants(
+          priorSnapshotFor(k, priorValues), normalized, droppedHere,
+        );
       }
       appStorage.setItem(k, normalized);
       written.push(k);
@@ -1173,6 +1245,16 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     for (const [k, v] of history) {
       if (writeOwnedKeyOrSkip(k, v)) written.push(k);
       else historySkipped++;
+    }
+    // Format 1 restores the ACTIVE workspace only, so its tombstones belong to
+    // whichever one the mapping names — '' when there is none, which is the
+    // same convention the collection uses for the open workspace.
+    if (restoreStampHandler && droppedHere.length) {
+      try {
+        restoreStampHandler(getProfileMapping() ?? '', droppedHere.map((id) => `resume:${id}`));
+      } catch (e) {
+        console.error('[backup] could not stamp restored tombstones:', e);
+      }
     }
   } catch (err) {
     rollbackWipedImport(written, priorValues);

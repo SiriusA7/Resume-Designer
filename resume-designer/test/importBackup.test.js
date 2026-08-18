@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   importFullBackupFromEnvelope, importFullBackupMerge, credentialFromEnvelope,
+  setRestoreStampHandler,
 } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
 
@@ -550,6 +551,64 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     const blob = JSON.parse(localStorage.getItem(DATA));
     expect(blob.variants.keep.name).toBe('Kept');
     expect(blob.variants.gone.deletedAt).toEqual(expect.any(String));
+  });
+
+  it('tombstones a workspace whose blob the backup omits entirely', () => {
+    // A backup can represent a workspace as EMPTY by carrying no blob for it.
+    // The wipe removes the résumés locally and no write happens for that
+    // profile at all — so driving the tombstones off the INCOMING entries meant
+    // every one of those CloudKit records outlived the restore and the next
+    // fetch brought the whole workspace back.
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { a: { id: 'a', name: 'One' }, b: { id: 'b', name: 'Two' } },
+    }));
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: {},
+    });
+
+    const blob = JSON.parse(localStorage.getItem(`resume-p--pmine--${DATA}`));
+    expect(blob.variants.a.deletedAt).toEqual(expect.any(String));
+    expect(blob.variants.b.deletedAt).toEqual(expect.any(String));
+  });
+
+  it('stamps and announces the tombstones it writes', () => {
+    // Bytes are not enough. The restore writes the blob under its PHYSICAL key,
+    // which the interceptor classifies 'unknown', so nothing is stamped or
+    // queued — and the restore also replaces that workspace's stamp table with
+    // the backup's, which has no entry for a résumé the backup never knew. The
+    // tombstone then reads as -Infinity against the remote's real stamp, the
+    // live copy wins, and the deletion undoes itself on the next fetch.
+    const stamped = [];
+    setRestoreStampHandler((profileId, unitIds) => stamped.push([profileId, unitIds]));
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { gone: { id: 'gone', name: 'Dropped' } },
+    }));
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+    });
+    setRestoreStampHandler(null);
+
+    expect(stamped).toEqual([['pmine', ['resume:gone']]]);
   });
 
   it('tombstones a workspace the backup leaves out', () => {

@@ -373,7 +373,20 @@ describe('format-1 import scoping', () => {
       },
     });
     // active profile replaced…
-    expect(localStorage.getItem(`resume-p--${ashId}--resume-designer-data`)).toBe('{"variants":{"legacy":{}}}');
+    const restored = JSON.parse(localStorage.getItem(`resume-p--${ashId}--resume-designer-data`));
+    expect(restored.variants.legacy).toBeDefined();
+    // …and the résumé the envelope OMITS is tombstoned rather than merely gone.
+    // A replacement restore is a deletion for what it leaves out, and only a
+    // tombstone makes that travel — dropped silently, CloudKit keeps the record
+    // and the next fetch hands it back.
+    //
+    // This case is also the mapping-ON coverage for that rule. The snapshot the
+    // comparison reads is keyed PHYSICALLY once a profile mapping exists, while
+    // the format-1 restore writes through the logical name, so looking it up by
+    // the logical key found nothing on every ordinary profiled install. The
+    // first test written for the rule ran with mapping off, where the two names
+    // are the same string, and so proved nothing about this.
+    expect(restored.variants.v1.deletedAt).toEqual(expect.any(String));
     // …partner untouched, registry intact…
     expect(localStorage.getItem(`resume-p--${partnerId}--resume-designer-data`)).toBe('{"variants":{"v2":{}}}');
     expect(loadRegistry()).toHaveLength(2);

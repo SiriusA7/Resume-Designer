@@ -52,6 +52,7 @@ import {
   registerPersistedSaveHandler, touchUnit,
   registerEditingProbe, isSyncEnabled, setSyncEnabled,
   installStorageStamping, setStorageDirtyNotifier, setActiveProfileDeletedHandler,
+  stampRestoredUnits,
   setResumeDeletedHandler,
 } from './sync/syncModel.js';
 import {
@@ -77,6 +78,7 @@ import {
   importFullBackupDurably,
   saveApiKey,
   setPersistedSaveHandler,
+  setRestoreStampHandler,
 } from './persistence.js';
 import {
   isTauri,
@@ -114,6 +116,13 @@ registerPersistedSaveHandler(setPersistedSaveHandler);
 // went up once on the first full sweep and never again. appStorage cannot
 // import the sync layer, so the wiring lands here, before anything can write.
 installStorageStamping(setStorageWriteObserver);
+
+// The other edge into the sync layer, and the same reason as the save handler:
+// a restore writes each workspace's blob under its PHYSICAL key, which the
+// interceptor classifies 'unknown', so the tombstones a replacement restore
+// produces are stamped and announced by nobody. Wired here because persistence
+// must not import the sync layer, nor the sync layer persistence.
+setRestoreStampHandler(stampRestoredUnits);
 
 // Same edge, same reason. A fetched résumé for the open variant is adopted by
 // the store, which repaints #resume from scratch — and an inline edit exists
