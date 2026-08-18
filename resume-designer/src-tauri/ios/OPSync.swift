@@ -525,6 +525,23 @@ final class OPSyncEngine {
   /// record — see `flushSystemFields`.
   private var systemFieldsDirty = false
 
+  /// Records THIS DEVICE could not read, which are the only ones a missing
+  /// local unit justifies re-fetching.
+  ///
+  /// `syncUnit` returning nil does not mean "there is nothing here". Its most
+  /// common cause is the ten-second bound against a webview that is still
+  /// reloading, and its own comment says so. Re-fetching on that signal made
+  /// every unanswered send pull the whole record back — the multi-megabyte
+  /// asset included — and hand it to the same dead page, which refused it and
+  /// re-owed the id. That voided the documented terminator for the retry loop
+  /// ("a page that answers 'I have nothing under that id' makes `recordToSend`
+  /// take the change off the queue for good"), so it ran again at every launch
+  /// instead of ending.
+  ///
+  /// Populated only where a fetched record genuinely would not decode, and
+  /// consumed on use, so one unreadable record buys exactly one direct fetch.
+  private var unreadableRecords: Set<CKRecord.ID> = []
+
   /// True from the delegate wrapper's entry until its `handleEvent` returns.
   /// CKSyncEngine guarantees serial delivery, so this cannot nest and is a
   /// boolean rather than a counter.
@@ -875,6 +892,9 @@ extension OPSyncEngine {
           // `serverRecordChanged`, and the record comes back down the conflict
           // path where both copies are compared and the loser is parked.
           forget(record.recordID)
+          // Marked as ours to ask for again. `recordToSend` cannot tell on its
+          // own why the page had no unit — see `unreadableRecords`.
+          unreadableRecords.insert(record.recordID)
           unreadable.append(OPSyncFailure(
             unitId: record.recordID.recordName,
             profileId: opProfileId(forZone: record.recordID.zoneID),
@@ -1521,8 +1541,12 @@ extension OPSyncEngine {
       // later either, so leaving it queued is a question re-asked on every
       // send for the life of the app.
       engine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
-      // BUT DROPPING IT IS NOT THE WHOLE ANSWER when the reason there are no
-      // bytes is that this device could not READ the record. That is the
+      // ONLY for a record this device could not read. Any other nil — above all
+      // a page that did not answer in time — keeps the old behaviour exactly,
+      // which is what ends the retry loop.
+      guard unreadableRecords.remove(recordID) != nil else { return nil }
+      // Dropping it is not the whole answer when the reason there are no bytes
+      // is that this device could not READ the record. That is the
       // recovery `syncDidFail` queues for an unreadable fetch — most often a
       // large résumé whose asset did not finish downloading — and by then the
       // change token has moved past the server record, so nothing will offer it
