@@ -15,6 +15,11 @@ let lastFit = null;
 // The animation frame a fit in flight is waiting on, so a second fit takes over
 // from the first instead of the two driving the same canvas at once.
 let fitTravel = null;
+// True only while the fit's own animation frame is writing. Every direct zoom
+// CANCELS a running fit (see `cancelFitTravel`), and the fit drives the very
+// same `setZoom` a button or a pinch does — so without this flag its first
+// frame would cancel itself.
+let fitDriving = false;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const ZOOM_STEP = 0.1;
@@ -187,7 +192,34 @@ export function initZoomControls() {
 // not persisted — a pinch produces ~60 of these a second, and only where the
 // fingers come to rest is worth saving. The final non-live frame of a gesture
 // rounds and saves, so what reaches storage is the same tidy value as before.
+/**
+ * Stop a fit part-way and let go of the gesture it was driving.
+ *
+ * The travel is a GESTURE — `setZoomLevel(live)` with an anchor held under the
+ * middle of the view — so abandoning it means releasing that anchor as well as
+ * dropping the frame. Left behind, the next pinch inherited the fit's anchor
+ * and the two inputs fought over scale and scroll.
+ */
+function cancelFitTravel() {
+  // Nothing running means nothing to release. Without this early return the
+  // call from `setZoom` wiped the anchor an ORDINARY pinch had just captured —
+  // `setZoomLevel` captures before it delegates — and the gesture stopped
+  // following the fingers.
+  if (fitTravel === null) return;
+  cancelAnimationFrame(fitTravel);
+  fitTravel = null;
+  liveGesture = false;
+  gestureAnchor = null;
+  document.getElementById('resume-container')?.classList.remove('is-zooming');
+}
+
 function setZoom(level, live = false) {
+  // ANY zoom that is not the fit's own ends the fit. Only a second fit used to
+  // reach the cancellation, so pressing Zoom In / Out / Reset or starting a
+  // pinch mid-travel left the outstanding frame computing from its original
+  // `from` value — and it overwrote every direct input until it landed on the
+  // fit target. The person's own zoom simply lost for 200 ms.
+  if (!fitDriving) cancelFitTravel();
   currentZoom = live ? level : Math.round(level * 100) / 100;
   applyZoom();
   if (!live) saveZoom();
@@ -295,7 +327,7 @@ function applyFit(axis) {
  * it, and the scroller's own clamping does the rest.
  */
 function travelZoomTo(target, from, scroller, done) {
-  cancelAnimationFrame(fitTravel);
+  cancelFitTravel();
 
   const rect = scroller.getBoundingClientRect();
   const focus = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
@@ -312,7 +344,12 @@ function travelZoomTo(target, from, scroller, done) {
     const eased = 1 - (1 - t) ** 3;
     // The last frame is not live, which is what rounds the value, saves it, and
     // gives the canvas its transition back.
-    setZoomLevel(from + (target - from) * eased, t < 1, focus);
+    fitDriving = true;
+    try {
+      setZoomLevel(from + (target - from) * eased, t < 1, focus);
+    } finally {
+      fitDriving = false;
+    }
     if (t < 1) {
       fitTravel = requestAnimationFrame(step);
     } else {
@@ -471,6 +508,10 @@ function restoreAnchor(focus) {
  */
 export function setZoomLevel(level, live = false, focus = null) {
   if (!Number.isFinite(level)) return currentZoom;
+  // BEFORE the anchor is captured, so a pinch starting mid-fit releases the
+  // fit's anchor and then takes its own. Cancelling further down, inside
+  // `setZoom`, would drop the capture this call had already made.
+  if (!fitDriving) cancelFitTravel();
   const container = document.getElementById('resume-container');
   if (live && !liveGesture) {
     liveGesture = true;
