@@ -952,6 +952,26 @@ function snapshotAndWipeOwnedKeys(keys) {
 }
 
 /**
+ * The pre-wipe value for a key a format-2 restore addresses PHYSICALLY.
+ *
+ * Mirror image of `priorSnapshotFor`, and needed for the mirror-image reason.
+ * The snapshot is keyed by the address `appStorage` resolves to, and with the
+ * profile mapping OFF — the incomplete-adoption recovery state `exportFullBackup`
+ * documents — the active workspace's keys sit UNPREFIXED, while a format-2
+ * restore addresses every workspace by its physical name. The lookup missed,
+ * every key read as "there was nothing here", and the restore wiped that
+ * workspace's résumés while writing no tombstone for any of them: deleted
+ * locally, alive on the server, and handed straight back by the next fetch.
+ */
+function priorPhysicalSnapshot(address, logicalKey, profileId, priorValues) {
+  if (priorValues.has(address)) return priorValues.get(address);
+  if (!getProfileMapping() && profileId === getActiveProfileId()) {
+    return priorValues.get(logicalKey);
+  }
+  return undefined;
+}
+
+/**
  * The pre-wipe value for a key the caller names LOGICALLY.
  *
  * `collectActiveOwnedKeys` snapshots what `appStorage.keys()` reports, which is
@@ -1137,7 +1157,7 @@ function importFullBackupV2(parsed, keepCredential = false) {
   const writeTracked = (k, v, pid = '', logicalKey = k) => {
     appStorage.setItem(k, v);
     written.push(k);
-    noteWrite(pid, logicalKey, v, priorValues.get(k) ?? null);
+    noteWrite(pid, logicalKey, v, priorPhysicalSnapshot(k, logicalKey, pid, priorValues) ?? null);
   };
 
   let keysImported = 0;
@@ -1185,7 +1205,10 @@ function importFullBackupV2(parsed, keepCredential = false) {
       // Same rule one level down: a résumé the restore omits is a résumé it
       // deletes, and only a tombstone makes that travel.
       if (logicalKey === STORAGE_KEY) {
-        normalized = withTombstonesForDroppedVariants(priorValues.get(key), normalized);
+        normalized = withTombstonesForDroppedVariants(
+          priorPhysicalSnapshot(key, STORAGE_KEY, splitPhysicalKey(key)?.profileId ?? '', priorValues),
+          normalized,
+        );
         blobWritten.add(splitPhysicalKey(key)?.profileId ?? '');
       }
       writeTracked(key, normalized, splitPhysicalKey(key)?.profileId ?? '', logicalKey);
@@ -1199,14 +1222,19 @@ function importFullBackupV2(parsed, keepCredential = false) {
       if (blobWritten.has(pid)) continue;
       const key = physicalKey(pid, STORAGE_KEY);
       const dropped = [];
-      const rebuilt = withTombstonesForDroppedVariants(priorValues.get(key), null, dropped);
+      const rebuilt = withTombstonesForDroppedVariants(
+        priorPhysicalSnapshot(key, STORAGE_KEY, pid, priorValues), null, dropped,
+      );
       if (dropped.length === 0) continue;
       writeTracked(key, rebuilt, pid, STORAGE_KEY);
     }
     for (const { physicalKey: key, logicalKey, value } of history) {
       if (writeOwnedKeyOrSkip(key, value)) {
         written.push(key);
-        noteWrite(splitPhysicalKey(key)?.profileId ?? '', logicalKey, value, priorValues.get(key) ?? null);
+        noteWrite(
+          splitPhysicalKey(key)?.profileId ?? '', logicalKey, value,
+          priorPhysicalSnapshot(key, logicalKey, splitPhysicalKey(key)?.profileId ?? '', priorValues) ?? null,
+        );
         keysImported++;
       } else {
         historySkipped++;

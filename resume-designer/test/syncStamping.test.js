@@ -1597,6 +1597,41 @@ describe('deleting a résumé produces something that can travel', () => {
       }
     });
 
+    it('finds the pre-wipe blob when the profile mapping is OFF', async () => {
+      // The incomplete-adoption recovery state `exportFullBackup` documents: a
+      // registry exists but the mapping is off, so the ACTIVE workspace's keys
+      // sit unprefixed — while a format-2 restore addresses every workspace by
+      // its physical name. The snapshot is keyed by address, so the lookup
+      // missed, every key read as "there was nothing here", and the restore
+      // wiped the résumés while writing no tombstone for any of them: deleted
+      // here, alive on the server, handed straight back by the next fetch.
+      setProfileMapping(null);
+      appStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      appStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({
+        variants: { 'v-9': { id: 'v-9', name: 'Dropped by the restore' } },
+      }));
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
+      expect(blob.variants['v-9'].deletedAt).toEqual(expect.any(String));
+      expect(allNamed()).toContain('resume:v-9');
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();
