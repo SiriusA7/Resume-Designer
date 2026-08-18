@@ -189,12 +189,19 @@ export default function Header() {
       toast.info("You can't delete your only resume.");
       return;
     }
+    // PINNED before either prompt. Both are unbounded waits, and
+    // `deleteCurrentVariant` deletes whatever is current when it finally runs —
+    // which is not necessarily what was named in the dialog. A CloudKit
+    // tombstone for the open résumé makes `setResumeDeletedHandler` load a
+    // replacement, so confirming afterwards deleted the résumé the person never
+    // selected, having already reassigned the ORIGINAL's chat threads.
+    const targetId = getCurrentId();
     // If the resume has chat threads, ask whether to keep (→General) or delete
     // them, and reassign BEFORE deleteCurrentVariant() so the id still exists.
     // After delete, loadVariant(newId) fires dataLoaded and useChat's follow
     // effect reloads threads, so the change is reflected automatically.
     const { cancelled, hadThreads } = await handleVariantThreadsForDelete({
-      variantId: getCurrentId(),
+      variantId: targetId,
       variantName: currentName,
     });
     if (cancelled) return;
@@ -205,6 +212,15 @@ export default function Header() {
         actionLabel: 'Delete',
       });
       if (!ok) return;
+    }
+    // REFUSED rather than redirected. Deleting `targetId` by id instead would
+    // mean a second delete route beside `deleteCurrentVariant`, which owns the
+    // last-variant guard and the reload of what replaces it — and the case this
+    // catches is one where the résumé is already gone from under us, so there
+    // is nothing left to delete anyway.
+    if (getCurrentId() !== targetId) {
+      toast.error(`"${currentName}" is no longer open — nothing was deleted.`);
+      return;
     }
     deleteCurrentVariant();
   };
