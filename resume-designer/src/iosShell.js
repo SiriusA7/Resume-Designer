@@ -458,6 +458,11 @@ export function buildDocumentOutline(data) {
       removePath: 'experience',
       removeIndex: i,
       removeTitle: text(role?.title) || `Role ${i + 1}`,
+      // The ROW's own id, not its position. A native confirm is an unbounded
+      // wait and an adopted document can reorder or replace this array while it
+      // is up; `removeIndex` alone would then name a different role. Empty for
+      // documents older than the ids, where the title is the only check left.
+      removeId: text(role?.id),
     });
   });
 
@@ -502,6 +507,7 @@ export function buildDocumentOutline(data) {
       removePath: 'sections',
       removeIndex: i,
       removeTitle: text(section?.title) || `Section ${i + 1}`,
+      removeId: text(section?.id),
     });
   });
 
@@ -518,7 +524,7 @@ export function buildDocumentOutline(data) {
   // Defaults applied once rather than at six push sites, so every group
   // decodes into the same Swift struct whether or not it has list actions.
   const withActions = (group) => ({
-    addLabel: '', removePath: null, removeIndex: -1, removeTitle: '', ...group,
+    addLabel: '', removePath: null, removeIndex: -1, removeTitle: '', removeId: '', ...group,
   });
 
   return {
@@ -1290,12 +1296,22 @@ let streamJobs = false;
  *
  * A SET keyed by scope rather than a boolean: the structure sheet and the
  * profile sheet can both be up, and each guard asks only about its own.
+ *
+ * And by HOLDER within the scope, which a bare scope could not express. The
+ * screens release on `onDisappear` because SwiftUI does not promise a focused
+ * field a final blur — but a push runs the destination's `onAppear` BEFORE the
+ * source's `onDisappear`, so a screen releasing "the profile scope" was taking
+ * down the guard the editor it had just pushed to had already raised. Each
+ * holder now names itself and releases only itself; a release naming no holder
+ * is a sheet closing, which does speak for everything inside it.
  */
 const nativeEditing = new Set();
 
-/** Whether a native field of this scope holds focus. */
+/** Whether any native holder of this scope is mid-edit. */
 export function nativeEditingBusy(scope) {
-  return nativeEditing.has(scope);
+  const prefix = `${scope}:`;
+  for (const held of nativeEditing) if (held.startsWith(prefix)) return true;
+  return false;
 }
 let streamProfile = false;
 // The comparison the history sheet has open, computed on demand because the
@@ -1668,13 +1684,30 @@ export function initIOSShell(deps) {
     // Focus, reported by the native fields themselves. Sent on every change so
     // a blur is as load-bearing as a focus: left set, this would stall every
     // adoption for that scope until the sheet closed.
-    setNativeEditing: ({ scope, value }) => {
+    setNativeEditing: ({ scope, value, holder }) => {
       const name = String(scope ?? '');
       if (name !== 'document' && name !== 'profile') {
         throw new Error('setNativeEditing needs a known scope');
       }
-      if (value === 'true') nativeEditing.add(name);
-      else nativeEditing.delete(name);
+      const who = String(holder ?? '');
+      if (value === 'true') {
+        // A hold has to say whose it is, or a release cannot be told from any
+        // other release. Throwing rather than defaulting: a shared default
+        // holder is exactly the singleton this replaced.
+        if (!who) throw new Error('setNativeEditing needs a holder to hold');
+        nativeEditing.add(`${name}:${who}`);
+        return;
+      }
+      if (who) {
+        nativeEditing.delete(`${name}:${who}`);
+        return;
+      }
+      // No holder on a release: the SHEET closing. That one does speak for
+      // everything inside it, and it is the backstop for any hold whose own
+      // release never arrived.
+      for (const held of [...nativeEditing]) {
+        if (held.startsWith(`${name}:`)) nativeEditing.delete(held);
+      }
     },
     setJobsOpen: ({ value }) => {
       streamJobs = value === 'true';

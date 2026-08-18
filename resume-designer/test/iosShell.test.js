@@ -148,6 +148,25 @@ describe('buildDocumentOutline list actions', () => {
     expect(role.removeTitle).toBe('Designer');
   });
 
+  it('carries the row\u2019s own id so a confirm can find it again', () => {
+    // `removeIndex` is a POSITION, and the native confirm is an unbounded wait
+    // during which an adopted document can reorder the array. The id is what
+    // lets Swift resolve the row the alert actually named; empty is the honest
+    // answer for documents older than the ids, where the title is the only
+    // check left.
+    const withIds = {
+      ...doc,
+      experience: [{ id: 'exp-7', title: 'Designer', bullets: ['Did a thing'] }],
+      sections: [{ id: 'section-3', title: 'Skills', content: ['One'] }],
+    };
+    const groups = buildDocumentOutline(withIds).groups;
+    expect(groups.find((g) => g.id === 'experience-0').removeId).toBe('exp-7');
+    expect(groups.find((g) => g.id === 'section-0').removeId).toBe('section-3');
+    // And the fallback is empty rather than absent, so the Swift struct still
+    // decodes for a document that predates the ids.
+    expect(buildDocumentOutline(doc).groups.find((g) => g.id === 'experience-0').removeId).toBe('');
+  });
+
   it('offers no row-add on a prose section, which is one string', () => {
     const [list, prose] = buildDocumentOutline(doc).groups.filter((g) => g.id.startsWith('section-'));
     expect(list.addLabel).toBe('Add item');
@@ -999,15 +1018,60 @@ describe('the Design sheet commands', () => {
     const { nativeEditingBusy } = await import('../src/iosShell.js');
 
     expect(nativeEditingBusy('document')).toBe(false);
-    send({ type: 'setNativeEditing', scope: 'document', value: 'true' });
+    send({ type: 'setNativeEditing', scope: 'document', holder: 'field', value: 'true' });
     expect(nativeEditingBusy('document')).toBe(true);
     // Scoped: a focused structure field must not stall a profile adoption.
     expect(nativeEditingBusy('profile')).toBe(false);
 
     // The blur matters as much as the focus — left set, this would stall every
     // adoption for that scope until the sheet closed.
-    send({ type: 'setNativeEditing', scope: 'document', value: 'false' });
+    send({ type: 'setNativeEditing', scope: 'document', holder: 'field', value: 'false' });
     expect(nativeEditingBusy('document')).toBe(false);
+  });
+
+  it('lets one holder release without taking down another\u2019s guard', async () => {
+    // Pushing from a field screen INTO the date picker: SwiftUI runs the
+    // destination's `onAppear` before the source's `onDisappear`, so the screen
+    // being left released last. When a release meant "the profile scope", that
+    // teardown unguarded the editor it had just pushed to — and a fetched
+    // profile could then be adopted underneath a picker holding seeded state.
+    const { send } = await mount();
+    const { nativeEditingBusy } = await import('../src/iosShell.js');
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field', value: 'true' });
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'dates', value: 'true' });
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field', value: 'false' });
+    expect(nativeEditingBusy('profile')).toBe(true);
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'dates', value: 'false' });
+    expect(nativeEditingBusy('profile')).toBe(false);
+  });
+
+  it('lets the sheet closing release every holder in its scope', async () => {
+    // The backstop, and the one release that legitimately speaks for everything
+    // inside it: a hold whose own release never arrived would otherwise stall
+    // every adoption for that scope until the app was relaunched.
+    const { send } = await mount();
+    const { nativeEditingBusy } = await import('../src/iosShell.js');
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field', value: 'true' });
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'dates', value: 'true' });
+    send({ type: 'setNativeEditing', scope: 'document', holder: 'field', value: 'true' });
+
+    send({ type: 'setNativeEditing', scope: 'profile', value: 'false' });
+    expect(nativeEditingBusy('profile')).toBe(false);
+    // Its own scope only — the structure sheet is still up.
+    expect(nativeEditingBusy('document')).toBe(true);
+    send({ type: 'setNativeEditing', scope: 'document', value: 'false' });
+  });
+
+  it('refuses a hold that does not say whose it is', async () => {
+    // A shared default holder would be the singleton this replaced, and the
+    // failure would look like the bug above rather than like a mistake here.
+    const { send } = await mount();
+    const { nativeEditingBusy } = await import('../src/iosShell.js');
+    expect(send({ type: 'setNativeEditing', scope: 'profile', value: 'true' }).ok).toBe(false);
+    expect(nativeEditingBusy('profile')).toBe(false);
   });
 
   it('refuses a native focus report for an unknown scope', async () => {

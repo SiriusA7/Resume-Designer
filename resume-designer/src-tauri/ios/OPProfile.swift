@@ -454,7 +454,9 @@ private struct ProfileFieldRow: View {
       // landing during this focus was adopted and republished while the binding
       // above went on showing `draft`, and the next keystroke wrote that stale
       // text over the adopted field and uploaded it as newer.
-      model.send("setNativeEditing", ["scope": "profile", "value": isFocused ? "true" : "false"])
+      model.send("setNativeEditing", [
+        "scope": "profile", "holder": "field", "value": isFocused ? "true" : "false",
+      ])
     }
   }
 
@@ -602,8 +604,13 @@ private struct ProfileFormScreen: View {
     //
     // Nothing to commit first, unlike the employer field: every keystroke here
     // already writes through (see `binding`).
+    //
+    // NAMED, and the name is the field row's. A blanket release here also took
+    // down the guard the Dates screen raises in its own `onAppear` — a push runs
+    // the destination's `onAppear` before the source's `onDisappear`, so pushing
+    // INTO an editor was the thing that unguarded it.
     .onDisappear {
-      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+      model.send("setNativeEditing", ["scope": "profile", "holder": "field", "value": "false"])
     }
     .alert("That row moved", isPresented: $staleWarning) {
       Button("OK", role: .cancel) {}
@@ -742,7 +749,7 @@ private struct ProfileExperienceScreen: View {
       for id in Array(companyDrafts.keys) { commitCompany(id) }
       // …and the guard is released with them, or leaving this way would stall
       // every profile adoption until the sheet was opened and closed again.
-      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+      model.send("setNativeEditing", ["scope": "profile", "holder": "employer", "value": "false"])
     }
     // TOLD TO THE SYNC GUARD, like `ProfileFieldRow`'s own focus. This screen
     // does NOT use that row — it has its own binding and its own
@@ -754,7 +761,9 @@ private struct ProfileExperienceScreen: View {
     // This field is the one on this screen that is NOT written per keystroke,
     // so the window is the whole time the keyboard is up rather than a debounce.
     .onChange(of: focusedEmployer) { _, current in
-      model.send("setNativeEditing", ["scope": "profile", "value": current == nil ? "false" : "true"])
+      model.send("setNativeEditing", [
+        "scope": "profile", "holder": "employer", "value": current == nil ? "false" : "true",
+      ])
     }
     .confirmationDialog(
       "Delete \(pendingDeleteName.isEmpty ? "this employer" : pendingDeleteName)?",
@@ -936,10 +945,12 @@ private struct ProfileRoleScreen: View {
     .navigationTitle(role.map { $0.title.isEmpty ? "Role" : $0.title } ?? "Role")
     .navigationBarTitleDisplayMode(.inline)
     // The same release as `ProfileFormScreen`'s, for the same reason — the
-    // reasoning is written out there. This is the screen the finding named:
-    // back out of a role with a field still focused and the guard was stuck.
+    // reasoning is written out there, including why it names the field row.
+    // This is the screen both findings named: back out of a role with a field
+    // still focused and the guard was stuck; push forward into Dates and a
+    // blanket release took down the guard that screen had just raised.
     .onDisappear {
-      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+      model.send("setNativeEditing", ["scope": "profile", "holder": "field", "value": "false"])
     }
   }
 }
@@ -1060,7 +1071,7 @@ private struct ProfileDatesScreen: View {
     // into a one-tap revert to the pre-fetch date.
     .onAppear {
       seed()
-      model.send("setNativeEditing", ["scope": "profile", "value": "true"])
+      model.send("setNativeEditing", ["scope": "profile", "holder": "dates", "value": "true"])
     }
     // Both ways out land here: a pop, and the `dismiss()` that `commitRange`
     // and `commitText` run once the write is acknowledged — so the guard is
@@ -1068,7 +1079,7 @@ private struct ProfileDatesScreen: View {
     // sheet is covered by the profile case in `ShellView`'s sheet close, which
     // releases this scope regardless of what was pushed on top of it.
     .onDisappear {
-      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+      model.send("setNativeEditing", ["scope": "profile", "holder": "dates", "value": "false"])
     }
   }
 

@@ -322,6 +322,9 @@ struct ShellSnapshot: Decodable, Equatable {
       /// What the confirmation names, so it says "Delete Designer?" rather than
       /// "Delete this?".
       let removeTitle: String
+      /// The row's own id, so a confirmation can find it again after the array
+      /// under it has changed. Empty for documents older than the ids.
+      let removeId: String
     }
     var groups: [Group]
     /// Adding the FIRST of something. A group only exists once its array is
@@ -3525,7 +3528,11 @@ private struct ShellView: View {
           model.send("importVariantText", ["text": picked.text, "name": picked.name])
         }
         .onChange(of: renamingVariant) { _, open in
-          if !open { model.send("setNativeEditing", ["scope": "document", "value": "false"]) }
+          if !open {
+            model.send("setNativeEditing", [
+              "scope": "document", "holder": "rename", "value": "false",
+            ])
+          }
         }
         .alert("Rename resume", isPresented: $renamingVariant) {
           TextField("Name", text: $renameDraft)
@@ -3753,7 +3760,7 @@ private struct ShellView: View {
           // device while this alert is up would be overwritten by the stale
           // draft on Save. Same guard as the structure fields; released when
           // the alert closes, whichever way it closes.
-          model.send("setNativeEditing", ["scope": "document", "value": "true"])
+          model.send("setNativeEditing", ["scope": "document", "holder": "rename", "value": "true"])
         } label: {
           Label("Rename…", systemImage: "pencil")
         }
@@ -4711,7 +4718,31 @@ private struct StructureSheet: View {
     let path: String
     let index: Int
     let title: String
+    /// What the row IS, as opposed to where it was. See `currentIndex(for:)`.
+    let identity: String
     var id: String { "\(path)[\(index)]" }
+  }
+
+  /// True when the row the alert named is no longer where it was.
+  @State private var removalMoved = false
+
+  /// Where that row sits NOW, or nil if it has moved or gone.
+  ///
+  /// The alert is an unbounded wait and `index` is a POSITION. This sheet is
+  /// not busy unless a field has focus, so a fetched document can be adopted
+  /// while the alert is up — and `removeItem` would then splice that index out
+  /// of an array that has been reordered or replaced, deleting a role the alert
+  /// never named.
+  private func currentIndex(for removal: Removal) -> Int? {
+    let candidates = groups.filter { $0.removePath == removal.path }
+    if !removal.identity.isEmpty {
+      return candidates.first { $0.removeId == removal.identity }?.removeIndex
+    }
+    // Older documents have no ids. The title at the same position is the only
+    // check left, and it still catches a replaced or reordered array.
+    return candidates.first {
+      $0.removeIndex == removal.index && $0.removeTitle == removal.title
+    }?.removeIndex
   }
 
   private var groups: [ShellSnapshot.DocumentOutline.Group] {
@@ -4779,7 +4810,8 @@ private struct StructureSheet: View {
                 if let removePath = group.removePath {
                   Button(role: .destructive) {
                     pendingRemoval = Removal(
-                      path: removePath, index: group.removeIndex, title: group.removeTitle
+                      path: removePath, index: group.removeIndex, title: group.removeTitle,
+                      identity: group.removeId
                     )
                   } label: {
                     // `.destructive` reddens the TITLE and leaves the symbol on
@@ -4830,7 +4862,9 @@ private struct StructureSheet: View {
       // `interruptsLiveEditing` and replace the document underneath this field.
       // The binding below keeps showing its draft, and the next keystroke sends
       // that pre-fetch value back as a fresh local edit, over what was adopted.
-      model.send("setNativeEditing", ["scope": "document", "value": current == nil ? "false" : "true"])
+      model.send("setNativeEditing", [
+        "scope": "document", "holder": "field", "value": current == nil ? "false" : "true",
+      ])
     }
     // An alert rather than a `confirmationDialog`: iOS 26 renders the compact
     // dialog with NO visible Cancel and relies on a tap outside, which is a
@@ -4844,15 +4878,22 @@ private struct StructureSheet: View {
     ) {
       Button("Delete", role: .destructive) {
         if let removal = pendingRemoval {
-          model.send("removeItem", [
-            "path": removal.path, "index": String(removal.index),
-          ])
+          if let at = currentIndex(for: removal) {
+            model.send("removeItem", ["path": removal.path, "index": String(at)])
+          } else {
+            removalMoved = true
+          }
         }
         pendingRemoval = nil
       }
       Button("Cancel", role: .cancel) { pendingRemoval = nil }
     } message: {
       Text("This cannot be undone from here.")
+    }
+    .alert("That moved", isPresented: $removalMoved) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text("The résumé changed while this was open, so nothing was deleted. Try again from the refreshed list.")
     }
   }
 
