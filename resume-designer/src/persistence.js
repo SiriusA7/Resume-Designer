@@ -1632,7 +1632,23 @@ export async function importFullBackupDurably(parsed, { keepCredential = false }
     appStorage.endRestoreGuard();
     rollback();
     appStorage.flushDeferredWrites();
-    await appStorage.flush();
+    // ANSWERED, not assumed. Whatever refused the import — a full disk, a
+    // permissions failure — is usually still refusing a moment later, so the
+    // rollback's own writes can fail too. The cache holds the old values either
+    // way, which is why the app keeps working and why this was easy to miss;
+    // the DISK is then a mixture of a failed import and a failed rollback, and
+    // the next launch reads that. Telling somebody their previous data was
+    // restored at exactly that moment is the worst available answer: it is the
+    // one thing that would stop them exporting while the good copy is still in
+    // memory.
+    if (!(await appStorage.flush())) {
+      throw new Error(
+        'The backup could not be written to disk, and your previous data could not be '
+        + 'written back either. Everything is still here in the app, but the files on '
+        + 'disk are incomplete — export a backup from Settings BEFORE closing or '
+        + 'reloading, then free up disk space and import it.'
+      );
+    }
     throw new Error(
       'The backup could not be written to disk (is the disk full?). Your previous data was restored.'
     );

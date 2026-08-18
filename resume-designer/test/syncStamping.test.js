@@ -77,7 +77,9 @@ function makeBackend(initial = {}) {
     loadAll: vi.fn(async () => Object.fromEntries(files)),
     write: vi.fn(async (key, value) => {
       if (key === heldKey) await heldGate;
-      if (key === refusedKey) throw new Error('no space left on device');
+      // `'*'` refuses EVERY key — a disk that is full for the rollback as well
+      // as for the import, which is the ordinary shape of the failure.
+      if (refusedKey === '*' || key === refusedKey) throw new Error('no space left on device');
       files.set(key, value);
     }),
     delete: vi.fn(async (key) => { files.delete(key); }),
@@ -1946,6 +1948,31 @@ describe('deleting a résumé produces something that can travel', () => {
 
       expect(backend.files.get(`resume-p--${PID}--resume-photo-settings`)).toEqual(expect.any(String));
       expect(allNamed()).toContain('key:resume-photo-settings');
+    });
+
+    it('does not claim the rollback succeeded when it failed too', async () => {
+      // Whatever refused the import — a full disk, a permissions failure — is
+      // usually still refusing a moment later, so the ROLLBACK's writes fail as
+      // well. The cache holds the old values either way, which is why the app
+      // keeps working and why this was easy to miss; the disk is then a mixture
+      // of a failed import and a failed rollback, and the next launch reads
+      // that. Telling somebody their previous data was restored at exactly that
+      // moment is the one thing that would stop them exporting while the good
+      // copy is still in memory.
+      withOneResume();
+      await settle();
+
+      // Refuse EVERYTHING, so the rollback cannot land either.
+      failWritesFor('*');
+      await expect(importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      })).rejects.toThrow(/could not be written back either/i);
+      failWritesFor(null);
     });
 
     it('announces them, past the barrier that has nothing left to gate', async () => {
