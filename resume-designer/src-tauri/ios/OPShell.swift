@@ -3423,6 +3423,9 @@ private struct ShellView: View {
           // end in the same code rather than in two imports that drift.
           model.send("importVariantText", ["text": picked.text, "name": picked.name])
         }
+        .onChange(of: renamingVariant) { _, open in
+          if !open { model.send("setNativeEditing", ["scope": "document", "value": "false"]) }
+        }
         .alert("Rename resume", isPresented: $renamingVariant) {
           TextField("Name", text: $renameDraft)
             .textInputAutocapitalization(.words)
@@ -3619,6 +3622,11 @@ private struct ShellView: View {
         Button {
           renameDraft = snapshot.variantName
           renamingVariant = true
+          // Seeded ONCE from the snapshot, so a résumé renamed on another
+          // device while this alert is up would be overwritten by the stale
+          // draft on Save. Same guard as the structure fields; released when
+          // the alert closes, whichever way it closes.
+          model.send("setNativeEditing", ["scope": "document", "value": "true"])
         } label: {
           Label("Rename…", systemImage: "pencil")
         }

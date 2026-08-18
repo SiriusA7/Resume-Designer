@@ -721,6 +721,21 @@ private struct ProfileExperienceScreen: View {
     // per keystroke.
     .onDisappear {
       for id in Array(companyDrafts.keys) { commitCompany(id) }
+      // …and the guard is released with them, or leaving this way would stall
+      // every profile adoption until the sheet was opened and closed again.
+      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+    }
+    // TOLD TO THE SYNC GUARD, like `ProfileFieldRow`'s own focus. This screen
+    // does NOT use that row — it has its own binding and its own
+    // `@FocusState` — so the notification added there covered nothing here,
+    // and a `data:userProfile` unit could replace the profile underneath a
+    // focused Company field. `commitCompany` then wrote the pre-fetch draft
+    // over the adopted name on blur, as a fresh local change.
+    //
+    // This field is the one on this screen that is NOT written per keystroke,
+    // so the window is the whole time the keyboard is up rather than a debounce.
+    .onChange(of: focusedEmployer) { _, current in
+      model.send("setNativeEditing", ["scope": "profile", "value": current == nil ? "false" : "true"])
     }
     .confirmationDialog(
       "Delete \(pendingDeleteName.isEmpty ? "this employer" : pendingDeleteName)?",
