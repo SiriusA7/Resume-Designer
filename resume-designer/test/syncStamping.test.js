@@ -23,7 +23,7 @@ import {
   initPersistence, setPersistedSaveHandler, deleteVariant, getVariants, renameVariant,
   setRestoreStampHandler, importFullBackupDurably,
 } from '../src/persistence.js';
-import { stampRestoredUnits, announceRestoredUnits } from '../src/sync/syncModel.js';
+import { stampRestoredWrites, announceRestoredUnits } from '../src/sync/syncModel.js';
 import { registerPersistedSaveHandler } from '../src/sync/syncModel.js';
 import { resetSpacingSettings } from '../src/spacingService.js';
 import { resetAccentSettings } from '../src/accentService.js';
@@ -994,7 +994,7 @@ describe('deleting a résumé produces something that can travel', () => {
         variants: { 'v-9': { id: 'v-9', name: 'Dropped by the restore' } },
         currentVariantId: 'v-9',
       }));
-      setRestoreStampHandler(stampRestoredUnits, announceRestoredUnits);
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
     };
 
     const replacementDropping = () => importFullBackupDurably({
@@ -1027,6 +1027,141 @@ describe('deleting a résumé produces something that can travel', () => {
       // the remote's real stamp — the live copy wins and the deletion undoes
       // itself on the next fetch.
       expect(Date.parse(written['resume:v-9'].modifiedAt)).toBeGreaterThan(Date.now() - 60_000);
+    });
+
+    it('stamps and announces what the backup BRINGS, not only what it drops', async () => {
+      // The general case of the same defect, and the larger half of it. Every
+      // per-profile key a format-2 restore writes goes in under its PHYSICAL
+      // name, which `classifyKey` answers 'unknown' for — so the interceptor
+      // named none of it. A backup's new résumés, changed settings and job data
+      // reached disk and were never stamped or announced: they did not upload,
+      // and the restore ALSO replaces the stamp table with the backup's, so
+      // they read as -Infinity against whatever the server still held and the
+      // next fetch overwrote the restore with the copy it had just replaced.
+      withOneResume();
+      appStorage.setItem('resume-designer-applications', '[]');
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: {
+          [PID]: {
+            keys: {
+              [DATA]: JSON.stringify({
+                variants: { 'v-new': { id: 'v-new', name: 'Brought by the backup' } },
+                currentVariantId: 'v-new',
+                settings: { pageSize: 'a4' },
+              }),
+              'resume-designer-applications': '[{"id":"app-1"}]',
+            },
+          },
+        },
+      });
+      await settle();
+
+      const written = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
+      // The résumé the backup brought, the settings it changed, and the whole
+      // key it replaced — each stamped, each named.
+      for (const unit of ['resume:v-new', 'data:settings', 'key:resume-designer-applications']) {
+        expect(written[unit]?.modifiedAt).toEqual(expect.any(String));
+        expect(allNamed()).toContain(unit);
+      }
+      // And the résumé it dropped still tombstones, so the general rule did not
+      // cost the specific one.
+      expect(allNamed()).toContain('resume:v-9');
+    });
+
+    it('names nothing for a key the restore rewrites byte for byte', async () => {
+      // The other half of stamping a restore, and it is not a nicety. A backup
+      // taken on this device and imported back writes most keys unchanged; if
+      // that counted as a change, every résumé would go up with a fresh stamp
+      // and newer-wins would revert another device's real edits — a restore that
+      // visibly did nothing, undoing work on a machine that was not involved.
+      // The comparison against the pre-wipe value is what prevents it, which is
+      // why the restore records `previous` rather than passing null.
+      withOneResume();
+      await settle();
+      const blob = appStorage.getItem(DATA);
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: blob } } },
+      });
+      await settle();
+
+      expect(allNamed()).not.toContain('resume:v-9');
+    });
+
+    it('stamps and announces the version history a backup carries', async () => {
+      // History is the one kind `unitsFor` declines, because the save path that
+      // writes it names its own unit as it goes — and a restore is not that
+      // path. Left out, the parked conflict losers a backup carries would sit on
+      // this device and reach no other.
+      withOneResume();
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: {
+          [PID]: {
+            keys: {
+              [DATA]: JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Kept' } } }),
+              'resume-designer-history-v-9': JSON.stringify({
+                history: [{ name: 'An earlier draft' }], historyIndex: 0,
+              }),
+            },
+          },
+        },
+      });
+      await settle();
+
+      const unit = 'key:resume-designer-history-v-9';
+      const written = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
+      expect(written[unit]?.modifiedAt).toEqual(expect.any(String));
+      expect(allNamed()).toContain(unit);
+    });
+
+    it('re-stamps a format-1 restore after the backup\u2019s own stamp table lands', async () => {
+      // Format 1 writes under LOGICAL names, so the interceptor does stamp as it
+      // goes — and then the backup's own sync-state key arrives later in the
+      // same loop and REPLACES the table, erasing every stamp written before it.
+      // Whatever the envelope happens to list first is silently unstamped, which
+      // is the same -Infinity loss by a different route. Re-stamping at the end,
+      // once that key has landed, is what survives it.
+      withOneResume();
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 1,
+        keys: {
+          // Written FIRST, stamped by the interceptor...
+          'resume-designer-applications': '[{"id":"app-1"}]',
+          // ...and then wiped by this, which lands after it.
+          [STATE]: JSON.stringify({ deviceId: 'from-the-backup' }),
+        },
+      });
+      await settle();
+
+      const unit = 'key:resume-designer-applications';
+      const written = JSON.parse(backend.files.get(`resume-p--${PID}--${STATE}`) || '{}');
+      expect(written[unit]?.modifiedAt).toEqual(expect.any(String));
+      expect(allNamed()).toContain(unit);
     });
 
     it('announces them, past the barrier that has nothing left to gate', async () => {

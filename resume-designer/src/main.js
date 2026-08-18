@@ -52,7 +52,7 @@ import {
   registerPersistedSaveHandler, touchUnit,
   registerEditingProbe, isSyncEnabled, setSyncEnabled,
   installStorageStamping, setStorageDirtyNotifier, setActiveProfileDeletedHandler,
-  stampRestoredUnits,
+  stampRestoredWrites,
   announceRestoredUnits,
   setResumeDeletedHandler,
 } from './sync/syncModel.js';
@@ -123,7 +123,7 @@ installStorageStamping(setStorageWriteObserver);
 // interceptor classifies 'unknown', so the tombstones a replacement restore
 // produces are stamped and announced by nobody. Wired here because persistence
 // must not import the sync layer, nor the sync layer persistence.
-setRestoreStampHandler(stampRestoredUnits, announceRestoredUnits);
+setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
 
 // Same edge, same reason. A fetched résumé for the open variant is adopted by
 // the store, which repaints #resume from scratch — and an inline edit exists

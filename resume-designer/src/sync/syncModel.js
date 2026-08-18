@@ -707,22 +707,59 @@ export function setResumeDeletedHandler(handler) {
  * `registerPersistedSaveHandler` uses and for the same reason — this module
  * must not import persistence, nor persistence this one.
  */
-export function stampRestoredUnits(profileId, unitIds) {
-  const ids = Array.isArray(unitIds) ? unitIds.filter(Boolean) : [];
-  if (ids.length === 0) return;
-  touchUnitsForProfile(profileId, ids);
+/**
+ * Stamp every synced unit a restore's writes changed, and report their ids.
+ *
+ * A restore writes each workspace's keys under their PHYSICAL, profile-
+ * namespaced names, and the storage interceptor is defined over LOGICAL ones —
+ * `classifyKey` answers 'unknown' for a physical key, so `onStorageWrite` named
+ * nothing. Every résumé, setting, job and history entry a backup BROUGHT was
+ * therefore written to disk and never stamped or announced: it did not upload,
+ * and — because the restore also replaces the stamp table with the backup's —
+ * it read as -Infinity against whatever the server still held, so the next
+ * fetch overwrote the restore with the copy it had just replaced.
+ *
+ * The restore is the only thing that knows which workspace each write belonged
+ * to, so it hands the writes over and this asks `unitsFor` — the same authority
+ * the interceptor uses, rather than a second copy of the key-to-unit rule that
+ * could disagree with it. Comparing against the pre-wipe value is what keeps
+ * this honest: a restore that rewrites a key byte for byte names nothing.
+ *
+ * Called with the restore's own writes, BEFORE `importFullBackupDurably` arms
+ * the restore guard — the guard defers every other writer and the reload the
+ * restore ends with discards what it deferred. Riding the restore's flush also
+ * makes the rollback correct, the sync-state key being a fixed backup key and
+ * so present in the pre-wipe snapshot.
+ *
+ * @param {string} profileId @param {{logicalKey:string,value:string,previous:?string}[]} writes
+ * @returns {string[]} the unit ids stamped, for the caller to announce once durable
+ */
+export function stampRestoredWrites(profileId, writes) {
+  const ids = [];
+  const add = (unitId) => { if (unitId && !ids.includes(unitId)) ids.push(unitId); };
+  for (const { logicalKey, value, previous } of writes || []) {
+    if (classifyKey(logicalKey) !== 'synced') continue;
+    // The one kind `unitsFor` deliberately declines, because the save path that
+    // writes history names its own unit as it goes. A restore is not that path,
+    // so the parked conflict losers a backup carries would travel from nowhere.
+    if (logicalKey.startsWith(HISTORY_PREFIX)) {
+      if (value !== previous) add(`${KEY_UNIT_PREFIX}${logicalKey}`);
+      continue;
+    }
+    for (const unitId of unitsFor(logicalKey, value, previous)) add(unitId);
+  }
+  if (ids.length) touchUnitsForProfile(profileId, ids);
+  return ids;
 }
 
 /**
- * Name restored tombstones to the transport, once the restore is durable.
+ * Name a restore's changed units to the transport, once it is durable.
  *
  * SPLIT from the stamping above, and the split is the whole point. The stamp is
- * itself a storage write, so it has to happen while the restore's own writes do
- * — before the guard is armed — or `appStorage` DEFERS it and the reload the
- * restore ends with discards it, leaving the tombstone unstamped and reading as
- * -Infinity against the remote's real time. The announcement is the opposite: it
- * must NOT happen until the flush has answered, because an upload cannot be
- * recalled by the rollback a failed flush triggers.
+ * itself a storage write, so it rides the restore's own (see above). The
+ * announcement is the opposite: it must NOT happen until the flush has
+ * answered, because an upload cannot be recalled by the rollback a failed flush
+ * triggers.
  *
  * Announced DIRECTLY rather than through `queueDirty`, because the whole point
  * of that queue is to hold a unit until the write carrying its bytes reaches

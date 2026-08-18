@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   importFullBackupFromEnvelope, importFullBackupMerge, credentialFromEnvelope,
-  setRestoreStampHandler, commitRestoredTombstones,
+  setRestoreStampHandler, commitRestoredUnits,
 } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
+import { stampRestoredWrites } from '../src/sync/syncModel.js';
 
 beforeEach(() => {
   localStorage.clear();
@@ -588,10 +589,17 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     // the backup's, which has no entry for a résumé the backup never knew. The
     // tombstone then reads as -Infinity against the remote's real stamp, the
     // live copy wins, and the deletion undoes itself on the next fetch.
+    // The REAL stamper, not a capturing fake. A fake proves only that the
+    // handler was called, which was true in all four versions of this that
+    // shipped inert; the real one computes the unit ids from the bytes.
     const stamped = [];
     const announced = [];
     setRestoreStampHandler(
-      (profileId, unitIds) => stamped.push([profileId, unitIds]),
+      (profileId, writes) => {
+        const ids = stampRestoredWrites(profileId, writes);
+        stamped.push([profileId, ids]);
+        return ids;
+      },
       (profileId, unitIds) => announced.push([profileId, unitIds]),
     );
     localStorage.setItem('resume-designer-profiles', JSON.stringify([
@@ -615,15 +623,24 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     // the durable wrapper arms the restore guard the moment this returns — a
     // guard that defers every other writer, and the reload the restore ends with
     // discards what it deferred.
-    expect(stamped).toEqual([['pmine', ['resume:gone']]]);
+    // The shared registry write is a synced unit too — it carries the profile
+    // tombstones for any workspace the backup omits — so it is named under the
+    // '' workspace alongside the résumé tombstone in pmine's.
+    expect(stamped).toEqual([
+      ['', ['key:resume-designer-profiles']],
+      ['pmine', ['resume:gone']],
+    ]);
     // NOT announced there. In cached mode nothing in the import throws, so
     // naming the deletions at that point uploads them for a restore that may
     // still be rolled back, and a rollback cannot recall them. The durable
     // wrapper commits them once the flush has answered.
     expect(announced).toEqual([]);
-    commitRestoredTombstones(result.restoredTombstones);
+    commitRestoredUnits(result.restoredUnits);
     setRestoreStampHandler(null);
-    expect(announced).toEqual([['pmine', ['resume:gone']]]);
+    expect(announced).toEqual([
+      ['', ['key:resume-designer-profiles']],
+      ['pmine', ['resume:gone']],
+    ]);
   });
 
   it('keeps tombstones for the SAME résumé id in two workspaces', () => {
@@ -633,7 +650,11 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     // branch has already corrected in `pendingDirty`, `syncOutstanding` and
     // `syncRecovered`, made once more.
     const stamped = [];
-    setRestoreStampHandler((profileId, unitIds) => stamped.push([profileId, unitIds]));
+    setRestoreStampHandler((profileId, writes) => {
+      const ids = stampRestoredWrites(profileId, writes);
+      stamped.push([profileId, ids]);
+      return ids;
+    });
     localStorage.setItem('resume-designer-profiles', JSON.stringify([
       { id: 'pone', name: 'One', emoji: '🙂', createdAt: 'x' },
       { id: 'ptwo', name: 'Two', emoji: '🙂', createdAt: 'x' },
@@ -656,10 +677,11 @@ describe('a replacement restore deletes what it omits, and says so', () => {
       shared: {},
       profiles: {},
     });
-    commitRestoredTombstones(result.restoredTombstones);
+    commitRestoredUnits(result.restoredUnits);
     setRestoreStampHandler(null);
 
     expect(stamped.sort()).toEqual([
+      ['', ['key:resume-designer-profiles']],
       ['pone', ['resume:shared']],
       ['ptwo', ['resume:shared']],
     ]);
