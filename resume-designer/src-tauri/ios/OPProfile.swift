@@ -586,6 +586,25 @@ private struct ProfileFormScreen: View {
     }
     .navigationTitle(section?.title ?? "")
     .navigationBarTitleDisplayMode(.inline)
+    // RELEASED HERE, not on the row. SwiftUI does not promise a field a final
+    // `false` on the way out: navigate back with the keyboard still up and
+    // `ProfileFieldRow`'s `onChange(of: focused)` never fires again, leaving the
+    // profile scope held — and the sheet's own teardown does not run either,
+    // because the SHEET is still open. Every fetched `data:userProfile` unit is
+    // then refused until some other field completes a focus/blur cycle. A stuck
+    // guard stops sync silently, which is worse than the overwrite it exists to
+    // prevent. `ProfileExperienceScreen` already does exactly this.
+    //
+    // On the SCREEN rather than the row because a `Form` row also disappears
+    // when it scrolls out of view, while it is still alive and still focused —
+    // a release there would drop the guard with the draft still on screen,
+    // which is the original bug back again. A pop is unambiguous.
+    //
+    // Nothing to commit first, unlike the employer field: every keystroke here
+    // already writes through (see `binding`).
+    .onDisappear {
+      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+    }
     .alert("That row moved", isPresented: $staleWarning) {
       Button("OK", role: .cancel) {}
     } message: {
@@ -916,6 +935,12 @@ private struct ProfileRoleScreen: View {
     }
     .navigationTitle(role.map { $0.title.isEmpty ? "Role" : $0.title } ?? "Role")
     .navigationBarTitleDisplayMode(.inline)
+    // The same release as `ProfileFormScreen`'s, for the same reason — the
+    // reasoning is written out there. This is the screen the finding named:
+    // back out of a role with a field still focused and the guard was stuck.
+    .onDisappear {
+      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+    }
   }
 }
 
