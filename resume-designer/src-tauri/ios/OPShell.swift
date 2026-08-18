@@ -258,6 +258,10 @@ struct ShellSnapshot: Decodable, Equatable {
     var loading: Bool
     var streaming: Bool
     var configured: Bool
+    /// The thread list is not on disk. Storage answers this, not the engine —
+    /// the write is behind a coalescing drain and can be refused long after the
+    /// send that made it.
+    var saveFailed: Bool
     /// The engine's live status line. Empty when idle.
     var thinking: String
     var currentModel: String
@@ -5642,6 +5646,28 @@ private struct ComposerSendStyle: ViewModifier {
 /// and no applying the AI's proposed CHANGES. Applying one runs the diff engine
 /// and opens a review session; a partial native version of that is how someone
 /// accepts an edit they never saw.
+/// "These messages are not on disk." Worded like `JobsSaveWarning`, and for the
+/// same reason: a full disk stays full, so this is a standing state rather than
+/// a one-shot notice.
+private struct ChatSaveWarning: View {
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundStyle(.orange)
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Not being saved").font(.subheadline.weight(.semibold))
+        Text("Storage is full, so these messages are not on disk. Free up space — reloading now would lose them.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
+    .background(.bar)
+  }
+}
+
 private struct ChatSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
@@ -5668,6 +5694,14 @@ private struct ChatSheet: View {
           )
         } else {
           transcript
+            // PINNED, not a row at the top of the transcript. The transcript
+            // scrolls to the newest message, so a banner among the messages
+            // would be off screen at the exact moment it started applying — and
+            // the web's global toast, which is what says this on desktop,
+            // renders UNDER this sheet.
+            .safeAreaInset(edge: .top) {
+              if chat?.saveFailed == true { ChatSaveWarning() }
+            }
             // An INSET, not a row in a VStack: the transcript keeps the full
             // height of the sheet and scrolls under the composer, so text passes
             // behind the glass instead of stopping at an opaque band above it.

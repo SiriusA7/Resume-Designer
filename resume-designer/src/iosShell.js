@@ -37,6 +37,7 @@ import {
 // holds only strings: the dialog's lucide icons live beside IT, because this
 // bridge draws nothing and Swift picks its own SF Symbols.
 import { TYPE_LABELS } from './historyEntryLabels.js';
+import { CHAT_THREADS_STATE_EVENT, threadsSaveFailed } from './chatThreads.js';
 
 export const SHELL_HANDLER = 'opShell';
 
@@ -2010,7 +2011,12 @@ export function initIOSShell(deps) {
           diff: diffView,
           chat: streamChat
             ? project('chat', () => ({
-              ...chatView, pendingChanges: buildPendingChanges(deps.getPendingChanges()),
+              ...chatView,
+              pendingChanges: buildPendingChanges(deps.getPendingChanges()),
+              // Read here rather than inside `buildChatView`, which is pure and
+              // is handed the engine's state by React. This one is storage's
+              // answer, and it changes without the engine changing at all.
+              saveFailed: (deps.threadsSaveFailed || threadsSaveFailed)(),
             }))
             : null,
         }),
@@ -2058,6 +2064,9 @@ export function initIOSShell(deps) {
   // write the drain refused. Without this the sheet's failure banner waits for
   // whatever unrelated mutation happens to publish next.
   window.addEventListener('rd:profile-state-changed', publish);
+  // Same for the chat's: a refused thread-list write is a storage event, and
+  // the sheet's warning would otherwise wait for the next unrelated publish.
+  window.addEventListener(CHAT_THREADS_STATE_EVENT, publish);
   // Dialogs open and close without any event this module could listen for —
   // Radix just portals a node into <body> and flips data-state. Watching the
   // DOM is the only signal that covers React dialogs, the onboarding wizard

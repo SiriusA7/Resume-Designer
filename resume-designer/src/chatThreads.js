@@ -8,7 +8,7 @@
  * Only the last 50 messages of a thread are persisted (see MAX_PERSISTED).
  */
 
-import { appStorage } from './appStorage.js';
+import { appStorage, onWriteFailure, onWriteSettled } from './appStorage.js';
 
 const STORAGE_KEY = 'resume-designer-chat-history'; // legacy single-thread history
 const THREADS_KEY = 'resume-designer-chat-threads';
@@ -222,6 +222,7 @@ export function countThreadsForVariant(threads, variantId) {
 }
 
 export function persistThreads(threads) {
+  listenForThreadWrites();
   // Writes during a destructive backup import are blocked centrally by
   // appStorage's restore guard (which also replays this write if the restore
   // fails), so there is no per-writer suspension check here.
@@ -229,7 +230,56 @@ export function persistThreads(threads) {
     appStorage.setItem(THREADS_KEY, JSON.stringify(threads));
   } catch (e) {
     console.error('Failed to save threads:', e);
+    // The SYNCHRONOUS half of a refusal. Nothing was queued, so no settle will
+    // arrive to clear this; the next write that does reach disk clears it.
+    reportThreadWrite(false);
   }
+}
+
+// ── "these messages are not on disk" ───────────────────────────────────────
+//
+// `setItem` returns when the CACHE takes the value. The disk write sits behind
+// a coalescing drain and can be refused long afterwards, so the throw caught
+// above is only half of it; the other half arrives through `onWriteFailure`,
+// naming the key and nothing else.
+//
+// It has to be said in the projection because on iOS the chat is a native sheet
+// over the web page, and the global toast the web relies on renders UNDER it.
+// Without this the composer clears, the reply appears, and the only sign the
+// transcript will not survive a relaunch is a toast nobody can see.
+
+/** Fired when the flag below changes; a disk failure is not a React change. */
+export const CHAT_THREADS_STATE_EVENT = 'rd:chat-threads-state-changed';
+
+let threadsUnsaved = false;
+let watchingThreadWrites = false;
+
+function reportThreadWrite(ok) {
+  if (threadsUnsaved === !ok) return;
+  threadsUnsaved = !ok;
+  window.dispatchEvent(new CustomEvent(CHAT_THREADS_STATE_EVENT));
+}
+
+function listenForThreadWrites() {
+  if (watchingThreadWrites) return;
+  watchingThreadWrites = true;
+  onWriteFailure((logicalKey) => {
+    if (logicalKey === THREADS_KEY) reportThreadWrite(false);
+  });
+  // NO write-id gate, unlike the profile sheet's listener. That one holds one
+  // specific unsaved copy and has to know whether a given refusal was that
+  // copy's. This says only "what you are looking at is not on disk", and the
+  // drain coalesces per key — so a settle for this key means the latest list
+  // landed, whatever was refused before it.
+  onWriteSettled((logicalKey) => {
+    if (logicalKey === THREADS_KEY) reportThreadWrite(true);
+  });
+}
+
+/** True while the thread list on screen is known not to have reached disk. */
+export function threadsSaveFailed() {
+  listenForThreadWrites();
+  return threadsUnsaved;
 }
 
 // ── the live thread list ───────────────────────────────────────────────────
