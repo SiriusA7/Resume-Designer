@@ -1324,11 +1324,21 @@ function importFullBackupV2(parsed, keepCredential = false) {
       writeTracked(key, normalized, splitPhysicalKey(key)?.profileId ?? '', logicalKey);
       keysImported++;
     }
+    // The workspaces this restore actually KEEPS: in the registry and not
+    // tombstoned. `exportFullBackup` deliberately keeps a tombstoned entry in
+    // the registry while omitting its profile bucket, so "in the registry" alone
+    // reads a deleted workspace as an empty live one — and synthesizing for it
+    // creates a default blob, cleared records for every other key, and stamps
+    // and announces the lot. If the sync session still covers that profile id,
+    // those empty records overwrite its CloudKit zone, which `deleteProfile`
+    // deliberately leaves INTACT so a revival can get the content back. The
+    // restore would make the deletion irreversible on every device.
+    const liveIds = registry.filter((p) => !p?.deletedAt).map((p) => p.id);
     // A workspace the backup represents as EMPTY writes no blob at all, so the
     // loop above never sees it — and the wipe already removed its résumés. The
     // tombstones have to be synthesized from the snapshot alone, or every one of
     // those CloudKit records outlives the restore and the next fetch undoes it.
-    for (const { id: pid } of registry) {
+    for (const pid of liveIds) {
       if (blobWritten.has(pid)) continue;
       const key = physicalKey(pid, STORAGE_KEY);
       const dropped = [];
@@ -1368,8 +1378,7 @@ function importFullBackupV2(parsed, keepCredential = false) {
     // files for a profile that no longer exists and announces into a zone the
     // deletion is about to remove.
     clearOmittedSyncedKeys(
-      priorValues, new Set(written), writeTracked,
-      registry.map((p) => p.id),
+      priorValues, new Set(written), writeTracked, liveIds,
     );
     restoredUnits = stampRestoredWrites(restoredWrites, (k) => written.push(k));
   } catch (err) {

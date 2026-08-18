@@ -1975,6 +1975,52 @@ describe('deleting a résumé produces something that can travel', () => {
       failWritesFor(null);
     });
 
+    it('writes nothing for a TOMBSTONED profile the backup still lists', async () => {
+      // `exportFullBackup` deliberately keeps a tombstoned entry in the registry
+      // while omitting its profile bucket, so "in the registry" alone reads a
+      // deleted workspace as an empty LIVE one. Synthesizing for it creates a
+      // default blob, cleared records for every other key, and stamps and
+      // announces the lot — and if the sync session still covers that profile
+      // id, those empty records overwrite its CloudKit zone, which
+      // `deleteProfile` deliberately leaves INTACT so a revival can get the
+      // content back. The restore would make the deletion irreversible
+      // everywhere, which is the opposite of what a tombstone is for.
+      const deletedAt = '2020-01-01T00:00:00.000Z';
+      setProfileMapping(PID);
+      appStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+        { id: 'pdead', name: 'Deleted', emoji: '\uD83D\uDE42', createdAt: 'x', deletedAt },
+      ]));
+      appStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }));
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        // The tombstone is RETAINED in the registry, its bucket omitted.
+        registry: [
+          { id: PID, name: 'Ash', emoji: '\uD83D\uDE42' },
+          { id: 'pdead', name: 'Deleted', emoji: '\uD83D\uDE42', deletedAt },
+        ],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      // Nothing created for it, and nothing said about it.
+      const deadFiles = [...backend.files.keys()].filter((k) => k.includes('pdead'));
+      expect(deadFiles).toEqual([]);
+      const deadNamed = notify.mock.calls.flatMap((c) => c[0]).filter((u) => u.profileId === 'pdead');
+      expect(deadNamed).toEqual([]);
+      // And it is still tombstoned in the registry, not quietly dropped.
+      const reg = JSON.parse(backend.files.get('resume-designer-profiles'));
+      expect(reg.find((p) => p.id === 'pdead').deletedAt).toBe(deletedAt);
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();
