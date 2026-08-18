@@ -62,6 +62,12 @@ export default function HistoryDialog() {
   const currentIndex = open ? store.getHistoryIndex() : -1;
 
   const handleRestore = async (index) => {
+    // PAIRED with the version the row named. A history unit fetched from another
+    // device merges into this array and renumbers it, and the confirm is an
+    // unbounded wait — so the index on its own would restore a different whole
+    // document than the dialog described. The native route carries the
+    // timestamp for exactly this reason; see `restoreVersion` in main.js.
+    const stamp = entries[index]?.timestamp;
     const ok = await confirmDestructive({
       title: 'Restore to this version?',
       description: 'Your current changes will be saved in history.',
@@ -69,6 +75,10 @@ export default function HistoryDialog() {
       destructive: false,
     });
     if (!ok) return;
+    if (store.getHistoryEntries()[index]?.timestamp !== stamp) {
+      toast.error('That version moved while the dialog was open — nothing was restored.');
+      return;
+    }
     store.restoreToEntry(index); // fires historyChanged -> bump() re-renders
   };
 
