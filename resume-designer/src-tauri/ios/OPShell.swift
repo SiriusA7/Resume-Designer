@@ -5866,6 +5866,11 @@ private struct ChatSheet: View {
   @State private var showReview = false
   @State private var showRename = false
   @State private var showDeleteConfirm = false
+  /// The chat the delete prompt was raised for. See the dialog's own comment.
+  @State private var pendingDeleteThread: String?
+  /// Unsent text, per chat. A draft belongs to the conversation it was written
+  /// for; see the switch handler.
+  @State private var drafts: [String: String] = [:]
   @State private var renameDraft = ""
   /// Bumped on every send; the composer's field is keyed on it. See the comment
   /// on the `.id` there.
@@ -5926,6 +5931,21 @@ private struct ChatSheet: View {
         ToolbarItem(placement: .principal) { titleMenu }
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
       }
+      // A DRAFT BELONGS TO ITS THREAD. The guard below stops a REMOTE thread
+      // list from moving out from under unsent text, and says nothing about the
+      // person changing chats themselves — one `draft` for the whole sheet meant
+      // switching carried the text along, and Send posted words written for one
+      // conversation into another. Parked under the chat being left and restored
+      // for the chat being opened, rather than cleared: text someone typed is
+      // work, and discarding it to protect it is the trade this whole guard
+      // exists to avoid.
+      .onChange(of: currentThread?.id) { previous, current in
+        if let previous { drafts[previous] = draft }
+        draft = current.flatMap { drafts[$0] } ?? ""
+        // The field is keyed on this; without the bump it keeps showing the
+        // text of the chat that was just left.
+        fieldGeneration += 1
+      }
       // UNSENT TEXT IS WORK, and it is Swift state — `threadHolderBusy` asks the
       // React hook, which can only see a stream in flight. So a thread list
       // adopted from another device could select a different current thread
@@ -5955,9 +5975,22 @@ private struct ChatSheet: View {
         "Delete this chat?", isPresented: $showDeleteConfirm, titleVisibility: .visible
       ) {
         Button("Delete", role: .destructive) {
-          guard let id = currentThread?.id else { return }
+          // THE CHAT THE PROMPT NAMED, pinned when it opened. Resolving
+          // `currentThread` here read whatever was current at the moment of the
+          // tap, and with an empty composer and no stream in flight
+          // `threadHolderBusy` is false — so a thread list adopted from another
+          // device can remove this chat and select a replacement while the
+          // prompt is up, and Delete then permanently removed a conversation
+          // nobody named.
+          guard let id = pendingDeleteThread,
+                chat?.threads.contains(where: { $0.id == id }) == true else {
+            pendingDeleteThread = nil
+            return
+          }
           model.send("chatDeleteThread", ["id": id])
+          pendingDeleteThread = nil
         }
+        Button("Cancel", role: .cancel) { pendingDeleteThread = nil }
       } message: {
         Text("The messages in it are removed. Your resume is not affected.")
       }
@@ -6142,7 +6175,10 @@ private struct ChatSheet: View {
       } label: {
         Label("Rename", systemImage: "pencil")
       }
-      Button(role: .destructive) { showDeleteConfirm = true } label: {
+      Button(role: .destructive) {
+        pendingDeleteThread = currentThread?.id
+        showDeleteConfirm = true
+      } label: {
         Label("Delete chat", systemImage: "trash")
       }
     } label: {
@@ -6161,6 +6197,8 @@ private struct ChatSheet: View {
     guard !text.isEmpty else { return }
     model.send("chatSend", ["text": text])
     draft = ""
+    // Sent, so there is no longer a parked draft for this chat to come back to.
+    if let id = currentThread?.id { drafts[id] = nil }
     fieldGeneration += 1
   }
 }
