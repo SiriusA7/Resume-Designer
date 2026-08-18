@@ -21,6 +21,23 @@ import { mergeRegistry } from './sync/syncMerge.js';
 // not a history key), so isOwnedKey is false → backups never carry it and the
 // key mapping never namespaces it.
 const PROFILE_ADOPTION_MARKER = 'resume-profile-adoption-pending';
+/**
+ * Durable "this registry came from the ACCOUNT and its first content pull has
+ * not completed".
+ *
+ * The readiness state below is in-memory, and that was enough only for the
+ * launch that derived the registry. A device whose first profile-zone fetch
+ * FAILED — or that exited before it settled — persisted the registry anyway, so
+ * the next launch loaded it, skipped the whole account branch, and left
+ * readiness at `ready`. The onboarding timer in main.js then opened the
+ * non-dismissible first-run wizard over a workspace whose contents were still
+ * on their way, which is the exact race the deferral exists to prevent.
+ *
+ * Device-local and never synced (`classifyKey` answers 'unknown'), and not an
+ * owned key, so a restore neither wipes it nor carries it between devices —
+ * it is a fact about THIS device's boot, not about the account.
+ */
+const INITIAL_FETCH_PENDING_MARKER = 'resume-profile-initial-fetch-pending';
 
 // Fired on the window after a registry mutation that stays on the current page
 // (rename; the switch/create paths reload instead). Header chrome that reads
@@ -51,6 +68,9 @@ function resetInitialProfileFetchState() {
 }
 
 function deferUntilInitialProfileFetch() {
+  // Written before the wait, not after it: the point is to survive a launch
+  // that never reaches the settle at all.
+  appStorage.setItem(INITIAL_FETCH_PENDING_MARKER, '1');
   initialProfileFetchState = 'pending';
   initialProfileFetchPromise = new Promise((resolve) => {
     settleInitialProfileFetch = resolve;
@@ -63,6 +83,12 @@ export function isInitialProfileFetchPending() {
 
 export function markInitialProfileFetchSettled(status = 'ready') {
   const settled = status === 'ready' ? 'ready' : 'unavailable';
+  // Cleared only by a REAL answer. 'unavailable' means sync could not say what
+  // the account holds, which is exactly the state that must wait again next
+  // launch rather than fall through to the first-run wizard. The wait is
+  // bounded by `whenInitialProfileFetchSettled`'s own timeout, so a device that
+  // can never fetch pays a delay rather than looping.
+  if (settled === 'ready') appStorage.removeItem(INITIAL_FETCH_PENDING_MARKER);
   initialProfileFetchState = settled;
   const resolve = settleInitialProfileFetch;
   settleInitialProfileFetch = null;
@@ -455,6 +481,12 @@ function revivalStamp(entry) {
 
 async function resolveActiveProfile(askAccount) {
   let registry = loadRegistry() || rebuildRegistryFromKeys();
+  // A registry already on disk skips the account branch below entirely, so this
+  // is the only place a LATER launch can learn that its first pull never
+  // finished. See the marker's own note.
+  if (registry && appStorage.getItem(INITIAL_FETCH_PENDING_MARKER)) {
+    deferUntilInitialProfileFetch();
+  }
   let accountActive = null;
   let recoveredMarkerOnlyAdoption = false;
 

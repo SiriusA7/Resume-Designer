@@ -7,6 +7,7 @@ import {
   loadRegistry, listProfiles, getActiveProfileId, setActiveProfile,
   createProfile, renameProfile, deleteProfile, exportProfileBackup,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
+  isInitialProfileFetchPending,
   activateProfileMappingForPrint, markInitialProfileFetchSettled,
   whenInitialProfileFetchSettled,
 } from '../src/profiles.js';
@@ -1219,6 +1220,63 @@ describe('account-first profile bootstrap', () => {
 
     await expect(ready).resolves.toBe('ready');
     expect(shouldShowOnboarding()).toBe(false);
+  });
+
+  it('is STILL pending on the next launch when the first pull never settled', async () => {
+    // The readiness state is in-memory, and that covered only the launch that
+    // derived the registry from the account. A device whose first profile-zone
+    // fetch failed — or that exited before it settled — persisted the registry
+    // anyway, so the next launch loaded it, skipped the account branch entirely,
+    // and left readiness at `ready`. The onboarding timer then opened the
+    // non-dismissible first-run wizard over a workspace whose contents were
+    // still on their way, which is the race the deferral exists to prevent.
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+    await ensureProfilesInitialized({ askAccount: ask });
+    expect(isInitialProfileFetchPending()).toBe(true);
+
+    // The app exits here — no settle of any kind. Relaunch: the registry is on
+    // disk, so the account is not consulted at all.
+    const askAgain = vi.fn(async () => ({ status: 'unavailable' }));
+    await ensureProfilesInitialized({ askAccount: askAgain });
+
+    expect(askAgain).not.toHaveBeenCalled();
+    expect(isInitialProfileFetchPending()).toBe(true);
+    expect(shouldShowOnboarding()).toBe(false);
+  });
+
+  it('stops waiting once a pull has actually answered ready', async () => {
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+    await ensureProfilesInitialized({ askAccount: ask });
+    markInitialProfileFetchSettled('ready');
+    await appStorage.flush();
+
+    await ensureProfilesInitialized({ askAccount: async () => ({ status: 'unavailable' }) });
+
+    expect(isInitialProfileFetchPending()).toBe(false);
+  });
+
+  it('keeps waiting after an UNAVAILABLE answer, which is not an answer', async () => {
+    // 'unavailable' means sync could not say what the account holds — the exact
+    // state that must wait again rather than fall through to the wizard. The
+    // wait is bounded by whenInitialProfileFetchSettled's own timeout, so a
+    // device that can never fetch pays a delay rather than looping.
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+    await ensureProfilesInitialized({ askAccount: ask });
+    markInitialProfileFetchSettled('unavailable');
+    await appStorage.flush();
+
+    await ensureProfilesInitialized({ askAccount: async () => ({ status: 'unavailable' }) });
+
+    expect(isInitialProfileFetchPending()).toBe(true);
   });
 
   it('keeps genuine first-run onboarding for a settled empty account profile', async () => {
