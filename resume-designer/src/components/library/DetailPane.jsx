@@ -262,7 +262,18 @@ export default function DetailPane({ variant, applications, onAfterDelete, onClo
       variantName: variant.name,
     });
     if (cancelled) return;
-    if (isCurrent) {
+    // RE-READ, not the render-time `isCurrent`. The prompt above is an
+    // unbounded wait, and a CloudKit tombstone for the open résumé makes
+    // `setResumeDeletedHandler` load a replacement during one — so a closure
+    // still holding `isCurrent === true` sent this down the
+    // `deleteCurrentVariant` branch, which deletes whatever is current NOW: the
+    // replacement, which nobody asked to delete, having already reassigned this
+    // résumé's chat threads.
+    //
+    // Nothing is refused here, unlike the header's delete: this pane already
+    // has a by-id branch for a résumé that is not the open one, and that branch
+    // is exactly right for a target that stopped being current mid-prompt.
+    if (getCurrentId() === variant.id) {
       if (deleteCurrentVariant().ok) onAfterDelete();
     } else {
       deleteVariant(variant.id);
