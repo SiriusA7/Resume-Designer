@@ -3259,6 +3259,10 @@ private struct ShellView: View {
   @State private var renamingVariant = false
   @State private var renameDraft = ""
   @State private var creatingProfile = false
+  /// A refused profile creation, shown after the alert that asked for it has
+  /// gone. Named apart from `ProfilesSheet`'s own `failure` because they are
+  /// different screens; the wording is deliberately the same.
+  @State private var profileFailure: String?
   @State private var newProfileName = ""
   /// The zoom a pinch started from; nil when no pinch is in flight.
   @State private var pinchBase: Double?
@@ -3441,6 +3445,17 @@ private struct ShellView: View {
             .disabled(trimmedNewProfileName.isEmpty)
         } message: {
           Text("A separate profile with its own résumés, job descriptions and chats.")
+        }
+        .alert(
+          "Could not create that profile",
+          isPresented: Binding(
+            get: { profileFailure != nil },
+            set: { if !$0 { profileFailure = nil } }
+          )
+        ) {
+          Button("OK", role: .cancel) {}
+        } message: {
+          Text(profileFailure ?? "")
         }
         // The wizard, which is not in `sheet` at all. It has no open command —
         // the WEB component decides when it runs, because one component serves
@@ -3694,7 +3709,18 @@ private struct ShellView: View {
   private func submitNewProfile() {
     let name = trimmedNewProfileName
     guard !name.isEmpty else { return }
-    Task { await model.createProfile(named: name) }
+    // ANSWERED, not fired and forgotten. `createProfile` returns false when the
+    // creation is refused — `flushActiveEdits` failing, or the registry's own
+    // durability flush — and the alert has already closed by then, so a
+    // discarded result left the person with no error and no new profile, and
+    // nothing on screen connecting the two. The rename and delete flows in
+    // `ProfilesSheet` already say so; this is the same failure and deserves the
+    // same sentence.
+    Task {
+      if await model.createProfile(named: name) == false {
+        profileFailure = "Could not create \(name) — the change didn't reach disk."
+      }
+    }
   }
 
   /// The initials, as an actual circle.
