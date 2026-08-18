@@ -695,6 +695,26 @@ export function exportFullBackup(filename) {
       exportedRegistry.push({ id: pid, name: `Recovered profile (${pid.slice(0, 6)})` });
     }
   }
+  // The ACTIVE workspace goes into the envelope LIVE, even when its registry
+  // entry is tombstoned. Its bytes are included above — they are what is on
+  // screen — but bytes alone do not restore: a format-2 restore writes the
+  // tombstone unchanged, the next start resolves to some other live workspace,
+  // and `purgeTombstonedProfiles` then deletes the namespace that was just
+  // restored. The recovery backup could not recover the very thing it was taken
+  // for, which is the state the storage-failure guidance sends people to it in.
+  //
+  // `updatedAt` is refreshed so the revival OUTRANKS the tombstone it replaces —
+  // without that, the next registry merge re-tombstones it and the purge takes
+  // it again one sync later. This is the exported copy only, never live storage,
+  // the same rule the orphan synthesis above follows: restoring is an explicit
+  // act, and somebody restoring this file is asking for exactly this workspace.
+  if (activeId) {
+    const i = exportedRegistry.findIndex((p) => p?.id === activeId && p?.deletedAt);
+    if (i !== -1) {
+      const { deletedAt: _deletedAt, ...revived } = exportedRegistry[i];
+      exportedRegistry[i] = { ...revived, updatedAt: new Date().toISOString() };
+    }
+  }
 
   const backup = {
     backupFormat: 2,

@@ -173,6 +173,20 @@ describe('export boundary', () => {
 
     expect(json).toContain('On screen right now');
     expect(json).not.toContain('Deleted elsewhere');
+
+    // AND its registry entry goes in LIVE. Bytes alone do not restore: a
+    // format-2 restore writes the tombstone unchanged, the next start resolves
+    // to the other live workspace, and the purge then deletes the namespace
+    // that was just restored — so the recovery backup could not recover the one
+    // thing it was taken for. Refreshed `updatedAt` so the revival outranks the
+    // tombstone rather than being re-tombstoned by the next merge.
+    const envelope = JSON.parse(json);
+    const mine = envelope.registry.find((p) => p.id === 'pmine');
+    expect(mine.deletedAt).toBeUndefined();
+    expect(mine.updatedAt).toEqual(expect.any(String));
+    // The one deleted elsewhere keeps its tombstone — restoring must not bring
+    // back a workspace this device is not showing anybody.
+    expect(envelope.registry.find((p) => p.id === 'pgone').deletedAt).toBeTruthy();
   });
 
   it('keeps them out of a whole-app backup', async () => {
