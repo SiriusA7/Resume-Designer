@@ -49,6 +49,7 @@ import {
   nativeEditingBusy,
 } from './iosShell.js';
 import { registerNativeProfileEditing } from './userProfileHolder.js';
+import { registerNativeChatEditing } from './chatThreads.js';
 import {
   collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts,
   registerPersistedSaveHandler, touchUnit,
@@ -138,6 +139,9 @@ setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
 // the SwiftUI one — see nativeEditingBusy.
 registerEditingProbe(() => getActiveInlineEditable() !== null || nativeEditingBusy('document'));
 registerNativeProfileEditing(() => nativeEditingBusy('profile'));
+// And the native chat composer, whose unsent draft is Swift state the hook's
+// own refs cannot see — see registerNativeChatEditing.
+registerNativeChatEditing(() => nativeEditingBusy('chat'));
 
 // Another device deleted the workspace open here. The sync layer merges the
 // tombstone and stops; moving off it is the app's job, because picking the

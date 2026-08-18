@@ -338,8 +338,22 @@ export function registerThreadHolder(next) {
  * The caller REFUSES on a true rather than deferring — see
  * src/sync/syncModel.js, where refusing shortens the applied count, the
  * transport forfeits the record's change tag, and the unit is re-offered.
+ *
+ * The NATIVE composer is asked too. Its draft lives only in Swift state, which
+ * the hook's refs cannot see, so an adopted thread list could select a
+ * different current thread underneath unsent text — and Send would then post
+ * words written for one conversation into another. Same shape as the profile
+ * and structure fields, and answered from the same bridge.
  */
+let nativeComposerBusy = null;
+
+/** Install the native composer's own answer. `null` removes it. */
+export function registerNativeChatEditing(probe) {
+  nativeComposerBusy = typeof probe === 'function' ? probe : null;
+}
+
 export function threadHolderBusy() {
+  if (nativeComposerBusy?.() === true) return true;
   return holder?.isBusy?.() === true;
 }
 
