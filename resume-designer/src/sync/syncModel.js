@@ -5,7 +5,9 @@
  * Swift calls into here through the bridge and never learns any of it: a unit
  * crosses as `{ id, kind, payload, modifiedAt }` with an opaque payload.
  */
-import { appStorage, getProfileMapping } from '../appStorage.js';
+import {
+  appStorage, currentWriteSequence, getProfileMapping, landedWriteSequence,
+} from '../appStorage.js';
 import {
   splitPhysicalKey, mapKey, BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY,
 } from '../profileKeys.js';
@@ -713,7 +715,16 @@ function queueDirty(unitId, logicalKey, profileId) {
   // zone to '' — while every local write queues under ''. Left as they come,
   // one record holds two routes and is announced, and sent, twice.
   const owner = !profileId || profileId === getProfileMapping() ? '' : profileId;
-  pendingDirty.set(dirtyRoute(owner, unitId), { id: unitId, key: logicalKey, profileId: owner });
+  // The WRITE that issued this unit, not just the key it rides. Every caller
+  // runs after its own `setItem`, so this names that write. `pendingDirty` is
+  // global and a drain is per batch: without an id, a unit queued while an
+  // earlier batch was still awaiting its backend write got announced the moment
+  // that batch settled, and the transport uploads on being told — CloudKit
+  // taking a change tag for bytes this disk never received is the whole failure
+  // this layer exists to stop.
+  pendingDirty.set(dirtyRoute(owner, unitId), {
+    id: unitId, key: logicalKey, profileId: owner, seq: currentWriteSequence(logicalKey),
+  });
 }
 
 let dirtyNotifier = null;
@@ -856,6 +867,14 @@ function onStorageFlush(failedLogicalKeys = new Set()) {
   const sent = [];
   for (const [route, gate] of pendingDirty) {
     if (failedLogicalKeys.has(gate.key)) continue;
+    // ONLY once the write that issued this unit has REACHED disk. A unit
+    // queued while an earlier batch was still in flight stays here and rides
+    // the drain that actually writes it — announced on that batch's settle, it
+    // would have the transport upload bytes the disk had never received.
+    // Measured against a cumulative high-water mark rather than this batch's
+    // own writes, because a unit held back for any other reason has to become
+    // announceable on a later drain, and that drain is not rewriting its key.
+    if (landedWriteSequence(gate.key) < gate.seq) continue;
     announced.push({ id: gate.id, profileId: gate.profileId });
     sent.push(route);
   }

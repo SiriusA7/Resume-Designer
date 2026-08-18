@@ -520,6 +520,39 @@ describe('the durability barrier', () => {
   });
 });
 
+describe('a unit is announced only once ITS OWN write reached disk', () => {
+  beforeEach(() => { setStorageDirtyNotifier(notify); });
+
+  it('does not announce a unit queued while an earlier batch was in flight', async () => {
+    // `pendingDirty` is global; a drain is per batch. So a synced write made
+    // while an earlier batch is still awaiting its backend write lands in the
+    // map immediately, and the earlier batch's settle used to announce the whole
+    // map — including that unit, whose bytes were still only in the cache. The
+    // transport uploads on being told, so CloudKit would take a change tag for
+    // content this disk had never received: if that later write then failed, or
+    // the app died first, the next launch would hold no tag for it and the edit
+    // after that would overwrite the server with no conflict raised.
+    const release = holdWritesFor('resume-designer-applications');
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    const firstDrain = appStorage.flush(); // batch 1 queued; its write hangs
+
+    // A DIFFERENT synced key, written while batch 1 is in flight, so its own
+    // write is genuinely still pending rather than coalesced into batch 1.
+    appStorage.setItem('resume-designer-job-descriptions', '[]');
+
+    release();
+    await firstDrain;
+
+    // Batch 1's settle names what batch 1 wrote, and nothing else.
+    expect(allNamed()).toContain('key:resume-designer-applications');
+    expect(allNamed()).not.toContain('key:resume-designer-job-descriptions');
+
+    // It is HELD, not dropped: the drain that actually writes it announces it.
+    await settle();
+    expect(allNamed()).toContain('key:resume-designer-job-descriptions');
+  });
+});
+
 describe('the failure is reported under the key its gate was built from', () => {
   beforeEach(() => {
     registerPersistedSaveHandler(setPersistedSaveHandler);

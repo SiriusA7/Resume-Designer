@@ -20,10 +20,18 @@ import { MAX_HISTORY } from '../src/historyLimits.js';
 // `collectUnits`' `?? physical` fallback exists for.
 const PROFILE = 'ptest';
 const disk = new Map();
+// See the mocked `currentWriteSequence` below.
+let mockWriteSeq = 0;
 let failDataWrites = false;
 let failSyncStateWrites = false;
 const physical = (k) => mapKey(PROFILE, k);
 vi.mock('../src/appStorage.js', () => ({
+  // This mock's `setItem` IS the disk, so every write is durable the instant it
+  // returns and each one may as well carry the next id. The real facade's
+  // per-key sequence exists to tell an in-flight write from a landed one, a
+  // distinction that cannot arise here — see syncStamping.test.js, which runs
+  // the real thing against a backend whose writes can hang and fail.
+  currentWriteSequence: () => mockWriteSeq,
   appStorage: {
     getItem: (k) => (disk.has(physical(k)) ? disk.get(physical(k)) : null),
     // `String(value)` mirrors the real setItem — the reason applyUnits has to
@@ -36,6 +44,7 @@ vi.mock('../src/appStorage.js', () => ({
         throw new DOMException('quota exceeded', 'QuotaExceededError');
       }
       disk.set(physical(k), String(v));
+      mockWriteSeq += 1;
     },
     keys: () => [...disk.keys()],
     // This mock's `setItem` IS the disk — there is no write-behind cache in

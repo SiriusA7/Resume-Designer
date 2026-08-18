@@ -104,6 +104,16 @@ let writeSeq = 0;
 // inside that, and so the last id minted by the time a caller's `setItem`
 // returns routinely belongs to a DIFFERENT key's write.
 let lastSeqByKey = new Map();
+// logical key -> the highest write id for that key whose bytes have actually
+// REACHED the backend. The high-water mark a queued unit is measured against:
+// `pendingDirty` in the sync layer is global while a drain is per batch, so a
+// unit queued while an earlier batch was still awaiting its write used to be
+// announced the moment that batch settled — its own bytes still only in cache,
+// and the transport uploads on being told. Cumulative rather than per batch,
+// because a unit HELD back (no notifier yet, a notifier that threw, an earlier
+// refusal) has to become announceable on some later drain, and that drain will
+// not be rewriting its key.
+let landedSeqByKey = new Map();
 
 // Restore guard: for a caller-bounded window during a destructive backup restore,
 // appStorage BLOCKS every other ("external") writer so a late async completion (a
@@ -267,6 +277,16 @@ function notifyWriteSettled(logicalKey, seq) {
       console.error(`[appStorage] a write-settled listener threw for "${logicalKey}":`, err);
     }
   }
+}
+
+/** The highest write id for `logicalKey` whose bytes reached the backend. */
+export function landedWriteSequence(logicalKey) {
+  return landedSeqByKey.get(logicalKey) ?? 0;
+}
+
+function recordLanded(logicalKey, seq) {
+  const highest = landedSeqByKey.get(logicalKey);
+  if (highest === undefined || seq > highest) landedSeqByKey.set(logicalKey, seq);
 }
 
 /** The next id, recorded against the key it belongs to. */
@@ -434,7 +454,10 @@ function drain() {
         }
       }
       // Under the same name and the same write id, for the same reasons.
-      if (landed) notifyWriteSettled(name, seq);
+      if (landed) {
+        recordLanded(name, seq);
+        notifyWriteSettled(name, seq);
+      }
     });
   }
   // The coalescing window just closed — but the writes for it have only been
@@ -486,7 +509,17 @@ export const appStorage = {
     // Blocked mid-restore: record the latest write and skip cache+disk (see the
     // restoreGuardActive note). The import's own writes ran before the guard armed.
     // No observer call either — nothing was stored, so nothing changed yet.
-    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'write', value: v, name: logicalKey }); return; }
+    // AN ID EVEN THOUGH NOTHING IS QUEUED. The write is deferred, not
+    // cancelled, and it is still this caller's write — so it takes its own id
+    // here and keeps it through the replay. Without one, `currentWriteSequence`
+    // answers with some EARLIER write's id, a caller records that as its own,
+    // and the settle for that earlier write is read as "mine landed".
+    if (restoreGuardActive) {
+      deferredDuringRestore.set(key, {
+        op: 'write', value: v, name: logicalKey, seq: mintSeq(logicalKey),
+      });
+      return;
+    }
     // Read BEFORE the write lands, and only when someone is listening. In cached
     // mode — every shipped desktop and iOS build — this is a Map lookup.
     const previous = writeObserver ? readStored(key) : null;
@@ -495,6 +528,10 @@ export const appStorage = {
       // no separate cache here, and it must never touch localStorage — no-op.
       if (readOnly) return;
       localStorage.setItem(key, v); // may throw on quota — callers guard
+      // An id here too, and a landing in the same breath: this call IS the
+      // durable write, so the observer's queue can be gated identically in both
+      // modes instead of passthrough being an exception to the rule.
+      recordLanded(logicalKey, mintSeq(logicalKey));
       // AFTER the store, so a quota throw above leaves no unit claiming a
       // change that never landed.
       observeWrite(logicalKey, v, previous);
@@ -528,7 +565,10 @@ export const appStorage = {
     // the string its CALLER used, never the physical one it was mapped to.
     const logicalKey = key;
     key = mapKey(activeProfileId, key);
-    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'delete', name: logicalKey }); return; }
+    if (restoreGuardActive) {
+      deferredDuringRestore.set(key, { op: 'delete', name: logicalKey, seq: mintSeq(logicalKey) });
+      return;
+    }
     if (mode === 'passthrough') {
       if (readOnly) return; // see setItem: readOnly passthrough never writes
       localStorage.removeItem(key);
@@ -661,16 +701,20 @@ export const appStorage = {
     // previously-absent keys would lose real work done during the window.
     let applied = false;
     for (const [key, entry] of deferredDuringRestore) {
-      // A REPLAY is a new write and takes a new id — these are being queued
-      // now, long after the call that was deferred. Omitting one would leave
-      // `seq` undefined, and every `seq < mine` gate reads undefined as "not
-      // older" and lets the notification through.
+      // The id the deferral MINTED, carried through rather than replaced: a
+      // deferred write and its replay are one logical write, and the caller
+      // that made it is holding that id to recognise its own outcome by. A
+      // fresh one here would leave that caller waiting for a landing under an
+      // id nothing will ever report. The fallback covers a deferral recorded
+      // before this field existed; `undefined` would defeat every `<` gate.
+      const name = entry.name ?? key;
+      const seq = entry.seq ?? mintSeq(name);
       if (entry.op === 'delete') {
         cache.delete(key);
-        dirty.set(key, { op: 'delete', name: entry.name ?? key, seq: mintSeq(entry.name ?? key) });
+        dirty.set(key, { op: 'delete', name, seq });
       } else {
         cache.set(key, entry.value);
-        dirty.set(key, { op: 'write', name: entry.name ?? key, seq: mintSeq(entry.name ?? key) });
+        dirty.set(key, { op: 'write', name, seq });
       }
       applied = true;
     }
@@ -830,6 +874,7 @@ export function __resetAppStorageForTests() {
   writeFailures = 0;
   writeSeq = 0;
   lastSeqByKey = new Map();
+  landedSeqByKey = new Map();
   writeObserver = null;
   restoreGuardActive = false;
   deferredDuringRestore.clear();
