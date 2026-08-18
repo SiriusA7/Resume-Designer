@@ -980,6 +980,21 @@ final class ShellModel: ObservableObject {
   /// export runs for a second or two first.
   @Published var pdfPreview: PdfPreviewRequest?
 
+  /// The keychain refused the last API-key write, and nobody has been told yet.
+  ///
+  /// ON THE MODEL, because the sheet cannot be trusted to still be there. Tap
+  /// Save and swipe Settings away and the task keeps running with the failure
+  /// flag — and the typed key — in `@State` belonging to a view that is gone:
+  /// the keychain says no (a locked device is enough), and reopening Settings
+  /// shows an empty field with nothing to say the replacement never landed.
+  /// Cleared when a write succeeds, and when the next one starts.
+  ///
+  /// The KEY itself is deliberately not kept here. It is a credential, and the
+  /// shorter it lives in memory the better; losing a typed key to a refusal is
+  /// recoverable by typing it again, whereas believing a key was saved when it
+  /// was not is the failure this reports.
+  @Published var apiKeyWriteFailed = false
+
   private static func liveReplyText(in snapshot: ShellSnapshot) -> String {
     snapshot.chat?.messages.first { $0.id == "streaming" }?.text ?? ""
   }
@@ -4540,9 +4555,6 @@ private struct SettingsSheet: View {
   @State private var apiKeyDraft = ""
   @State private var apiKeyFocused = false
   @State private var savingApiKey = false
-  /// The last save was refused. Cleared on the next attempt, not on a timer —
-  /// the message has to outlive the tap that caused it.
-  @State private var apiKeyFailed = false
   /// Guards the destructive remove behind one confirmation. The key cannot be
   /// read back out of the keychain to show, so a mis-tap is only recoverable by
   /// fetching a new one from OpenRouter.
@@ -4581,14 +4593,14 @@ private struct SettingsSheet: View {
           Button(savingApiKey ? "Saving…" : "Save key") {
             let key = apiKeyDraft
             savingApiKey = true
-            apiKeyFailed = false
+            model.apiKeyWriteFailed = false
             Task {
               let saved = await model.saveApiKey(key)
               savingApiKey = false
               // The draft survives a refusal. Clearing it unconditionally is
               // what used to lose the key: the keychain says no, nothing
               // publishes, and the field the user typed into is already empty.
-              if saved { apiKeyDraft = "" } else { apiKeyFailed = true }
+              if saved { apiKeyDraft = "" } else { model.apiKeyWriteFailed = true }
             }
           }
           .disabled(savingApiKey || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -4615,14 +4627,14 @@ private struct SettingsSheet: View {
             ) {
               Button("Remove key", role: .destructive) {
                 savingApiKey = true
-                apiKeyFailed = false
+                model.apiKeyWriteFailed = false
                 Task {
                   // The same refusal handling as a save: the keychain can say
                   // no, and claiming the key is gone when it is not would be
                   // worse here than for a write.
                   let cleared = await model.saveApiKey("")
                   savingApiKey = false
-                  if !cleared { apiKeyFailed = true }
+                  if !cleared { model.apiKeyWriteFailed = true }
                 }
               }
               Button("Cancel", role: .cancel) { }
@@ -4638,8 +4650,11 @@ private struct SettingsSheet: View {
           // A refusal replaces it rather than joining it: the one thing worth
           // reading at that moment is that the key is NOT saved, and it should
           // not have to be found at the end of a paragraph about privacy.
-          if apiKeyFailed {
-            Text("The keychain would not save that key. It is still in the field above — try again, or unlock the device and retry.")
+          if model.apiKeyWriteFailed {
+            // Worded to be true whether or not the draft is still there. This
+            // notice can now outlive the sheet, so the old "it is still in the
+            // field above" would be a false statement on a reopened one.
+            Text("The keychain would not save that key, so it is not stored. Unlock the device if it was locked, then save again.")
               .foregroundStyle(.red)
           } else {
             Text(
