@@ -25,7 +25,7 @@ import {
 } from '../src/persistence.js';
 import { stampRestoredWrites, announceRestoredUnits } from '../src/sync/syncModel.js';
 import { registerPersistedSaveHandler } from '../src/sync/syncModel.js';
-import { resetSpacingSettings } from '../src/spacingService.js';
+import { resetSpacingSettings, defaultSpacingSettings } from '../src/spacingService.js';
 import { resetAccentSettings } from '../src/accentService.js';
 import { clearLegacyHistory } from '../src/chatThreads.js';
 import { BACKUP_FIXED_KEYS, BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
@@ -1297,6 +1297,99 @@ describe('deleting a résumé produces something that can travel', () => {
       await settle();
 
       expect(allNamed()).not.toContain('key:resume-designer-applications');
+    });
+
+    it('leaves a workspace the restore DELETES entirely alone', async () => {
+      // Clearing is for a workspace that survives with less in it. A workspace
+      // the backup drops is deleted outright, and its profile tombstone carries
+      // that — the zone goes with it. Writing cleared payloads there re-creates
+      // files on disk for a profile that no longer exists, stamps a fresh table
+      // beside them, and announces a unit into a zone the deletion is about to
+      // remove, which could land after it and bring the zone back.
+      setProfileMapping(PID);
+      // Through appStorage, not localStorage: in cached mode they are different
+      // stores, and the profile tombstones are synthesized from the registry's
+      // PRE-WIPE value — which the restore reads out of the cache.
+      appStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+        { id: 'pgone', name: 'Old', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      appStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }));
+      appStorage.setItem('resume-p--pgone--resume-designer-applications', '[{"id":"theirs"}]');
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: {
+          [PID]: { keys: { [DATA]: JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }) } },
+        },
+      });
+      await settle();
+
+      expect(backend.files.get('resume-p--pgone--resume-designer-applications')).toBeUndefined();
+      expect(backend.files.get(`resume-p--pgone--${STATE}`)).toBeUndefined();
+      expect(allNamed()).not.toContain('key:resume-designer-applications');
+      // The deletion still travels — as the profile tombstone it belongs to.
+      const registry = JSON.parse(backend.files.get('resume-designer-profiles'));
+      expect(registry.find((p) => p.id === 'pgone').deletedAt).toEqual(expect.any(String));
+    });
+
+    it('clears an omitted DESIGN key to its owner\u2019s default', async () => {
+      // The design keys look like the harmless case — absence reads as the
+      // default to every local reader — but the customisation survives on
+      // CloudKit, so it comes back on the next fetch HERE as well as staying on
+      // every other device. Resurrection, not divergence, which is why they get
+      // a cleared value like the content keys do. The value is asked of the
+      // module that owns it, so there is no second copy of the default to drift.
+      withOneResume();
+      appStorage.setItem('resume-spacing-settings', JSON.stringify({ sectionGap: 99 }));
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      const written = backend.files.get(`resume-p--${PID}--resume-spacing-settings`);
+      expect(JSON.parse(written)).toEqual(defaultSpacingSettings());
+      expect(allNamed()).toContain('key:resume-spacing-settings');
+    });
+
+    it('does not push a PROMPT back open on another device', async () => {
+      // The other side of the same judgement. A dismissal flag's cleared state
+      // is the one that SHOWS the prompt, so sending it would re-open onboarding
+      // on a device somebody is working in — a worse outcome than the stale
+      // flag, and not what restoring a backup asks for.
+      withOneResume();
+      appStorage.setItem('resume-designer-onboarding-complete', 'true');
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      expect(backend.files.get(`resume-p--${PID}--resume-designer-onboarding-complete`)).toBeUndefined();
+      expect(allNamed()).not.toContain('key:resume-designer-onboarding-complete');
     });
 
     it('announces them, past the barrier that has nothing left to gate', async () => {

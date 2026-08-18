@@ -546,7 +546,7 @@ import {
   withoutDeviceIdentity,
   mapKey,
 } from './profileKeys.js';
-import { CLEARED_PAYLOADS } from './sync/syncKeys.js';
+import { clearedPayloadFor } from './sync/clearedPayloads.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 import { getProfileMapping } from './appStorage.js';
 
@@ -894,14 +894,22 @@ function normalizeImportedValue(key, value, keepCredential = false) {
  * @param writtenAddresses the addresses this restore has already rewritten
  * @param write (address, value, profileId, logicalKey) => void
  */
-function clearOmittedSyncedKeys(priorValues, writtenAddresses, write) {
+function clearOmittedSyncedKeys(priorValues, writtenAddresses, write, keepsWorkspace = () => true) {
   for (const [address, priorValue] of priorValues) {
     if (priorValue == null || writtenAddresses.has(address)) continue;
     const split = splitPhysicalKey(address);
     const logicalKey = split?.logicalKey ?? address;
-    const cleared = CLEARED_PAYLOADS.get(logicalKey);
-    // Nothing to say for a key already empty — the comparison would name no
-    // unit anyway, and writing it back would only churn the disk.
+    // A workspace the restore DELETES needs none of this, and doing it anyway
+    // is not merely wasteful. The profile's own tombstone is what carries that
+    // deletion, and its zone goes with it — so writing cleared payloads there
+    // re-creates files on disk for a profile that no longer exists, stamps a
+    // fresh table beside them, and announces a unit into a zone the deletion is
+    // about to remove, which could land after it and bring the zone back.
+    if (!keepsWorkspace(split?.profileId ?? '')) continue;
+    const cleared = clearedPayloadFor(logicalKey);
+    // Nothing to say for a key already at its cleared value: a `key:` unit is
+    // named unconditionally, so a no-op write would upload nothing and stamp it
+    // with a fresh time that outranks another device's real edit.
     if (cleared === undefined || priorValue === cleared) continue;
     write(address, cleared, split?.profileId ?? '', logicalKey);
   }
@@ -1205,7 +1213,10 @@ function importFullBackupV2(parsed, keepCredential = false) {
     // -Infinity against the remote's real time. Riding this flush also makes it
     // roll back correctly: the sync-state key is a fixed backup key, so it is in
     // the pre-wipe snapshot. Only the ANNOUNCEMENT waits for durability.
-    clearOmittedSyncedKeys(priorValues, new Set(written), writeTracked);
+    clearOmittedSyncedKeys(
+      priorValues, new Set(written), writeTracked,
+      (pid) => pid === '' || restoredIds.has(pid),
+    );
     restoredUnits = stampRestoredWrites(restoredWrites, (k) => written.push(k));
   } catch (err) {
     rollbackWipedImport(written, priorValues);
