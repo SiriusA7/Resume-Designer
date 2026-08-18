@@ -1018,7 +1018,33 @@ private struct ProfileDatesScreen: View {
     } message: {
       Text("The role moved while this was open. Go back and open it again.")
     }
-    .onAppear(perform: seed)
+    // TOLD TO THE SYNC GUARD for the whole time the screen is up, like
+    // `ProfileFieldRow`'s focus and the employer field's keyboard. Everything
+    // this picker holds — `start`, `end`, `ongoing`, `typed` — is Swift state
+    // seeded ONCE (see `seed`), so a `data:userProfile` unit adopted while it
+    // is open replaces the role underneath a screen that goes on showing the
+    // pre-fetch values, and the next pick writes them back over the adopted
+    // dates as a fresh local change.
+    //
+    // Held from `onAppear` rather than from the first edit, because there is no
+    // moment after seeding when this screen is NOT holding a draft. `typed` is
+    // seeded from the display string, and `commitText`'s own "text unchanged
+    // from what it was seeded with is not an edit" test compares against the
+    // LIVE role — so an adoption alone makes an untouched seeded string differ
+    // from the new display, re-enables the button, and turns "Use this text"
+    // into a one-tap revert to the pre-fetch date.
+    .onAppear {
+      seed()
+      model.send("setNativeEditing", ["scope": "profile", "value": "true"])
+    }
+    // Both ways out land here: a pop, and the `dismiss()` that `commitRange`
+    // and `commitText` run once the write is acknowledged — so the guard is
+    // never dropped while a write is still in flight. A swipe on the whole
+    // sheet is covered by the profile case in `ShellView`'s sheet close, which
+    // releases this scope regardless of what was pushed on top of it.
+    .onDisappear {
+      model.send("setNativeEditing", ["scope": "profile", "value": "false"])
+    }
   }
 
   /// Seeded once. The snapshot republishes on every keystroke elsewhere, and a
