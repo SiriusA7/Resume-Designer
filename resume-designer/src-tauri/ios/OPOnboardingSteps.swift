@@ -385,6 +385,10 @@ struct OnboardingInterviewStep: View {
   let view: OnboardingView
   @State private var value = ""
   @State private var appliedImprovement = 0
+  /// The question that asked for the rewrite in flight. The answer comes back
+  /// without one, so this is the only thing that can say whether it belongs
+  /// to the question on screen.
+  @State private var improvingQuestion: Int?
   @State private var shownQuestion = -1
 
   private var question: OnboardingView.Question? {
@@ -427,6 +431,12 @@ struct OnboardingInterviewStep: View {
           if question?.aiAssist == true && view.hasProviders {
             HStack {
               Button {
+                // WHICH question asked. The improvement comes back as a bare
+                // `{token, text}` with no question on it, and Next is disabled
+                // only on empty text — never on `busy` — so a person who gives
+                // up on a slow rewrite and moves on has an answer to the
+                // PREVIOUS question land in the field they are typing in now.
+                improvingQuestion = view.question
                 model.send("onboardingImprove", ["value": value])
               } label: {
                 Label("Improve this answer", systemImage: "wand.and.stars")
@@ -466,7 +476,11 @@ struct OnboardingInterviewStep: View {
     // the same wording still lands.
     .onChange(of: view.improved) { _, improved in
       guard let improved, improved.token != appliedImprovement else { return }
+      // Marked applied either way, before the check below: this token has been
+      // dealt with, and leaving it unmarked would let it land later, on some
+      // other question, the moment anything else republished.
       appliedImprovement = improved.token
+      guard improvingQuestion == view.question else { return }
       value = improved.text
     }
   }
