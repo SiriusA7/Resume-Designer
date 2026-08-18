@@ -24,6 +24,10 @@ import PDFKit
 import PhotosUI
 import SwiftUI
 import UIKit
+// `UTType`, for the file importers' content types. SwiftUI re-exports enough
+// for the literals to typecheck, but the `UTType(filenameExtension:)` lookup
+// used for Markdown needs the module named outright.
+import UniformTypeIdentifiers
 import WebKit
 
 // MARK: - Wire contract
@@ -3379,7 +3383,7 @@ private struct ShellView: View {
         // an edit of what is there rather than a fresh sentence.
         .fileImporter(
           isPresented: $importingVariant,
-          allowedContentTypes: [.json],
+          allowedContentTypes: resumeImportTypes,
           allowsMultipleSelection: false
         ) { result in
           guard let picked = readPickedText(result, label: "resume") else { return }
@@ -4202,6 +4206,20 @@ private struct PDFDocumentView: UIViewRepresentable {
 /// what actually landed in the store rather than what it optimistically set.
 /// The one exception is the API-key field, which has no snapshot to render
 /// from: only whether a key exists comes back.
+/// What the résumé importer will open.
+///
+/// JSON and Markdown, because the shared pipeline takes both — `Header.jsx`
+/// offers `.json`, `.md` and `.markdown`, and `importVariant` strips either
+/// Markdown extension. Offering only JSON here made a Markdown résumé
+/// unselectable on iOS while the parser behind the picker could read it.
+/// `.plainText`/`.text` are the fallback a device with no Markdown declaration
+/// resolves an `.md` file to — the same list `OPProfile` builds for its import.
+private let resumeImportTypes: [UTType] = {
+  var types: [UTType] = [.json, .plainText, .text]
+  if let markdown = UTType(filenameExtension: "md") { types.insert(markdown, at: 1) }
+  return types
+}()
+
 /// A picked file's text and name, or nil when nothing usable was chosen.
 ///
 /// Shared by the two importers so the security-scoped read — which a file from
