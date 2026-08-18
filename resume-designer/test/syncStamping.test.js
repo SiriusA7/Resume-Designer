@@ -1687,15 +1687,21 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain('resume:v-9');
     });
 
-    it('does not quietly reset settings for a workspace the backup omits', async () => {
-      // The absent-blob synthesis built the tombstones on an empty object, so
-      // `settings` and `userProfile` — which live in the same blob — were
-      // dropped with them. That deletion cannot travel: `changedDataUnits`
-      // compares the fields present in the NEXT blob, and a field that is
-      // simply gone is never named. So the server kept them and the next fetch
-      // put them back — a local loss that undoes itself, which is the worst of
-      // both. Tombstoning the résumés is what the omission means; inventing a
-      // reset of everything else alongside it is not.
+    it('RESETS the data fields for a workspace the backup omits, and says so', async () => {
+      // Three ways to treat `settings` and `userProfile` when the backup carries
+      // no blob for the workspace, and only one is right.
+      //
+      // DROPPING them was the original bug: a field that is simply gone is
+      // never named, because `changedDataUnits` compares the fields present in
+      // the NEXT blob. The server kept them and the next fetch put them back — a
+      // local loss that undid itself.
+      //
+      // CARRYING THEM OVER fixed the travelling and broke the promise instead:
+      // the restore confirmation says in as many words that current settings
+      // will be replaced.
+      //
+      // RESETTING is both. It is what "this workspace has no blob" means, and a
+      // value rather than an absence, so it travels like any other change.
       withOneResume();
       appStorage.setItem(DATA, JSON.stringify({
         variants: { 'v-9': { id: 'v-9', name: 'Dropped by the restore' } },
@@ -1717,8 +1723,12 @@ describe('deleting a résumé produces something that can travel', () => {
 
       const blob = JSON.parse(backend.files.get(`resume-p--${PID}--${DATA}`));
       expect(blob.variants['v-9'].deletedAt).toEqual(expect.any(String));
-      expect(blob.settings).toEqual({ pageSize: 'a4' });
-      expect(blob.userProfile).toEqual({ contactInfo: { fullName: 'Ada' } });
+      // Not the person's a4 / Ada, and not absent either.
+      expect(blob.settings.pageSize).toBe('continuous');
+      expect(blob.userProfile).not.toEqual({ contactInfo: { fullName: 'Ada' } });
+      // And the reset TRAVELS, which dropping them never did.
+      expect(allNamed()).toContain('data:settings');
+      expect(allNamed()).toContain('data:userProfile');
     });
 
     it('announces them, past the barrier that has nothing left to gate', async () => {

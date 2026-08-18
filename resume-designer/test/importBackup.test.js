@@ -680,10 +680,13 @@ describe('a replacement restore deletes what it omits, and says so', () => {
     commitRestoredUnits(result.restoredUnits);
     setRestoreStampHandler(null);
 
+    // Each workspace's data fields reset alongside its tombstone, because the
+    // backup carries no blob for either — see "RESETS the data fields for a
+    // workspace the backup omits" in syncStamping.test.js.
     expect(stamped.sort()).toEqual([
       ['', ['key:resume-designer-profiles']],
-      ['pone', ['resume:shared']],
-      ['ptwo', ['resume:shared']],
+      ['pone', ['resume:shared', 'data:settings', 'data:userProfile']],
+      ['ptwo', ['resume:shared', 'data:settings', 'data:userProfile']],
     ]);
   });
 

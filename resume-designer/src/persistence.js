@@ -1009,16 +1009,28 @@ function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
   // compare", the wipe removed the résumés locally and no tombstone was written
   // for any of them, so every CloudKit record survived and the next fetch
   // brought the whole workspace back.
-  // Built on the PRIOR blob when there is no incoming one, not on an empty
-  // object. The blob holds `settings` and `userProfile` beside the résumés, and
-  // starting from `{}` silently deleted both — a deletion that then cannot
-  // travel, because `changedDataUnits` compares the fields present in the NEXT
-  // blob and a field that is simply gone is never named. So the server kept
-  // them and the next fetch put them back: a local loss that undoes itself,
-  // which is the worst of both. The backup says nothing about this workspace's
-  // blob; tombstoning its résumés is what the omission means, and inventing a
-  // reset of everything else alongside is not.
-  const next = parseJSONSafe(nextRaw) ?? { ...(prior ?? {}), variants: {} };
+  // RESET to the defaults when there is no incoming blob — not carried over
+  // from the prior one, and not dropped.
+  //
+  // Dropping was the original bug: the blob holds `settings` and `userProfile`
+  // beside the résumés, and a field that is simply gone is never named, because
+  // `changedDataUnits` compares the fields present in the NEXT blob. So the
+  // server kept them and the next fetch put them back — a local loss that undid
+  // itself. Carrying them over fixed the travelling and broke the promise
+  // instead: the restore confirmation says in as many words that current
+  // settings WILL be replaced, and a workspace left holding values absent from
+  // the backup is not what the person agreed to.
+  //
+  // The defaults are both. They are what "this workspace has no blob" means,
+  // they are a VALUE rather than an absence so the reset travels like any other
+  // change, and building from `DEFAULT_STORAGE` rather than spreading `prior`
+  // also means no credential can ride across — `normalizeImportedValue` strips
+  // those from an incoming blob, and this path has no incoming blob to strip.
+  const next = parseJSONSafe(nextRaw) ?? {
+    settings: DEFAULT_STORAGE.settings,
+    userProfile: DEFAULT_STORAGE.userProfile,
+    variants: {},
+  };
   if (typeof next !== 'object') return nextRaw;
   const nextVariants = next.variants && typeof next.variants === 'object' ? next.variants : {};
   const now = new Date().toISOString();
