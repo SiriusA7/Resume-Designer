@@ -1255,7 +1255,21 @@ export async function applyUnits(units) {
   // launch reads a registry that still lists the workspace, and switching away
   // from it now would move the pointer on the strength of bytes this device
   // does not hold.
-  if (durable && deletedOpenVariant) {
+  if (durable) await reconcileRemoteDeletions();
+  return durable ? landed : nothingApplied();
+}
+
+/**
+ * Act on anything a landing said was deleted elsewhere.
+ *
+ * Called from BOTH paths that can land one — the fetch apply and the conflict
+ * resolution — and only on a durable flush. A tombstone is a write like any
+ * other: if it did not reach disk, the next launch reads a world in which the
+ * résumé or workspace still exists, and moving off it now would act on bytes
+ * this device does not hold.
+ */
+async function reconcileRemoteDeletions() {
+  if (deletedOpenVariant) {
     const variantId = deletedOpenVariant;
     deletedOpenVariant = null;
     try {
@@ -1264,17 +1278,16 @@ export async function applyUnits(units) {
       console.error('[sync] could not move off a remotely deleted résumé:', err);
     }
   }
-  if (durable && activeProfileDeleted) {
+  if (activeProfileDeleted) {
     activeProfileDeleted = false;
     try {
       await activeProfileDeletedHandler?.();
     } catch (err) {
-      // The apply itself stands: those units ARE on disk, and forfeiting them
+      // The landing itself stands: those units ARE on disk, and forfeiting them
       // over a failed reconciliation would re-fetch content that already landed.
       console.error('[sync] could not move off a remotely deleted workspace:', err);
     }
   }
-  return durable ? landed : nothingApplied();
 }
 
 /** Every fetched unit refused: the shape of an answer that accounts for none. */
@@ -1546,7 +1559,15 @@ export async function resolveConflicts(conflicts) {
   // version that had one skipped the barrier for exactly the case that needed
   // it: a local winner with nowhere to park writes nothing and can still be
   // cache-only.
-  return (await appStorage.flush()) ? answer : nothingResolved();
+  const durable = await appStorage.flush();
+  // The same reconciliation `applyUnits` does, because `landRegistry` and the
+  // résumé landing are reached from HERE too — `accumulate` runs on the conflict
+  // path. Wired into only one of the two callers, a tombstone that arrived as a
+  // save conflict was merged and durably flushed and then never acted on; worse
+  // than a missed apply, because the transport keeps the SERVER's change tag on
+  // this answer, so nothing re-delivers it.
+  if (durable) reconcileRemoteDeletions();
+  return durable ? answer : nothingResolved();
 }
 
 function resolveEachConflict(conflicts) {

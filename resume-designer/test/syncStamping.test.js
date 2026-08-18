@@ -846,6 +846,42 @@ describe('a conflict parked into a workspace this device is not in', () => {
   });
 });
 
+describe('a wipe-and-rewrite stamps only what actually changed', () => {
+  beforeEach(() => { setStorageDirtyNotifier(notify); });
+
+  it('stamps nothing when a rollback puts the same bytes back', async () => {
+    // BOTH backup-restore paths wipe a key and rewrite it, and a FAILED restore
+    // rolls back by wiping and putting the prior values straight back. The
+    // observer compares against what was there before — and a remove leaves
+    // nothing there, so every unit in the key read as changed.
+    //
+    // The cost of that is not noise. Every résumé would be stamped with a fresh
+    // time and named to the transport, and newer-wins would then upload this
+    // device's untouched copies over another device's real edits: a restore
+    // that visibly did nothing, reverting work on a machine that was not even
+    // involved.
+    const before = appStorage.getItem(DATA);
+    notify.mockClear();
+
+    appStorage.removeItem(DATA);
+    appStorage.setItem(DATA, before);
+    await settle();
+
+    expect(allNamed()).toEqual([]);
+  });
+
+  it('still stamps what a wipe-and-rewrite really did change', async () => {
+    const before = JSON.parse(appStorage.getItem(DATA));
+    before.settings = { pageSize: 'a4' };
+
+    appStorage.removeItem(DATA);
+    appStorage.setItem(DATA, JSON.stringify(before));
+    await settle();
+
+    expect(allNamed()).toEqual(['data:settings']);
+  });
+});
+
 describe('deleting a résumé produces something that can travel', () => {
   beforeEach(() => {
     registerPersistedSaveHandler(setPersistedSaveHandler);

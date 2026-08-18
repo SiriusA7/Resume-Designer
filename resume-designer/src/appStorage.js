@@ -173,6 +173,19 @@ export function setStorageWriteObserver(observer) {
 }
 
 /** The stored value for a MAPPED key, read the same way getItem's tail does. */
+// What a `removeItem` evicted, held only until that key is written again.
+//
+// The observer compares a write against what was there before, and a remove
+// followed by a write is a real pattern — both backup-restore paths wipe a key
+// and rewrite it, and a FAILED restore rolls back by wiping and putting the
+// prior values straight back. Without this the second half sees `previous`
+// null, so EVERYTHING in that key reads as changed: a rollback that restored
+// the status quo byte for byte stamped every résumé with a fresh time and named
+// them all to the transport, and newer-wins then reverted another device's real
+// edits. A restore that visibly did nothing, undoing work on a machine that was
+// not even involved.
+const removedForComparison = new Map();
+
 function readStored(mappedKey) {
   if (mode === 'passthrough') return localStorage.getItem(mappedKey);
   return cache.has(mappedKey) ? cache.get(mappedKey) : null;
@@ -522,7 +535,17 @@ export const appStorage = {
     }
     // Read BEFORE the write lands, and only when someone is listening. In cached
     // mode — every shipped desktop and iOS build — this is a Map lookup.
-    const previous = writeObserver ? readStored(key) : null;
+    // The evicted value stands in when the key was just removed — see
+    // `removedForComparison`. Consumed here, so it can only ever answer for the
+    // write that immediately follows its own remove.
+    let previous = null;
+    if (writeObserver) {
+      previous = readStored(key);
+      if (previous === null && removedForComparison.has(key)) {
+        previous = removedForComparison.get(key);
+      }
+    }
+    removedForComparison.delete(key);
     if (mode === 'passthrough') {
       // readOnly passthrough (print window whose disk load failed): there is
       // no separate cache here, and it must never touch localStorage — no-op.
@@ -574,6 +597,9 @@ export const appStorage = {
       localStorage.removeItem(key);
       return;
     }
+    // Remembered for the comparison the next write of this key will make.
+    const evicted = readStored(key);
+    if (evicted !== null) removedForComparison.set(key, evicted);
     cache.delete(key);
     if (readOnly) return; // print window: cache-only, never queued to disk
     dirty.set(key, { op: 'delete', name: logicalKey, seq: mintSeq(logicalKey) });
@@ -589,6 +615,7 @@ export const appStorage = {
     }
     cache.clear();
     dirty.clear();
+    removedForComparison.clear();
     if (!readOnly) {
       // Failure mode: if backendImpl.clear() rejects, the cache is already
       // empty but the old files survive until the next boot. For the backup
@@ -911,6 +938,7 @@ export function __resetAppStorageForTests() {
   writeSeq = 0;
   lastSeqByKey = new Map();
   landedSeqByKey = new Map();
+  removedForComparison.clear();
   writeObserver = null;
   restoreGuardActive = false;
   deferredDuringRestore.clear();

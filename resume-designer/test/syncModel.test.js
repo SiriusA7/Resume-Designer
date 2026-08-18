@@ -77,6 +77,7 @@ vi.mock('../src/appStorage.js', () => ({
 const {
   collectUnit, collectUnits, unitScopes, applyUnits, parkLoser, registerPersistedSaveHandler,
   registerEditingProbe, touchUnit, resolveConflict, setActiveProfileDeletedHandler,
+  resolveConflicts,
 } = await import('../src/sync/syncModel.js');
 // The résumé store, not the storage map above: parking into the LOADED
 // variant's history has to go through it.
@@ -377,6 +378,22 @@ describe('a tombstone for the workspace this device has open', () => {
     // The merge itself still landed — the reaction is in addition to it.
     const merged = JSON.parse(disk.get(physical('resume-designer-profiles')));
     expect(merged.find((p) => p.id === PROFILE).deletedAt).toBe(DELETED.deletedAt);
+  });
+
+  it('reports it when the tombstone arrives as a CONFLICT, not only as a fetch', async () => {
+    // `landRegistry` is reached from both landing paths — the fetch apply and
+    // the conflict resolution — but the reaction was wired into only the first.
+    // Worse than a missed apply: the transport keeps the SERVER's change tag on
+    // a resolved conflict, so nothing ever re-delivers it.
+    const onDeleted = vi.fn();
+    setActiveProfileDeletedHandler(onDeleted);
+
+    await resolveConflicts([{
+      local: registryUnit([{ id: PROFILE, name: 'Personal' }]),
+      server: registryUnit([DELETED, OTHER_LIVE]),
+    }]);
+
+    expect(onDeleted).toHaveBeenCalledTimes(1);
   });
 
   it('says nothing when the tombstone is for some OTHER workspace', async () => {
