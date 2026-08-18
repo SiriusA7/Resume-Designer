@@ -192,7 +192,9 @@ describe('a write to a synced key stamps its unit and notifies', () => {
 describe('an unchanged write is not a change', () => {
   beforeEach(() => { setStorageDirtyNotifier(notify); });
 
-  // The blob got this for free — changedDataUnits compares field by field — and
+  // The PLAIN-KEY half; the blob half is 'a wipe-and-rewrite stamps only what
+  // actually changed' below, which is older. Keeping them apart is what hid the
+  // gap: the blob got this for free — changedDataUnits compares field by field — and
   // every other key was named unconditionally, `previous` accepted and thrown
   // away. Not a missed optimisation: a named unit is stamped with a FRESH time,
   // and newer-wins then beats another device's real edit with bytes identical
@@ -940,6 +942,11 @@ describe('a conflict parked into a workspace this device is not in', () => {
 });
 
 describe('a wipe-and-rewrite stamps only what actually changed', () => {
+  // The BLOB half of the rule "an unchanged write is not a change". The plain-key
+  // half is its own describe above, and they were apart for a reason worth
+  // remembering: this one existed and passed while plain keys were named
+  // unconditionally, because the blob compared field by field and no other key
+  // did. One rule, two kinds of key, and only one of them covered.
   beforeEach(() => { setStorageDirtyNotifier(notify); });
 
   it('stamps nothing when a rollback puts the same bytes back', async () => {
@@ -1165,17 +1172,24 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain('resume:v-9');
     });
 
-    it('names nothing for a key the restore rewrites byte for byte', async () => {
+    it('names nothing for ANY key the restore rewrites byte for byte', async () => {
       // The other half of stamping a restore, and it is not a nicety. A backup
       // taken on this device and imported back writes most keys unchanged; if
-      // that counted as a change, every résumé would go up with a fresh stamp
-      // and newer-wins would revert another device's real edits — a restore that
+      // that counted as a change, every unit would go up with a fresh stamp and
+      // newer-wins would revert another device's real edits — a restore that
       // visibly did nothing, undoing work on a machine that was not involved.
-      // The comparison against the pre-wipe value is what prevents it, which is
-      // why the restore records `previous` rather than passing null.
+      //
+      // THE PLAIN KEY IS THE POINT, and the earlier version of this test that
+      // asserted only `resume:v-9` is why the bug survived: the blob compares
+      // field by field and always did, while every other key was named
+      // unconditionally, so the property held for exactly the one unit this
+      // checked. Whatever a test's comment claims about "every key", the
+      // assertion has to visit more than one kind of key.
       withOneResume();
+      appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
       await settle();
       const blob = appStorage.getItem(DATA);
+      const apps = appStorage.getItem('resume-designer-applications');
       notify.mockClear();
 
       await importFullBackupDurably({
@@ -1184,11 +1198,12 @@ describe('deleting a résumé produces something that can travel', () => {
         registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
         activeProfile: PID,
         shared: {},
-        profiles: { [PID]: { keys: { [DATA]: blob } } },
+        profiles: { [PID]: { keys: { [DATA]: blob, 'resume-designer-applications': apps } } },
       });
       await settle();
 
       expect(allNamed()).not.toContain('resume:v-9');
+      expect(allNamed()).not.toContain('key:resume-designer-applications');
     });
 
     it('stamps and announces the version history a backup carries', async () => {
