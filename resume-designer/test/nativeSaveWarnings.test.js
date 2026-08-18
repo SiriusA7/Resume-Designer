@@ -73,6 +73,27 @@ describe('a chat that is not reaching disk', () => {
 });
 
 describe('a résumé that is not reaching disk', () => {
+  it('does not let one settings key answer for another', async () => {
+    // The blob and the theme fail independently: the blob can be refused for
+    // want of space while the theme — a few bytes — settles in the same drain.
+    // Behind one flag that success announced that the résumé had been saved.
+    const THEME = 'resume-designer-theme';
+    refuse = DATA;
+    saveToStorage({ variants: {}, currentVariantId: null });
+    await appStorage.flush();
+    expect(dataSaveFailed()).toBe(true);
+
+    appStorage.setItem(THEME, 'dark');
+    await appStorage.flush();
+    // The theme landed. The résumé did not, and still says so.
+    expect(dataSaveFailed()).toBe(true);
+
+    refuse = null;
+    saveToStorage({ variants: {}, currentVariantId: null });
+    await appStorage.flush();
+    expect(dataSaveFailed()).toBe(false);
+  });
+
   it('reports the refusal and takes it back when a write lands', async () => {
     // The structure sheet is the one that needed this: it is a native sheet
     // over the page, so the canvas behind it goes on showing the edit while

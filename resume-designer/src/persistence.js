@@ -181,7 +181,7 @@ export function saveToStorage(data) {
     return true;
   } catch (e) {
     console.error('Failed to save to storage:', e);
-    reportDataWrite(false);
+    reportDataWrite(STORAGE_KEY, false);
     return false;
   }
 }
@@ -202,12 +202,18 @@ export function saveToStorage(data) {
 /** Fired when the flag below changes; a disk refusal is not a DOM change. */
 export const DATA_SAVE_STATE_EVENT = 'rd:data-save-state-changed';
 
-let dataUnsaved = false;
+// PER KEY, not one flag for both. They fail independently: the blob can be
+// refused for want of space while the theme — a few bytes — settles in the same
+// drain, and a shared boolean let that success announce that the résumé was
+// saved. The warning has to survive until the key that failed lands.
+const unsavedKeys = new Set();
 let watchingDataWrites = false;
 
-function reportDataWrite(ok) {
-  if (dataUnsaved === !ok) return;
-  dataUnsaved = !ok;
+function reportDataWrite(logicalKey, ok) {
+  const was = unsavedKeys.size > 0;
+  if (ok) unsavedKeys.delete(logicalKey);
+  else unsavedKeys.add(logicalKey);
+  if ((unsavedKeys.size > 0) === was) return;
   window.dispatchEvent(new CustomEvent(DATA_SAVE_STATE_EVENT));
 }
 
@@ -221,17 +227,17 @@ function listenForDataWrites() {
   if (watchingDataWrites) return;
   watchingDataWrites = true;
   onWriteFailure((logicalKey) => {
-    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(false);
+    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, false);
   });
   onWriteSettled((logicalKey) => {
-    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(true);
+    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, true);
   });
 }
 
 /** True while the résumé or the settings on screen are not known to be on disk. */
 export function dataSaveFailed() {
   listenForDataWrites();
-  return dataUnsaved;
+  return unsavedKeys.size > 0;
 }
 
 /**
