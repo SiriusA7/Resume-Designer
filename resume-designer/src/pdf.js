@@ -564,7 +564,25 @@ async function savePreviewedPdf(customFilename) {
     setExportBusy(true);
     try {
       const staged = await stagePdfForShare(filename);
-      sharePdf(staged);
+      // ANSWERED, not fired and forgotten. `sharePdf` reports false when there
+      // is no native shell to hand the file to — `OP_NATIVE_SHELL=0`, which is
+      // a supported control, or an install where the shell never came up. This
+      // branch is still taken there, because `isIOSPlatform` is a user-agent
+      // test and knows nothing about the shell: the preview fell back to the
+      // web dialog, and confirming it arrives here anyway. Ignored, the `finally`
+      // below then deleted the staged PDF, so Save produced no sheet, no file
+      // and no error — indistinguishable from the button doing nothing.
+      if (!sharePdf(staged)) {
+        await notify({
+          title: 'PDF export failed',
+          type: 'error',
+          message: 'On Paper could not open the share sheet, so the PDF was not '
+            + 'saved. Please restart the app and try again.',
+        });
+        // Terminal, like every other outcome here. There is nothing to retry
+        // against: a second attempt finds the shell still missing.
+        return;
+      }
       console.log('PDF Export: shared', staged);
     } catch (error) {
       // Staging CAN fail — a full temp dir, or an emptied preview slot — and a
