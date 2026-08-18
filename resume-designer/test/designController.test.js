@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   COLOR_PALETTES,
   LAYOUTS,
@@ -212,5 +212,81 @@ describe('a design service’s default is what its getter falls back to', () => 
     const { getCurrentFontSettings, defaultFontSettings } =
       await import('../src/fontService.js');
     expect(getCurrentFontSettings()).toEqual(defaultFontSettings());
+  });
+});
+
+// A font choice is the one design control that has to fetch something before it
+// can be stored, and the list it was chosen from stays live while it does. So
+// two ordinary taps overlap, and without a rule about it the write order is the
+// NETWORK's rather than the person's.
+describe('overlapping font choices', () => {
+  // `loadGoogleFont` awaits `document.fonts.load`. jsdom has no FontFaceSet, so
+  // the real call throws into that function's own catch and settles at once —
+  // the overlap cannot happen here by accident. Holding the promise open is
+  // what a slow network looks like from inside the controller. Every test picks
+  // families no other test loads: `loadedFonts` is module state and a cached
+  // family returns before it ever reaches this stub.
+  let pending;
+  beforeEach(() => {
+    pending = [];
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: () => new Promise((resolve) => { pending.push(resolve); }) },
+    });
+  });
+  afterEach(() => { delete document.fonts; });
+
+  it('lets a system pick beat a Google family that is still loading', async () => {
+    const slow = applyDesign({
+      group: 'fonts', property: 'display', value: 'google:Zilla Slab:serif',
+    });
+    await applyDesign({ group: 'fonts', property: 'body', value: 'system:georgia' });
+    expect(state().fonts).toMatchObject({ mode: 'system', bodyName: 'Georgia' });
+
+    pending[0]();
+    await slow;
+
+    // Not merely "the old family reappears": the stale write would run
+    // `nextFontSettings('google')`, which starts both halves over on a mode
+    // change — so the stack the newer tap chose would go with it.
+    expect(state().fonts).toMatchObject({ mode: 'system', bodyName: 'Georgia' });
+  });
+
+  it('gives a slot to the later of two Google families, not the faster one', async () => {
+    const first = applyDesign({
+      group: 'fonts', property: 'display', value: 'google:Spectral:serif',
+    });
+    const second = applyDesign({
+      group: 'fonts', property: 'display', value: 'google:Cabin:sans-serif',
+    });
+
+    pending[1]();
+    await second;
+    expect(state().fonts).toMatchObject({ mode: 'google', displayName: 'Cabin' });
+
+    pending[0]();
+    await first;
+    expect(state().fonts).toMatchObject({ mode: 'google', displayName: 'Cabin' });
+  });
+
+  it('still lands both halves when the two picks are different slots', async () => {
+    // The half of the rule that is easy to get wrong in the other direction: a
+    // single "has anything been written since?" test would drop this one, and
+    // choosing a display face and then a body face is not a race at all.
+    const display = applyDesign({
+      group: 'fonts', property: 'display', value: 'google:Asap:sans-serif',
+    });
+    const body = applyDesign({
+      group: 'fonts', property: 'body', value: 'google:Sora:sans-serif',
+    });
+
+    pending[0]();
+    await display;
+    pending[1]();
+    await body;
+
+    expect(state().fonts).toMatchObject({
+      mode: 'google', displayName: 'Asap', bodyName: 'Sora',
+    });
   });
 });

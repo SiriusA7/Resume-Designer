@@ -393,12 +393,36 @@ function applyHeader(property, value) {
   throw new Error(`unknown design property: header.${property}`);
 }
 
+// One counter per font slot. Every choice below that has to fetch something
+// leaves the list live while it does, so two ordinary taps overlap and the
+// write order is the NETWORK's order rather than the person's.
+const fontRequests = { pairing: 0, display: 0, body: 0 };
+
 async function applyFonts(property, value) {
+  const token = (fontRequests[property] = (fontRequests[property] ?? 0) + 1);
+  const modeAtStart = getCurrentFontSettings().mode;
+  // True when this request has been overtaken and must not write.
+  //
+  // TWO ways to be overtaken, and each misses the other's case. A newer tap on
+  // the SAME slot bumps the counter — without which the slower of two families
+  // wins the slot. A newer tap that changes the SOURCE moves the mode — and a
+  // stale write would not merely be old, it would flip the mode back and null
+  // the other half, because `nextFontSettings` starts both halves over on a
+  // mode change. That is why the mode test is not simply "it moved": a sibling
+  // request landing first moves it too, legitimately, toward the very mode this
+  // one is about to write. Only a move to a THIRD mode means someone else chose.
+  const overtaken = (mode) => {
+    if (fontRequests[property] !== token) return true;
+    const now = getCurrentFontSettings().mode;
+    return now !== modeAtStart && now !== mode;
+  };
+
   if (property === 'pairing') {
     const pairingId = String(value);
     // The webfont has to be in the document before the family is applied, or
     // the résumé renders — and repaginates — against the fallback's metrics.
     await loadFontPairing(pairingId);
+    if (overtaken('preset')) return;
     writeFontSettings({ mode: 'preset', pairingId });
     return;
   }
@@ -411,6 +435,7 @@ async function applyFonts(property, value) {
   const [source, id, category] = String(value).split(':');
   if (source === 'google') {
     await loadGoogleFont(id, [400, 500, 600, 700]);
+    if (overtaken('google')) return;
     const next = nextFontSettings('google');
     next[`${property}Font`] = { family: id, category };
     writeFontSettings(next);
