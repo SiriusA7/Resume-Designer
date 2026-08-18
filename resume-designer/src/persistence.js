@@ -9,7 +9,7 @@ import { isTauri, isIOSPlatform, stageTextForShare, notify } from './native.js';
 // The share sheet, for the exports iOS cannot download. `iosShell` does not
 // import this module, so the edge only goes one way.
 import { sharePdf, isNativeShellAvailable } from './iosShell.js';
-import { appStorage } from './appStorage.js';
+import { appStorage, onWriteFailure, onWriteSettled } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 // The API key lives in the OS keychain, not beside the resume data on disk.
 import {
@@ -175,13 +175,57 @@ export function loadFromStorage() {
 // QuotaExceededError; in cached (Tauri) mode setItem never throws — disk
 // failures surface asynchronously via the facade's own toast.
 export function saveToStorage(data) {
+  listenForDataWrites();
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     return true;
   } catch (e) {
     console.error('Failed to save to storage:', e);
+    reportDataWrite(false);
     return false;
   }
+}
+
+// ── "this résumé is not on disk" ───────────────────────────────────────────
+//
+// The comment above says disk failures "surface asynchronously via the facade's
+// own toast". That is true, and on iOS it is not enough: the structure editor is
+// a native sheet over the page, so Sonner renders UNDERNEATH it. Someone can
+// type into the sheet, watch the canvas behind it update, and quit believing the
+// work was saved.
+//
+// So the same answer the profile sheet and the chat sheet already give — the
+// state is published, and the sheet says it. Note the profile sheet listens to
+// this same key for its own banner; that one is about ONE held copy it can
+// retry, this one is about the résumé the editor is showing.
+
+/** Fired when the flag below changes; a disk refusal is not a DOM change. */
+export const DATA_SAVE_STATE_EVENT = 'rd:data-save-state-changed';
+
+let dataUnsaved = false;
+let watchingDataWrites = false;
+
+function reportDataWrite(ok) {
+  if (dataUnsaved === !ok) return;
+  dataUnsaved = !ok;
+  window.dispatchEvent(new CustomEvent(DATA_SAVE_STATE_EVENT));
+}
+
+function listenForDataWrites() {
+  if (watchingDataWrites) return;
+  watchingDataWrites = true;
+  onWriteFailure((logicalKey) => {
+    if (logicalKey === STORAGE_KEY) reportDataWrite(false);
+  });
+  onWriteSettled((logicalKey) => {
+    if (logicalKey === STORAGE_KEY) reportDataWrite(true);
+  });
+}
+
+/** True while the résumé on screen is known not to have reached disk. */
+export function dataSaveFailed() {
+  listenForDataWrites();
+  return dataUnsaved;
 }
 
 /**

@@ -38,6 +38,7 @@ import {
 // bridge draws nothing and Swift picks its own SF Symbols.
 import { TYPE_LABELS } from './historyEntryLabels.js';
 import { CHAT_THREADS_STATE_EVENT, threadsSaveFailed } from './chatThreads.js';
+import { DATA_SAVE_STATE_EVENT, dataSaveFailed } from './persistence.js';
 
 export const SHELL_HANDLER = 'opShell';
 
@@ -1995,7 +1996,14 @@ export function initIOSShell(deps) {
         ...buildSnapshot({
           currentId, list, zoom: getZoom(), pdfBusy, modalOpen: hasOpenModal(),
           settings: readSettings(),
-          document: streamDocument ? project('document', () => deps.getDocument()) : null,
+          document: streamDocument
+            ? project('document', () => ({
+              ...deps.getDocument(),
+              // Storage's answer, not the outline builder's — the same split the
+              // chat projection makes, and for the same reason.
+              saveFailed: (deps.dataSaveFailed || dataSaveFailed)(),
+            }))
+            : null,
           library: streamLibrary
             ? project('library', () => deps.getLibrary(libraryQuery, libraryDeep))
             : null,
@@ -2067,6 +2075,8 @@ export function initIOSShell(deps) {
   // Same for the chat's: a refused thread-list write is a storage event, and
   // the sheet's warning would otherwise wait for the next unrelated publish.
   window.addEventListener(CHAT_THREADS_STATE_EVENT, publish);
+  // …and the résumé's, which the structure sheet reports the same way.
+  window.addEventListener(DATA_SAVE_STATE_EVENT, publish);
   // Dialogs open and close without any event this module could listen for —
   // Radix just portals a node into <body> and flips data-state. Watching the
   // DOM is the only signal that covers React dialogs, the onboarding wizard

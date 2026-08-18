@@ -285,6 +285,15 @@ struct ShellSnapshot: Decodable, Equatable {
   /// paths it was given, so it cannot construct one and cannot become a second
   /// implementation of a grammar whose drift has corrupted data before.
   struct DocumentOutline: Decodable, Equatable {
+    /// The résumé is not on disk. Storage answers this, not the outline
+    /// builder — the write is behind a coalescing drain and can be refused
+    /// long after the keystroke that made it.
+    ///
+    /// Non-optional, like every other field in these structs: the projection
+    /// always emits all of them, and a partial one should fail to decode
+    /// loudly rather than render a sheet that quietly cannot warn.
+    var saveFailed: Bool
+
     struct Field: Decodable, Equatable, Identifiable {
       let path: String
       let label: String
@@ -4593,6 +4602,24 @@ private struct SettingsSheet: View {
 /// the field they are typing in resets the cursor to the end on every
 /// keystroke. So a FOCUSED field renders from its local draft and ignores
 /// inbound snapshots for its own path; every other field keeps updating live.
+/// "This résumé is not on disk." Worded like `JobsSaveWarning` and
+/// `ChatSaveWarning`, which are the same failure on their own keys.
+private struct DocumentSaveWarning: View {
+  var body: some View {
+    Label {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Not being saved").font(.subheadline.weight(.semibold))
+        Text("Storage is full, so these edits are not on disk. Free up space — reloading now would lose them.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    } icon: {
+      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+    }
+    .padding(.vertical, 2)
+  }
+}
+
 private struct StructureSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
@@ -4625,6 +4652,14 @@ private struct StructureSheet: View {
           ProgressView()
         } else {
           Form {
+            // FIRST, and a standing state rather than a notice: a full disk
+            // stays full. The web's toast is the only other warning and it
+            // renders UNDER this sheet, so without this someone can type here,
+            // watch the canvas behind the sheet update, and quit believing the
+            // work was saved.
+            if model.snapshot.document?.saveFailed == true {
+              Section { DocumentSaveWarning() }
+            }
             ForEach(groups) { group in
               Section(group.title) {
                 // Split, not one ForEach with `.onMove`: attaching the move to
