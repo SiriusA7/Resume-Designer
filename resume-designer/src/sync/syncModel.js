@@ -734,7 +734,7 @@ export function setResumeDeletedHandler(handler) {
  * @param {string} profileId @param {{logicalKey:string,value:string,previous:?string}[]} writes
  * @returns {string[]} the unit ids stamped, for the caller to announce once durable
  */
-export function stampRestoredWrites(profileId, writes) {
+export function stampRestoredWrites(profileId, writes, noteKeyWritten) {
   const ids = [];
   const add = (unitId) => { if (unitId && !ids.includes(unitId)) ids.push(unitId); };
   for (const { logicalKey, value, previous } of writes || []) {
@@ -748,7 +748,18 @@ export function stampRestoredWrites(profileId, writes) {
     }
     for (const unitId of unitsFor(logicalKey, value, previous)) add(unitId);
   }
-  if (ids.length) touchUnitsForProfile(profileId, ids);
+  if (ids.length) {
+    // NAMED BACK to the restore before the write, so its rollback set contains
+    // it. This key is written straight through `appStorage`, not through the
+    // restore's own tracked writer, so the restore did not otherwise know it
+    // had been touched — and when the workspace had no stamp table before, it
+    // is not in the pre-wipe snapshot either. A rolled-back restore then
+    // neither removed nor restored it, leaving fresh timestamps sitting on
+    // PRE-restore content: that content would beat a genuine remote edit and
+    // send itself over the top of it.
+    noteKeyWritten?.(storageKeyFor(profileId, STATE_KEY));
+    touchUnitsForProfile(profileId, ids);
+  }
   return ids;
 }
 

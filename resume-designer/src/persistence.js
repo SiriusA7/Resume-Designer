@@ -47,13 +47,13 @@ export function setRestoreStampHandler(handler, announceHandler) {
  * what was stamped, rather than recomputing it against a store that has since
  * moved.
  */
-function stampRestoredWrites(restoredWrites) {
+function stampRestoredWrites(restoredWrites, noteKeyWritten) {
   const stamped = new Map();
   if (!restoreStampHandler || !restoredWrites?.size) return stamped;
   for (const [profileId, writes] of restoredWrites) {
     if (!writes?.length) continue;
     try {
-      const ids = restoreStampHandler(profileId, writes);
+      const ids = restoreStampHandler(profileId, writes, noteKeyWritten);
       if (ids?.length) stamped.set(profileId, ids);
     } catch (e) {
       console.error('[backup] could not stamp restored units:', e);
@@ -546,6 +546,7 @@ import {
   withoutDeviceIdentity,
   mapKey,
 } from './profileKeys.js';
+import { CLEARED_PAYLOADS } from './sync/syncKeys.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
 import { getProfileMapping } from './appStorage.js';
 
@@ -879,6 +880,34 @@ function normalizeImportedValue(key, value, keepCredential = false) {
  * reader hides it and `landsAsResume` still accepts it on the other side.
  */
 /**
+ * Write the "cleared" value for every synced key this restore wiped and did not
+ * put back, so the removal travels.
+ *
+ * The wipe deletes each owned key and the write loops only restore the ones the
+ * backup carries; whatever is left over is a deletion nothing announces, because
+ * an absent key produces no unit (`collectKeyUnit`). Routed through the
+ * restore's own tracked writer so the ordinary machinery carries it: the write
+ * joins the rollback set, and `stampRestoredWrites` names its unit from the
+ * comparison against the pre-wipe value like any other.
+ *
+ * @param priorValues pre-wipe snapshot, keyed by ADDRESS
+ * @param writtenAddresses the addresses this restore has already rewritten
+ * @param write (address, value, profileId, logicalKey) => void
+ */
+function clearOmittedSyncedKeys(priorValues, writtenAddresses, write) {
+  for (const [address, priorValue] of priorValues) {
+    if (priorValue == null || writtenAddresses.has(address)) continue;
+    const split = splitPhysicalKey(address);
+    const logicalKey = split?.logicalKey ?? address;
+    const cleared = CLEARED_PAYLOADS.get(logicalKey);
+    // Nothing to say for a key already empty — the comparison would name no
+    // unit anyway, and writing it back would only churn the disk.
+    if (cleared === undefined || priorValue === cleared) continue;
+    write(address, cleared, split?.profileId ?? '', logicalKey);
+  }
+}
+
+/**
  * Snapshot and wipe a set of owned keys, ONE ENTRY PER ADDRESS.
  *
  * Two different names can address the same cache slot: with a profile mapping
@@ -1176,7 +1205,8 @@ function importFullBackupV2(parsed, keepCredential = false) {
     // -Infinity against the remote's real time. Riding this flush also makes it
     // roll back correctly: the sync-state key is a fixed backup key, so it is in
     // the pre-wipe snapshot. Only the ANNOUNCEMENT waits for durability.
-    restoredUnits = stampRestoredWrites(restoredWrites);
+    clearOmittedSyncedKeys(priorValues, new Set(written), writeTracked);
+    restoredUnits = stampRestoredWrites(restoredWrites, (k) => written.push(k));
   } catch (err) {
     rollbackWipedImport(written, priorValues);
     throw err;
@@ -1363,7 +1393,21 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     // See format 2: stamped here, inside the try, so it rides the restore's own
     // flush and rolls back with it — and so the guard armed the moment this
     // returns cannot defer it into a queue the reload discards.
-    restoredUnits = stampRestoredWrites(new Map([[activeWorkspace, writes]]));
+    // `written` holds the names this path PASSED to setItem, which are logical
+    // for most keys, while the snapshot is keyed by address — so they are
+    // compared in address form or every rewritten key reads as omitted.
+    clearOmittedSyncedKeys(
+      priorValues,
+      new Set(written.map((k) => mapKey(getProfileMapping(), k))),
+      (address, value, profileId, logicalKey) => {
+        appStorage.setItem(address, value);
+        written.push(address);
+        writes.push({ logicalKey, value, previous: priorValues.get(address) ?? null });
+      },
+    );
+    restoredUnits = stampRestoredWrites(
+      new Map([[activeWorkspace, writes]]), (k) => written.push(k),
+    );
   } catch (err) {
     rollbackWipedImport(written, priorValues);
     throw err;

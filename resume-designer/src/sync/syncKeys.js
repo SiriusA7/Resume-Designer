@@ -66,6 +66,45 @@ export const SYNCED_SHARED_KEYS = [PROFILES_KEY];
 const LOCAL = new Set(DEVICE_LOCAL_KEYS);
 const SYNCED_SHARED = new Set(SYNCED_SHARED_KEYS);
 
+/**
+ * What a synced key holds when a REPLACEMENT restore leaves it out.
+ *
+ * Absence is not a message in this protocol — `collectKeyUnit` says so out
+ * loud: "a key this device cannot read is one it has nothing to say about". So
+ * a restore that wipes a key the backup omits deletes it here and tells nobody,
+ * the server keeps the old record, and the next fetch (or any other device)
+ * hands the content back. The same failure the résumé tombstones exist for, one
+ * level up at whole keys — and the same answer: write the value the deletion
+ * MEANS, which is a change the interceptor can see, rather than an absence it
+ * cannot.
+ *
+ * Only keys whose empty is unambiguous are here, and the omissions are
+ * deliberate rather than pending:
+ *
+ * - `resume-designer-token-usage` and the `resume-designer-history-*` keys are
+ *   UNIONS on the way in (`landTokenUsage`, `landHistory`). An empty payload
+ *   merges into what the receiver already holds and changes nothing, so
+ *   clearing them cannot travel by newer-wins at all. That is a property of
+ *   accumulating units, not a gap here.
+ * - The design keys (`resume-accent-settings`, `resume-spacing-settings`,
+ *   `resume-font-settings`, `resume-photo-settings`, `resume-header-style`) and
+ *   the two dismissal flags hold module-private defaults, and absence reads as
+ *   exactly that default to every reader. What survives on another device is a
+ *   stale customisation, not resurrected content — and each module already owns
+ *   the reset that makes its own clear travel (see resetSpacingSettings and
+ *   resetAccentSettings). Guessing their default JSON from here would be a
+ *   second copy of it, wrong the first time either changed.
+ * - `resume-designer-data` is represented by its `resume:`/`data:` units and
+ *   carries its own tombstones.
+ */
+export const CLEARED_PAYLOADS = new Map([
+  ['resume-designer-job-descriptions', '[]'],
+  ['resume-designer-applications', '[]'],
+  ['resume-designer-chat-threads', '[]'],
+  ['resume-designer-chat-history', '[]'],
+  ['resume-designer-learned-answers', '[]'],
+]);
+
 export function classifyKey(logicalKey) {
   if (typeof logicalKey !== 'string' || !logicalKey) return 'unknown';
   if (LOCAL.has(logicalKey)) return 'local';

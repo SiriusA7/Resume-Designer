@@ -1164,6 +1164,141 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain(unit);
     });
 
+    it('takes back a stamp table it CREATED when the restore rolls back', async () => {
+      // The stamp goes through appStorage directly, not through the restore's
+      // tracked writer, so the restore does not otherwise know the key was
+      // touched — and a workspace with no stamp table before the restore has no
+      // entry in the pre-wipe snapshot either. The rollback then neither removed
+      // nor restored it, and its second flush persisted FRESH timestamps sitting
+      // on PRE-restore content. That content outranks a genuine remote edit and
+      // sends itself over the top of it: a failed restore corrupting a device
+      // that was never involved.
+      setProfileMapping(PID);
+      localStorage.setItem('resume-designer-profiles', JSON.stringify([
+        { id: PID, name: 'Ash', emoji: '\uD83D\uDE42', createdAt: 'x' },
+      ]));
+      localStorage.setItem('resume-designer-active-profile', PID);
+      appStorage.setItem(DATA, JSON.stringify({ variants: { 'v-9': { id: 'v-9', name: 'Mine' } } }));
+      setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+      await settle();
+      // No stamp table for this workspace — the state the bug needs.
+      const stateKey = `resume-p--${PID}--${STATE}`;
+      backend.files.delete(stateKey);
+      appStorage.removeItem(STATE);
+      await settle();
+      expect(backend.files.get(stateKey)).toBeUndefined();
+
+      // A restore whose disk refuses one of its writes: it rolls back and throws.
+      failWritesFor(`resume-p--${PID}--${DATA}`);
+      await expect(importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      })).rejects.toThrow(/could not be written/i);
+      failWritesFor(null);
+      await settle();
+
+      expect(backend.files.get(stateKey)).toBeUndefined();
+    });
+
+    it('clears a synced key the backup omits, instead of silently deleting it', async () => {
+      // The résumé tombstone problem one level up, at whole KEYS. A replacement
+      // restore wipes every owned key and puts back only the ones the backup
+      // carries; the rest are deleted here and announced to nobody, because an
+      // absent key produces no unit at all — `collectKeyUnit` says so out loud.
+      // CloudKit keeps the old record, and the next fetch or any other device
+      // hands the applications, job descriptions and chat threads back.
+      withOneResume();
+      appStorage.setItem('resume-designer-applications', '[{"id":"app-1"}]');
+      appStorage.setItem('resume-designer-job-descriptions', '[{"id":"jd-1"}]');
+      await settle();
+      notify.mockClear();
+
+      // A backup carrying neither key.
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      for (const key of ['resume-designer-applications', 'resume-designer-job-descriptions']) {
+        // The value the deletion MEANS, which the interceptor can see — not an
+        // absence, which it cannot.
+        expect(backend.files.get(`resume-p--${PID}--${key}`)).toBe('[]');
+        expect(allNamed()).toContain(`key:${key}`);
+      }
+    });
+
+    it('clears what a format-1 backup omits too', async () => {
+      withOneResume();
+      appStorage.setItem('resume-designer-applications', '[{"id":"app-1"}]');
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 1,
+        keys: { [DATA]: JSON.stringify({ variants: {} }) },
+      });
+      await settle();
+
+      expect(backend.files.get(`resume-p--${PID}--resume-designer-applications`)).toBe('[]');
+      expect(allNamed()).toContain('key:resume-designer-applications');
+    });
+
+    it('does not clear a key the backup DOES carry', async () => {
+      // The dangerous direction, and the reason format 1 compares addresses
+      // rather than the names it happened to pass to setItem. Format 1 writes
+      // through LOGICAL names while the pre-wipe snapshot is keyed by address,
+      // so comparing raw names makes every key it just restored read as omitted
+      // — and clearing it destroys the restored content the person asked for,
+      // then uploads that destruction to every other device.
+      withOneResume();
+      appStorage.setItem('resume-designer-applications', '[{"id":"old"}]');
+      await settle();
+
+      await importFullBackupDurably({
+        backupFormat: 1,
+        keys: {
+          [DATA]: JSON.stringify({ variants: {} }),
+          'resume-designer-applications': '[{"id":"from-the-backup"}]',
+        },
+      });
+      await settle();
+
+      expect(backend.files.get(`resume-p--${PID}--resume-designer-applications`))
+        .toBe('[{"id":"from-the-backup"}]');
+    });
+
+    it('says nothing about a key that was already empty', async () => {
+      // A `key:` unit is named unconditionally by `unitsFor` — there is no
+      // comparison for it the way there is inside the blob — so clearing an
+      // already-empty key would upload a no-op and, worse, stamp it with a
+      // fresh time that outranks another device's real edit to it.
+      withOneResume();
+      appStorage.setItem('resume-designer-applications', '[]');
+      await settle();
+      notify.mockClear();
+
+      await importFullBackupDurably({
+        backupFormat: 2,
+        kind: 'full',
+        registry: [{ id: PID, name: 'Ash', emoji: '\uD83D\uDE42' }],
+        activeProfile: PID,
+        shared: {},
+        profiles: { [PID]: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+      });
+      await settle();
+
+      expect(allNamed()).not.toContain('key:resume-designer-applications');
+    });
+
     it('announces them, past the barrier that has nothing left to gate', async () => {
       withOneResume();
       await settle();
