@@ -1089,6 +1089,17 @@ final class ShellModel: ObservableObject {
   private var syncDeferredDrainKey: String?
   private var syncDeferredReowed: Set<String> = []
 
+  /// How many times each profile has been OWED a full upload, so a settlement
+  /// can tell whether it is settling the debt it set out to pay. See
+  /// `sendAllUnits`.
+  private var syncFullUploadOwe: [String: Int] = [:]
+
+  /// A drain is between its first offer and its last settlement. See
+  /// `drainSyncDeferred()` for why overlapping drains lose data, and why a
+  /// request that arrives during one is remembered instead of dropped.
+  private var syncDraining = false
+  private var syncDrainAgain = false
+
   /// The shared zone belongs to the account rather than whichever profile is
   /// active, so its deferred work does too. This remains under the deferred-key
   /// prefix so an explicit account purge clears it with the profile queues.
@@ -1459,10 +1470,25 @@ extension ShellModel {
       return
     }
     NSLog("[OPShell] offering \(unitIds.count) unit(s) for \(profileId)'s full upload")
+    // WHICH debt, not just whether one was owed. The marker is a Bool, so a
+    // debt re-owed during the send below is indistinguishable from the one this
+    // call is paying — and settling then clears a claim about an account that
+    // has never seen any of these units.
+    //
+    // It happens on the longest suspension in this file. `syncDidSwitchAccounts`
+    // re-owes every considered profile, and it is a CKSyncEngine delegate event,
+    // delivered from inside the very `sendChanges()` this is waiting on. Nothing
+    // would have re-created the debt afterwards: settlement is deliberately a
+    // `false` rather than a delete, so the profile stays "considered" and
+    // `runStartSync` never offers it again.
+    let owed = syncFullUploadOwe[profileId, default: 0]
     let sent = await sendSync(unitIds: unitIds, inProfile: profileId)
-    if sent {
-      setSyncFullUploadOwed(false, profileId: profileId)
+    guard sent else { return }
+    guard syncFullUploadOwe[profileId, default: 0] == owed else {
+      NSLog("[OPShell] \(profileId)'s full upload was re-owed mid-send; keeping the debt")
+      return
     }
+    setSyncFullUploadOwed(false, profileId: profileId)
   }
 
   /// Stop through the same ONE-AT-A-TIME chain as `startSync`. Capturing the
@@ -1862,14 +1888,44 @@ extension ShellModel {
   /// Hoist first so a shared id parked by the `nil` fallback reaches the queue
   /// that every profile drains. `fetchShared` has already run before this call,
   /// preserving the shared-zone fetch-before-send order.
+  ///
+  /// ONE AT A TIME, and that is load-bearing rather than tidy.
+  /// `syncDeferredDrainKey`/`syncDeferredReowed` are a single scratch pair, and
+  /// `drainSyncDeferred(key:)` both arms them on entry and clears them on
+  /// resume. Two drains overlapping therefore erase each other's record of what
+  /// was re-owed mid-send — and an erased re-owe is not a lost message, it is a
+  /// settled debt for bytes that were never sent, which is exactly what the
+  /// comment on `syncDeferredReowed` says must not happen.
+  ///
+  /// They CAN overlap: a start's drain suspends inside `sendChanges()`, the
+  /// engine delivers a delegate event from in there, a send postponed during it
+  /// makes `finishDelegateEvent` spawn an unserialised `Task` — and that task
+  /// calls `syncRetryDeferred`, which drains again.
+  ///
+  /// A request that arrives during a drain is remembered rather than dropped,
+  /// and honoured for ONE more pass. Bounded deliberately: the retry fires from
+  /// a refusal, and a webview that refuses every send would otherwise keep this
+  /// loop going for ever. Anything still owed after two passes stays durable and
+  /// goes out on the next start, which is the whole point of the queue.
   private func drainSyncDeferred() async {
-    await hoistSharedSyncDeferred()
-    // Shared first: those ids belong to the account rather than to any one
-    // workspace, and a profile drain must not be the thing that sends them.
-    await drainSyncDeferred(key: Self.syncDeferredSharedKey)
-    for (queueProfileId, key) in deferredProfileQueues() {
-      await drainSyncDeferred(key: key, inProfile: queueProfileId)
+    guard !syncDraining else {
+      syncDrainAgain = true
+      return
     }
+    syncDraining = true
+    var passes = 0
+    repeat {
+      syncDrainAgain = false
+      await hoistSharedSyncDeferred()
+      // Shared first: those ids belong to the account rather than to any one
+      // workspace, and a profile drain must not be the thing that sends them.
+      await drainSyncDeferred(key: Self.syncDeferredSharedKey)
+      for (queueProfileId, key) in deferredProfileQueues() {
+        await drainSyncDeferred(key: key, inProfile: queueProfileId)
+      }
+      passes += 1
+    } while syncDrainAgain && passes < 2
+    syncDraining = false
   }
 
   /// Every per-profile deferred queue this device holds, as (profile id, key).
@@ -1927,6 +1983,18 @@ extension ShellModel {
   }
 
   private func setSyncFullUploadOwed(_ owed: Bool, profileId: String) {
+    // STAMPED on the way in, so `sendAllUnits` can tell the debt it is paying
+    // from one created while it was paying.
+    //
+    // EVERY owe has to come through here for that to hold, and one did not:
+    // `oweFullUploadForEveryConsideredProfile` wrote the defaults key itself,
+    // which is the account-switch path — the very one this stamp exists for. It
+    // routes through this function now. Stamping at the callers instead would
+    // have left exactly that kind of hole open.
+    //
+    // In memory only, and that is the safe direction: losing the stamp to a
+    // relaunch leaves the marker itself `true`, which is a debt still owed.
+    if owed { syncFullUploadOwe[profileId, default: 0] += 1 }
     // RECORDED, not removed, on settlement. The absence of this key is what
     // `runStartSync` reads as "this profile has never been offered a full
     // upload", so removing it here would make every later activation of that
@@ -2012,7 +2080,14 @@ extension ShellModel {
   private func oweFullUploadForEveryConsideredProfile() {
     let defaults = UserDefaults.standard
     let prefix = Self.syncFullUploadKey("")
-    var keys = Set(defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(prefix) })
+    // Ids rather than keys, and THROUGH the setter below rather than writing the
+    // defaults here. Same bytes either way; the difference is that the setter
+    // stamps the owe, which is what lets a settlement in flight tell this new
+    // debt from the one it set out to pay. Writing the key directly is how this
+    // path silently opted out of that.
+    var ids = Set(defaults.dictionaryRepresentation().keys
+      .filter { $0.hasPrefix(prefix) }
+      .map { String($0.dropFirst(prefix.count)) })
     // THE SNAPSHOT'S LIST TOO, which the marker keys do not cover. They record
     // every workspace this device has STARTED syncing, and after a purge that
     // is the wrong set: a workspace fetched from the account but never opened
@@ -2021,9 +2096,9 @@ extension ShellModel {
     // here said this side never sees a workspace list. It has since — see
     // `runStartSync`, which hands the registry's ids to `sync.start` — and the
     // enumeration was never updated to match.)
-    keys.formUnion(snapshot.profiles.map { Self.syncFullUploadKey($0.id) })
-    for key in keys { defaults.set(true, forKey: key) }
-    NSLog("[OPShell] a full upload is owed again for \(keys.count) profile(s)")
+    ids.formUnion(snapshot.profiles.map { $0.id })
+    for id in ids { setSyncFullUploadOwed(true, profileId: id) }
+    NSLog("[OPShell] a full upload is owed again for \(ids.count) profile(s)")
   }
 
   /// Stand behind one more failure. The published value is the one just
