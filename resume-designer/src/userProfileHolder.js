@@ -53,6 +53,25 @@ export function registerUserProfileHolder(next) {
   };
 }
 
+// The NATIVE profile sheet's focus, which the holder above cannot speak for.
+//
+// `OPProfile.swift`'s field bindings keep their own draft while focused and
+// ignore updates to `field.value` — deliberately, so typing is not yanked out
+// from under the person — but `userProfileHolderBusy` only knew about the
+// mounted React holder. A `data:userProfile` unit landing during that focus was
+// adopted and republished while the control kept the old text, and the next
+// keystroke wrote the stale draft over the adopted field and uploaded it as
+// newer.
+//
+// Separate from `holder` rather than a second entry in it: the React dialog and
+// the native sheet are different screens with different lifetimes, and the
+// singleton above is genuinely one — ProfileDialog is the only web holder.
+let nativeBusy = () => false;
+
+export function registerNativeProfileEditing(probe) {
+  nativeBusy = typeof probe === 'function' ? probe : () => false;
+}
+
 /**
  * Whether replacing the working copy right now would destroy work in flight.
  *
@@ -71,7 +90,7 @@ export function registerUserProfileHolder(next) {
  * transport forfeits the record's change tag, and the unit is re-offered.
  */
 export function userProfileHolderBusy() {
-  return holder?.isBusy?.() === true;
+  return holder?.isBusy?.() === true || nativeBusy() === true;
 }
 
 /**

@@ -988,6 +988,33 @@ describe('the Design sheet commands', () => {
     });
   });
 
+  it('reports a native field\u2019s focus to the sync guards, and its blur', async () => {
+    // The web guards ask the DOM — an active contentEditable for the résumé, a
+    // mounted React ref for the profile — and neither can see a SwiftUI
+    // `@FocusState`. The native screens keep their own draft while focused, so
+    // a fetched unit passed both guards, the document or profile was replaced
+    // underneath the field, and the next keystroke sent the pre-fetch draft
+    // back as a fresh local edit over what had just been adopted.
+    const { send } = await mount();
+    const { nativeEditingBusy } = await import('../src/iosShell.js');
+
+    expect(nativeEditingBusy('document')).toBe(false);
+    send({ type: 'setNativeEditing', scope: 'document', value: 'true' });
+    expect(nativeEditingBusy('document')).toBe(true);
+    // Scoped: a focused structure field must not stall a profile adoption.
+    expect(nativeEditingBusy('profile')).toBe(false);
+
+    // The blur matters as much as the focus — left set, this would stall every
+    // adoption for that scope until the sheet closed.
+    send({ type: 'setNativeEditing', scope: 'document', value: 'false' });
+    expect(nativeEditingBusy('document')).toBe(false);
+  });
+
+  it('refuses a native focus report for an unknown scope', async () => {
+    const { send } = await mount();
+    expect(send({ type: 'setNativeEditing', scope: 'everything', value: 'true' }).ok).toBe(false);
+  });
+
   it('republishes the jobs sheet when a job write is REFUSED later', async () => {
     // A synchronous add/edit/delete publishes immediately, while
     // `jobStorageFailed()` is still false — cached storage reports a disk-full

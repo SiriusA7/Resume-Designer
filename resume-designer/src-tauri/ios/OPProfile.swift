@@ -449,6 +449,12 @@ private struct ProfileFieldRow: View {
       // Seed on the way in; on the way out the field goes back to rendering
       // what actually landed, including anything the store normalised.
       if isFocused { draft = field.value }
+      // TOLD TO THE SYNC GUARD. `userProfileHolderBusy` knew only about the
+      // mounted React holder, which is not this — so a `data:userProfile` unit
+      // landing during this focus was adopted and republished while the binding
+      // above went on showing `draft`, and the next keystroke wrote that stale
+      // text over the adopted field and uploaded it as newer.
+      model.send("setNativeEditing", ["scope": "profile", "value": isFocused ? "true" : "false"])
     }
   }
 

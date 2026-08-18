@@ -4638,10 +4638,18 @@ private struct StructureSheet: View {
       }
     }
     .environment(\.editMode, .constant(.active))
-    .onChange(of: focusedPath) { previous, _ in
+    .onChange(of: focusedPath) { previous, current in
       // Drop the draft once focus leaves, so the field goes back to rendering
       // the store's value — including any normalisation the store applied.
       if let previous { drafts[previous] = nil }
+      // TOLD TO THE SYNC GUARD, because it cannot see a `@FocusState`. The web
+      // side asks the DOM for an active contentEditable, which is nothing here,
+      // and `store.isDirty` goes false again after the 500 ms save debounce —
+      // so pausing mid-word while still focused let a fetched résumé pass
+      // `interruptsLiveEditing` and replace the document underneath this field.
+      // The binding below keeps showing its draft, and the next keystroke sends
+      // that pre-fetch value back as a fresh local edit, over what was adopted.
+      model.send("setNativeEditing", ["scope": "document", "value": current == nil ? "false" : "true"])
     }
     // An alert rather than a `confirmationDialog`: iOS 26 renders the compact
     // dialog with NO visible Cancel and relies on a tap outside, which is a

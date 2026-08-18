@@ -1274,6 +1274,27 @@ let libraryDeep = false;
 let streamDesign = false;
 let streamHistory = false;
 let streamJobs = false;
+
+/**
+ * Which native fields are focused right now — 'document' or 'profile'.
+ *
+ * The web guards ask the DOM: `inlineEditingProbe` looks for an active
+ * contentEditable, and the profile holder is a mounted React ref. Neither can
+ * see a SwiftUI `@FocusState`, and the native screens keep their own draft
+ * while focused precisely so typing is not yanked out from under the person.
+ * So a fetched unit passed both guards, the document or the profile was
+ * replaced underneath the field, and the next keystroke sent the pre-fetch
+ * draft back as a fresh local edit — overwriting what had just been adopted.
+ *
+ * A SET keyed by scope rather than a boolean: the structure sheet and the
+ * profile sheet can both be up, and each guard asks only about its own.
+ */
+const nativeEditing = new Set();
+
+/** Whether a native field of this scope holds focus. */
+export function nativeEditingBusy(scope) {
+  return nativeEditing.has(scope);
+}
 let streamProfile = false;
 // The comparison the history sheet has open, computed on demand because the
 // entry payloads never ride the snapshot. Cleared when the sheet closes.
@@ -1642,6 +1663,17 @@ export function initIOSShell(deps) {
     // `setDesign` uses, and the same rule: every action routes to the function
     // the web dialog calls, and the sheet re-renders from the next projection
     // rather than from what it optimistically set.
+    // Focus, reported by the native fields themselves. Sent on every change so
+    // a blur is as load-bearing as a focus: left set, this would stall every
+    // adoption for that scope until the sheet closed.
+    setNativeEditing: ({ scope, value }) => {
+      const name = String(scope ?? '');
+      if (name !== 'document' && name !== 'profile') {
+        throw new Error('setNativeEditing needs a known scope');
+      }
+      if (value === 'true') nativeEditing.add(name);
+      else nativeEditing.delete(name);
+    },
     setJobsOpen: ({ value }) => {
       streamJobs = value === 'true';
       publish();

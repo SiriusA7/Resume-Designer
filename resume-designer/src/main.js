@@ -46,7 +46,9 @@ import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow
 import {
   initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
   initIOSProfileBootstrap, askAccountProfiles, resolveAccountProfiles, reportProfilesResolved,
+  nativeEditingBusy,
 } from './iosShell.js';
+import { registerNativeProfileEditing } from './userProfileHolder.js';
 import {
   collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts,
   registerPersistedSaveHandler, touchUnit,
@@ -131,7 +133,11 @@ setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
 // delete the characters being typed. The sync model refuses to land one while
 // this says yes; it cannot ask the DOM itself (it is storage-only, and the same
 // file runs on iOS), so main.js hands it the question.
-registerEditingProbe(() => getActiveInlineEditable() !== null);
+// The web's inline editor OR a focused native structure field. Both are "a
+// person is typing into this résumé right now", and the DOM answer cannot see
+// the SwiftUI one — see nativeEditingBusy.
+registerEditingProbe(() => getActiveInlineEditable() !== null || nativeEditingBusy('document'));
+registerNativeProfileEditing(() => nativeEditingBusy('profile'));
 
 // Another device deleted the workspace open here. The sync layer merges the
 // tombstone and stops; moving off it is the app's job, because picking the
