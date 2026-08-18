@@ -1046,6 +1046,19 @@ private struct ProfileDatesScreen: View {
       } footer: {
         Text("Typed dates print exactly as written, but positions at one employer can only be grouped when both dates are months.")
       }
+      // The only way OFF a date. The month grids can replace a pair but never
+      // remove one, `commitText` refuses an empty string, and the button above
+      // is disabled on one — so a role that had dates could not be returned to
+      // having none without deleting the role. The web has always allowed it:
+      // `freeformDateFields('')` is a legitimate clear, and the bridge already
+      // takes it.
+      if !(role?.dates.display ?? "").isEmpty {
+        Section {
+          Button("Clear dates", role: .destructive, action: clearDates)
+        } footer: {
+          Text("The role stays; only its dates go.")
+        }
+      }
     }
     .navigationTitle("Dates")
     .navigationBarTitleDisplayMode(.inline)
@@ -1140,6 +1153,18 @@ private struct ProfileDatesScreen: View {
       "endYear": String(end?.year ?? 0),
       "endMonth": String(end?.month ?? 0),
       "ongoing": ongoing ? "true" : "false",
+    ]) { ok in
+      if ok { dismiss() } else { refused = true }
+    }
+  }
+
+  private func clearDates() {
+    guard let role else { return }
+    model.profile("setDates", [
+      "index": String(role.index),
+      "key": role.key,
+      "mode": "text",
+      "text": "",
     ]) { ok in
       if ok { dismiss() } else { refused = true }
     }
