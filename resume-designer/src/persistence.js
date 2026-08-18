@@ -936,7 +936,7 @@ function clearOmittedSyncedKeys(priorValues, writtenAddresses, write, workspaces
       // server record simply came back. The `forced` flag is what carries that
       // through the ordinary change detection, which would otherwise see
       // identical bytes and name nothing.
-      write(address, cleared, profileId, logicalKey, true);
+      write(address, cleared, profileId, logicalKey);
     }
   }
 }
@@ -1249,17 +1249,17 @@ function importFullBackupV2(parsed, keepCredential = false) {
   // by the ordinary path. Recorded here because the restore is the only thing
   // that knows which workspace each key belongs to.
   const restoredWrites = new Map();
-  const noteWrite = (pid, logicalKey, value, previous, forced = false) => {
+  const noteWrite = (pid, logicalKey, value) => {
     if (!restoredWrites.has(pid)) restoredWrites.set(pid, []);
-    restoredWrites.get(pid).push({ logicalKey, value, previous, forced });
+    restoredWrites.get(pid).push({ logicalKey, value });
   };
   // `k` is the ADDRESS appStorage resolves to for every call here — physical for
   // a profile's key, unchanged for a shared one — so the pre-wipe snapshot,
   // which `snapshotAndWipeOwnedKeys` keys by address, answers directly.
-  const writeTracked = (k, v, pid = '', logicalKey = k, forced = false) => {
+  const writeTracked = (k, v, pid = '', logicalKey = k) => {
     appStorage.setItem(k, v);
     written.push(k);
-    noteWrite(pid, logicalKey, v, priorPhysicalSnapshot(k, logicalKey, pid, priorValues) ?? null, forced);
+    noteWrite(pid, logicalKey, v);
   };
 
   let keysImported = 0;
@@ -1355,10 +1355,7 @@ function importFullBackupV2(parsed, keepCredential = false) {
     for (const { physicalKey: key, logicalKey, value } of history) {
       if (writeOwnedKeyOrSkip(key, value)) {
         written.push(key);
-        noteWrite(
-          splitPhysicalKey(key)?.profileId ?? '', logicalKey, value,
-          priorPhysicalSnapshot(key, logicalKey, splitPhysicalKey(key)?.profileId ?? '', priorValues) ?? null,
-        );
+        noteWrite(splitPhysicalKey(key)?.profileId ?? '', logicalKey, value);
         keysImported++;
       } else {
         historySkipped++;
@@ -1524,7 +1521,6 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
   const noteWrite = (k, value) => writes.push({
     logicalKey: splitPhysicalKey(k)?.logicalKey ?? k,
     value,
-    previous: priorSnapshotFor(k, priorValues) ?? null,
   });
   let restoredUnits = new Map();
   try {
@@ -1577,12 +1573,10 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     clearOmittedSyncedKeys(
       priorValues,
       new Set(written.map((k) => mapKey(getProfileMapping(), k))),
-      (address, value, profileId, logicalKey, forced = false) => {
+      (address, value, profileId, logicalKey) => {
         appStorage.setItem(address, value);
         written.push(address);
-        writes.push({
-          logicalKey, value, previous: priorValues.get(address) ?? null, forced,
-        });
+        writes.push({ logicalKey, value });
       },
       [activeWorkspace],
     );

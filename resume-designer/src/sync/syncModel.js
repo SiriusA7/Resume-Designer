@@ -736,50 +736,25 @@ export function setResumeDeletedHandler(handler) {
  */
 export function stampRestoredWrites(profileId, writes, noteKeyWritten) {
   const ids = [];
-  // Read ONCE, before any of this restore's own stamping: every unit here is
-  // being decided against the table as the restore found it.
-  const stamped = stampedIn(profileId);
   const add = (unitId) => { if (unitId && !ids.includes(unitId)) ids.push(unitId); };
-  for (const { logicalKey, value, previous, forced } of writes || []) {
+  for (const { logicalKey, value } of writes || []) {
     if (classifyKey(logicalKey) !== 'synced') continue;
-    // A FORCED write is a restore asserting the workspace's state rather than
-    // reporting a change — the cleared payload for a key the backup omits. Its
-    // bytes may already match what is here, and change detection would name
-    // nothing, while the whole point is to outrank whatever another device has
-    // put on the server since.
-    if (forced) {
-      for (const unitId of unitsCarriedBy(logicalKey, value)) add(unitId);
-      continue;
-    }
-    // The one kind `unitsFor` deliberately declines, because the save path that
-    // writes history names its own unit as it goes. A restore is not that path,
-    // so the parked conflict losers a backup carries would travel from nowhere.
-    if (logicalKey.startsWith(HISTORY_PREFIX)) {
-      // `unitsFor` declines history because the save path that writes it names
-      // its own unit as it goes; a restore is not that path, so this answers
-      // the "who names it" question on its behalf.
-      if (value !== previous) add(`${KEY_UNIT_PREFIX}${logicalKey}`);
-    } else {
-      for (const unitId of unitsFor(logicalKey, value, previous)) add(unitId);
-    }
-    // AND anything this key carries that has no stamp AT ALL, changed or not.
+    // EVERY unit the restore writes, changed or not.
     //
-    // Only the restore does this, because only the restore wipes the table:
-    // `resume-designer-sync-state` is a fixed backup key, and no backup written
-    // before this branch existed carries a replacement. Restoring one of those
-    // leaves content on disk with no time anywhere — `collectUnit` answers
-    // `modifiedAt: null`, `resolveConflict` reads that as -Infinity, and any
-    // remote copy however old lands on top of it, while the unit is never named
-    // so the correct local content cannot win the round trip back.
+    // This used to be change detection with three exceptions bolted on, and the
+    // exceptions were the tell. A replacement restore is not reporting what
+    // changed on this device — it is asserting what the workspace now IS, and
+    // every value in it was selected by the person who chose the backup. What
+    // that assertion has to outrank lives on the SERVER, so measuring it
+    // against local bytes answers the wrong question: a value identical to this
+    // device's, whose unit the backup also carries a stamp for, was named by
+    // nobody, and the next fetch replaced it with whatever another device
+    // wrote while this one was offline.
     //
-    // Both KINDS of unit, which is the half a scoped-to-key-units version of
-    // this missed: an unstamped résumé whose bytes did not change is exactly as
-    // undefendable as an unstamped applications list. Once the restore has
-    // stamped everything it wrote, the ordinary interceptor is reading a
-    // populated table again, so pure change detection is right everywhere else.
-    for (const unitId of unitsCarriedBy(logicalKey, value)) {
-      if (!stamped(unitId)) add(unitId);
-    }
+    // `unitsFor` keeps its comparison for ORDINARY writes, where "nothing
+    // changed" really does mean nothing to say. The two differ by context, and
+    // this is the context where the answer is always yes.
+    for (const unitId of unitsCarriedBy(logicalKey, value)) add(unitId);
   }
   if (ids.length) {
     // NAMED BACK to the restore before the write, so its rollback set contains
@@ -1011,29 +986,12 @@ function changedDataUnits(previous, next) {
   return changed;
 }
 
-/**
- * Does this workspace already hold a modification time for `unitId`?
- *
- * The unchanged-write rule leans on this and cannot be stated without it. "The
- * bytes did not change, so the stamp still describes them" is only true when
- * there IS a stamp — and a restore wipes the stamp table, because
- * `resume-designer-sync-state` is a fixed backup key and every backup written
- * before this branch existed carries no replacement for it. Restoring one of
- * those left content on disk with no time anywhere: `collectUnit` answers
- * `modifiedAt: null`, `resolveConflict` reads that as -Infinity, and any remote
- * copy however old lands on top of it — while the unit is never named, so the
- * correct local content cannot win the round trip back either.
- */
 function unitsCarriedBy(logicalKey, value) {
   if (logicalKey === DATA_KEY) return [...dataFieldPayloads(value).keys()];
   if (logicalKey.startsWith(HISTORY_PREFIX)) return [`${KEY_UNIT_PREFIX}${logicalKey}`];
   return [`${KEY_UNIT_PREFIX}${logicalKey}`];
 }
 
-function stampedIn(profileId) {
-  const table = stateFor(profileId);
-  return (unitId) => Boolean(table?.[unitId]?.modifiedAt);
-}
 
 /**
  * Which units a write to `logicalKey` makes locally modified.

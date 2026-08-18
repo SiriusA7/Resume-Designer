@@ -1174,28 +1174,28 @@ describe('deleting a résumé produces something that can travel', () => {
       expect(allNamed()).toContain('resume:v-9');
     });
 
-    it('names nothing for ANY key the restore rewrites byte for byte', async () => {
-      // The other half of stamping a restore, and it is not a nicety. A backup
-      // taken on this device and imported back writes most keys unchanged; if
-      // that counted as a change, every unit would go up with a fresh stamp and
-      // newer-wins would revert another device's real edits — a restore that
-      // visibly did nothing, undoing work on a machine that was not involved.
+    it('ASSERTS every value it writes, even ones identical to what is here', async () => {
+      // I had this the other way round, asserting that a restore of identical
+      // bytes named nothing — change detection, imported from ordinary writes.
       //
-      // THE PLAIN KEY IS THE POINT, and the earlier version of this test that
-      // asserted only `resume:v-9` is why the bug survived: the blob compares
-      // field by field and always did, while every other key was named
-      // unconditionally, so the property held for exactly the one unit this
-      // checked. Whatever a test's comment claims about "every key", the
-      // assertion has to visit more than one kind of key.
+      // A replacement restore is not reporting what changed on this device. It
+      // is asserting what the workspace now IS, and every value in it was
+      // selected by whoever chose the backup. What that assertion has to
+      // outrank lives on the SERVER, so measuring it against local bytes
+      // answers the wrong question: a value identical to this device's, whose
+      // unit the backup also carries a stamp for, was named by nobody, and the
+      // next fetch replaced it with whatever another device wrote while this
+      // one was offline.
+      //
+      // The ordinary-write rule is untouched — see "an unchanged write is not a
+      // change", which still passes. The two differ by CONTEXT.
       withOneResume();
       appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
       await settle();
       const blob = appStorage.getItem(DATA);
       const apps = appStorage.getItem('resume-designer-applications');
-      // The backup carries the STAMP TABLE too, which a backup taken by this
-      // branch does. That is what makes "unchanged" a complete statement: the
-      // restore wipes the table (a fixed backup key) and this puts it back, so
-      // the units still have the times that describe those unchanged bytes.
+      // The backup carries the stamp table too, so the missing-stamp route
+      // cannot be what names these — this is the assertion doing it.
       const stampTable = appStorage.getItem(STATE);
       notify.mockClear();
 
@@ -1213,8 +1213,8 @@ describe('deleting a résumé produces something that can travel', () => {
       });
       await settle();
 
-      expect(allNamed()).not.toContain('resume:v-9');
-      expect(allNamed()).not.toContain('key:resume-designer-applications');
+      expect(allNamed()).toContain('resume:v-9');
+      expect(allNamed()).toContain('key:resume-designer-applications');
     });
 
     it('stamps unchanged keys anyway when the backup carries NO stamp table', async () => {
