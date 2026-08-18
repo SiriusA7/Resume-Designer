@@ -268,8 +268,15 @@ export async function importBackupFromFile(file) {
         // true on desktop — where there is no CloudKit transport at all — and
         // the sentence would be describing something that cannot happen.
         + (isIOSPlatform() && isSyncEnabled()
-          ? `Because iCloud sync is on, resumes this backup does not contain will `
-            + `also be removed from your other devices. `
+          // SCOPED, because the unscoped promise is one this device cannot
+          // keep. A replacement can only remove what it can name, and a résumé
+          // created on another device that has not reached this one yet is not
+          // in the pre-wipe snapshot, so no tombstone is written for it and the
+          // next fetch adopts it as new. Saying so lets somebody who cares sync
+          // first; claiming otherwise would have them find out afterwards.
+          ? `Because iCloud sync is on, this also removes those resumes from your `
+            + `other devices. Anything created elsewhere that has not synced to `
+            + `this device yet will not be removed. `
           : '')
         + `The app will reload after import.`,
       actionLabel: 'Replace and reload',
