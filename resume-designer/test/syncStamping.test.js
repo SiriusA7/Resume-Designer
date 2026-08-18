@@ -179,10 +179,99 @@ describe('a write to a synced key stamps its unit and notifies', () => {
   });
 
   it('records a real ISO time, not a placeholder', async () => {
-    appStorage.setItem('resume-designer-applications', '[]');
+    // A value the fixture does not already hold. Writing the identical bytes
+    // names nothing now — see "an unchanged write is not a change" below — and
+    // this test is about the SHAPE of the time, so it needs a real change.
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
     await settle();
     const { modifiedAt } = stamps()['key:resume-designer-applications'];
     expect(new Date(modifiedAt).toISOString()).toBe(modifiedAt);
+  });
+});
+
+describe('an unchanged write is not a change', () => {
+  beforeEach(() => { setStorageDirtyNotifier(notify); });
+
+  // The blob got this for free — changedDataUnits compares field by field — and
+  // every other key was named unconditionally, `previous` accepted and thrown
+  // away. Not a missed optimisation: a named unit is stamped with a FRESH time,
+  // and newer-wins then beats another device's real edit with bytes identical
+  // to what was already there. Two callers make it ordinary rather than exotic:
+  // a restore rewrites most keys byte for byte (re-importing your own backup),
+  // and rollbackWipedImport puts the pre-wipe values straight back.
+
+  it('names nothing when a synced key is rewritten with the same bytes', async () => {
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+    notify.mockClear();
+
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+
+    expect(allNamed()).toEqual([]);
+  });
+
+  it('names nothing when a key is REMOVED and put straight back', async () => {
+    // The rollback shape. `removedForComparison` in appStorage exists so the
+    // second half of a remove-then-write can still see what was there — it
+    // supplies the right `previous`, and this used to discard it.
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+    notify.mockClear();
+
+    appStorage.removeItem('resume-designer-applications');
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+
+    expect(allNamed()).toEqual([]);
+  });
+
+  it('still names it the moment one byte differs', async () => {
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+    notify.mockClear();
+
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-2"}]');
+    await settle();
+
+    expect(allNamed()).toContain('key:resume-designer-applications');
+  });
+
+  it('lets the OTHER device\u2019s edit land after an identical rewrite', async () => {
+    // The harm, not the naming — and the control is the whole test. A remote
+    // edit is offered twice under identical conditions; the only difference is
+    // whether an unchanged local rewrite happened first. Stamped fresh by that
+    // rewrite, the local copy wins newer-wins and the remote loser is SETTLED
+    // rather than parked (a plain key has nowhere to park), so its change tag
+    // is taken and it is never offered again. The edit is gone, unarchived.
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+    // Age that write, so the sequence is the real one: this device last touched
+    // the key an hour ago, device B edited it since. Without this the local
+    // stamp is newer than the remote for an honest reason and the test proves
+    // nothing about the rewrite.
+    const table = JSON.parse(appStorage.getItem(STATE));
+    table['key:resume-designer-applications'] =
+      { modifiedAt: new Date(Date.now() - 3_600_000).toISOString() };
+    appStorage.setItem(STATE, JSON.stringify(table));
+    await settle();
+
+    // The identical rewrite a restore or a rollback performs.
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    await settle();
+
+    // Device B's real edit, made after this device last touched the key.
+    const { applied } = await applyUnits([{
+      id: 'key:resume-designer-applications',
+      kind: 'plain',
+      payload: '[{"id":"a-1"},{"id":"a-2-from-device-B"}]',
+      modifiedAt: new Date(Date.now() - 30_000).toISOString(),
+      profileId: '',
+    }]);
+
+    expect(applied).toBe(1);
+    expect(appStorage.getItem('resume-designer-applications'))
+      .toContain('a-2-from-device-B');
   });
 });
 
@@ -397,8 +486,8 @@ describe('the notification is coalesced, not one per write', () => {
   });
 
   it('carries every distinct unit touched in the window', async () => {
-    appStorage.setItem('resume-designer-applications', '[]');
-    appStorage.setItem('resume-designer-job-descriptions', '[]');
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    appStorage.setItem('resume-designer-job-descriptions', '[{"id":"j-1"}]');
     appStorage.setItem('resume-zoom', '2'); // device-local: must not appear
     await settle();
 

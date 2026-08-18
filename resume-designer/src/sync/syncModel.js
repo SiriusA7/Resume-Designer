@@ -743,6 +743,10 @@ export function stampRestoredWrites(profileId, writes, noteKeyWritten) {
     // writes history names its own unit as it goes. A restore is not that path,
     // so the parked conflict losers a backup carries would travel from nowhere.
     if (logicalKey.startsWith(HISTORY_PREFIX)) {
+      // `unitsFor` declines history because the save path that writes it names
+      // its own unit as it goes; a restore is not that path. The unchanged
+      // check that used to live here is now `unitsFor`'s own first rule, so
+      // this only has to answer the "who names it" question.
       if (value !== previous) add(`${KEY_UNIT_PREFIX}${logicalKey}`);
       continue;
     }
@@ -1008,6 +1012,23 @@ function changedDataUnits(previous, next) {
  */
 function unitsFor(logicalKey, value, previous) {
   if (classifyKey(logicalKey) !== 'synced') return [];
+  // A write that changed nothing IS nothing, whatever kind of key it was.
+  //
+  // The blob got this for free — `changedDataUnits` compares field by field —
+  // and every other key was named unconditionally, `previous` accepted and
+  // discarded. That is not a missed optimisation: a named unit is stamped with
+  // a fresh time, and newer-wins then beats another device's REAL edit to that
+  // key with bytes identical to what was already there. The remote loser is
+  // `settle`d rather than parked (a plain key has nowhere to park), so its
+  // change tag is taken and it is never offered again — the edit is gone with
+  // nothing archived.
+  //
+  // Two live callers made that reachable. A restore rewrites most keys byte for
+  // byte, which is the ordinary shape of re-importing your own backup; and
+  // `rollbackWipedImport` puts the pre-wipe values straight back, which is what
+  // `removedForComparison` in appStorage.js exists to make comparable — it
+  // supplies the right `previous` and this discarded it.
+  if (value === previous) return [];
   if (logicalKey === DATA_KEY) return changedDataUnits(previous, value);
   if (logicalKey.startsWith(HISTORY_PREFIX)) return [];
   return [`${KEY_UNIT_PREFIX}${logicalKey}`];
