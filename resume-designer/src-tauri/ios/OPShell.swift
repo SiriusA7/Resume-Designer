@@ -4349,7 +4349,17 @@ private struct SettingsSheet: View {
         }
 
         Section("Data") {
-          Button("Export backup…") { model.send("exportBackup") }
+          Button("Export backup…") {
+            // DISMISSED FIRST, like the import below. A staging failure reports
+            // through a Tauri dialog, which presents on the window's root
+            // controller with no walk over what is already presented — so with
+            // this sheet still up UIKit refuses it and the person taps Export
+            // and gets nothing at all, which is the silence this whole path was
+            // fixed to remove. Dismissing also puts the share sheet back on the
+            // root, where its iPad popover anchor actually lives.
+            dismiss()
+            model.send("exportBackup")
+          }
           Button("Import backup…") { importingBackup = true }
         }
 

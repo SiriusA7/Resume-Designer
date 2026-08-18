@@ -8,7 +8,7 @@ import { parseResume } from './parser.js';
 import { isTauri, isIOSPlatform, stageTextForShare, notify } from './native.js';
 // The share sheet, for the exports iOS cannot download. `iosShell` does not
 // import this module, so the edge only goes one way.
-import { sharePdf, isNativeShellAvailable } from './iosShell.js';
+import { sharePdf } from './iosShell.js';
 import { appStorage } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 // The API key lives in the OS keychain, not beside the resume data on disk.
@@ -1468,7 +1468,17 @@ export function downloadFile(content, filename, mimeType) {
  * shell, which is the only place both halves are true.
  */
 function shouldShareInsteadOfDownload() {
-  return isIOSPlatform() && isNativeShellAvailable();
+  // THE APP ON iOS, shell or no shell. Being unable to download is a property
+  // of WKWebView, not of the shell: with `OP_NATIVE_SHELL=0` — a supported
+  // control — or an install where the shell never came up, requiring it sent
+  // every export straight back to the `<a download>` no-op, silently, in
+  // exactly the fallback environment where the web UI is what the person is
+  // using. Staging is a Tauri command and still works there; only the sheet is
+  // missing, and `shareTextFile` says so rather than doing nothing.
+  //
+  // `isTauri` is the other half and it is not redundant: mobile Safari is also
+  // iOS and CAN download, so the browser build must keep the ordinary path.
+  return isTauri && isIOSPlatform();
 }
 
 /** Stage the text and hand it to the native share sheet, reporting a failure. */
