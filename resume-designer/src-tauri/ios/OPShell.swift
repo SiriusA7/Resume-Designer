@@ -4285,6 +4285,10 @@ private struct SettingsSheet: View {
   /// The last save was refused. Cleared on the next attempt, not on a timer —
   /// the message has to outlive the tap that caused it.
   @State private var apiKeyFailed = false
+  /// Guards the destructive remove behind one confirmation. The key cannot be
+  /// read back out of the keychain to show, so a mis-tap is only recoverable by
+  /// fetching a new one from OpenRouter.
+  @State private var confirmRemoveKey = false
   /// The backup file picker, here for the same reason as the résumé one: the
   /// web input never opens under the shell.
   @State private var importingBackup = false
@@ -4325,7 +4329,42 @@ private struct SettingsSheet: View {
           }
           .disabled(savingApiKey || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
 
+          // The only way to REMOVE a key on iOS. `Save key` refuses an empty
+          // draft — deliberately, because clearing the field is how a refused
+          // save used to lose the key — and the web Settings that offers this is
+          // unreachable behind the native shell. So a revoked or unwanted
+          // credential could be replaced but never erased from a keychain that
+          // syncs to every device on the account.
+          //
+          // `saveApiKey("")` is already the clear operation; `backupFlow`'s
+          // rollback uses exactly that. Nothing new crosses the bridge.
+          if settings.hasApiKey {
+            Button("Remove key", role: .destructive) { confirmRemoveKey = true }
+              .disabled(savingApiKey)
+          }
+
           Toggle("Automatic fallback", isOn: fallbackBinding)
+            .confirmationDialog(
+              "Remove the saved API key?",
+              isPresented: $confirmRemoveKey,
+              titleVisibility: .visible
+            ) {
+              Button("Remove key", role: .destructive) {
+                savingApiKey = true
+                apiKeyFailed = false
+                Task {
+                  // The same refusal handling as a save: the keychain can say
+                  // no, and claiming the key is gone when it is not would be
+                  // worse here than for a write.
+                  let cleared = await model.saveApiKey("")
+                  savingApiKey = false
+                  if !cleared { apiKeyFailed = true }
+                }
+              }
+              Button("Cancel", role: .cancel) { }
+            } message: {
+              Text("The AI assistant will stop working until you add a key again. Everything else is unaffected. This also removes it from your other devices.")
+            }
         } header: {
           Text("AI")
         } footer: {

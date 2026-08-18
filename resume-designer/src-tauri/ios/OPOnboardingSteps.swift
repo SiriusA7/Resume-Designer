@@ -62,17 +62,42 @@ struct OnboardingKeyStep: View {
           .padding(.horizontal, 22)
 
           OnboardingNoticeLabel(notice: view.notice)
+          // Said here as well as by the button, because "Skip for now" alone
+          // reads as postponing something required. The web step carries the
+          // same sentence directly under its own skip.
+          if !view.hasKey {
+            Text("You can add a key later in Settings. Everything except the AI assistant works without one.")
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+              .multilineTextAlignment(.center)
+              .padding(.horizontal, 22)
+          }
         }
         .padding(.bottom, 24)
       }
 
       OnboardingFooter {
         Spacer(minLength: 0)
-        // Available without typing anything once a key exists, so a replay of
-        // the guide is not a dead end.
+        // ALWAYS a way forward, which is the whole of this. Genuine first-run
+        // onboarding is non-dismissible and `Save key` is disabled until
+        // something is typed, so gating the only other action on `hasKey ||
+        // hasProviders` left a fresh install with no way out of this screen: no
+        // Continue, a disabled Save, and no close. Somebody who only wanted to
+        // write a résumé had to go and obtain an OpenRouter key first. The web
+        // wizard has never worked that way — it offers "Skip for now"
+        // unconditionally, for the reason its own comment gives about not
+        // stranding a keyless user.
+        //
+        // Two buttons rather than one with a conditional label, because the
+        // emphasis differs too: with a key this is the primary action, without
+        // one it sits behind `Save key`.
         if view.hasKey || view.hasProviders {
           Button("Continue") { model.send("onboardingNext") }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        } else {
+          Button("Skip for now") { model.send("onboardingNext") }
+            .buttonStyle(.bordered)
             .controlSize(.large)
         }
         // Two buttons rather than one with a conditional style: `.bordered` and
