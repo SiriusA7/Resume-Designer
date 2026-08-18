@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mapKey, BACKUP_HISTORY_PREFIX } from '../src/profileKeys.js';
 // The history bound, from the leaf that owns it. store.js and syncMerge.js both
 // enforce it and neither may own it — see src/historyLimits.js.
@@ -71,7 +71,7 @@ vi.mock('../src/appStorage.js', () => ({
 
 const {
   collectUnit, collectUnits, unitScopes, applyUnits, parkLoser, registerPersistedSaveHandler,
-  registerEditingProbe, touchUnit, resolveConflict,
+  registerEditingProbe, touchUnit, resolveConflict, setActiveProfileDeletedHandler,
 } = await import('../src/sync/syncModel.js');
 // The résumé store, not the storage map above: parking into the LOADED
 // variant's history has to go through it.
@@ -306,6 +306,47 @@ describe('collecting a profile that is not the open one', () => {
   it('still collects the open workspace when named explicitly', () => {
     expect(collectUnits(PROFILE).map((u) => u.id).sort())
       .toEqual(collectUnits().map((u) => u.id).sort());
+  });
+});
+
+describe('a tombstone for the workspace this device has open', () => {
+  const registryUnit = (entries) => ({
+    id: 'key:resume-designer-profiles', kind: 'plain', payload: JSON.stringify(entries),
+  });
+  const DELETED = {
+    id: PROFILE, name: 'Personal',
+    deletedAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z',
+  };
+  const OTHER_LIVE = { id: 'pother', name: 'Work', createdAt: '2026-08-01T00:00:00.000Z' };
+
+  afterEach(() => setActiveProfileDeletedHandler(null));
+
+  it('reports it, because merging the registry is not moving off the workspace', async () => {
+    // `listProfiles` stops showing it and NOTHING else moves: the active pointer
+    // still names it, appStorage stays mapped to its namespace, and every edit
+    // after this lands in `resume-p--<dead>--…`. The next launch resolves to a
+    // live profile and those edits are gone — written where nothing reads.
+    const onDeleted = vi.fn();
+    setActiveProfileDeletedHandler(onDeleted);
+
+    await applyUnits([registryUnit([DELETED, OTHER_LIVE])]);
+
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+    // The merge itself still landed — the reaction is in addition to it.
+    const merged = JSON.parse(disk.get(physical('resume-designer-profiles')));
+    expect(merged.find((p) => p.id === PROFILE).deletedAt).toBe(DELETED.deletedAt);
+  });
+
+  it('says nothing when the tombstone is for some OTHER workspace', async () => {
+    const onDeleted = vi.fn();
+    setActiveProfileDeletedHandler(onDeleted);
+
+    await applyUnits([registryUnit([
+      { id: PROFILE, name: 'Personal' },
+      { ...OTHER_LIVE, deletedAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z' },
+    ])]);
+
+    expect(onDeleted).not.toHaveBeenCalled();
   });
 });
 

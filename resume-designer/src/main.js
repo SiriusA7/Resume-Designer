@@ -12,6 +12,7 @@ import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
   hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId,
+  listProfiles, switchToProfileDurably,
   markInitialProfileFetchSettled, whenInitialProfileFetchSettled,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
@@ -50,7 +51,7 @@ import {
   collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts,
   registerPersistedSaveHandler, touchUnit,
   registerEditingProbe, isSyncEnabled, setSyncEnabled,
-  installStorageStamping, setStorageDirtyNotifier,
+  installStorageStamping, setStorageDirtyNotifier, setActiveProfileDeletedHandler,
 } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
@@ -120,6 +121,36 @@ installStorageStamping(setStorageWriteObserver);
 // this says yes; it cannot ask the DOM itself (it is storage-only, and the same
 // file runs on iOS), so main.js hands it the question.
 registerEditingProbe(() => getActiveInlineEditable() !== null);
+
+// Another device deleted the workspace open here. The sync layer merges the
+// tombstone and stops; moving off it is the app's job, because picking the
+// replacement is a registry question and reloading differs by platform — the
+// same split `switchToProfileDurably` documents by stopping at the pointer.
+//
+// Left alone, the pointer keeps naming a workspace `listProfiles` no longer
+// shows, `appStorage` stays mapped to its namespace, and every edit lands in
+// `resume-p--<dead>--…` until the next launch resolves elsewhere and they are
+// gone — written where nothing will ever read them.
+setActiveProfileDeletedHandler(async () => {
+  const replacement = listProfiles().find((p) => p.id !== getActiveProfileId());
+  if (!replacement) {
+    // Nothing live to move to, which the boot path is already the answer for:
+    // `resolveActiveProfile` rebuilds or creates one. Reloading into it beats
+    // staying on a workspace that no longer exists.
+    console.warn('[profiles] the open workspace was deleted elsewhere and no live one remains');
+    window.location.reload();
+    return;
+  }
+  // The durable helper, not the pointer move: it saves the open editors first.
+  // Their bytes go into the dead namespace and are lost with it either way, but
+  // the ordering is what makes the pointer change safe, and a second copy of
+  // that reasoning here is how the two platforms drift.
+  if (!(await switchToProfileDurably(replacement.id))) {
+    console.error('[profiles] could not move off the deleted workspace — staying put');
+    return;
+  }
+  window.location.reload();
+});
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [

@@ -17,7 +17,7 @@ import {
 // the mapping, because that is what `appStorage` reads and writes through. The
 // pointer is where the app will be after the next reload, which is a question
 // nothing here is asking.
-import { listProfiles } from '../profiles.js';
+import { getActiveProfileId, listProfiles } from '../profiles.js';
 // The store owns the loaded variant's history IN MEMORY and rewrites the whole
 // key from it on every edit, so parking a loser for that variant has to go
 // through it — see parkLoser.
@@ -564,8 +564,41 @@ function landRegistry(key, unit, profileId) {
   }
   if (!Array.isArray(incoming)) return false;
   const storageKey = storageKeyFor(profileId, key);
-  appStorage.setItem(storageKey, JSON.stringify(mergeRegistry(readJSON(storageKey, null), incoming)));
+  const merged = mergeRegistry(readJSON(storageKey, null), incoming);
+  appStorage.setItem(storageKey, JSON.stringify(merged));
+  // A tombstone for the workspace THIS device has open is not just a registry
+  // row. `listProfiles` filters it out, but nothing else moves: the active
+  // pointer still names it, `appStorage` is still mapped to its namespace, and
+  // the app goes on accepting edits into `resume-p--<dead>--…`. The next launch
+  // resolves to a live profile instead and those edits are simply gone —
+  // written to a namespace nothing will ever read again.
+  //
+  // Only NOTED here. This runs inside the apply, where writes are suppressed
+  // from stamping and nothing is durable yet; the reaction belongs after the
+  // flush, which is where `applyUnits` takes it.
+  const activeId = getActiveProfileId();
+  if (activeId && merged.some((p) => p?.id === activeId && p?.deletedAt)) {
+    activeProfileDeleted = true;
+  }
   return true;
+}
+
+// Set by `landRegistry` when a merged tombstone names the open workspace;
+// consumed once, after the apply's flush, by the handler below.
+let activeProfileDeleted = false;
+let activeProfileDeletedHandler = null;
+
+/**
+ * Install what to do when another device deletes the workspace open here.
+ *
+ * The app owns it, not this module: choosing the replacement is a registry
+ * question and RELOADING differs by platform — the same division
+ * `switchToProfileDurably` documents, which is why it stops at the pointer.
+ * Nothing is registered in the browser or in tests, where the reaction would
+ * have nowhere to go.
+ */
+export function setActiveProfileDeletedHandler(handler) {
+  activeProfileDeletedHandler = typeof handler === 'function' ? handler : null;
 }
 
 /**
@@ -1155,7 +1188,23 @@ export async function applyUnits(units) {
   // that just failed, so which of those reached disk is exactly as unknowable.
   // Over-forfeiting costs a round trip; the other direction is the silent
   // overwrite this whole barrier exists to stop.
-  return (await appStorage.flush()) ? landed : nothingApplied();
+  const durable = await appStorage.flush();
+  // AFTER the flush, and only on a durable one. The tombstone that provokes this
+  // is a registry write like any other: if it did not reach disk, the next
+  // launch reads a registry that still lists the workspace, and switching away
+  // from it now would move the pointer on the strength of bytes this device
+  // does not hold.
+  if (durable && activeProfileDeleted) {
+    activeProfileDeleted = false;
+    try {
+      await activeProfileDeletedHandler?.();
+    } catch (err) {
+      // The apply itself stands: those units ARE on disk, and forfeiting them
+      // over a failed reconciliation would re-fetch content that already landed.
+      console.error('[sync] could not move off a remotely deleted workspace:', err);
+    }
+  }
+  return durable ? landed : nothingApplied();
 }
 
 /** Every fetched unit refused: the shape of an answer that accounts for none. */
