@@ -3489,8 +3489,21 @@ private struct ShellView: View {
           // Stop streaming whatever the closing sheet was subscribed to: both
           // outlines are the largest things on the wire and the canvas
           // re-renders on every keystroke.
+          // RELEASED HERE for both sheets that report focus, because a
+          // disappearing SwiftUI screen does not reliably deliver the focus
+          // transition their `onChange` handlers rely on. Dismissed with the
+          // keyboard still up, `nativeEditing` kept the scope — and a stuck
+          // guard REFUSES every fetched unit for it until another focus/blur
+          // cycle or a relaunch. Sync simply stops, silently, which is a worse
+          // failure than the overwrite the guard exists to prevent.
+          //
+          // Sent from the sheet's close rather than from each field: one place
+          // that always runs, instead of N places that each run only if SwiftUI
+          // delivered a final blur.
           switch previous {
-          case .structure: model.send("setStructureOpen", ["value": "false"])
+          case .structure:
+            model.send("setStructureOpen", ["value": "false"])
+            model.send("setNativeEditing", ["scope": "document", "value": "false"])
           case .design:
             model.send("setDesignOpen", ["value": "false"])
             // Let the held edit go and commit what the Format tab changed. The
@@ -3500,7 +3513,9 @@ private struct ShellView: View {
           case .library: model.send("setLibraryOpen", ["value": "false"])
           case .history: model.send("setHistoryOpen", ["value": "false"])
           case .jobs: model.send("setJobsOpen", ["value": "false"])
-          case .profile: model.send("setProfileOpen", ["value": "false"])
+          case .profile:
+            model.send("setProfileOpen", ["value": "false"])
+            model.send("setNativeEditing", ["scope": "profile", "value": "false"])
           case .pdfPreview:
             // Swiped away rather than answered. The web side is still holding
             // the export guard and the temp PDF waiting to hear which it was,
