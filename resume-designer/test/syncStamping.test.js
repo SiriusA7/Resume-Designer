@@ -457,6 +457,37 @@ describe('the résumé save path still stamps exactly what it did', () => {
     ]);
   });
 
+  it('holds a résumé whose blob\u2019s LATEST bytes were refused, though its own landed', async () => {
+    // The one gate the write-id gate does NOT subsume, and it needs its own case
+    // because nothing else pins it: a `resume:` unit is queued only by the
+    // persistence handler, so a later direct write to the data blob re-queues
+    // the `data:` units but leaves this one gated on its ORIGINAL write — one
+    // that landed. The write-id gate therefore passes it, and only the refusal
+    // gate is left to notice that the blob's current bytes are the ones the
+    // disk just refused. Announce it and the transport collects and uploads
+    // exactly those bytes.
+    setStorageDirtyNotifier(null); // held: nowhere to announce it yet
+    store.setData({ name: 'Edited' }, true, 'v-1');
+    initPersistence('v-1');
+    expect(store.saveNow()).toBe(true);
+    await settle(); // the blob lands; `resume:v-1` is held
+
+    setStorageDirtyNotifier(notify);
+    failWritesFor(DATA);
+    appStorage.setItem(DATA, JSON.stringify({
+      ...JSON.parse(appStorage.getItem(DATA)), currentVariantId: 'v-1',
+    }));
+    await settle();
+
+    expect(allNamed()).not.toContain('resume:v-1');
+
+    // Once the blob writes again, it goes up with everything else.
+    failWritesFor(null);
+    appStorage.setItem(DATA, appStorage.getItem(DATA));
+    await settle();
+    expect(allNamed()).toContain('resume:v-1');
+  });
+
   it('names each dirty unit exactly once', async () => {
     store.setData({ name: 'Edited' }, true, 'v-1');
     initPersistence('v-1');
@@ -550,6 +581,44 @@ describe('a unit is announced only once ITS OWN write reached disk', () => {
     // It is HELD, not dropped: the drain that actually writes it announces it.
     await settle();
     expect(allNamed()).toContain('key:resume-designer-job-descriptions');
+  });
+});
+
+describe('a rolled-back restore still announces what ended up on disk', () => {
+  beforeEach(() => { setStorageDirtyNotifier(notify); });
+
+  it('announces the unit after a deferred write is replayed over a rollback', async () => {
+    // A FAILED restore releases the guard, rolls back by rewriting every key it
+    // wiped, and only then replays the writes it deferred. The rollback's own
+    // `setItem` queues that key's unit at a high id; if the replay is queued
+    // under the deferral's older id it REPLACES that dirty entry, so the only
+    // landing for the key comes in below the unit's gate and the unit is never
+    // announced — held in memory until something else happens to write the key,
+    // which for a unit named once may be never.
+    appStorage.setItem('resume-designer-applications', '[{"id":"before"}]');
+    await settle();
+    notify.mockClear();
+
+    const prior = appStorage.getItem('resume-designer-applications');
+    appStorage.beginRestoreGuard(
+      new Map([['resume-designer-applications', prior]]),
+      ['resume-designer-applications'],
+    );
+    // Somebody else's in-flight work during the window — deferred, not written.
+    appStorage.setItem('resume-designer-applications', '[{"id":"during"}]');
+
+    // The restore fails: release, roll back, then replay. Mirrors
+    // `rollbackWipedImport` + `importFullBackupDurably`'s failure path.
+    appStorage.endRestoreGuard();
+    appStorage.removeItem('resume-designer-applications');
+    appStorage.setItem('resume-designer-applications', prior);
+    appStorage.flushDeferredWrites();
+    await settle();
+
+    // The deferred value is what ended up on disk, so it is exactly what should
+    // go up — and it must be named to the transport for that to happen.
+    expect(appStorage.getItem('resume-designer-applications')).toBe('[{"id":"during"}]');
+    expect(allNamed()).toContain('key:resume-designer-applications');
   });
 });
 

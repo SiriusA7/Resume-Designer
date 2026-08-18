@@ -701,14 +701,20 @@ export const appStorage = {
     // previously-absent keys would lose real work done during the window.
     let applied = false;
     for (const [key, entry] of deferredDuringRestore) {
-      // The id the deferral MINTED, carried through rather than replaced: a
-      // deferred write and its replay are one logical write, and the caller
-      // that made it is holding that id to recognise its own outcome by. A
-      // fresh one here would leave that caller waiting for a landing under an
-      // id nothing will ever report. The fallback covers a deferral recorded
-      // before this field existed; `undefined` would defeat every `<` gate.
+      // A FRESH id, even though the deferral minted one. This is being queued
+      // now, and things happened in between: a failed restore rolls back by
+      // rewriting every key it wiped, and that rollback's own `setItem` queues
+      // a unit at a HIGH id. Replaying under the deferral's LOW id replaces
+      // that dirty entry, so the only landing for the key comes in below the
+      // unit's gate and the unit is never announced — held in memory until
+      // something else happens to write the key, which for a unit named once
+      // may be never.
+      //
+      // The deferral's mint is still what matters to a caller holding an id to
+      // recognise its own outcome by, and it still works: those gates are `>=`,
+      // so a landing at this higher id satisfies the lower one it recorded.
       const name = entry.name ?? key;
-      const seq = entry.seq ?? mintSeq(name);
+      const seq = mintSeq(name);
       if (entry.op === 'delete') {
         cache.delete(key);
         dirty.set(key, { op: 'delete', name, seq });
