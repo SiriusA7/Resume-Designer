@@ -529,6 +529,15 @@ async function resolveActiveProfile(askAccount) {
         accountActive = firstByRegistryOrder(live).id;
         appStorage.setItem(ACTIVE_PROFILE_KEY, accountActive);
       }
+      // ARMED BEFORE THE BARRIER, so the marker and the registry cross it
+      // together. Queued after, it belonged to a LATER write-behind window:
+      // iOS terminating the app in between left the registry durable with no
+      // marker, and the next launch skipped the account branch and treated the
+      // fetch as ready — the very race this marker was added to close, one
+      // window over. The adoption path above states the same rule for the same
+      // reason: the marker reaches disk first, and what it guards crosses its
+      // own barrier while it holds.
+      if (!recoveredMarkerOnlyAdoption) deferUntilInitialProfileFetch();
       if (!(await appStorage.flush())) {
         if (recoveredMarkerOnlyAdoption) {
           console.warn('[profiles] account registry merge did not reach disk; keeping the recovered local profile');
@@ -537,7 +546,6 @@ async function resolveActiveProfile(askAccount) {
           throw new Error('account profile registry did not reach disk');
         }
       }
-      if (!recoveredMarkerOnlyAdoption) deferUntilInitialProfileFetch();
     }
   }
 

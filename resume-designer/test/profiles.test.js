@@ -1222,6 +1222,23 @@ describe('account-first profile bootstrap', () => {
     expect(shouldShowOnboarding()).toBe(false);
   });
 
+  it('gets the pending marker onto DISK with the registry, not after it', async () => {
+    // The marker used to be queued after the flush that made the registry
+    // durable, so it belonged to a later write-behind window. iOS terminating
+    // the app in between left the registry on disk with no marker, and the next
+    // launch skipped the account branch and treated the fetch as ready — the
+    // race this marker exists to close, one window over. Asserted against the
+    // BACKEND rather than the cache, and with no flush of its own, because the
+    // cache would hold it either way and prove nothing.
+    await ensureProfilesInitialized({ askAccount: async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }) });
+
+    expect(backend.files.get(PROFILES_KEY)).toBeDefined();
+    expect(backend.files.get('resume-profile-initial-fetch-pending')).toBe('1');
+  });
+
   it('is STILL pending on the next launch when the first pull never settled', async () => {
     // The readiness state is in-memory, and that covered only the launch that
     // derived the registry from the account. A device whose first profile-zone
