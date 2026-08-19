@@ -57,6 +57,21 @@ struct ShellAccountStats: Decodable, Equatable {
 /// Mirrors the snapshot posted by src/iosShell.js. Changing either side
 /// without the other silently empties the chrome.
 struct ShellSnapshot: Decodable, Equatable {
+  /// Which résumé, in which workspace — the pair that identifies what a
+  /// command without an id of its own will land on.
+  ///
+  /// A résumé id is unique only within a workspace, so anything pinning a
+  /// target across an unbounded wait has to carry both. See
+  /// `ShellModel.ImageRequest`, which pins the same pair for the same reason.
+  struct Where: Equatable {
+    let profileId: String?
+    let variantId: String?
+  }
+
+  var whereAmI: Where {
+    Where(profileId: profiles.first(where: { $0.isActive })?.id, variantId: variantId)
+  }
+
   struct Variant: Decodable, Equatable, Identifiable {
     let id: String
     let name: String
@@ -1125,7 +1140,15 @@ final class ShellModel: ObservableObject {
   /// counter onto the model let a request survive the screen, which was the
   /// point; it also let it survive a résumé switch, which was not. Pick a slow
   /// image, close Design, change résumé, and it lands on the new one.
+  ///
+  /// And the WORKSPACE, because a résumé id is only unique within one. Two
+  /// workspaces holding the same id is not exotic — importing one backup into
+  /// both produces it — and a workspace switch does not stop a Swift task: it
+  /// reloads the WKWebView, which kills anything in flight on the JS side and
+  /// nothing on this one. So the id alone could match again in a workspace that
+  /// never asked for the image.
   struct ImageRequest {
+    let profileId: String?
     let variantId: String?
     let target: String
     let token: Int
@@ -1143,8 +1166,14 @@ final class ShellModel: ObservableObject {
   /// header pick must not supersede a photo still loading.
   private var imageRequests: [String: Int] = [:]
 
-  private func imageRequestKey(_ variantId: String?, _ target: String) -> String {
-    "\(variantId ?? "")|\(target)"
+  private func imageRequestKey(_ profileId: String?, _ variantId: String?, _ target: String)
+    -> String {
+    "\(profileId ?? "")|\(variantId ?? "")|\(target)"
+  }
+
+  /// The workspace the shell is currently in, as the snapshot reports it.
+  private var activeProfileId: String? {
+    snapshot.profiles.first(where: { $0.isActive })?.id
   }
 
   /// Claim the newest request for `target` on the open résumé. Every pick and
@@ -1152,11 +1181,14 @@ final class ShellModel: ObservableObject {
   /// itself against.
   @discardableResult
   func beginImageRequest(_ target: String) -> ImageRequest {
+    let profileId = activeProfileId
     let variantId = snapshot.variantId
-    let key = imageRequestKey(variantId, target)
+    let key = imageRequestKey(profileId, variantId, target)
     let next = (imageRequests[key] ?? 0) + 1
     imageRequests[key] = next
-    return ImageRequest(variantId: variantId, target: target, token: next)
+    return ImageRequest(
+      profileId: profileId, variantId: variantId, target: target, token: next
+    )
   }
 
   /// Whether this request is still the one that should be allowed to write.
@@ -1166,8 +1198,12 @@ final class ShellModel: ObservableObject {
   /// Coming BACK to the originating résumé makes an outstanding load valid
   /// again, which is right — it is that résumé's image, and it is open.
   func isCurrentImageRequest(_ request: ImageRequest) -> Bool {
-    guard snapshot.variantId == request.variantId else { return false }
-    return imageRequests[imageRequestKey(request.variantId, request.target)] == request.token
+    guard activeProfileId == request.profileId, snapshot.variantId == request.variantId else {
+      return false
+    }
+    return imageRequests[
+      imageRequestKey(request.profileId, request.variantId, request.target)
+    ] == request.token
   }
 
   /// A drain is between its first offer and its last settlement. See
@@ -7998,13 +8034,17 @@ private struct HeaderScreen: View {
   /// load", which is only meaningful to somebody still looking at the screen
   /// they chose it on. A person who navigated away has nothing to act on.
   @State private var loadFailed = false
-  /// The résumé the removal prompt was raised for.
+  /// The résumé AND workspace the removal prompt was raised for.
   ///
   /// The prompt is an unbounded wait and `clearDesignImage` carries no id — it
   /// clears whatever is open when it arrives. A CloudKit tombstone for this
   /// résumé loads a replacement without closing this sheet or the prompt on top
   /// of it, so Remove deleted the replacement's image instead.
-  @State private var removeFrom: String?
+  ///
+  /// The workspace for the same reason the picked-image token carries one: a
+  /// résumé id is unique only within a workspace, and two can legitimately hold
+  /// the same one.
+  @State private var removeFrom: ShellSnapshot.Where?
 
   var body: some View {
     Form { content }
@@ -8055,7 +8095,7 @@ private struct HeaderScreen: View {
         "Remove the header image?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
-          guard removeFrom == model.snapshot.variantId else {
+          guard removeFrom == model.snapshot.whereAmI else {
             removeFrom = nil
             return
           }
@@ -8127,7 +8167,7 @@ private struct HeaderScreen: View {
           }
           .pickerStyle(.segmented)
           Button("Remove image", role: .destructive) {
-            removeFrom = model.snapshot.variantId
+            removeFrom = model.snapshot.whereAmI
             confirmRemove = true
           }
         }
@@ -8542,13 +8582,17 @@ private struct PhotoScreen: View {
   /// load", which is only meaningful to somebody still looking at the screen
   /// they chose it on. A person who navigated away has nothing to act on.
   @State private var loadFailed = false
-  /// The résumé the removal prompt was raised for.
+  /// The résumé AND workspace the removal prompt was raised for.
   ///
   /// The prompt is an unbounded wait and `clearDesignImage` carries no id — it
   /// clears whatever is open when it arrives. A CloudKit tombstone for this
   /// résumé loads a replacement without closing this sheet or the prompt on top
   /// of it, so Remove deleted the replacement's image instead.
-  @State private var removeFrom: String?
+  ///
+  /// The workspace for the same reason the picked-image token carries one: a
+  /// résumé id is unique only within a workspace, and two can legitimately hold
+  /// the same one.
+  @State private var removeFrom: ShellSnapshot.Where?
 
   var body: some View {
     Form { content }
@@ -8585,7 +8629,7 @@ private struct PhotoScreen: View {
         "Remove the photo?", isPresented: $confirmRemove, titleVisibility: .visible
       ) {
         Button("Remove", role: .destructive) {
-          guard removeFrom == model.snapshot.variantId else {
+          guard removeFrom == model.snapshot.whereAmI else {
             removeFrom = nil
             return
           }
@@ -8612,7 +8656,7 @@ private struct PhotoScreen: View {
         if design.photo.hasImage {
           Toggle("Show the photo", isOn: designFlag(model, "photo", "enabled") { $0.photo.enabled })
           Button("Remove photo", role: .destructive) {
-            removeFrom = model.snapshot.variantId
+            removeFrom = model.snapshot.whereAmI
             confirmRemove = true
           }
         }
