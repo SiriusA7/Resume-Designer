@@ -173,13 +173,77 @@ describe('getJobsState — the read', () => {
     seedStorage({
       analysis: { recommendations: [{ section: 'summary', current: 'Old summary', suggested: 'New' }] },
     });
-    applyJobs({ action: 'applyRecommendation', index: '0' });
+    applyJobs({ action: 'applyRecommendation', index: '0', revision: String(buildJobs(getJobsState()).revision) });
     expect(buildJobs(getJobsState()).appliedIndexes).toEqual([0]);
 
     currentId = 'v2';
     // Nothing persists which recommendations were applied, so carrying them
     // across would grey out rows on a résumé they were never applied to.
     expect(buildJobs(getJobsState()).appliedIndexes).toEqual([]);
+  });
+
+  // The guard compares the revision the card was drawn with against the live
+  // adoption count. It first took that number from the `document` projection,
+  // which is streamed only while the STRUCTURE sheet is open — and it cannot
+  // be, because the Jobs sheet is. So the card sent -1, the comparison could
+  // never match, and Apply was dead. The property that was missing is this one:
+  // the number the sheet can actually read has to be the number the guard
+  // accepts.
+  it('accepts the revision its own projection publishes', () => {
+    seedJobs([job()]);
+    seedStorage({
+      analysis: { recommendations: [{ section: 'summary', current: 'Old summary', suggested: 'New' }] },
+    });
+    store.setData({ name: 'Ash', summary: 'Old summary' }, true, 'v1');
+    const before = buildJobs(getJobsState()).revision;
+
+    // Move the count off its starting value first. Without this the test would
+    // pass on a projection that publishes NOTHING — the normaliser turns a
+    // missing revision into 0, which matches a count that has never moved.
+    expect(store.adoptDocument('v1', { name: 'Ada', summary: 'Old summary' })).toBe(true);
+
+    const view = buildJobs(getJobsState());
+    expect(view.revision).toBe(before + 1);
+
+    applyJobs({ action: 'applyRecommendation', index: '0', revision: String(view.revision) });
+
+    expect(buildJobs(getJobsState()).appliedIndexes).toEqual([0]);
+  });
+
+  it('refuses a recommendation drawn from a report that has since been replaced', () => {
+    seedJobs([job()]);
+    seedStorage({
+      analysis: { recommendations: [{ section: 'summary', current: 'Old summary', suggested: 'New' }] },
+    });
+    // The store has to be ON v1 for an adoption of v1 to be accepted at all —
+    // `adoptDocument` refuses a variant it is not showing.
+    store.setData({ name: 'Ash', summary: 'Old summary' }, true, 'v1');
+    const stale = buildJobs(getJobsState()).revision;
+    // What an adoption does: the résumé and its report are replaced together,
+    // so the index on the card now counts into a report it never saw. The
+    // return value is asserted because `adoptDocument` answers false to a
+    // variant id it does not hold — and a no-op adoption would leave the
+    // revision matching, so this test would pass without testing anything.
+    expect(store.adoptDocument('v1', { name: 'Ada', summary: 'from the other device' })).toBe(true);
+
+    applyJobs({ action: 'applyRecommendation', index: '0', revision: String(stale) });
+
+    // One read: the notice is a one-shot field that the read consumes.
+    const after = buildJobs(getJobsState());
+    expect(after.appliedIndexes).toEqual([]);
+    expect(after.notice.text).toContain('changed on another device');
+  });
+
+  it('refuses to run at all without a revision, rather than skipping the check', () => {
+    seedJobs([job()]);
+    seedStorage({
+      analysis: { recommendations: [{ section: 'summary', current: 'Old summary', suggested: 'New' }] },
+    });
+    // `Number(undefined)` is NaN, which is not an integer — so a permissive
+    // check here was one forgotten argument away from not existing, and that is
+    // exactly how the broken guard went unnoticed.
+    expect(() => applyJobs({ action: 'applyRecommendation', index: '0' }))
+      .toThrow(/revision/);
   });
 });
 
@@ -311,7 +375,7 @@ describe('applyJobs — applying a recommendation', () => {
         ],
       },
     });
-    applyJobs({ action: 'applyRecommendation', index: '0' });
+    applyJobs({ action: 'applyRecommendation', index: '0', revision: String(buildJobs(getJobsState()).revision) });
     expect(store.getData().summary).toBe('Tailored summary');
     expect(buildJobs(getJobsState()).appliedIndexes).toEqual([0]);
   });
@@ -322,7 +386,7 @@ describe('applyJobs — applying a recommendation', () => {
         recommendations: [{ section: 'Portfolio flair', current: 'nope', suggested: 'still nope' }],
       },
     });
-    applyJobs({ action: 'applyRecommendation', index: '0' });
+    applyJobs({ action: 'applyRecommendation', index: '0', revision: String(buildJobs(getJobsState()).revision) });
     const view = buildJobs(getJobsState());
     expect(view.appliedIndexes).toEqual([]);
     expect(view.notice.kind).toBe('error');

@@ -129,6 +129,10 @@ struct JobsView: Decodable, Equatable {
   var tailorModelId: String
   var tailorReasoning: String
   var analysis: Analysis?
+  /// Which report `analysis` is, for `applyRecommendation` to echo back. Read
+  /// off THIS projection because it is the one live while the sheet is open —
+  /// see the note beside it in `getJobsState`.
+  var revision: Int
   var appliedIndexes: [Int]
   var lastRun: RunMeta?
   var run: Run
@@ -941,6 +945,10 @@ private struct AnalysisScreen: View {
 
   private func recommendation(_ rec: JobsView.Analysis.Recommendation) -> some View {
     let isApplied = view?.appliedIndexes.contains(rec.index) ?? false
+    // The report this card was DRAWN from. Read inside the button's action it
+    // would resolve live at the press, comparing the current report with
+    // itself — a guard that cannot fail is the same as no guard.
+    let revision = view?.revision ?? -1
     return VStack(alignment: .leading, spacing: 8) {
       if !rec.section.isEmpty {
         Text(rec.section.uppercased())
@@ -969,7 +977,7 @@ private struct AnalysisScreen: View {
           // into a list that is not the one on screen.
           model.jobs("applyRecommendation", [
             "index": "\(rec.index)",
-            "revision": String(model.snapshot.document?.revision ?? -1),
+            "revision": String(revision),
           ])
         }
         .buttonStyle(.bordered)

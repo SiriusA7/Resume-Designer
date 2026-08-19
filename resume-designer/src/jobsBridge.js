@@ -194,6 +194,13 @@ export function getJobsState() {
     tailorModelId: validateModelId(settings.tailorModel || settings.defaultModel) || getDefaultModelId(),
     tailorReasoning: settings.tailorReasoning || 'medium',
     analysis: variantId ? getVariantAnalysis(variantId) : null,
+    // WHICH REPORT the recommendations below are, echoed back by Apply and
+    // checked there. It has to be published HERE, on the projection the sheet
+    // actually reads: the guard first took it from the `document` projection,
+    // which is streamed only while the structure sheet is open — and the
+    // structure sheet cannot be open, because the Jobs sheet is. So the card
+    // sent `-1` every time and Apply refused every time.
+    revision: store.documentAdoptions(),
     appliedIndexes: [...applied],
     lastRun,
     run,
@@ -284,6 +291,7 @@ export function buildJobs(state) {
         impactReason: text(obj(r).impactReason),
       })),
     },
+    revision: int(s.revision),
     appliedIndexes: list(s.appliedIndexes).filter((i) => Number.isInteger(i)),
     lastRun: meta && {
       model: text(meta.model),
@@ -554,8 +562,14 @@ function applyRecommendation(index, revision) {
   // against the DOCUMENT, and the new report's entry at that index was computed
   // against that very document — so it matches, and the wrong suggestion applies
   // cleanly.
+  // Required, not optional. Left permissive, a caller that sent no revision at
+  // all skipped the check silently — `Number(undefined)` is NaN, which is not
+  // an integer — so the guard was one forgotten argument away from not being
+  // there, and a test that omitted it passed for that reason rather than for
+  // the one it claimed. The only caller is the native sheet.
   const seen = Number(revision);
-  if (Number.isInteger(seen) && seen !== store.documentAdoptions()) {
+  if (!Number.isInteger(seen)) throw new Error('applyRecommendation needs the report revision');
+  if (seen !== store.documentAdoptions()) {
     notice = {
       kind: 'error',
       text: 'This résumé changed on another device, so that suggestion is out of date. Re-open the analysis.',
