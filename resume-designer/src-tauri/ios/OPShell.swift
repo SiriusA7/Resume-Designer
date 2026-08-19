@@ -8452,6 +8452,14 @@ private struct SpacingScreen: View {
   @ObservedObject var model: ShellModel
 
   @State private var confirmReset = false
+  /// The workspace the reset prompt was raised for.
+  ///
+  /// `resetDesign` names a group and no workspace, so it writes the defaults
+  /// into whichever one is open when it arrives. A CloudKit tombstone for this
+  /// workspace loads a replacement and reloads the webview WITHOUT closing this
+  /// sheet — its `@State` outlives the reload — so Reset would blank the design
+  /// of a workspace the person never opened.
+  @State private var resetFrom: ShellSnapshot.Where?
 
   var body: some View {
     Form { content }
@@ -8461,6 +8469,11 @@ private struct SpacingScreen: View {
         "Reset spacing?", isPresented: $confirmReset, titleVisibility: .visible
       ) {
         Button("Reset", role: .destructive) {
+          guard resetFrom == model.snapshot.whereAmI else {
+            resetFrom = nil
+            return
+          }
+          resetFrom = nil
           model.send("resetDesign", ["group": "spacing"])
         }
       } message: {
@@ -8544,7 +8557,10 @@ private struct SpacingScreen: View {
         // Behind a dialog, where the desktop has a 28pt ghost icon in a section
         // header. On a phone an unconfirmed reset is one mis-tap away from an
         // hour of fitting a résumé onto one page.
-        Button("Reset spacing", role: .destructive) { confirmReset = true }
+        Button("Reset spacing", role: .destructive) {
+          resetFrom = model.snapshot.whereAmI
+          confirmReset = true
+        }
       }
     }
   }
@@ -8570,6 +8586,14 @@ private struct AccentsScreen: View {
   @ObservedObject var model: ShellModel
 
   @State private var confirmReset = false
+  /// The workspace the reset prompt was raised for.
+  ///
+  /// `resetDesign` names a group and no workspace, so it writes the defaults
+  /// into whichever one is open when it arrives. A CloudKit tombstone for this
+  /// workspace loads a replacement and reloads the webview WITHOUT closing this
+  /// sheet — its `@State` outlives the reload — so Reset would blank the design
+  /// of a workspace the person never opened.
+  @State private var resetFrom: ShellSnapshot.Where?
 
   var body: some View {
     Form { content }
@@ -8579,6 +8603,11 @@ private struct AccentsScreen: View {
         "Reset accents?", isPresented: $confirmReset, titleVisibility: .visible
       ) {
         Button("Reset", role: .destructive) {
+          guard resetFrom == model.snapshot.whereAmI else {
+            resetFrom = nil
+            return
+          }
+          resetFrom = nil
           model.send("resetDesign", ["group": "accent"])
         }
       } message: {
@@ -8648,7 +8677,10 @@ private struct AccentsScreen: View {
       }
 
       Section {
-        Button("Reset accents", role: .destructive) { confirmReset = true }
+        Button("Reset accents", role: .destructive) {
+          resetFrom = model.snapshot.whereAmI
+          confirmReset = true
+        }
       }
     }
   }

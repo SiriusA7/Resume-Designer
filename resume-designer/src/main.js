@@ -16,7 +16,7 @@ import {
   markInitialProfileFetchSettled, whenInitialProfileFetchSettled,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
-import { initPdfExport } from './pdf.js';
+import { initPdfExport, isPdfCapturing } from './pdf.js';
 import { paginate, resetPaginatedState } from './pagination.js';
 import { normalizePageSize, DEFAULT_PAGE_WIDTH_IN } from './pageSetup.js';
 import {
@@ -137,7 +137,13 @@ setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
 // The web's inline editor OR a focused native structure field. Both are "a
 // person is typing into this résumé right now", and the DOM answer cannot see
 // the SwiftUI one — see nativeEditingBusy.
-registerEditingProbe(() => getActiveInlineEditable() !== null || nativeEditingBusy('document'));
+//
+// …OR a PDF capture, which is not typing but has the same requirement: the
+// capture takes each page's rect in turn, so a document adopted between two of
+// them puts one résumé on the early pages and another on the late ones.
+registerEditingProbe(() => (
+  getActiveInlineEditable() !== null || nativeEditingBusy('document') || isPdfCapturing()
+));
 registerNativeProfileEditing(() => nativeEditingBusy('profile'));
 // And the native chat composer, whose unsent draft is Swift state the hook's
 // own refs cannot see — see registerNativeChatEditing.

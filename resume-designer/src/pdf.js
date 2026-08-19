@@ -36,6 +36,26 @@ async function loadHtml2Pdf() {
   return html2pdfModule;
 }
 
+/**
+ * A main-window capture is running.
+ *
+ * It counts as EDITING for the sync guards, and that is not a metaphor: the
+ * capture takes each page's rect in turn, so a document replaced between two of
+ * them puts one résumé on the early pages and another on the late ones. The
+ * editing probe is the existing way to say "this document must not be replaced
+ * right now", and a capture has exactly that requirement.
+ *
+ * It became necessary the moment the capture started BLURRING the editor:
+ * before that, exporting mid-sentence left a focused contenteditable, and the
+ * probe answered true by accident. Blurring closed the typing hole and opened
+ * this one — the guard the blur removed has to be replaced deliberately.
+ */
+let capturing = false;
+
+export function isPdfCapturing() {
+  return capturing;
+}
+
 export function initPdfExport() {
   const downloadBtn = document.getElementById('download-pdf');
 
@@ -212,6 +232,8 @@ async function generatePdfInMainWindow() {
   const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
   document.activeElement?.blur?.();
   for (const el of editables) el.setAttribute('contenteditable', 'false');
+  // …and the sync guard the blur just released. See `isPdfCapturing`.
+  capturing = true;
 
   root.classList.add('pdf-export-mode');
   try {
@@ -261,6 +283,7 @@ async function generatePdfInMainWindow() {
     // Restored on every exit, including the throwing ones — a résumé that
     // cannot be typed into is a worse outcome than a failed export.
     for (const el of editables) el.setAttribute('contenteditable', 'true');
+    capturing = false;
     // `pdf-export-mode` makes <html> the scrolling box over a document as tall
     // as the whole resume. Once the class is gone `overflow: hidden` returns
     // and hides any leftover offset visually, so a non-zero scroll here is
