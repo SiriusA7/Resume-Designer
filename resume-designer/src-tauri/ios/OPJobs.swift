@@ -498,6 +498,16 @@ private struct JobEditorScreen: View {
   let target: JobsSheet.Editor
   @Environment(\.dismiss) private var dismiss
 
+  /// The workspace this editor was opened in.
+  ///
+  /// `saveDraft` names no workspace, so it writes into whichever is open when it
+  /// arrives — and this screen is pushed, so a tombstone for the workspace
+  /// reloads the webview underneath it without closing it. A new job then lands
+  /// in the replacement workspace, and an EDIT can overwrite an unrelated job
+  /// there outright, because a job id is unique only within a workspace and one
+  /// backup imported into two produces the same ids in both.
+  @State private var openedIn: ShellSnapshot.Where?
+  @State private var savedElsewhere = false
   @State private var title = ""
   @State private var company = ""
   @State private var description = ""
@@ -526,7 +536,15 @@ private struct JobEditorScreen: View {
         Button("Save") { save() }.disabled(trimmedDescription.isEmpty)
       }
     }
-    .onAppear { seed(draft) }
+    .onAppear {
+      seed(draft)
+      openedIn = model.snapshot.whereAmI
+    }
+    .alert("That workspace is gone", isPresented: $savedElsewhere) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text("Your workspace changed on another device while this was open, so the job was not saved. Copy the text, then add it again.")
+    }
     // Fires when the pasted posting comes back parsed, and only then: the user's
     // own typing never changes the projected draft, so this cannot clobber it.
     .onChange(of: draft) { _, now in seed(now) }
@@ -566,6 +584,13 @@ private struct JobEditorScreen: View {
   }
 
   private func save() {
+    // The workspace this was written for, or nothing. Told rather than dropped
+    // silently — the text is only in this screen, so a save that quietly went
+    // nowhere would take a whole pasted posting with it.
+    guard openedIn == model.snapshot.whereAmI else {
+      savedElsewhere = true
+      return
+    }
     model.jobs("saveDraft", [
       "id": target.id,
       "title": title,

@@ -6165,6 +6165,15 @@ private struct ChatSheet: View {
   @State private var pendingDeleteThread: String?
   /// The chat the rename alert was raised for, for the same reason.
   @State private var pendingRenameThread: String?
+  /// …and the WORKSPACE either was raised in.
+  ///
+  /// A thread id is unique only within a workspace, and importing one backup
+  /// into two produces the same ids in both. A tombstone for the open workspace
+  /// reloads the webview underneath this sheet without closing it, so checking
+  /// only that the id still exists finds the replacement workspace's unrelated
+  /// chat and renames or deletes THAT. Only one of these prompts can be up at a
+  /// time, so one field serves both.
+  @State private var pendingThreadFrom: ShellSnapshot.Where?
   /// Unsent text, per chat. A draft belongs to the conversation it was written
   /// for; see the switch handler.
   @State private var drafts: [String: String] = [:]
@@ -6271,16 +6280,22 @@ private struct ChatSheet: View {
       }
       .alert("Rename chat", isPresented: $showRename) {
         TextField("Name", text: $renameDraft)
-        Button("Cancel", role: .cancel) { pendingRenameThread = nil }
+        Button("Cancel", role: .cancel) {
+          pendingRenameThread = nil
+          pendingThreadFrom = nil
+        }
         Button("Rename") {
           let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
           guard !title.isEmpty, let id = pendingRenameThread,
+                pendingThreadFrom == model.snapshot.whereAmI,
                 chat?.threads.contains(where: { $0.id == id }) == true else {
             pendingRenameThread = nil
+            pendingThreadFrom = nil
             return
           }
           model.send("chatRenameThread", ["id": id, "title": title])
           pendingRenameThread = nil
+          pendingThreadFrom = nil
         }
       }
       .confirmationDialog(
@@ -6295,14 +6310,20 @@ private struct ChatSheet: View {
           // prompt is up, and Delete then permanently removed a conversation
           // nobody named.
           guard let id = pendingDeleteThread,
+                pendingThreadFrom == model.snapshot.whereAmI,
                 chat?.threads.contains(where: { $0.id == id }) == true else {
             pendingDeleteThread = nil
+            pendingThreadFrom = nil
             return
           }
           model.send("chatDeleteThread", ["id": id])
           pendingDeleteThread = nil
+          pendingThreadFrom = nil
         }
-        Button("Cancel", role: .cancel) { pendingDeleteThread = nil }
+        Button("Cancel", role: .cancel) {
+          pendingDeleteThread = nil
+          pendingThreadFrom = nil
+        }
       } message: {
         Text("The messages in it are removed. Your resume is not affected.")
       }
@@ -6498,12 +6519,14 @@ private struct ChatSheet: View {
         // alert is up — and resolving `currentThread` on Rename would then put
         // this chat's drafted title on that replacement.
         pendingRenameThread = currentThread?.id
+        pendingThreadFrom = model.snapshot.whereAmI
         showRename = true
       } label: {
         Label("Rename", systemImage: "pencil")
       }
       Button(role: .destructive) {
         pendingDeleteThread = currentThread?.id
+        pendingThreadFrom = model.snapshot.whereAmI
         showDeleteConfirm = true
       } label: {
         Label("Delete chat", systemImage: "trash")
