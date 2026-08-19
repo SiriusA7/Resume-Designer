@@ -3915,7 +3915,13 @@ private struct ShellView: View {
     Menu {
       Section {
         ForEach(snapshot.variants) { variant in
-          Button {
+          Button { [renderedIn = snapshot.whereAmI] in
+            // Pinned like the two actions below it. A variant id is unique only
+            // within a workspace, so a menu held open across a tombstone would
+            // open a DIFFERENT résumé of that name in the replacement — or, in
+            // a workspace cloned from the same backup, one that matches by id
+            // and is not the row that was tapped.
+            guard renderedIn == model.snapshot.whereAmI else { return }
             model.send("selectVariant", ["id": variant.id])
           } label: {
             // A checkmark on the current row, which is how iOS shows the

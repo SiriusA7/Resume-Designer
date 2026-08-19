@@ -100,7 +100,9 @@ import { initJobDescriptions } from './jobDescriptions.js';
 import { initApplications } from './applications.js';
 import { initLearnedAnswers } from './learnedAnswers.js';
 import { openUserProfilePanel } from './userProfilePanel.js';
-import { shouldShowOnboarding, showOnboardingWizard, isOnboardingOpen } from './onboarding.js';
+import {
+  shouldShowOnboarding, showOnboardingWizard, isOnboardingOpen, whenOnboardingClosed,
+} from './onboarding.js';
 import { initFontService } from './fontService.js';
 import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from './headerStyleService.js';
 import { initSpacingService, applySpacingSettings, getSpacingSettings, saveSpacingSettings } from './spacingService.js';
@@ -186,7 +188,11 @@ setResumeDeletedHandler((deletedIds, openVariantId) => {
   loadVariant(live[0]);
 });
 
-setActiveProfileDeletedHandler(async () => {
+// Whether a deferred switch is already waiting on the wizard, so repeated
+// reports of the same deletion do not stack up waiters.
+let waitingForWizard = false;
+
+async function moveOffDeletedWorkspace() {
   const replacement = listProfiles().find((p) => p.id !== getActiveProfileId());
   if (!replacement) {
     // Nothing live to move to, which the boot path is already the answer for:
@@ -210,6 +216,18 @@ setActiveProfileDeletedHandler(async () => {
   if (isOnboardingOpen()) {
     window.dispatchEvent(new CustomEvent('rd:workspace-deleted'));
     console.warn('[profiles] the open workspace was deleted elsewhere; waiting for the wizard');
+    // WOKEN BY THE WIZARD CLOSING, not only by the next fetch. Keeping the move
+    // owed is what makes a retry possible, but the retry is driven by
+    // `reconcileRemoteDeletions`, which runs when a record lands — and none has
+    // to. Without this, someone could close the warning and spend the rest of
+    // the session editing a workspace that is dead on every device.
+    if (!waitingForWizard) {
+      waitingForWizard = true;
+      whenOnboardingClosed().then(() => {
+        waitingForWizard = false;
+        moveOffDeletedWorkspace();
+      });
+    }
     return false;
   }
   // The durable helper, not the pointer move: it saves the open editors first.
@@ -225,7 +243,9 @@ setActiveProfileDeletedHandler(async () => {
   }
   window.location.reload();
   return true;
-});
+}
+
+setActiveProfileDeletedHandler(moveOffDeletedWorkspace);
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
