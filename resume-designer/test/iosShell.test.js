@@ -845,13 +845,16 @@ describe('the Design sheet commands', () => {
   it('resolves a new row\'s shape on this side, from the path alone', async () => {
     const addListItem = vi.fn();
     const { send } = await mount({ addListItem, generateId: () => 'exp-9' });
+    const { store } = await import('../src/store.js');
+    const revision = String(store.documentAdoptions());
 
-    // Swift sends a path and nothing else. What lands in the document is
-    // decided here, which is what keeps the schema out of the native side.
-    send({ type: 'addItem', path: 'experience[2].bullets' });
+    // Swift sends a path and the revision it drew the rows from — nothing about
+    // the SHAPE. What lands in the document is decided here, which is what keeps
+    // the schema out of the native side.
+    send({ type: 'addItem', path: 'experience[2].bullets', revision });
     expect(addListItem).toHaveBeenCalledWith('experience[2].bullets', 'New bullet point');
 
-    send({ type: 'addItem', path: 'experience' });
+    send({ type: 'addItem', path: 'experience', revision });
     expect(addListItem).toHaveBeenLastCalledWith('experience', expect.objectContaining({
       id: 'exp-9', title: 'New Position',
     }));
@@ -860,9 +863,11 @@ describe('the Design sheet commands', () => {
   it('refuses to append to something that has no template', async () => {
     const addListItem = vi.fn();
     const { send } = await mount({ addListItem });
+    const { store } = await import('../src/store.js');
+    const revision = String(store.documentAdoptions());
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    expect(send({ type: 'addItem', path: 'name' })).toEqual({
+    expect(send({ type: 'addItem', path: 'name', revision })).toEqual({
       ok: false, error: 'addItem has no template for name',
     });
     expect(send({ type: 'addItem' })).toEqual({
@@ -914,6 +919,9 @@ describe('the Design sheet commands', () => {
     expect(send({ type: 'moveItem', path: 'education', from: '0', to: '2', revision }).ok)
       .toBe(false);
     expect(send({ type: 'removeItem', path: 'education', index: '0', revision }).ok).toBe(false);
+    // Adding too: `experience[0].bullets` is a position, and a reordered résumé
+    // leaves that path naming another role's list.
+    expect(send({ type: 'addItem', path: 'experience[0].bullets', revision }).ok).toBe(false);
     expect(moveListItem).not.toHaveBeenCalled();
     expect(removeListItem).not.toHaveBeenCalled();
 

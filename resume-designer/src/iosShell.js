@@ -1634,8 +1634,12 @@ export function initIOSShell(deps) {
     // in the native side would be the second place the document's schema is
     // known. A path with no template is refused rather than appending
     // something the renderer cannot draw.
-    addItem: ({ path }) => {
+    addItem: ({ path, revision }) => {
       if (typeof path !== 'string' || !path) throw new Error('addItem needs a list path');
+      // The same check its two siblings carry. `experience[0].bullets` is a
+      // POSITION too: an adopted résumé that reordered the roles leaves that
+      // path naming a different role's list, and the new row lands under it.
+      requireCurrentDocument(revision, 'addItem');
       const item = newListItem(path, deps.generateId);
       if (item === undefined) throw new Error(`addItem has no template for ${path}`);
       deps.addListItem(path, item);

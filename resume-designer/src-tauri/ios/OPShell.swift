@@ -5052,7 +5052,10 @@ private struct StructureSheet: View {
                 }
                 if !group.addLabel.isEmpty, let listPath = group.listPath {
                   Button {
-                    model.send("addItem", ["path": listPath])
+                    model.send("addItem", [
+                      "path": listPath,
+                      "revision": String(model.snapshot.document?.revision ?? -1),
+                    ]) { ok in if !ok { staleAction = movedMessage } }
                   } label: {
                     Label(group.addLabel, systemImage: "plus.circle.fill")
                   }

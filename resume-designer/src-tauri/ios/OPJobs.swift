@@ -845,7 +845,14 @@ private struct AnalysisScreen: View {
           .foregroundStyle(.secondary)
       } else {
         Button("Apply") {
-          model.jobs("applyRecommendation", ["index": "\(rec.index)"])
+          // The report and the résumé arrive in the same sync unit, so the
+          // revision that identifies one identifies the other: an adoption
+          // replaces the analysis under this card and `rec.index` then counts
+          // into a list that is not the one on screen.
+          model.jobs("applyRecommendation", [
+            "index": "\(rec.index)",
+            "revision": String(model.snapshot.document?.revision ?? -1),
+          ])
         }
         .buttonStyle(.bordered)
         .controlSize(.small)

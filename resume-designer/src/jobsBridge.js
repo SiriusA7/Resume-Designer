@@ -544,7 +544,28 @@ function startTailor({ modelId, reasoning }) {
     .finally(() => { run = IDLE; });
 }
 
-function applyRecommendation(index) {
+function applyRecommendation(index, revision) {
+  // WHICH REPORT that index counts into. The recommendation list is projected
+  // from the résumé's stored analysis, and both travel in the same `resume:<id>`
+  // unit — so an adoption replaces the report under the sheet, and the index the
+  // tapped card was drawn with now names a different recommendation.
+  //
+  // Not caught downstream: `applyRecommendationToStore` checks the premise
+  // against the DOCUMENT, and the new report's entry at that index was computed
+  // against that very document — so it matches, and the wrong suggestion applies
+  // cleanly.
+  const seen = Number(revision);
+  if (Number.isInteger(seen) && seen !== store.documentAdoptions()) {
+    notice = {
+      kind: 'error',
+      text: 'This résumé changed on another device, so that suggestion is out of date. Re-open the analysis.',
+    };
+    return;
+  }
+  return applyRecommendationInner(index);
+}
+
+function applyRecommendationInner(index) {
   // Read against the CURRENT résumé, which is also the one the projection built
   // the recommendation list from. The index is the position in
   // `analysis.recommendations`, never the impact-sorted position the sheet
@@ -687,7 +708,7 @@ export function applyJobs(action) {
     case 'applyRecommendation': {
       const index = Number(command.index);
       if (!Number.isInteger(index) || index < 0) throw new Error('applyRecommendation needs an index');
-      applyRecommendation(index);
+      applyRecommendation(index, command.revision);
       return undefined;
     }
 
