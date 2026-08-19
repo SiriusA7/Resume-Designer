@@ -266,8 +266,19 @@ export default function DiffDialog() {
   //
   // Closed for owned sessions too: theirs has just been ended underneath them,
   // and a dialog outliving its own session is the thing this avoids elsewhere.
+  //
+  // BOTH events, because there are two ways the document underneath changes and
+  // only one of them is an adoption. A tombstone for the open résumé does not
+  // adopt anything — it calls `loadVariant`, which reaches `store.setData` and
+  // emits 'dataLoaded'. `inlineChanges.js` ends its session on both for exactly
+  // this reason; a standalone review (Jobs' Tailor, History's compare) has no
+  // session to end, so before this it simply stayed open and actionable against
+  // a résumé that had been swapped out from under it.
+  //
+  // Only a document LOAD emits 'dataLoaded' — applying a change writes through
+  // `store.update`, so a review does not close itself on its own first Apply.
   useEffect(() => store.subscribe((event) => {
-    if (event === 'documentAdopted') setOpen(false);
+    if (event === 'documentAdopted' || event === 'dataLoaded') setOpen(false);
   }), []);
 
   useEffect(() => changeSession.subscribe(() => {
