@@ -5113,7 +5113,15 @@ private struct StructureSheet: View {
               Section {
                 ForEach(additions) { addition in
                   Button {
-                    model.send("addItem", ["path": addition.path])
+                    // The revision, like every other list command. Without it
+                    // `requireCurrentDocument` refuses before adding anything,
+                    // and these buttons are the ONLY way to create the first
+                    // experience, education or section row — so the empty state
+                    // had no way out of itself.
+                    model.send("addItem", [
+                      "path": addition.path,
+                      "revision": String(model.snapshot.document?.revision ?? -1),
+                    ]) { ok in if !ok { staleAction = movedMessage } }
                   } label: {
                     Label(addition.label, systemImage: "plus")
                   }
@@ -5162,7 +5170,11 @@ private struct StructureSheet: View {
       Button("Delete", role: .destructive) {
         if let removal = pendingRemoval {
           if let at = currentIndex(for: removal) {
-            model.send("removeItem", ["path": removal.path, "index": String(at)])
+            model.send("removeItem", [
+              "path": removal.path,
+              "index": String(at),
+              "revision": String(model.snapshot.document?.revision ?? -1),
+            ]) { ok in if !ok { staleAction = movedMessage } }
           } else {
             staleAction = movedMessage
           }
