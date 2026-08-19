@@ -202,6 +202,11 @@ struct ProfileSheet: View {
   @Environment(\.dismiss) private var dismiss
 
   @State private var importing = false
+  /// The workspace the picker was opened from. A system picker outlives a
+  /// webview reload, and the import names no workspace — for a profile with no
+  /// grouping question it commits immediately, overwriting the replacement
+  /// workspace's own profile outright.
+  @State private var importFrom: ShellSnapshot.Where?
   @State private var importFailed = false
   /// Mirrored from the snapshot rather than read from it: a dialog bound
   /// straight to `pendingImport` re-presents itself the moment it is dismissed
@@ -283,11 +288,20 @@ struct ProfileSheet: View {
           Button("Done") { dismiss() }
         }
       }
+      .onChange(of: importing) { _, open in
+        if open { importFrom = model.snapshot.whereAmI }
+      }
       .fileImporter(
         isPresented: $importing,
         allowedContentTypes: profileImportTypes,
         allowsMultipleSelection: false
       ) { result in
+        let openedIn = importFrom
+        importFrom = nil
+        guard openedIn == model.snapshot.whereAmI else {
+          importFailed = true
+          return
+        }
         handleImport(result)
       }
       .alert("Could not read that file", isPresented: $importFailed) {

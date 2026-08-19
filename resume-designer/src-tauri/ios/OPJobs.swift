@@ -185,6 +185,8 @@ struct JobsSheet: View {
   /// it belongs on the wire.
   @State private var expanded: Set<String> = []
   @State private var pendingDelete: JobsView.Job?
+  /// The workspace that prompt was raised in. See the dialog's own comment.
+  @State private var deleteFrom: ShellSnapshot.Where?
   @State private var editor: Editor?
   /// Latched from the one-shot `notice`, so a run that failed while the sheet
   /// was closed still says so the next time it is opened.
@@ -247,6 +249,15 @@ struct JobsSheet: View {
         Button("Delete", role: .destructive) {
           guard let job = pendingDelete else { return }
           pendingDelete = nil
+          // A job id is unique only inside a workspace, and one backup imported
+          // into two produces the same ids in both — so after a tombstone
+          // reloads the page under this sheet, deleting by id alone removes an
+          // unrelated job from the replacement.
+          guard deleteFrom == model.snapshot.whereAmI else {
+            deleteFrom = nil
+            return
+          }
+          deleteFrom = nil
           model.jobs("deleteJob", ["id": job.id])
         }
       } message: {
@@ -386,7 +397,10 @@ struct JobsSheet: View {
       if expanded.contains(job.id) { expanded.remove(job.id) } else { expanded.insert(job.id) }
     }
     .swipeActions(edge: .trailing) {
-      Button("Delete", role: .destructive) { pendingDelete = job }
+      Button("Delete", role: .destructive) {
+        pendingDelete = job
+        deleteFrom = model.snapshot.whereAmI
+      }
       Button("Edit") { openEditor(.existing(job.id)) }.tint(.blue)
     }
     .swipeActions(edge: .leading) {
@@ -405,7 +419,10 @@ struct JobsSheet: View {
         model.jobs("toggleActive", ["id": job.id])
       }
       Button("Edit", systemImage: "pencil") { openEditor(.existing(job.id)) }
-      Button("Delete", systemImage: "trash", role: .destructive) { pendingDelete = job }
+      Button("Delete", systemImage: "trash", role: .destructive) {
+        pendingDelete = job
+        deleteFrom = model.snapshot.whereAmI
+      }
     }
   }
 

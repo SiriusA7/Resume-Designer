@@ -3529,6 +3529,11 @@ private struct ShellView: View {
   /// rename was refused because they moved. See `submitRename`.
   @State private var renameFrom: ShellSnapshot.Where?
   @State private var renameFailed = false
+  /// …and the workspace the file picker was opened from. A picker is a system
+  /// sheet that outlives a webview reload as surely as an alert does, and the
+  /// import names no workspace — it would create the résumé in whichever one
+  /// the tombstone handler selected.
+  @State private var importFrom: ShellSnapshot.Where?
   /// A refused profile creation or switch, shown after the menu or alert that
   /// asked for it has gone. Named apart from `ProfilesSheet`'s own `failure`
   /// because they are different screens; the wording is deliberately the same,
@@ -4041,6 +4046,17 @@ private struct ShellView: View {
   /// write all stay in JS, so the native picker and the web one end in the same
   /// code rather than in two imports that drift.
   private func openPickedResume(_ result: Result<[URL], Error>) {
+    // The workspace this picker was opened from. Refused rather than imported
+    // somewhere else: the file is still on disk and can be picked again, where
+    // a résumé silently created in another workspace is found much later, if at
+    // all.
+    let openedIn = importFrom
+    importFrom = nil
+    guard openedIn == model.snapshot.whereAmI else {
+      renameFailed = false
+      importFailed = true
+      return
+    }
     guard let picked = readPickedText(result, label: "resume") else {
       importFailed = true
       return
@@ -4143,7 +4159,15 @@ private struct ShellView: View {
       // done that often — they live in the bottom bar now, one tap from the
       // canvas.
       Section("File") {
-        Button { importingVariant = true } label: { Label("Import…", systemImage: "square.and.arrow.down") }
+        Button {
+          // Pinned where the picker OPENS rather than in an `onChange` on the
+          // body: this view's expression is at the type-checker's budget and one
+          // more modifier tips it over.
+          importFrom = snapshot.whereAmI
+          importingVariant = true
+        } label: {
+          Label("Import…", systemImage: "square.and.arrow.down")
+        }
         Button { model.send("exportVariant", ["format": "json"]) } label: { Label("Export as JSON", systemImage: "curlybraces") }
         Button { model.send("exportVariant", ["format": "md"]) } label: { Label("Export as Markdown", systemImage: "text.alignleft") }
       }
@@ -6567,6 +6591,8 @@ private struct HistorySheet: View {
   /// The version a confirmation is pending on. Held whole rather than by index:
   /// indices renumber, and this is what gets sent back for the check.
   @State private var pendingRestore: ShellSnapshot.History.Entry?
+  /// The résumé and workspace that prompt was raised in. See the dialog.
+  @State private var restoreFrom: ShellSnapshot.Where?
   @State private var staleWarning = false
 
   private var history: ShellSnapshot.History? { model.snapshot.history }
@@ -6609,6 +6635,18 @@ private struct HistorySheet: View {
         Button("Restore", role: .destructive) {
           guard let entry = pendingRestore else { return }
           pendingRestore = nil
+          // The index AND timestamp were already checked against the live
+          // history, which is enough while the history is this résumé's. Two
+          // workspaces cloned from one backup hold histories with the same
+          // positions and the same timestamps, so after a tombstone reload that
+          // check passes against a different document — and a restore replaces
+          // the whole of it.
+          guard restoreFrom == model.snapshot.whereAmI else {
+            restoreFrom = nil
+            staleWarning = true
+            return
+          }
+          restoreFrom = nil
           model.send(
             "restoreVersion", ["index": "\(entry.index)", "timestamp": entry.timestamp]
           ) { ok in staleWarning = !ok }
@@ -6658,7 +6696,11 @@ private struct HistorySheet: View {
         .padding(.vertical, 2)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
           if !entry.isCurrent {
-            Button("Restore") { pendingRestore = entry }.tint(.orange)
+            Button("Restore") {
+              pendingRestore = entry
+              restoreFrom = model.snapshot.whereAmI
+            }
+            .tint(.orange)
           }
           Button("Compare") {
             model.send("compareVersion", [
@@ -6675,6 +6717,7 @@ private struct HistorySheet: View {
           if !entry.isCurrent {
             Button("Restore this version", systemImage: "clock.arrow.circlepath") {
               pendingRestore = entry
+              restoreFrom = model.snapshot.whereAmI
             }
           }
           Button("Compare with current", systemImage: "arrow.left.arrow.right") {
