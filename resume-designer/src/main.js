@@ -192,6 +192,32 @@ setResumeDeletedHandler((deletedIds, openVariantId) => {
 // reports of the same deletion do not stack up waiters.
 let waitingForWizard = false;
 
+// A retry of the move itself, for when it fails rather than when it is
+// deferred. The wizard wake-up fires ONCE, and a disk that is momentarily full
+// makes that one attempt return false — after which the move is still owed and
+// nothing drives it, because reconciliation only runs when another record
+// lands. Same gap as the wake-up itself had, one level down.
+//
+// Backed off to 30s and never given up on: the alternative to trying again is a
+// session spent editing a workspace that is dead on every device, and every
+// attempt is one flush that ends the moment it succeeds, because success
+// reloads the page.
+let moveRetryTimer = null;
+let moveRetryDelay = 2000;
+
+function retryMoveLater() {
+  // Not while the wizard holds it: that path re-arms its own waiter, and a
+  // timer as well would be two things racing to do the same move.
+  if (moveRetryTimer || waitingForWizard) return;
+  moveRetryTimer = setTimeout(async () => {
+    moveRetryTimer = null;
+    if ((await moveOffDeletedWorkspace()) === false) {
+      moveRetryDelay = Math.min(moveRetryDelay * 2, 30_000);
+      retryMoveLater();
+    }
+  }, moveRetryDelay);
+}
+
 async function moveOffDeletedWorkspace() {
   const replacement = listProfiles().find((p) => p.id !== getActiveProfileId());
   if (!replacement) {
@@ -223,9 +249,12 @@ async function moveOffDeletedWorkspace() {
     // the session editing a workspace that is dead on every device.
     if (!waitingForWizard) {
       waitingForWizard = true;
-      whenOnboardingClosed().then(() => {
+      whenOnboardingClosed().then(async () => {
         waitingForWizard = false;
-        moveOffDeletedWorkspace();
+        // The result matters. This is the one wake-up the wizard gets, and a
+        // disk that is momentarily full turns it into a no-op that nothing
+        // follows up.
+        if ((await moveOffDeletedWorkspace()) === false) retryMoveLater();
       });
     }
     return false;
@@ -239,6 +268,7 @@ async function moveOffDeletedWorkspace() {
     // `false` and tries again on the next fetch; returning nothing would tell
     // it this had been dealt with, and it never would be.
     console.error('[profiles] could not move off the deleted workspace — staying put');
+    retryMoveLater();
     return false;
   }
   window.location.reload();
