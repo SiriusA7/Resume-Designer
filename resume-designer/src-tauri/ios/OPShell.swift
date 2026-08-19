@@ -3525,6 +3525,10 @@ private struct ShellView: View {
   @State private var creatingProfile = false
   /// A picked file could not be read. See `readPickedText`.
   @State private var importFailed = false
+  /// The résumé and workspace the rename alert was opened for, and whether the
+  /// rename was refused because they moved. See `submitRename`.
+  @State private var renameFrom: ShellSnapshot.Where?
+  @State private var renameFailed = false
   /// A refused profile creation or switch, shown after the menu or alert that
   /// asked for it has gone. Named apart from `ProfilesSheet`'s own `failure`
   /// because they are different screens; the wording is deliberately the same,
@@ -3721,9 +3725,14 @@ private struct ShellView: View {
         } message: {
           Text("A separate profile with its own résumés, job descriptions and chats.")
         }
-        .modifier(ImportFailureAlert(
+        .modifier(importFailureAlert(
           isPresented: $importFailed,
           hint: "Pick a résumé exported from On Paper — a .json or .md file."
+        ))
+        .modifier(NoticeAlert(
+          title: "That resume moved",
+          isPresented: $renameFailed,
+          hint: "Your workspace changed on another device while the name was open, so nothing was renamed."
         ))
         .alert(
           "Couldn't save",
@@ -3932,6 +3941,7 @@ private struct ShellView: View {
       Section("This resume") {
         Button {
           renameDraft = snapshot.variantName
+          renameFrom = snapshot.whereAmI
           renamingVariant = true
           // Seeded ONCE from the snapshot, so a résumé renamed on another
           // device while this alert is up would be overwritten by the stale
@@ -3980,6 +3990,22 @@ private struct ShellView: View {
   private func submitRename() {
     let name = trimmedRenameDraft
     guard !name.isEmpty else { return }
+    // THE RÉSUMÉ AND WORKSPACE THIS ALERT WAS OPENED FOR. `renameVariant` names
+    // neither — it renames whatever is current when it arrives — and this alert
+    // outlives a reload: a tombstone for the open workspace switches to a
+    // replacement and reloads the webview underneath, while the SwiftUI alert
+    // and its draft stay exactly where they were. Confirming then renamed a
+    // résumé in a workspace nobody had opened.
+    //
+    // `whereAmI` rather than the variant id alone, because both halves can
+    // move: the same tombstone changes the workspace, and a tombstone for the
+    // résumé alone changes which one is current inside it.
+    guard renameFrom == model.snapshot.whereAmI else {
+      renameFrom = nil
+      renameFailed = true
+      return
+    }
+    renameFrom = nil
     model.send("renameVariant", ["name": name])
   }
 
@@ -4641,23 +4667,29 @@ private let resumeImportTypes: [UTType] = {
 /// Shared by the two importers so the security-scoped read — which a file from
 /// outside the app's container fails without — is written once rather than
 /// twice. Same pair `OPProfile.handleImport` opens.
-/// "Could not read that file", for the two importers that share one helper.
+/// A one-button "this did not happen, and here is why" alert.
 ///
-/// A modifier rather than the `.alert` written out at each site: both are word
-/// for word the same but for the hint, and — the reason it is not a style
-/// choice — inlining the second one tipped `ShellView`'s body over the
-/// type-checker's budget. That failure is a build timeout, not a wrong shape.
-private struct ImportFailureAlert: ViewModifier {
+/// A modifier rather than the `.alert` written out at each site, and not as a
+/// style choice: `ShellView`'s body sits at the type-checker's budget, and every
+/// inline alert added to it has tipped it over — a build timeout rather than a
+/// wrong shape. Each one that moves in here buys the next one room.
+private struct NoticeAlert: ViewModifier {
+  let title: String
   @Binding var isPresented: Bool
   let hint: String
 
   func body(content: Content) -> some View {
-    content.alert("Could not read that file", isPresented: $isPresented) {
+    content.alert(title, isPresented: $isPresented) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(hint)
     }
   }
+}
+
+/// The two importers that share `readPickedText`, which reports nothing itself.
+private func importFailureAlert(isPresented: Binding<Bool>, hint: String) -> NoticeAlert {
+  NoticeAlert(title: "Could not read that file", isPresented: isPresented, hint: hint)
 }
 
 private func readPickedText(
@@ -4898,7 +4930,7 @@ private struct SettingsSheet: View {
         dismiss()
         model.send("importBackupText", ["text": picked.text, "name": picked.name])
       }
-      .modifier(ImportFailureAlert(
+      .modifier(importFailureAlert(
         isPresented: $importFailed,
         hint: "Pick a backup .json exported from On Paper."
       ))
