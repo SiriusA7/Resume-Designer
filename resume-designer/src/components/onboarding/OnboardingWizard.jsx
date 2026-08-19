@@ -30,6 +30,7 @@ import {
 } from '../../aiService.js';
 import { getSettings, saveSettings, saveApiKey, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { refreshChatPanel } from '../../chatPanel.js';
+import { appStorage } from '../../appStorage.js';
 import { publishOnboarding } from '../../iosShell.js';
 import { initWindowDrag } from '../../tauriDrag.js';
 import {
@@ -346,14 +347,32 @@ export default function OnboardingWizard() {
 
   const reviewBack = useCallback(() => setStep(mode === 'job' ? 2 : 3), [mode]);
 
-  const saveResume = useCallback(() => {
+  const saveResume = useCallback(async () => {
     // saveOnboardingResume throws when the variant can't be persisted (full
     // storage). Surface that and stay on the review step — advancing to
     // the success screen would claim a resume that doesn't exist.
+    setNotice(null);
     try {
       saveOnboardingResume({ parsedResume, mode, targetJob, jobDescriptions });
     } catch (err) {
       toast.error(err.message);
+      setNotice({ kind: 'error', text: err.message });
+      return;
+    }
+    // …and the OTHER half of that same sentence, which the throw above does not
+    // cover. On a device the write goes into `appStorage`'s cache and the disk
+    // refusal arrives later, so the throw never happens and the wizard says
+    // "ready" for a résumé that is only in memory — the first one, on a fresh
+    // install, which is gone at the next launch with nothing to go back to.
+    //
+    // Waited for rather than warned about: this is a one-off at the end of a
+    // wizard, where a moment's pause is affordable and "ready" has to mean it.
+    if (!(await appStorage.flush())) {
+      const text = 'Your resume could not be saved to disk. Free up space and try again.';
+      toast.error(text);
+      // The toast renders in the canvas, behind the native wizard. This is what
+      // the iOS side reads.
+      setNotice({ kind: 'error', text });
       return;
     }
     setStep(5);
