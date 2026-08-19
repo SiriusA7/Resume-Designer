@@ -367,6 +367,12 @@ export default function OnboardingWizard() {
 
   useEffect(() => {
     const onGone = () => {
+      // The ref as well as the state. `saveResume` awaits a durability flush,
+      // and the closure it is running in captured `workspaceGone` before that
+      // await — so a tombstone landing DURING the flush sets the state, and the
+      // in-flight save reads false anyway and advances to "ready" for a résumé
+      // written into a namespace nothing will read.
+      workspaceGoneRef.current = true;
       setWorkspaceGone(true);
       setNotice({
         kind: 'error',
@@ -414,6 +420,9 @@ export default function OnboardingWizard() {
     //
     // Waited for rather than warned about: this is a one-off at the end of a
     // wizard, where a moment's pause is affordable and "ready" has to mean it.
+      // Re-read AFTER the await, from the ref. The check at the top of this
+      // function was true when it ran and says nothing about now.
+      if (workspaceGoneRef.current) return;
       if (!(await appStorage.flush())) {
         const text = 'Your resume could not be saved to disk. Free up space and try again.';
         toast.error(text);
@@ -422,6 +431,9 @@ export default function OnboardingWizard() {
         setNotice({ kind: 'error', text });
         return;
       }
+      // And again on the other side of it, which is the window the flush itself
+      // opens — the whole point of waiting for durability is that it takes time.
+      if (workspaceGoneRef.current) return;
       setStep(5);
     } finally {
       savingRef.current = false;
@@ -462,6 +474,9 @@ export default function OnboardingWizard() {
   // holds the switch back while this is open so the answers survive long enough
   // to be copied out.
   const [workspaceGone, setWorkspaceGone] = useState(false);
+  // The same fact, readable from inside an async closure that captured the
+  // state before its await. See `onGone` and `saveResume`.
+  const workspaceGoneRef = useRef(false);
   // A durable save is in flight; a second Create must not start another.
   const savingRef = useRef(false);
   // The variant was created. Only its durability is outstanding, so a retry
