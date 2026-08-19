@@ -4185,11 +4185,14 @@ private struct ShellView: View {
       // done that often — they live in the bottom bar now, one tap from the
       // canvas.
       Section("File") {
-        Button {
-          // Pinned where the picker OPENS rather than in an `onChange` on the
-          // body: this view's expression is at the type-checker's budget and one
-          // more modifier tips it over.
-          importFrom = snapshot.whereAmI
+        Button { [renderedIn = snapshot.whereAmI] in
+          // In the capture list, not in the body: `snapshot` is a computed read
+          // of `model.snapshot`, so reading it inside the action resolves LIVE
+          // at the press — which is after the menu-open wait, and would pin the
+          // very workspace being guarded against. (Not an `onChange` on the
+          // body either: this view's expression is at the type-checker's budget
+          // and one more modifier tips it over.)
+          importFrom = renderedIn
           importingVariant = true
         } label: {
           Label("Import…", systemImage: "square.and.arrow.down")
@@ -5185,6 +5188,13 @@ private struct StructureSheet: View {
               Section { DocumentSaveWarning() }
             }
             ForEach(groups) { group in
+              // Captured where the rows are DRAWN. A drag is a wait and a swipe
+              // tray is retained, and the revision echo below cannot stand in
+              // for this: it is read live at the drop, and a variant swap is not
+              // an adoption, so the counter never moves for one. The paths are
+              // no help either — "workExperience" means the same thing in every
+              // résumé.
+              let renderedIn = model.snapshot.whereAmI
               Section(group.title) {
                 // Split, not one ForEach with `.onMove`: attaching the move to
                 // the whole group put a drag handle on Role, Company and Dates
@@ -5198,6 +5208,10 @@ private struct StructureSheet: View {
                       // offset arithmetic to get wrong. Swift moves within a
                       // list it was TOLD about and never builds an element path.
                       guard let from = indices.first else { return }
+                      guard renderedIn == model.snapshot.whereAmI else {
+                        staleAction = movedMessage
+                        return
+                      }
                       model.send("moveItem", [
                         "path": listPath,
                         "from": String(from),
@@ -5210,6 +5224,10 @@ private struct StructureSheet: View {
                       // arithmetic that maps a ROW to an array element never
                       // happens here.
                       guard let at = offsets.first else { return }
+                      guard renderedIn == model.snapshot.whereAmI else {
+                        staleAction = movedMessage
+                        return
+                      }
                       model.send("removeItem", [
                         "path": listPath, "index": String(at),
                         "revision": String(model.snapshot.document?.revision ?? -1),
@@ -5218,6 +5236,10 @@ private struct StructureSheet: View {
                 }
                 if !group.addLabel.isEmpty, let listPath = group.listPath {
                   Button {
+                    guard renderedIn == model.snapshot.whereAmI else {
+                      staleAction = movedMessage
+                      return
+                    }
                     model.send("addItem", [
                       "path": listPath,
                       "revision": String(model.snapshot.document?.revision ?? -1),

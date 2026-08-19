@@ -274,7 +274,14 @@ struct ProfileSheet: View {
           // sheet, which needs the shell's own sheet slot to present. Both
           // would be buttons that look like features and are not.
           Menu {
-            Button {
+            // Captured in the capture list, which is the only place that runs
+            // when the MENU is drawn. A menu keeps the closure it was presented
+            // with, so recording the workspace when the row is tapped records
+            // it after the wait it exists to span — and the completion guard
+            // then compared the replacement with itself and let a picked
+            // profile overwrite a workspace this menu was never opened in.
+            Button { [renderedIn = model.snapshot.whereAmI] in
+              importFrom = renderedIn
               importing = true
             } label: {
               Label("Import from markdown…", systemImage: "square.and.arrow.down")
@@ -287,9 +294,6 @@ struct ProfileSheet: View {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
-      }
-      .onChange(of: importing) { _, open in
-        if open { importFrom = model.snapshot.whereAmI }
       }
       .fileImporter(
         isPresented: $importing,
