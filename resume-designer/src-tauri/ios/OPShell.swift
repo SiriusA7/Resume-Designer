@@ -8027,6 +8027,13 @@ private struct HeaderScreen: View {
           // clears it to the same nil — while a stale task that skipped this
           // could leave `pick` holding a photo the user then cannot re-pick.
           pick = nil
+          // CURRENCY FIRST, before the outcome is acted on either way. A
+          // superseded request has nothing to say: it must not write its image,
+          // and it must not report a failure either — the person has since
+          // picked something else or removed the image, and telling them "that
+          // photo could not be read" would be about a choice they have already
+          // replaced.
+          guard model.isCurrentImageRequest(request) else { return }
           guard let url else {
             // SAID, not only logged. `loadTransferable` fails on an iCloud photo
             // that cannot be downloaded — offline, or the library is still
@@ -8036,7 +8043,6 @@ private struct HeaderScreen: View {
             loadFailed = true
             return
           }
-          guard model.isCurrentImageRequest(request) else { return }
           model.send("setDesignImage", ["target": "header", "dataUrl": url])
         }
       }
@@ -8558,13 +8564,15 @@ private struct PhotoScreen: View {
         Task {
           let url = await designImageDataURL(for: item)
           pick = nil
+          // Currency first, as on the header screen — a superseded request has
+          // nothing to say, not even that it failed.
+          guard model.isCurrentImageRequest(request) else { return }
           guard let url else {
             // Said rather than only logged, as on the header screen.
             NSLog("[OPShell] could not read the picked photo")
             loadFailed = true
             return
           }
-          guard model.isCurrentImageRequest(request) else { return }
           model.send("setDesignImage", ["target": "photo", "dataUrl": url])
         }
       }
