@@ -3956,10 +3956,20 @@ private struct ShellView: View {
         } label: {
           Label("Rename…", systemImage: "pencil")
         }
-        Button { model.send("duplicateVariant") } label: {
+        // Both pinned to the render, like every other menu on this shell: a
+        // menu keeps the action it was presented with, so one open across a
+        // workspace tombstone would duplicate — or start the delete of — a
+        // résumé in the workspace that replaced the one it is showing.
+        Button { [renderedIn = snapshot.whereAmI] in
+          guard renderedIn == model.snapshot.whereAmI else { return }
+          model.send("duplicateVariant")
+        } label: {
           Label("Duplicate", systemImage: "plus.square.on.square")
         }
-        Button(role: .destructive) { model.send("deleteVariant") } label: {
+        Button(role: .destructive) { [renderedIn = snapshot.whereAmI] in
+          guard renderedIn == model.snapshot.whereAmI else { return }
+          model.send("deleteVariant")
+        } label: {
           Label("Delete", systemImage: "trash")
         }
       }

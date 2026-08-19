@@ -100,7 +100,7 @@ import { initJobDescriptions } from './jobDescriptions.js';
 import { initApplications } from './applications.js';
 import { initLearnedAnswers } from './learnedAnswers.js';
 import { openUserProfilePanel } from './userProfilePanel.js';
-import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
+import { shouldShowOnboarding, showOnboardingWizard, isOnboardingOpen } from './onboarding.js';
 import { initFontService } from './fontService.js';
 import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from './headerStyleService.js';
 import { initSpacingService, applySpacingSettings, getSpacingSettings, saveSpacingSettings } from './spacingService.js';
@@ -195,6 +195,22 @@ setActiveProfileDeletedHandler(async () => {
     console.warn('[profiles] the open workspace was deleted elsewhere and no live one remains');
     window.location.reload();
     return;
+  }
+  // NOT WHILE THE WIZARD IS UP. A reload discards its interview answers, the
+  // imported résumé and anything generated — none of which is stored anywhere
+  // yet, so `switchToProfileDurably`'s flush cannot help. Losing ten minutes of
+  // setup without touching anything is a worse first impression than the
+  // workspace being stale for a moment longer.
+  //
+  // Deferred AND declared, because deferring alone would be a trap: the
+  // workspace is gone on every device, so a résumé finished here would be
+  // written into a namespace nothing reads and would look saved. The wizard is
+  // told, says so, and refuses to create. Returning false keeps the move owed,
+  // so it happens on the next fetch after the wizard closes.
+  if (isOnboardingOpen()) {
+    window.dispatchEvent(new CustomEvent('rd:workspace-deleted'));
+    console.warn('[profiles] the open workspace was deleted elsewhere; waiting for the wizard');
+    return false;
   }
   // The durable helper, not the pointer move: it saves the open editors first.
   // Their bytes go into the dead namespace and are lost with it either way, but

@@ -97,6 +97,11 @@ const ONBOARDING_CLOSE_POLL_MS = 400;
  * user leaves a due wizard unfinished, the dialog simply stays deferred to a
  * later launch rather than interrupting setup.
  */
+/** Whether the wizard is on screen, which is the DOM's answer and not a flag. */
+export function isOnboardingOpen() {
+  return !!document.querySelector(ONBOARDING_OPEN_SELECTOR);
+}
+
 export function whenOnboardingClosed() {
   const blocked = () =>
     !!document.querySelector(ONBOARDING_OPEN_SELECTOR)

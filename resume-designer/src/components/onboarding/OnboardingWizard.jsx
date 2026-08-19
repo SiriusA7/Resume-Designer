@@ -347,6 +347,19 @@ export default function OnboardingWizard() {
 
   const reviewBack = useCallback(() => setStep(mode === 'job' ? 2 : 3), [mode]);
 
+  useEffect(() => {
+    const onGone = () => {
+      setWorkspaceGone(true);
+      setNotice({
+        kind: 'error',
+        text: 'This workspace was deleted on another device, so nothing here can be saved. '
+          + 'Copy anything you want to keep, then close this.',
+      });
+    };
+    window.addEventListener('rd:workspace-deleted', onGone);
+    return () => window.removeEventListener('rd:workspace-deleted', onGone);
+  }, []);
+
   const saveResume = useCallback(async () => {
     // SINGLE FLIGHT. Waiting for durability opened a window this step never had
     // before: Create is a button on a screen that stays interactive, so a second
@@ -354,6 +367,7 @@ export default function OnboardingWizard() {
     // minting a second résumé id, and in job mode committing the job
     // descriptions a second time as well.
     if (savingRef.current) return;
+    if (workspaceGone) return;
     savingRef.current = true;
     setBusy('save');
     try {
@@ -395,7 +409,7 @@ export default function OnboardingWizard() {
       savingRef.current = false;
       setBusy('');
     }
-  }, [parsedResume, mode, targetJob, jobDescriptions]);
+  }, [parsedResume, mode, targetJob, jobDescriptions, workspaceGone]);
 
   const finish = useCallback(() => {
     completeOnboarding();
@@ -424,6 +438,12 @@ export default function OnboardingWizard() {
   const [nativeGen, setNativeGen] = useState(null);
   const [improved, setImproved] = useState(null);
   const [busy, setBusy] = useState('');
+  // The workspace this wizard is running in was deleted on another device.
+  // Nothing here can be saved to it, so Create is refused rather than writing a
+  // résumé into a namespace nothing reads — see the handler in main.js, which
+  // holds the switch back while this is open so the answers survive long enough
+  // to be copied out.
+  const [workspaceGone, setWorkspaceGone] = useState(false);
   // A durable save is in flight; a second Create must not start another.
   const savingRef = useRef(false);
   // The variant was created. Only its durability is outstanding, so a retry
@@ -696,7 +716,7 @@ export default function OnboardingWizard() {
             isTailored={jobDescriptions.length > 0}
             onBack={reviewBack}
             onCreate={saveResume}
-            saving={busy === 'save'}
+            saving={busy === 'save' || workspaceGone}
           />
         );
       case 5:
