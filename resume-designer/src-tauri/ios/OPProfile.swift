@@ -313,7 +313,11 @@ struct ProfileSheet: View {
         let openedIn = importFrom
         importFrom = nil
         guard openedIn == model.snapshot.whereAmI else {
-          importFailed = true
+          // Not `importFailed`: the file is fine, and telling someone their
+          // valid Markdown could not be read sends them to troubleshoot a file
+          // that has nothing wrong with it. Same condition, same words as the
+          // grouping question's — nothing was imported, pick it again.
+          importVanished = true
           return
         }
         handleImport(result)

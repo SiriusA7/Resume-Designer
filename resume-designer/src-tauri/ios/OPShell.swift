@@ -3529,6 +3529,10 @@ private struct ShellView: View {
   /// rename was refused because they moved. See `submitRename`.
   @State private var renameFrom: ShellSnapshot.Where?
   @State private var renameFailed = false
+  /// A picker that came back into a different workspace. Separate from
+  /// `importFailed` because the file is not the problem — reporting it as an
+  /// unreadable file sends someone to troubleshoot one that is perfectly good.
+  @State private var importElsewhere = false
   /// …and the workspace the file picker was opened from. A picker is a system
   /// sheet that outlives a webview reload as surely as an alert does, and the
   /// import names no workspace — it would create the résumé in whichever one
@@ -3738,6 +3742,12 @@ private struct ShellView: View {
           title: "That resume moved",
           isPresented: $renameFailed,
           hint: "Your workspace changed on another device while the name was open, so nothing was renamed."
+        ))
+        .modifier(NoticeAlert(
+          title: "That workspace is gone",
+          isPresented: $importElsewhere,
+          hint: "Your workspace changed on another device while the picker was open, "
+            + "so nothing was imported. Pick the file again."
         ))
         .alert(
           "Couldn't save",
@@ -4085,8 +4095,11 @@ private struct ShellView: View {
     let openedIn = importFrom
     importFrom = nil
     guard openedIn == model.snapshot.whereAmI else {
+      // Kept from before this branch changed which alert it raises: only the
+      // WORKSPACE case clears a pending rename notice, because that notice is
+      // about the workspace that just went.
       renameFailed = false
-      importFailed = true
+      importElsewhere = true
       return
     }
     guard let picked = readPickedText(result, label: "resume") else {
