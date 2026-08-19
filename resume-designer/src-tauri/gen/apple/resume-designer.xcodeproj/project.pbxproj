@@ -25,6 +25,7 @@
 		9BEEA6B6EF4FE4B81856F179 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D82239C056B94F6C12B6AFF /* Security.framework */; };
 		9C560E19D1A37B784329F1D8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 35C6EC1683A0B36BC4D973E6 /* Assets.xcassets */; };
 		A09EF06F6E8D97BCF483834E /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 6EEE3405CED55B9A7875970D /* assets */; };
+		CC113B1E7AE7DEC388E0BB84 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 60816FF37467226652B293E2 /* PrivacyInfo.xcprivacy */; };
 		FC45B961568C0DF70307199A /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = DCF643378505CF59EB076023 /* main.mm */; };
 /* End PBXBuildFile section */
 
@@ -44,6 +45,7 @@
 		4ED538225C2B89B0B74B9238 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4F7D748785876BEDA2EAD667 /* pdf_windows.rs */ = {isa = PBXFileReference; path = pdf_windows.rs; sourceTree = "<group>"; };
 		5B18D1C388CC897BBFA6254C /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		60816FF37467226652B293E2 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		66250B1BE62BA664F214CB7E /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		6EEE3405CED55B9A7875970D /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		72B526A3E02A81204398D45E /* pdf_merge.rs */ = {isa = PBXFileReference; path = pdf_merge.rs; sourceTree = "<group>"; };
@@ -189,6 +191,7 @@
 				6EEE3405CED55B9A7875970D /* assets */,
 				35C6EC1683A0B36BC4D973E6 /* Assets.xcassets */,
 				129E38387B051F17EF9D53E5 /* LaunchScreen.storyboard */,
+				60816FF37467226652B293E2 /* PrivacyInfo.xcprivacy */,
 				459AC654BB107884EE50E7D9 /* Externals */,
 				586BA75DFAA5BA8F879F76FA /* resume-designer_iOS */,
 				2C210BA60A255C62C6A238E1 /* Shell */,
@@ -212,18 +215,18 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
-		"TEMP_7863DD7E-D60C-4E2A-B820-EF84105432C5" /* arm64 */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = arm64;
-			sourceTree = "<group>";
-		};
-		"TEMP_D9A158D5-05C1-440B-9DC4-056FEB1F5874" /* x86_64 */ = {
+		"TEMP_7E52B702-C09C-4D9D-8DBB-F98F39102A8B" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = x86_64;
+			sourceTree = "<group>";
+		};
+		"TEMP_BDEAFC4C-A7F2-407A-8FE0-8BE5D35AFF92" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -289,6 +292,7 @@
 			files = (
 				9C560E19D1A37B784329F1D8 /* Assets.xcassets in Resources */,
 				3C7969A8468941C590381228 /* LaunchScreen.storyboard in Resources */,
+				CC113B1E7AE7DEC388E0BB84 /* PrivacyInfo.xcprivacy in Resources */,
 				A09EF06F6E8D97BCF483834E /* assets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

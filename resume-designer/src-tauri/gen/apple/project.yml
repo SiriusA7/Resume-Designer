@@ -64,6 +64,14 @@ targets:
         buildPhase: resources
         type: folder
       - path: LaunchScreen.storyboard
+      # Apple's required-reason API declaration. Listed EXPLICITLY as a
+      # resource rather than left inside `resume-designer_iOS`, so it cannot
+      # depend on xcodegen guessing a build phase from an extension it does not
+      # know — and so it is visible here, in the file that survives
+      # `tauri ios init`, rather than only as a file on disk that a regeneration
+      # could drop.
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
     info:
       path: resume-designer_iOS/Info.plist
       properties:

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Apple's required-reason declaration. Without it an App Store archive can
+	  fail privacy validation at upload, which is a submission blocker rather
+	  than a runtime one — nothing about the app behaves differently.
+
+	  UserDefaults is the only required-reason API this target uses. The other
+	  candidates were checked rather than assumed: the FileManager calls here
+	  create and remove directories and read `temporaryDirectory`, none of which
+	  are in the required-reason list — the file-timestamp APIs are, and this
+	  target does not touch them.
+
+	  CA92.1 is the app-owned case: everything stored here is this app's own
+	  state — sync bookkeeping (change tags, deferred queues, full-upload debt)
+	  and UI preferences. Nothing is read from or written to a group container
+	  shared with other apps, which is what the other reasons cover.
+	-->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- On Paper collects nothing and tracks nobody. The résumé never leaves
+	     the device except into the user's own iCloud, and the only outbound
+	     request is to the model provider the user configured with their own
+	     key. -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+</dict>
+</plist>
