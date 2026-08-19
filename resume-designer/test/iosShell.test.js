@@ -905,7 +905,12 @@ describe('the Design sheet commands', () => {
     // would move whichever bullet is at that index NOW.
     const moveListItem = vi.fn();
     const removeListItem = vi.fn();
-    const { send } = await mount({ moveListItem, removeListItem });
+    // `addListItem` is provided deliberately. Without it the addItem case below
+    // returns ok:false because the dep is undefined and the handler throws —
+    // which looks exactly like the guard working, and passes whether or not the
+    // guard exists.
+    const addListItem = vi.fn();
+    const { send } = await mount({ moveListItem, removeListItem, addListItem });
     // After `mount`, for the reason above.
     const { store } = await import('../src/store.js');
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -924,12 +929,15 @@ describe('the Design sheet commands', () => {
     expect(send({ type: 'addItem', path: 'experience[0].bullets', revision }).ok).toBe(false);
     expect(moveListItem).not.toHaveBeenCalled();
     expect(removeListItem).not.toHaveBeenCalled();
+    expect(addListItem).not.toHaveBeenCalled();
 
     // The same gesture, restarted against what is on screen now, goes through.
     const fresh = String(store.documentAdoptions());
     expect(send({ type: 'moveItem', path: 'education', from: '0', to: '2', revision: fresh }).ok)
       .toBe(true);
     expect(moveListItem).toHaveBeenCalledWith('education', 0, 2);
+    expect(send({ type: 'addItem', path: 'experience[0].bullets', revision: fresh }).ok).toBe(true);
+    expect(addListItem).toHaveBeenCalledWith('experience[0].bullets', 'New bullet point');
     spy.mockRestore();
   });
 
