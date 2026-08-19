@@ -676,6 +676,7 @@ function adoptLoadedDocument(unit) {
 let landedResumeTombstones = [];
 let deletedOpenVariant = null;
 let resumeDeletedHandler = null;
+let resumeChangedHandler = null;
 
 /**
  * Install what to do when another device deletes a résumé here.
@@ -687,6 +688,29 @@ let resumeDeletedHandler = null;
  */
 export function setResumeDeletedHandler(handler) {
   resumeDeletedHandler = typeof handler === 'function' ? handler : null;
+}
+
+/**
+ * Install what to do when another device CHANGES a résumé here.
+ *
+ * The other half of the handler above, and needed for the same reason its own
+ * comment gives: what the header and the Library render is a cached snapshot
+ * that only variantManager's own mutations refresh. A deletion said so; a rename
+ * or an edit did not, so a résumé renamed on another device kept its old name on
+ * the list, and one edited there kept its old preview and its old searchable
+ * text, until some unrelated local change happened to refresh the cache.
+ *
+ * `adoptLoadedDocument` is not that refresh and cannot be: it hands the bytes to
+ * the loaded editor, so for any résumé that is not the open one it has nothing
+ * to do — which is exactly the case where the stale name is on screen the
+ * longest.
+ *
+ * Called with the ids that landed. main.js owns it, on the same division as the
+ * deletion handler: this module lands the unit, and the list is the variant
+ * list's question.
+ */
+export function setResumeChangedHandler(handler) {
+  resumeChangedHandler = typeof handler === 'function' ? handler : null;
 }
 
 /**
@@ -1602,10 +1626,15 @@ function landFetchedUnits(units) {
     // handing them over anyway would show one workspace's résumé inside
     // another.
     if (dataKey !== DATA_KEY) continue;
+    const changedResumes = [];
     for (const unit of group) {
-      if (unit.id.startsWith(RESUME_UNIT_PREFIX)) adoptLoadedDocument(unit);
-      else if (unit.id === USER_PROFILE_UNIT_ID) adoptStoredUserProfile();
+      if (unit.id.startsWith(RESUME_UNIT_PREFIX)) {
+        changedResumes.push(unit.id.slice(RESUME_UNIT_PREFIX.length));
+        adoptLoadedDocument(unit);
+      } else if (unit.id === USER_PROFILE_UNIT_ID) adoptStoredUserProfile();
     }
+    // Once per batch, after the storage write. See `setResumeChangedHandler`.
+    if (changedResumes.length) resumeChangedHandler?.(changedResumes);
   }
 
   for (const unit of incoming) {

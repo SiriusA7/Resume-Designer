@@ -58,6 +58,7 @@ import {
   stampRestoredWrites,
   announceRestoredUnits,
   setResumeDeletedHandler,
+  setResumeChangedHandler,
 } from './sync/syncModel.js';
 import {
   getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
@@ -163,6 +164,11 @@ registerNativeChatEditing(() => nativeEditingBusy('chat'));
 // The résumé on screen, deleted on another device. Same division as the
 // workspace handler below: the sync layer lands the tombstone and says so, and
 // what to open instead is the variant list's question.
+// The other half of the handler below: a résumé RENAMED or edited on another
+// device. Only the cached list needs saying — `adoptLoadedDocument` has already
+// handed the bytes to the editor if the changed one happened to be open.
+setResumeChangedHandler(() => refreshVariants());
+
 setResumeDeletedHandler((deletedIds, openVariantId) => {
   // The list first, and for EVERY deletion. `getVariants` already stops
   // returning them, but what the header and the library render is a cached

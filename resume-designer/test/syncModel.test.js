@@ -82,6 +82,7 @@ const {
   collectUnit, collectUnits, unitScopes, applyUnits, parkLoser, registerPersistedSaveHandler,
   registerEditingProbe, touchUnit, resolveConflict, setActiveProfileDeletedHandler,
   setResumeDeletedHandler,
+  setResumeChangedHandler,
   resolveConflicts,
 } = await import('../src/sync/syncModel.js');
 // The résumé store, not the storage map above: parking into the LOADED
@@ -353,6 +354,26 @@ describe('a deleted résumé travels', () => {
 
     // Named, with null for "none of them was on screen".
     expect(onDeleted).toHaveBeenCalledWith(['v-other'], null);
+  });
+
+  it('reports a CHANGE to a résumé that is not the one on screen', async () => {
+    // The same cached-snapshot problem as the deletion above, and the half that
+    // was missing. `adoptLoadedDocument` hands the bytes to the loaded editor,
+    // so for any résumé that is not the open one it does nothing at all — which
+    // is exactly where a stale name sits on the list longest.
+    const onChanged = vi.fn();
+    setResumeChangedHandler(onChanged);
+    // An EDIT to that résumé's document — the name here is the résumé's own
+    // name field, not the variant's label. Both reach the list through the same
+    // landing path: the variant's label feeds the header row, the document feeds
+    // the Library's preview and its searchable text.
+    const landed = await applyUnits([resumeUnit('v-other', { name: 'Ada Lovelace' })]);
+    setResumeChangedHandler(null);
+
+    // Asserted alongside `applied`, so a test that stopped landing anything
+    // could not pass by reporting a change that never happened.
+    expect(landed.applied).toBe(1);
+    expect(onChanged).toHaveBeenCalledWith(['v-other']);
   });
 
   it('still refuses a record that is merely broken', async () => {
