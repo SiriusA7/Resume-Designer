@@ -6205,6 +6205,10 @@ private struct ChatSheet: View {
   /// Bumped on every send; the composer's field is keyed on it. See the comment
   /// on the `.id` there.
   @State private var fieldGeneration = 0
+  /// The workspace the visible draft was written in, and whether a send was
+  /// refused because it changed. See `sendDraft`.
+  @State private var composedIn: ShellSnapshot.Where?
+  @State private var staleWorkspace = false
 
   private var chat: ShellSnapshot.ChatView? { model.snapshot.chat }
 
@@ -6294,6 +6298,18 @@ private struct ChatSheet: View {
       // That was wrong: the hold cannot outlive the sheet, because the sheet's
       // own close blanket-releases this scope. It is bounded by a screen the
       // person is looking at.
+      .onChange(of: draft) { _, text in
+        // Recorded as soon as there IS something to send, and left alone after
+        // that: the workspace it was written in does not change because more
+        // was typed.
+        if composedIn == nil, !text.isEmpty { composedIn = model.snapshot.whereAmI }
+        if text.isEmpty, drafts.isEmpty { composedIn = nil }
+      }
+      .modifier(NoticeAlert(
+        title: "That workspace is gone",
+        isPresented: $staleWorkspace,
+        hint: "Your workspace changed on another device, so this was not sent. Copy the text, then reopen the chat."
+      ))
       .onChange(of: hasUnsentText) { _, unsent in
         model.send("setNativeEditing", [
           "scope": "chat", "holder": "composer", "value": unsent ? "true" : "false",
@@ -6569,6 +6585,15 @@ private struct ChatSheet: View {
   private func sendDraft() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return }
+    // Not into a workspace this was not written in. The per-thread parking
+    // above keys on the thread id changing, and a workspace cloned from the
+    // same backup can present the SAME current thread id after the reload — so
+    // nothing fires, the draft stays on screen looking like it belongs, and
+    // Send posts it into a conversation in a workspace nobody opened.
+    guard composedIn == model.snapshot.whereAmI else {
+      staleWorkspace = true
+      return
+    }
     model.send("chatSend", ["text": text])
     draft = ""
     // Sent, so there is no longer a parked draft for this chat to come back to.
@@ -7747,14 +7772,29 @@ private func optionName(_ id: String, in options: [Design.Option]) -> String {
 /// closure formed in a nonisolated function cannot then touch the model at all.
 /// The isolation is what a View gets for free — every caller here is one — and
 /// stating it is what keeps these free functions on the same footing.
+/// The workspace a design control was RENDERED for.
+///
+/// A `Picker`'s menu keeps the binding it was presented with, so a menu still
+/// open across a workspace tombstone holds the binding built before the reload
+/// while the sheet behind it has re-rendered for the replacement. Choosing then
+/// writes into a workspace whose design the menu never showed.
+///
+/// Only the bindings need this. The palette, layout, header-style and font
+/// buttons act on the tap itself, and the sheet has re-rendered for the new
+/// workspace by then — so a tap after a reload targets exactly what is on
+/// screen, which is right.
 @MainActor
 private func designText(
   _ model: ShellModel, _ group: String, _ property: String,
   _ read: @escaping (Design) -> String
 ) -> Binding<String> {
-  Binding(
+  let renderedFor = model.snapshot.whereAmI
+  return Binding(
     get: { model.snapshot.design.map(read) ?? "" },
-    set: { model.send("setDesign", ["group": group, "property": property, "value": $0]) }
+    set: {
+      guard renderedFor == model.snapshot.whereAmI else { return }
+      model.send("setDesign", ["group": group, "property": property, "value": $0])
+    }
   )
 }
 
@@ -7763,9 +7803,11 @@ private func designFlag(
   _ model: ShellModel, _ group: String, _ property: String,
   _ read: @escaping (Design) -> Bool
 ) -> Binding<Bool> {
-  Binding(
+  let renderedFor = model.snapshot.whereAmI
+  return Binding(
     get: { model.snapshot.design.map(read) ?? false },
     set: {
+      guard renderedFor == model.snapshot.whereAmI else { return }
       model.send(
         "setDesign", ["group": group, "property": property, "value": $0 ? "true" : "false"]
       )
@@ -7786,9 +7828,11 @@ private func designNumber(
   fallback: Double, places: Int,
   _ read: @escaping (Design) -> Double
 ) -> Binding<Double> {
-  Binding(
+  let renderedFor = model.snapshot.whereAmI
+  return Binding(
     get: { model.snapshot.design.map(read) ?? fallback },
     set: {
+      guard renderedFor == model.snapshot.whereAmI else { return }
       model.send(
         "setDesign",
         ["group": group, "property": property, "value": String(format: "%.\(places)f", $0)]
