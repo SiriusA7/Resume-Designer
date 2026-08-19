@@ -120,6 +120,12 @@ export default function OnboardingWizard() {
     setQuestion(0);
     setImportText('');
     setFilePreview(null);
+    // The saved guard is per RUN, not per session. It exists so a retry after a
+    // durability failure re-flushes rather than creating a second résumé — but
+    // left standing from the previous run it made the NEXT "New resume" skip
+    // saveOnboardingResume entirely: the wizard flushed, showed the success
+    // screen, and created nothing. Reset with the rest of the run's state.
+    savedRef.current = false;
 
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
@@ -240,7 +246,19 @@ export default function OnboardingWizard() {
    */
   const nativeSaveKey = useCallback(async (key) => {
     setNotice(null);
-    const result = await validateKey(key);
+    let result;
+    try {
+      result = await validateKey(key);
+    } finally {
+      // The native step's "Saving…" is cleared by THIS, not by watching hasKey
+      // and notice change. Replacing a key that already worked with another
+      // that works moves neither — hasKey was true and stays true, the notice
+      // was nil and stays nil — so the step sat on "Saving…" with the button
+      // disabled and no way to retry or to correct a mistyped key. A counter
+      // always changes, so every completed attempt is reported, including the
+      // ones whose outcome happens to look like the state before them.
+      setKeySaves((n) => n + 1);
+    }
     if (!result?.saved) {
       setNotice({ kind: 'error', text: result?.error || 'Could not save your API key.' });
       return;
@@ -450,6 +468,9 @@ export default function OnboardingWizard() {
   // re-flushes instead of minting a second résumé.
   const savedRef = useRef(false);
   const [notice, setNotice] = useState(null);
+  // Bumped once per COMPLETED key-save attempt. The native step has no other
+  // reliable signal that one finished — see `nativeSaveKey`.
+  const [keySaves, setKeySaves] = useState(0);
   const genAbortRef = useRef(null);
   const improveTokenRef = useRef(0);
 
@@ -584,6 +605,7 @@ export default function OnboardingWizard() {
           open, step, mode, isNewResumeMode, canDismiss,
           hasProviders: getConfiguredProviders().length > 0,
           hasKey: !!getSettings().openrouterKey,
+          keySaves,
           importText,
           filePreview,
           questions: INTERVIEW_QUESTIONS,
