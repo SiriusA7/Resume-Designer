@@ -948,12 +948,29 @@ function finishEditing(element) {
 // `b`/`i` are included alongside `strong`/`em` because WebKit's own execCommand —
 // the iPad shortcut bar, and macOS's Edit menu — inserts the presentational tags.
 // Querying only the semantic ones dropped that formatting on every round trip.
+//
+// WALKED IN ORDER, not matched by text. This used to take the element's plain
+// text and `String.replace()` each formatted node's text into it — which finds
+// the FIRST occurrence, not the node's own. "foo <b>foo</b>" serialised as
+// "**foo** foo": the bold silently moved to the other word, and that is what
+// got saved. Repeated words are ordinary in a résumé — a tool listed twice, a
+// company name inside its own bullet — so this was not an exotic case.
+const EMPHASIS_MARKERS = { strong: '**', b: '**', em: '_', i: '_', u: '++' };
+
 export function serializeEmphasis(el) {
-  let result = (el.textContent || '').trim();
-  el.querySelectorAll('strong, b').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `**${t}**`); });
-  el.querySelectorAll('em, i').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `_${t}_`); });
-  el.querySelectorAll('u').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `++${t}++`); });
-  return result;
+  const walk = (node) => {
+    if (node.nodeType === 3) return node.nodeValue || '';
+    if (node.nodeType !== 1) return '';
+    const inner = Array.from(node.childNodes).map(walk).join('');
+    const marker = EMPHASIS_MARKERS[node.tagName.toLowerCase()];
+    if (!marker) return inner;
+    // Markers hug the text, not the spaces around it: "**bold **next" is not
+    // emphasis to any reader of the stored string, and WebKit is happy to put
+    // a trailing space inside the tag it creates.
+    const [, lead, body, trail] = inner.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    return body ? `${lead}${marker}${body}${marker}${trail}` : inner;
+  };
+  return Array.from(el.childNodes).map(walk).join('').trim();
 }
 
 // Extract the edited value, preserving format for special content types

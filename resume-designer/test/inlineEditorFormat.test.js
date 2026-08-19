@@ -107,4 +107,26 @@ describe('serializeEmphasis', () => {
   it('returns plain text unchanged', () => {
     expect(serializeEmphasis(el('Led infra work'))).toBe('Led infra work');
   });
+
+  it('marks the occurrence that is actually formatted', () => {
+    // The old serializer took the plain text and `String.replace()`d each
+    // formatted node's text into it, which finds the FIRST match rather than
+    // the node's own position — so the emphasis moved to another word and that
+    // is what was saved. A repeated word is ordinary here: a tool listed twice,
+    // a company name inside its own bullet.
+    expect(serializeEmphasis(el('foo <b>foo</b>'))).toBe('foo **foo**');
+    expect(serializeEmphasis(el('<b>foo</b> foo'))).toBe('**foo** foo');
+    expect(serializeEmphasis(el('Ada and <em>Ada</em> and Ada'))).toBe('Ada and _Ada_ and Ada');
+  });
+
+  it('keeps the markers against the text rather than the spaces', () => {
+    // WebKit's own execCommand will happily put the trailing space inside the
+    // tag it creates, and "**bold **next" is not emphasis to anything reading
+    // the stored string back.
+    expect(serializeEmphasis(el('Led <b>infra </b>work'))).toBe('Led **infra** work');
+  });
+
+  it('keeps both markers when they are nested', () => {
+    expect(serializeEmphasis(el('<b><i>both</i></b>'))).toBe('**_both_**');
+  });
 });
