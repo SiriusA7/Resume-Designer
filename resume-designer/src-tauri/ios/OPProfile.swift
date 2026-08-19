@@ -222,6 +222,16 @@ struct ProfileSheet: View {
   /// round. Checked rather than ordered, because ordering is the part that
   /// cannot be verified from here.
   @State private var groupingAnswered = false
+  /// The workspace the grouping question was ASKED in.
+  ///
+  /// The parse behind the question lives in a module-level variable in
+  /// `profileBridge`, and a workspace tombstone RELOADS the webview — so the
+  /// parse is gone while this sheet, being native, is still standing. The
+  /// projection then carries no `pendingImport`, the question dismisses itself,
+  /// and without this it looked exactly like the person had tapped outside it:
+  /// no import, no question, no reason.
+  @State private var groupingAskedIn: ShellSnapshot.Where?
+  @State private var importVanished = false
 
   private var profile: ProfileView? { model.snapshot.profile }
 
@@ -308,6 +318,11 @@ struct ProfileSheet: View {
         }
         handleImport(result)
       }
+      .alert("That workspace is gone", isPresented: $importVanished) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("Your workspace changed on another device before the import finished, so nothing was imported. Pick the file again.")
+      }
       .alert("Could not read that file", isPresented: $importFailed) {
         Button("OK", role: .cancel) {}
       } message: {
@@ -330,7 +345,22 @@ struct ProfileSheet: View {
             // number of multi-role employers — and the import can then neither
             // be completed nor cancelled.
             Task { @MainActor in
-              if !groupingAnswered { model.profile("cancelImport") }
+              // Two ways to reach here unanswered, and they end differently. A
+              // tap outside is a cancel and the page still holds the parse, so
+              // tell it. A workspace replaced underneath took the parse with it,
+              // so there is nothing to cancel — and the person is owed the
+              // reason their import vanished.
+              //
+              // Reported rather than deferred or carried over. The reload is
+              // held for the onboarding wizard because six typed answers cannot
+              // be recreated; a parsed file is still on disk, one tap away. And
+              // carrying the parse across would import into a workspace it was
+              // never chosen for, which is the thing every other guard on this
+              // screen exists to prevent.
+              if !groupingAnswered {
+                if groupingAskedIn != model.snapshot.whereAmI { importVanished = true }
+                else { model.profile("cancelImport") }
+              }
               groupingAnswered = false
             }
           }
@@ -356,6 +386,7 @@ struct ProfileSheet: View {
       }
       .onChange(of: profile?.pendingImport?.runCount) { _, runCount in
         groupingQuestion = runCount
+        if runCount != nil { groupingAskedIn = model.snapshot.whereAmI }
       }
     }
     .presentationDetents([.large])
