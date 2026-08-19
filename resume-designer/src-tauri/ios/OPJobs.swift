@@ -620,6 +620,44 @@ private struct JobEditorScreen: View {
 
 // MARK: - Analyze
 
+/// Pin a run screen to the workspace it was set up in.
+///
+/// Analyze and Tailor each hand a whole run to the page and pop back to the
+/// root, and both are PUSHED — a tombstone for the open workspace reloads the
+/// webview underneath them without closing them, so their SwiftUI state
+/// outlives the workspace it was chosen in. Analyze's tick marks are `@State`,
+/// and a job id is unique only inside a workspace: one backup imported into two
+/// produces the same ids in both, so `live` stays nonempty and the ids resolve
+/// against the REPLACEMENT. The run then spends an API request and writes its
+/// report over an unrelated résumé's analysis. Tailor names no ids at all — it
+/// rewrites whichever workspace's active jobs it lands in.
+///
+/// So the workspace is captured on appear and re-read at the press. Told rather
+/// than dropped silently: the button is the whole point of the screen, and a
+/// dismiss with no run behind it reads as a run that started.
+private struct WorkspacePin: ViewModifier {
+  @ObservedObject var model: ShellModel
+  @Binding var openedIn: ShellSnapshot.Where?
+  @Binding var changed: Bool
+  @Environment(\.dismiss) private var dismiss
+
+  func body(content: Content) -> some View {
+    content
+      // Only the first appearance. A re-pin would take the value of whatever
+      // workspace is open by then, which is exactly the one being guarded
+      // against.
+      .onAppear { if openedIn == nil { openedIn = model.snapshot.whereAmI } }
+      .alert("That workspace is gone", isPresented: $changed) {
+        // Back to the root, whose list belongs to the workspace that is
+        // actually open. Staying would leave the pin naming a workspace that no
+        // longer exists, so every further press would refuse as well.
+        Button("OK", role: .cancel) { dismiss() }
+      } message: {
+        Text("Your workspace changed on another device while this was open, so nothing was started. Open it again to run this on the workspace you have now.")
+      }
+  }
+}
+
 /// Pick the jobs, the model and the effort, then start the run.
 ///
 /// Model and effort seed from the per-area remembered choice the projection
@@ -650,6 +688,8 @@ private struct AnalyzeScreen: View {
   @State private var modelId = ""
   @State private var reasoning = "medium"
   @State private var seeded = false
+  @State private var openedIn: ShellSnapshot.Where?
+  @State private var workspaceChanged = false
 
   private var view: JobsView? { model.snapshot.jobs }
 
@@ -690,6 +730,11 @@ private struct AnalyzeScreen: View {
     }
     .safeAreaInset(edge: .bottom) {
       Button {
+        // The ids below mean nothing outside the workspace they were ticked in.
+        guard openedIn == model.snapshot.whereAmI else {
+          workspaceChanged = true
+          return
+        }
         model.jobs("analyze", [
           // Every payload value is a String, so the selection crosses as a
           // comma-separated list of the ids the projection handed out — they are
@@ -711,6 +756,7 @@ private struct AnalyzeScreen: View {
     }
     .navigationTitle("Analyze resume fit")
     .navigationBarTitleDisplayMode(.inline)
+    .modifier(WorkspacePin(model: model, openedIn: $openedIn, changed: $workspaceChanged))
     .onAppear {
       guard !seeded, let view else { return }
       seeded = true
@@ -732,6 +778,8 @@ private struct TailorScreen: View {
   @State private var modelId = ""
   @State private var reasoning = "medium"
   @State private var seeded = false
+  @State private var openedIn: ShellSnapshot.Where?
+  @State private var workspaceChanged = false
 
   private var view: JobsView? { model.snapshot.jobs }
 
@@ -749,6 +797,12 @@ private struct TailorScreen: View {
       }
       Section {
         Button("Tailor resume") {
+          // Rewrites the ACTIVE jobs of whichever workspace this lands in, and
+          // the choice was made about the one that was open.
+          guard openedIn == model.snapshot.whereAmI else {
+            workspaceChanged = true
+            return
+          }
           model.jobs("tailor", ["modelId": modelId, "reasoning": reasoning])
           dismiss()
         }
@@ -757,6 +811,7 @@ private struct TailorScreen: View {
     }
     .navigationTitle("Tailor resume")
     .navigationBarTitleDisplayMode(.inline)
+    .modifier(WorkspacePin(model: model, openedIn: $openedIn, changed: $workspaceChanged))
     .onAppear {
       guard !seeded, let view else { return }
       seeded = true
