@@ -1413,10 +1413,45 @@ final class ShellModel: ObservableObject {
   /// device is locked, access is denied — and the sheet clears the field the
   /// user typed into. Without an answer that clearing is unconditional, so a
   /// refused write loses the key with nothing on screen to say so.
+  /// The chain of key writes still to finish, and how many are outstanding.
+  ///
+  /// SERIALISED, and on the model rather than on the sheet. `savingApiKey` used
+  /// to be the sheet's own `@State`, so swiping Settings away and reopening it
+  /// gave a fresh sheet that believed nothing was in flight — it would offer
+  /// Save and Remove again while the first write was still crossing to the
+  /// keychain, and nothing below here ordered the two. The older key could land
+  /// last and overwrite the newer choice.
+  private var apiKeyWriteChain: Task<Bool, Never>?
+  private var apiKeyWritesOutstanding = 0
+
+  /// A key write is crossing. Published, so every sheet instance agrees.
+  @Published var apiKeyWriteInFlight = false
+
   func saveApiKey(_ key: String) async -> Bool {
-    guard case .answered(let value) = await sendForResult("setApiKey", ["value": key])
-    else { return false }
-    return value as? Bool == true
+    // Each write waits for the one before it, so the LAST one asked for is the
+    // last one to land — which is the only ordering a person could predict.
+    let previous = apiKeyWriteChain
+    let write = Task { @MainActor [weak self] in
+      _ = await previous?.value
+      guard let self else { return false }
+      guard case .answered(let value) = await self.sendForResult("setApiKey", ["value": key])
+      else { return false }
+      return value as? Bool == true
+    }
+    apiKeyWriteChain = write
+    apiKeyWritesOutstanding += 1
+    apiKeyWriteInFlight = true
+
+    let ok = await write.value
+
+    apiKeyWritesOutstanding -= 1
+    // Only the last one out turns the light off, and drops the chain so the
+    // next write starts a fresh one rather than awaiting a finished task.
+    if apiKeyWritesOutstanding == 0 {
+      apiKeyWriteInFlight = false
+      apiKeyWriteChain = nil
+    }
+    return ok
   }
 
   /// The command body, encoded once for both ways of asking.
@@ -4554,7 +4589,6 @@ private struct SettingsSheet: View {
 
   @State private var apiKeyDraft = ""
   @State private var apiKeyFocused = false
-  @State private var savingApiKey = false
   /// Guards the destructive remove behind one confirmation. The key cannot be
   /// read back out of the keychain to show, so a mis-tap is only recoverable by
   /// fetching a new one from OpenRouter.
@@ -4590,20 +4624,21 @@ private struct SettingsSheet: View {
           )
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
-          Button(savingApiKey ? "Saving…" : "Save key") {
+          Button(model.apiKeyWriteInFlight ? "Saving…" : "Save key") {
             let key = apiKeyDraft
-            savingApiKey = true
             model.apiKeyWriteFailed = false
             Task {
               let saved = await model.saveApiKey(key)
-              savingApiKey = false
               // The draft survives a refusal. Clearing it unconditionally is
               // what used to lose the key: the keychain says no, nothing
               // publishes, and the field the user typed into is already empty.
               if saved { apiKeyDraft = "" } else { model.apiKeyWriteFailed = true }
             }
           }
-          .disabled(savingApiKey || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+          .disabled(
+            model.apiKeyWriteInFlight
+            || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty
+          )
 
           // The only way to REMOVE a key on iOS. `Save key` refuses an empty
           // draft — deliberately, because clearing the field is how a refused
@@ -4616,7 +4651,7 @@ private struct SettingsSheet: View {
           // rollback uses exactly that. Nothing new crosses the bridge.
           if settings.hasApiKey {
             Button("Remove key", role: .destructive) { confirmRemoveKey = true }
-              .disabled(savingApiKey)
+              .disabled(model.apiKeyWriteInFlight)
           }
 
           Toggle("Automatic fallback", isOn: fallbackBinding)
@@ -4626,14 +4661,12 @@ private struct SettingsSheet: View {
               titleVisibility: .visible
             ) {
               Button("Remove key", role: .destructive) {
-                savingApiKey = true
                 model.apiKeyWriteFailed = false
                 Task {
                   // The same refusal handling as a save: the keychain can say
                   // no, and claiming the key is gone when it is not would be
                   // worse here than for a write.
                   let cleared = await model.saveApiKey("")
-                  savingApiKey = false
                   if !cleared { model.apiKeyWriteFailed = true }
                 }
               }
