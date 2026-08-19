@@ -298,12 +298,25 @@ export function buildJobs(state) {
  * report on the current résumé.
  *
  * Extracted verbatim from JobsDialog.runAnalysis so both shells run the same
- * thing. **It reads `getCurrentId()` AFTER the await**, which is a pre-existing
- * bug and is left exactly as it was: a résumé switched during the request saves
- * the report onto whatever is current when it returns. Tailoring pins its
- * target before its await for precisely this reason; this one never did, and
- * fixing it here would be a silent behaviour change to the desktop app in a
- * commit about the phone.
+ * thing — except for the pin, which it did not have.
+ *
+ * THE TARGET IS PINNED BEFORE THE AWAIT, as `runTailor` below has always done.
+ * Reading `getCurrentId()` afterwards saved the report onto whatever résumé was
+ * current when the request returned, and `saveVariantAnalysis` overwrites
+ * unconditionally — so switching résumés during an analysis destroyed the other
+ * one's stored report and left it showing gaps and scores computed against a
+ * document it had never seen.
+ *
+ * This was carried as a known pre-existing bug on the grounds that fixing it
+ * would be a silent desktop change in a commit about the phone. That reason
+ * expired: the review of this branch fixed the same shape in `Header.jsx`,
+ * `DetailPane.jsx`, `StructurePanel.jsx`, `HistoryDialog.jsx` and
+ * `ProfileTabs.jsx`, and the iOS Jobs sheet can be dismissed while the run
+ * continues, which makes it easier to reach rather than harder.
+ *
+ * No existence re-check is needed on the way out, unlike tailoring's: the pin is
+ * only used to address the write, and `saveVariantAnalysis` already ignores a
+ * variant that has been deleted.
  *
  * @param {{jobs: Array, modelId: string, reasoning: string, hooks: object}} params
  * @returns {Promise<object>} the parsed analysis
@@ -312,9 +325,9 @@ export async function runJobAnalysis({ jobs = [], modelId = '', reasoning = 'med
   const model = modelId || getSettings().defaultModel || getDefaultModelId();
   const reasoningEffort = reasoning || 'medium';
   saveSettings({ analysisModel: model, analysisReasoning: reasoningEffort });
+  const variantId = getCurrentId();
   const results = await analyzeAgainstJobs(model, jobs, { reasoningEffort, hooks });
-  const id = getCurrentId();
-  if (id && results) saveVariantAnalysis(id, results);
+  if (variantId && results) saveVariantAnalysis(variantId, results);
   return results;
 }
 

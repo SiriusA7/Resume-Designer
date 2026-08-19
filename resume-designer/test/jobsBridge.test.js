@@ -26,7 +26,7 @@ vi.mock('../src/variantManager.js', () => ({
 
 const { analyzeAgainstJobs, generateResumeChanges } = await import('../src/aiService.js');
 const {
-  buildJobs, getJobsState, applyJobs, runTailor,
+  buildJobs, getJobsState, applyJobs, runTailor, runJobAnalysis,
 } = await import('../src/jobsBridge.js');
 const { initJobDescriptions, getAllJobDescriptions } = await import('../src/jobDescriptions.js');
 const { store } = await import('../src/store.js');
@@ -331,6 +331,38 @@ describe('applyJobs — applying a recommendation', () => {
 
   it('rejects an index that is not one', () => {
     expect(() => applyJobs({ action: 'applyRecommendation', index: 'first' })).toThrow(/index/);
+  });
+});
+
+describe('runJobAnalysis — the report lands on the résumé it was run for', () => {
+  beforeEach(() => {
+    seedJobs([job()]);
+    localStorage.setItem(DATA_KEY, JSON.stringify({
+      variants: {
+        v1: { name: 'Main', data: {}, jobAnalysis: null },
+        v2: { name: 'Other', data: {}, jobAnalysis: { matchScore: 11, source: 'v2 own run' } },
+      },
+      currentVariantId: 'v1',
+      settings: {},
+    }));
+  });
+
+  it('writes to the pinned résumé when the user switches mid-run', async () => {
+    // The window is a whole AI request — tens of seconds — and on a phone the
+    // Jobs sheet can be dismissed while it runs, leaving the variant menu live.
+    analyzeAgainstJobs.mockImplementation(async () => {
+      currentId = 'v2';
+      return { matchScore: 88, source: 'v1 run' };
+    });
+
+    await runJobAnalysis({ jobs: [job()], modelId: 'openai/gpt-5.5' });
+
+    const stored = JSON.parse(localStorage.getItem(DATA_KEY)).variants;
+    expect(stored.v1.jobAnalysis).toMatchObject({ source: 'v1 run' });
+    // And the other résumé's own report is untouched. `saveVariantAnalysis`
+    // overwrites unconditionally, so an unpinned write does not merely put the
+    // report in the wrong place — it destroys the one that was there.
+    expect(stored.v2.jobAnalysis).toMatchObject({ source: 'v2 own run' });
   });
 });
 
