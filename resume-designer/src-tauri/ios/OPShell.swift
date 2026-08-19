@@ -4812,6 +4812,18 @@ private struct SettingsSheet: View {
   /// The backup file picker, here for the same reason as the résumé one: the
   /// web input never opens under the shell.
   @State private var importingBackup = false
+  /// The workspace the backup picker was opened FROM.
+  ///
+  /// Browsing the Files app is an arbitrarily long wait, and nothing dismisses
+  /// a native sheet when the webview reloads underneath it. `importBackupText`
+  /// names no workspace, so it restores into whichever one is open when it
+  /// arrives — and a restore is not an ordinary write: the format-1 path wipes
+  /// the active profile's owned keys before writing. Aimed at the wrong
+  /// workspace it does not import somewhere odd, it REPLACES a workspace nobody
+  /// asked about. The two résumé pickers already pin for the milder version of
+  /// this; see `openPickedResume`.
+  @State private var backupFrom: ShellSnapshot.Where?
+  @State private var backupElsewhere = false
   /// That file could not be read. See `readPickedText`.
   @State private var importFailed = false
 
@@ -4960,7 +4972,10 @@ private struct SettingsSheet: View {
             dismiss()
             model.send("exportBackup")
           }
-          Button("Import backup…") { importingBackup = true }
+          Button("Import backup…") {
+            backupFrom = model.snapshot.whereAmI
+            importingBackup = true
+          }
         }
 
         Section {
@@ -4984,6 +4999,15 @@ private struct SettingsSheet: View {
         allowedContentTypes: [.json],
         allowsMultipleSelection: false
       ) { result in
+        // Refused rather than restored elsewhere: the file is still on disk and
+        // can be picked again, where a workspace overwritten by someone else's
+        // backup is not recoverable from here.
+        let openedIn = backupFrom
+        backupFrom = nil
+        guard openedIn == model.snapshot.whereAmI else {
+          backupElsewhere = true
+          return
+        }
         guard let picked = readPickedText(result, label: "backup") else {
           importFailed = true
           return
@@ -4998,6 +5022,12 @@ private struct SettingsSheet: View {
       .modifier(importFailureAlert(
         isPresented: $importFailed,
         hint: "Pick a backup .json exported from On Paper."
+      ))
+      .modifier(NoticeAlert(
+        title: "That workspace is gone",
+        isPresented: $backupElsewhere,
+        hint: "Your workspace changed on another device while the picker was open, "
+          + "so nothing was restored. Open Settings again and pick the file once more."
       ))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -5078,6 +5108,19 @@ private struct StructureSheet: View {
     let title: String
     /// What the row IS, as opposed to where it was. See `currentIndex(for:)`.
     let identity: String
+    /// The workspace this was ASKED about.
+    ///
+    /// `currentIndex(for:)` re-resolves the row by its id, which is right for
+    /// an adoption inside one workspace — an id there means the same row. It is
+    /// no help at all across workspaces: `duplicateVariant` deep-copies the
+    /// document, so a duplicate carries IDENTICAL ids, and a tombstone for the
+    /// open résumé swaps another one in underneath this sheet without closing
+    /// it. The id then matches a row the alert never named, in a résumé nobody
+    /// opened, and a whole role or section is spliced out of it.
+    ///
+    /// The revision echo cannot stand in either: it is read live at the press,
+    /// and a variant swap is not an adoption, so the counter never moves for it.
+    let renderedIn: ShellSnapshot.Where
     var id: String { "\(path)[\(index)]" }
   }
 
@@ -5191,7 +5234,7 @@ private struct StructureSheet: View {
                   Button(role: .destructive) {
                     pendingRemoval = Removal(
                       path: removePath, index: group.removeIndex, title: group.removeTitle,
-                      identity: group.removeId
+                      identity: group.removeId, renderedIn: model.snapshot.whereAmI
                     )
                   } label: {
                     // `.destructive` reddens the TITLE and leaves the symbol on
@@ -5266,7 +5309,9 @@ private struct StructureSheet: View {
     ) {
       Button("Delete", role: .destructive) {
         if let removal = pendingRemoval {
-          if let at = currentIndex(for: removal) {
+          if removal.renderedIn != model.snapshot.whereAmI {
+            staleAction = movedMessage
+          } else if let at = currentIndex(for: removal) {
             model.send("removeItem", [
               "path": removal.path,
               "index": String(at),
