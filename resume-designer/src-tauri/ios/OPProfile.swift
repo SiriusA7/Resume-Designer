@@ -514,9 +514,9 @@ private struct ProfileFieldRow: View {
       }
     }
     .padding(.vertical, 2)
-    // A picker never takes focus, so its workspace is recorded when the row
-    // renders — which is the last moment before a tap that the row was, in
-    // fact, showing this workspace's value.
+    // Seeds the TEXT binding's guard for the window before its first focus.
+    // The picker no longer reads this — it captures its own where the binding is
+    // built, because a row SwiftUI reuses never sees `onAppear` again.
     .onAppear { if focusedIn == nil { focusedIn = model.snapshot.whereAmI } }
     .alert("That skill moved", isPresented: $staleChoice) {
       Button("OK", role: .cancel) {}
@@ -612,13 +612,23 @@ private struct ProfileFieldRow: View {
     // against exactly the state it was added to catch. The design bindings in
     // OPShell capture their pin the same way and for the same reason.
     let renderedWith = String(model.snapshot.profile?.revision ?? -1)
+    // The WORKSPACE captured the same way, and no longer read from `focusedIn`.
+    // That is `@State` seeded in `onAppear`, and SwiftUI reuses a row whose
+    // identity has not changed — which a replacement workspace with the same
+    // field paths gives it — so `onAppear` never runs again and the pin stayed
+    // on the dead workspace for the life of the screen. Every later menu was
+    // then refused, including freshly opened ones, while the alert told the
+    // person to try again from the refreshed list. Captured here, an old menu
+    // keeps the old pin and a newly rendered one gets the workspace it is
+    // actually showing.
+    let renderedIn = model.snapshot.whereAmI
     return Binding(
       get: { field.value },
       set: {
         // The workspace as well as the revision. The revision counts ADOPTIONS,
         // and a workspace switch reloads the page — which resets that counter,
         // so a stale number can match the new workspace's by starting over.
-        guard focusedIn == model.snapshot.whereAmI else {
+        guard renderedIn == model.snapshot.whereAmI else {
           staleChoice = true
           return
         }
