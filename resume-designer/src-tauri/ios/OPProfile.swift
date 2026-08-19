@@ -916,7 +916,9 @@ private struct ProfileExperienceScreen: View {
   }
 
   private func companyRow(_ employer: ProfileView.Employer) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
+    // See `roleRow` for why this is read here rather than in the actions.
+    let renderedIn = model.snapshot.whereAmI
+    return VStack(alignment: .leading, spacing: 4) {
       Text("Company")
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -930,17 +932,25 @@ private struct ProfileExperienceScreen: View {
     }
     .padding(.vertical, 2)
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-      Button("Delete", role: .destructive) { askDelete(employer) }
+      Button("Delete", role: .destructive) { askDelete(employer, renderedIn: renderedIn) }
     }
     .contextMenu {
       Button("Delete employer", systemImage: "trash", role: .destructive) {
-        askDelete(employer)
+        askDelete(employer, renderedIn: renderedIn)
       }
     }
   }
 
   private func roleRow(_ employer: ProfileView.Employer, _ role: ProfileView.Role) -> some View {
-    NavigationLink {
+    // Captured where the row is DRAWN. A swipe tray and a long-press menu keep
+    // the closures they were presented with — the row redraws underneath them,
+    // the presented actions do not — so a tombstone landing while one is open
+    // leaves these holding an index and key that now address a different
+    // workspace's role. `requireItem` cannot catch it: a workspace cloned from
+    // the same backup has the same keys at the same positions, so the command
+    // is accepted and detaches or deletes the wrong résumé's role.
+    let renderedIn = model.snapshot.whereAmI
+    return NavigationLink {
       ProfileRoleScreen(model: model, roleKey: role.key, roleIndex: role.index)
     } label: {
       VStack(alignment: .leading, spacing: 2) {
@@ -952,29 +962,33 @@ private struct ProfileExperienceScreen: View {
     }
     // No confirmation, matching the web: only a whole employer asks.
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-      Button("Delete", role: .destructive) { deleteRole(role) }
+      Button("Delete", role: .destructive) { deleteRole(role, renderedIn: renderedIn) }
       if role.canDetach {
-        Button("Detach") {
-          model.profile("detachRole", [
-            "index": String(role.index), "key": role.key,
-          ]) { ok in staleWarning = !ok }
-        }
-        .tint(.orange)
+        Button("Detach") { detachRole(role, renderedIn: renderedIn) }
+          .tint(.orange)
       }
     }
     .contextMenu {
       if role.canDetach {
         Button("Make this its own employer", systemImage: "rectangle.split.2x1") {
-          model.profile("detachRole", [
-            "index": String(role.index), "key": role.key,
-          ]) { ok in staleWarning = !ok }
+          detachRole(role, renderedIn: renderedIn)
         }
       }
-      Button("Delete role", systemImage: "trash", role: .destructive) { deleteRole(role) }
+      Button("Delete role", systemImage: "trash", role: .destructive) {
+        deleteRole(role, renderedIn: renderedIn)
+      }
     }
   }
 
-  private func deleteRole(_ role: ProfileView.Role) {
+  private func detachRole(_ role: ProfileView.Role, renderedIn: ShellSnapshot.Where) {
+    guard renderedIn == model.snapshot.whereAmI else { return }
+    model.profile("detachRole", [
+      "index": String(role.index), "key": role.key,
+    ]) { ok in staleWarning = !ok }
+  }
+
+  private func deleteRole(_ role: ProfileView.Role, renderedIn: ShellSnapshot.Where) {
+    guard renderedIn == model.snapshot.whereAmI else { return }
     model.profile("deleteItem", [
       "listPath": listPath,
       "index": String(role.index),
@@ -986,15 +1000,19 @@ private struct ProfileExperienceScreen: View {
   /// employer the user just typed rather than the one it was called an edit
   /// ago — the same reason `deleteEmployer` re-reads the live company on the
   /// web.
-  private func askDelete(_ employer: ProfileView.Employer) {
+  private func askDelete(_ employer: ProfileView.Employer, renderedIn: ShellSnapshot.Where) {
     // Read the draft BEFORE resigning focus: that is what commits it, and
     // committing consumes it.
     pendingDeleteName = companyDrafts[employer.id] ?? employer.company
     focusedEmployer = nil
     pendingDeleteID = employer.id
-    // The pin the dialog checks. Declared and guarded without ever being set,
-    // the guard could only fail — which is a Delete button that does nothing.
-    deleteFrom = model.snapshot.whereAmI
+    // The pin the dialog checks, taken where the ROW was drawn. Read here
+    // instead, it would be read after the wait it has to span — a menu held
+    // open across a tombstone — and the dialog would only ever compare the
+    // replacement with itself. (It was also, once, declared and guarded without
+    // ever being set at all: a guard that could only fail, which is a Delete
+    // button that does nothing.)
+    deleteFrom = renderedIn
   }
 
   private func companyBinding(_ employer: ProfileView.Employer) -> Binding<String> {

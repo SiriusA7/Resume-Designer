@@ -6762,6 +6762,13 @@ private struct HistorySheet: View {
   private func list(_ entries: [ShellSnapshot.History.Entry]) -> some View {
     List {
       ForEach(entries) { entry in
+        // Captured where the row is DRAWN. A swipe tray and a long-press menu
+        // keep the closures they were presented with, so reading the workspace
+        // inside the action reads it AFTER the wait the pin exists to span —
+        // and `restoreFrom` then holds the replacement, which its own
+        // confirmation happily matches. The index and timestamp cannot catch it
+        // either: a workspace cloned from the same backup has both.
+        let renderedIn = model.snapshot.whereAmI
         VStack(alignment: .leading, spacing: 4) {
           HStack(spacing: 8) {
             Image(systemName: symbol(for: entry.changeType))
@@ -6792,11 +6799,12 @@ private struct HistorySheet: View {
           if !entry.isCurrent {
             Button("Restore") {
               pendingRestore = entry
-              restoreFrom = model.snapshot.whereAmI
+              restoreFrom = renderedIn
             }
             .tint(.orange)
           }
           Button("Compare") {
+            guard renderedIn == model.snapshot.whereAmI else { return }
             model.send("compareVersion", [
               "index": "\(entry.index)",
               "timestamp": entry.timestamp,
@@ -6811,10 +6819,11 @@ private struct HistorySheet: View {
           if !entry.isCurrent {
             Button("Restore this version", systemImage: "clock.arrow.circlepath") {
               pendingRestore = entry
-              restoreFrom = model.snapshot.whereAmI
+              restoreFrom = renderedIn
             }
           }
           Button("Compare with current", systemImage: "arrow.left.arrow.right") {
+            guard renderedIn == model.snapshot.whereAmI else { return }
             model.send("compareVersion", [
               "index": "\(entry.index)",
               "timestamp": entry.timestamp,

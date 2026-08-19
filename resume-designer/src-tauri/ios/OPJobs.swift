@@ -371,7 +371,19 @@ struct JobsSheet: View {
   }
 
   private func row(_ job: JobsView.Job) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
+    // Captured where the row is DRAWN, not where an action is chosen. A swipe
+    // tray and a long-press menu each keep the closures they were presented
+    // with — the row redraws underneath them, the presented actions do not — so
+    // a tombstone landing while one is open leaves every action here holding a
+    // job id that now names a different workspace's job. And a workspace cloned
+    // from the same backup HAS that id, so nothing downstream can tell.
+    //
+    // The delete pin was already wrong for this reason rather than missing: it
+    // was read when Delete was tapped, which is after the wait it has to span,
+    // so the confirmation dialog only ever compared the replacement with
+    // itself.
+    let renderedIn = model.snapshot.whereAmI
+    return VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 10) {
         VStack(alignment: .leading, spacing: 2) {
           Text(job.title).font(.body)
@@ -399,12 +411,17 @@ struct JobsSheet: View {
     .swipeActions(edge: .trailing) {
       Button("Delete", role: .destructive) {
         pendingDelete = job
-        deleteFrom = model.snapshot.whereAmI
+        deleteFrom = renderedIn
       }
-      Button("Edit") { openEditor(.existing(job.id)) }.tint(.blue)
+      Button("Edit") {
+        guard renderedIn == model.snapshot.whereAmI else { return }
+        openEditor(.existing(job.id))
+      }
+      .tint(.blue)
     }
     .swipeActions(edge: .leading) {
       Button(job.isActive ? "Deactivate" : "Activate") {
+        guard renderedIn == model.snapshot.whereAmI else { return }
         model.jobs("toggleActive", ["id": job.id])
       }
       .tint(job.isActive ? .gray : .green)
@@ -416,12 +433,16 @@ struct JobsSheet: View {
         job.isActive ? "Deactivate" : "Activate",
         systemImage: job.isActive ? "circle" : "checkmark.circle"
       ) {
+        guard renderedIn == model.snapshot.whereAmI else { return }
         model.jobs("toggleActive", ["id": job.id])
       }
-      Button("Edit", systemImage: "pencil") { openEditor(.existing(job.id)) }
+      Button("Edit", systemImage: "pencil") {
+        guard renderedIn == model.snapshot.whereAmI else { return }
+        openEditor(.existing(job.id))
+      }
       Button("Delete", systemImage: "trash", role: .destructive) {
         pendingDelete = job
-        deleteFrom = model.snapshot.whereAmI
+        deleteFrom = renderedIn
       }
     }
   }
