@@ -588,6 +588,23 @@ private struct AnalyzeScreen: View {
   @Environment(\.dismiss) private var dismiss
 
   @State private var selected: Set<String> = []
+
+  /// The selection, minus anything that is no longer in the list.
+  ///
+  /// A job list fetched from another device replaces the projection under this
+  /// screen — that is why the rows update — but `selected` is Swift state and
+  /// keeps the ids of jobs that have since been deleted. Counting them
+  /// overstates what is about to be analysed, sending them asks the page about
+  /// jobs it no longer has, and if EVERY selected job went, `startAnalysis`
+  /// throws "no jobs selected" into a fire-and-forget call: the screen would
+  /// dismiss with no run and no error.
+  ///
+  /// Derived rather than pruned in place. A row that disappears and comes back
+  /// — the ordinary shape of a sync round trip — keeps its tick, where a
+  /// destructive prune would have dropped it.
+  private var live: Set<String> {
+    selected.intersection((view?.jobs ?? []).map(\.id))
+  }
   @State private var modelId = ""
   @State private var reasoning = "medium"
   @State private var seeded = false
@@ -621,7 +638,7 @@ private struct AnalyzeScreen: View {
         }
       } header: {
         HStack {
-          Text("\(selected.count) selected")
+          Text("\(live.count) selected")
           Spacer()
           Button("Select all") { selected = Set((view?.jobs ?? []).map(\.id)) }
           Button("Clear") { selected.removeAll() }
@@ -635,18 +652,18 @@ private struct AnalyzeScreen: View {
           // Every payload value is a String, so the selection crosses as a
           // comma-separated list of the ids the projection handed out — they are
           // generated as `jd-<time>-<suffix>` and never contain a comma.
-          "ids": selected.joined(separator: ","),
+          "ids": live.sorted().joined(separator: ","),
           "modelId": modelId,
           "reasoning": reasoning,
         ])
         // Back to the root, which is where the run's progress shows.
         dismiss()
       } label: {
-        Text("Analyze (\(selected.count))").frame(maxWidth: .infinity)
+        Text("Analyze (\(live.count))").frame(maxWidth: .infinity)
       }
       .buttonStyle(.borderedProminent)
       .controlSize(.large)
-      .disabled(selected.isEmpty)
+      .disabled(live.isEmpty)
       .padding(.horizontal, 16)
       .padding(.bottom, 8)
     }
