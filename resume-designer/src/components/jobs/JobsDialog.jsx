@@ -282,7 +282,7 @@ export default function JobsDialog() {
     setIsAnalyzing(true);
     setAppliedIndexes(new Set());
     try {
-      const { results, variantId } = await runJobAnalysis({
+      const { results, variantId, superseded } = await runJobAnalysis({
         jobs: selectedJobs,
         modelId,
         reasoning: reasoningEffort,
@@ -295,6 +295,14 @@ export default function JobsDialog() {
       // then run A's wording against B's document. The variant-change effect
       // has already loaded B's own report, so the honest move is to leave it.
       if (variantId && getCurrentId() !== variantId) return;
+      // The same résumé, replaced under the request by sync. The report was
+      // computed against the copy that has just been thrown away, so it is not
+      // about anything on screen — and `reloadAnalysis` has already put the
+      // adopted résumé's own report there.
+      if (superseded) {
+        toast.error('This resume changed on another device while the analysis was running, so it was discarded. Run it again.');
+        return;
+      }
       setAnalysisResults(results);
     } catch (error) {
       toast.error(`Analysis failed: ${error.message}`);

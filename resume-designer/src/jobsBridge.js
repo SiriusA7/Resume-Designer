@@ -363,9 +363,19 @@ export async function runJobAnalysis({ jobs = [], modelId = '', reasoning = 'med
   const reasoningEffort = reasoning || 'medium';
   saveSettings({ analysisModel: model, analysisReasoning: reasoningEffort });
   const variantId = getCurrentId();
+  // The DOCUMENT as well as the résumé. Pinning the id stops the report landing
+  // on a different résumé; it says nothing about the same résumé being replaced
+  // underneath the request, which `adoptDocument` does — and the report was
+  // computed against the copy that has just been thrown away. Saving it then
+  // overwrites the adopted résumé's own report with recommendations about text
+  // nobody has, and applying one writes that text back over what arrived.
+  const adoptions = store.documentAdoptions();
   const results = await analyzeAgainstJobs(model, jobs, { reasoningEffort, hooks });
+  if (store.documentAdoptions() !== adoptions) {
+    return { results: null, variantId: null, superseded: true };
+  }
   if (variantId && results) saveVariantAnalysis(variantId, results);
-  return { results, variantId: variantId || null };
+  return { results, variantId: variantId || null, superseded: false };
 }
 
 /**
@@ -469,6 +479,16 @@ function startAnalysis({ ids, modelId, reasoning }) {
   // belong to the report about to be replaced.
   applied = new Set();
   return runJobAnalysis({ jobs: selected, modelId, reasoning, hooks: runHooks() })
+    .then((outcome) => {
+      // Discarded rather than shown. Saying nothing here would read as a run
+      // that simply produced no findings.
+      if (outcome?.superseded) {
+        notice = {
+          kind: 'error',
+          text: 'This résumé changed on another device while the analysis was running, so it was discarded. Run it again.',
+        };
+      }
+    })
     .catch((error) => {
       // The web raises `toast.error` here, which renders in the webview behind
       // the sheet. A failed run that leaves no trace is indistinguishable from

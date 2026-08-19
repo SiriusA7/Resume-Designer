@@ -347,6 +347,29 @@ describe('runJobAnalysis — the report lands on the résumé it was run for', (
     }));
   });
 
+  it('discards a report whose document was replaced under it', async () => {
+    // Pinning the id stops the report landing on a different résumé. It says
+    // nothing about the SAME résumé being replaced by sync while the request
+    // runs — and the report was computed against the copy just thrown away.
+    // The store has to be ON v1 for an adoption of v1 to be accepted at all —
+    // `adoptDocument` refuses a variant it is not showing, which is the guard
+    // that stops a fetched résumé overwriting a different one.
+    store.setData({ name: 'Ash', summary: 'Old summary', experience: [] }, true, 'v1');
+    analyzeAgainstJobs.mockImplementation(async () => {
+      expect(store.adoptDocument('v1', { name: 'Ada', summary: 'from the other device' }))
+        .toBe(true);
+      return { matchScore: 88, source: 'stale run' };
+    });
+
+    const outcome = await runJobAnalysis({ jobs: [job()], modelId: 'openai/gpt-5.5' });
+
+    expect(outcome.superseded).toBe(true);
+    expect(outcome.results).toBeNull();
+    // And nothing was written over the adopted résumé's own report.
+    const stored = JSON.parse(localStorage.getItem(DATA_KEY)).variants;
+    expect(stored.v1.jobAnalysis).toBeNull();
+  });
+
   it('writes to the pinned résumé when the user switches mid-run', async () => {
     // The window is a whole AI request — tens of seconds — and on a phone the
     // Jobs sheet can be dismissed while it runs, leaving the variant menu live.

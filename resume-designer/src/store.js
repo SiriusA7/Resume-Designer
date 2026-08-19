@@ -178,6 +178,8 @@ export function migrateSectionAreas(data) {
 function createStore() {
   let data = null;
   let isDirty = false;
+  // See `documentAdoptions()`.
+  let adoptions = 0;
   const listeners = new Set();
   let saveCallback = null;
   let saveTimeout = null;
@@ -502,9 +504,20 @@ function createStore() {
       // A third event rather than promoting this to 'dataLoaded': that would
       // also re-settle the chat threads for a variant that has not changed,
       // which is the reason 'change' was chosen in the first place.
+      adoptions += 1;
       this.emit('documentAdopted', data);
       this.emit('change', data);
       return true;
+    },
+
+    /// How many times the open document has been replaced by an adoption.
+    ///
+    /// The event says "it just happened"; this says "has it happened SINCE",
+    /// which is the question an operation suspended across one has to ask. A
+    /// listener cannot answer it — the answer has to survive the await, and
+    /// whoever is awaiting may not have been subscribed when it fired.
+    documentAdoptions() {
+      return adoptions;
     },
 
     // Insert a history entry this store did not produce — the losing side of a
