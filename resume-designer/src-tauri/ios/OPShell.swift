@@ -3569,10 +3569,20 @@ private struct ShellView: View {
           // and made "whose profile is this" compete with "what else can I
           // do". Merged, the profile IS the identity of everything in the
           // menu, which is what it always was.
-          actionsMenu.disabled(snapshot.modalOpen)
+          // …and while a PDF is being captured, for the reason on `titleMenu`
+          // below: this menu switches workspaces, which changes the document
+          // mid-capture just as surely as switching résumés does.
+          actionsMenu.disabled(snapshot.modalOpen || snapshot.pdfBusy)
         }
         ToolbarItem(placement: .principal) {
-          titleMenu.disabled(snapshot.modalOpen)
+          // DISABLED DURING A CAPTURE, not only during a modal. The main-window
+          // export yields — once while the layout settles, and again for every
+          // page it captures — and the document can be swapped in any of those
+          // gaps. What comes out is the replacement résumé, or worse, pages of
+          // each, under the original's filename. The export button already
+          // refuses a second run; this is the same rule for the other way to
+          // change what is being captured.
+          titleMenu.disabled(snapshot.modalOpen || snapshot.pdfBusy)
         }
         ToolbarItem(placement: .topBarTrailing) {
           HStack(spacing: 10) {
@@ -6179,11 +6189,21 @@ private struct ChatSheet: View {
       // underneath this draft, and Send would post words written for one
       // conversation into another. Reported while the field holds anything, and
       // released when it is emptied — including by `sendDraft`, which clears it.
-      .onChange(of: draft) { _, text in
+      // EVERY draft, not just the one on screen. Switching chats parks the
+      // outgoing text in `drafts` and puts B's (usually empty) into `draft` —
+      // which released the only hold, so a fetched thread list could delete A
+      // while its unsent text existed nowhere but Swift. A then vanishes from
+      // the menu, the parked text is unreachable, and closing the sheet
+      // destroys it.
+      //
+      // I argued against this when the per-chat drafts went in, on the grounds
+      // that a parked draft never expires and would hold the guard for ever.
+      // That was wrong: the hold cannot outlive the sheet, because the sheet's
+      // own close blanket-releases this scope. It is bounded by a screen the
+      // person is looking at.
+      .onChange(of: hasUnsentText) { _, unsent in
         model.send("setNativeEditing", [
-          "scope": "chat", "holder": "composer",
-          "value": text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "false" : "true",
+          "scope": "chat", "holder": "composer", "value": unsent ? "true" : "false",
         ])
       }
       .sheet(isPresented: $showReview) {
@@ -6361,6 +6381,15 @@ private struct ChatSheet: View {
   }
 
   // MARK: chat management
+
+  /// Whether any chat on this sheet is holding text that has not been sent —
+  /// the one on screen, or any parked by a switch.
+  private var hasUnsentText: Bool {
+    let written = { (text: String) in
+      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    return written(draft) || drafts.values.contains(where: written)
+  }
 
   private var currentThread: ShellSnapshot.ChatView.Thread? {
     chat?.threads.first { $0.isCurrent }
