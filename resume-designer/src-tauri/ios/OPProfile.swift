@@ -704,6 +704,13 @@ private struct ProfileFormScreen: View {
 
   @ViewBuilder
   private func list(_ group: ProfileView.Group) -> some View {
+    // Captured where the rows are DRAWN, for the same reason as `roleRow`: the
+    // swipe tray keeps the closure it was presented with. `requireItem` is a
+    // weaker backstop here than anywhere else in this file — for every list on
+    // this screen the key is the row's own DISPLAY TEXT (skills by name,
+    // education by degree), so a profile cloned from the same backup matches on
+    // the first try.
+    let renderedIn = model.snapshot.whereAmI
     if group.items.isEmpty {
       Text(group.emptyLabel).foregroundStyle(.secondary)
     }
@@ -714,7 +721,7 @@ private struct ProfileFormScreen: View {
         }
       }
     }
-    .onDelete { offsets in delete(group, offsets) }
+    .onDelete { offsets in delete(group, offsets, renderedIn: renderedIn) }
     Button {
       model.profile("addItem", ["listPath": group.listPath])
     } label: {
@@ -728,7 +735,13 @@ private struct ProfileFormScreen: View {
   /// One row: this list has no edit mode, so `.onDelete` is a swipe and carries
   /// a single offset. Sending several would be wrong anyway — each delete
   /// renumbers the ones after it.
-  private func delete(_ group: ProfileView.Group, _ offsets: IndexSet) {
+  private func delete(
+    _ group: ProfileView.Group, _ offsets: IndexSet, renderedIn: ShellSnapshot.Where
+  ) {
+    guard renderedIn == model.snapshot.whereAmI else {
+      staleWarning = true
+      return
+    }
     guard let offset = offsets.first, offset < group.items.count else { return }
     let item = group.items[offset]
     model.profile("deleteItem", [
