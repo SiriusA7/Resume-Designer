@@ -877,14 +877,51 @@ describe('the Design sheet commands', () => {
     // tapped after the list shrank underneath would look like it worked.
     const removeListItem = vi.fn();
     const { send } = await mount({ removeListItem });
+    // AFTER `mount`, which calls `vi.resetModules()` — importing it first hands
+    // back the pre-reset instance, a different module object from the one the
+    // shell under test is holding, and its counter would move independently.
+    const { store } = await import('../src/store.js');
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const revision = String(store.documentAdoptions());
 
-    send({ type: 'removeItem', path: 'education', index: '2' });
+    send({ type: 'removeItem', path: 'education', index: '2', revision });
     expect(removeListItem).toHaveBeenCalledWith('education', 2);
 
-    expect(send({ type: 'removeItem', path: 'education', index: '-1' }).ok).toBe(false);
-    expect(send({ type: 'removeItem', path: 'education', index: 'x' }).ok).toBe(false);
+    expect(send({ type: 'removeItem', path: 'education', index: '-1', revision }).ok).toBe(false);
+    expect(send({ type: 'removeItem', path: 'education', index: 'x', revision }).ok).toBe(false);
     expect(removeListItem).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('refuses a list action aimed at a document sync has replaced', async () => {
+    // A drag holds two indexes across real time, and this sheet is not busy by
+    // any measure the sync guards use while one is in flight — no field has
+    // focus. An adopted résumé renumbers the array in that window, so the drop
+    // would move whichever bullet is at that index NOW.
+    const moveListItem = vi.fn();
+    const removeListItem = vi.fn();
+    const { send } = await mount({ moveListItem, removeListItem });
+    // After `mount`, for the reason above.
+    const { store } = await import('../src/store.js');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // The revision the rows were drawn from…
+    const revision = String(store.documentAdoptions());
+    // …and the résumé is replaced while the finger is still down.
+    store.setData({ name: 'Ash', education: ['a', 'b', 'c'] }, true, 'v-rev');
+    expect(store.adoptDocument('v-rev', { name: 'Ada', education: ['c', 'b', 'a'] })).toBe(true);
+
+    expect(send({ type: 'moveItem', path: 'education', from: '0', to: '2', revision }).ok)
+      .toBe(false);
+    expect(send({ type: 'removeItem', path: 'education', index: '0', revision }).ok).toBe(false);
+    expect(moveListItem).not.toHaveBeenCalled();
+    expect(removeListItem).not.toHaveBeenCalled();
+
+    // The same gesture, restarted against what is on screen now, goes through.
+    const fresh = String(store.documentAdoptions());
+    expect(send({ type: 'moveItem', path: 'education', from: '0', to: '2', revision: fresh }).ok)
+      .toBe(true);
+    expect(moveListItem).toHaveBeenCalledWith('education', 0, 2);
     spy.mockRestore();
   });
 

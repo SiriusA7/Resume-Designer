@@ -39,6 +39,7 @@ import {
 import { TYPE_LABELS } from './historyEntryLabels.js';
 import { CHAT_THREADS_STATE_EVENT, threadsSaveFailed } from './chatThreads.js';
 import { DATA_SAVE_STATE_EVENT, dataSaveFailed } from './persistence.js';
+import { store } from './store.js';
 
 export const SHELL_HANDLER = 'opShell';
 
@@ -1313,6 +1314,27 @@ let streamJobs = false;
  */
 const nativeEditing = new Set();
 
+/**
+ * Refuse a positional command aimed at a document that has since been replaced.
+ *
+ * The structure sheet's list actions carry indexes and nothing else — a drag
+ * reports "row 2 went to row 5", a swipe "delete row 2" — and a drag in
+ * particular spans real time during which the sheet is not busy by any measure
+ * the guards use. An adopted `resume:<id>` renumbers the array in that window,
+ * and the index then names a different bullet.
+ *
+ * Throwing rather than returning quietly: the dispatcher answers `ok: false`,
+ * which the sheet turns into a visible "that moved" — and a reorder that is
+ * ignored in silence is indistinguishable from one that worked, because the
+ * rows spring back either way.
+ */
+function requireCurrentDocument(revision, command) {
+  const seen = Number(revision);
+  if (!Number.isInteger(seen)) throw new Error(`${command} needs the document revision`);
+  const now = store.documentAdoptions();
+  if (seen !== now) throw new Error(`${command} was aimed at an older document`);
+}
+
 /** Whether any native holder of this scope is mid-edit. */
 export function nativeEditingBusy(scope) {
   const prefix = `${scope}:`;
@@ -1599,8 +1621,9 @@ export function initIOSShell(deps) {
     },
     // Reordering. Swift sends the LIST's path and two indices — it never
     // builds an element path, so the grammar stays owned by the projection.
-    moveItem: ({ path, from, to }) => {
+    moveItem: ({ path, from, to, revision }) => {
       if (typeof path !== 'string' || !path) throw new Error('moveItem needs a list path');
+      requireCurrentDocument(revision, 'moveItem');
       deps.moveListItem(path, Number(from), Number(to));
     },
     // Adding and removing rows. Same path-echo contract as moveItem: the path
@@ -1617,8 +1640,9 @@ export function initIOSShell(deps) {
       if (item === undefined) throw new Error(`addItem has no template for ${path}`);
       deps.addListItem(path, item);
     },
-    removeItem: ({ path, index }) => {
+    removeItem: ({ path, index, revision }) => {
       if (typeof path !== 'string' || !path) throw new Error('removeItem needs a list path');
+      requireCurrentDocument(revision, 'removeItem');
       const at = Number(index);
       // `removeFromArray` silently ignores an out-of-range index, so a stale
       // row tapped after the list shrank underneath would look like it worked.
@@ -2055,6 +2079,14 @@ export function initIOSShell(deps) {
               // Storage's answer, not the outline builder's — the same split the
               // chat projection makes, and for the same reason.
               saveFailed: (deps.dataSaveFailed || dataSaveFailed)(),
+              // WHICH DOCUMENT these rows are. Everything the sheet sends back
+              // about a list is POSITIONAL — a drag reports two indices, a swipe
+              // one — and a gesture is held across time the sheet is not busy
+              // for, so an adopted résumé can renumber the array underneath it.
+              // Echoed on those commands and checked, so a drop computed against
+              // rows that no longer exist is refused instead of moving whichever
+              // bullet is at that index now.
+              revision: store.documentAdoptions(),
             }))
             : null,
           library: streamLibrary

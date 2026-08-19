@@ -300,6 +300,12 @@ struct ShellSnapshot: Decodable, Equatable {
   /// paths it was given, so it cannot construct one and cannot become a second
   /// implementation of a grammar whose drift has corrupted data before.
   struct DocumentOutline: Decodable, Equatable {
+    /// WHICH document these rows are, so a positional command can say which
+    /// one it was computed against. Everything this sheet sends back about a
+    /// list is an index, and a drag holds one across time nothing here counts
+    /// as busy — long enough for an adopted résumé to renumber the array.
+    var revision: Int
+
     /// The résumé is not on disk. Storage answers this, not the outline
     /// builder — the write is behind a coalescing drain and can be refused
     /// long after the keystroke that made it.
@@ -4952,8 +4958,19 @@ private struct StructureSheet: View {
     var id: String { "\(path)[\(index)]" }
   }
 
-  /// True when the row the alert named is no longer where it was.
-  @State private var removalMoved = false
+  /// Set when an action was refused because the résumé had moved on. Carries
+  /// the sentence to show, since the same alert covers a whole-group delete, a
+  /// row delete and a reorder.
+  @State private var staleAction: String?
+
+  /// What every one of those has to say. The sheet is not busy during a drag or
+  /// a swipe by any measure the sync guards use — there is no focused field —
+  /// so an adopted résumé can renumber the list underneath the gesture, and
+  /// acting on the index it started from would move or delete a different row.
+  private var movedMessage: String {
+    "The résumé changed while this was open, so nothing was changed. "
+      + "Try again from the refreshed list."
+  }
 
   /// Where that row sits NOW, or nil if it has moved or gone.
   ///
@@ -5019,7 +5036,8 @@ private struct StructureSheet: View {
                         "path": listPath,
                         "from": String(from),
                         "to": String(destination),
-                      ])
+                        "revision": String(model.snapshot.document?.revision ?? -1),
+                      ]) { ok in if !ok { staleAction = movedMessage } }
                     }
                     .onDelete { offsets in
                       // Same property as the move: list-relative, so the offset
@@ -5028,7 +5046,8 @@ private struct StructureSheet: View {
                       guard let at = offsets.first else { return }
                       model.send("removeItem", [
                         "path": listPath, "index": String(at),
-                      ])
+                        "revision": String(model.snapshot.document?.revision ?? -1),
+                      ]) { ok in if !ok { staleAction = movedMessage } }
                     }
                 }
                 if !group.addLabel.isEmpty, let listPath = group.listPath {
@@ -5116,7 +5135,7 @@ private struct StructureSheet: View {
           if let at = currentIndex(for: removal) {
             model.send("removeItem", ["path": removal.path, "index": String(at)])
           } else {
-            removalMoved = true
+            staleAction = movedMessage
           }
         }
         pendingRemoval = nil
@@ -5125,10 +5144,17 @@ private struct StructureSheet: View {
     } message: {
       Text("This cannot be undone from here.")
     }
-    .alert("That moved", isPresented: $removalMoved) {
+    .alert(
+      "That moved",
+      isPresented: Binding(
+        get: { staleAction != nil },
+        set: { if !$0 { staleAction = nil } }
+      ),
+      presenting: staleAction
+    ) { _ in
       Button("OK", role: .cancel) {}
-    } message: {
-      Text("The résumé changed while this was open, so nothing was deleted. Try again from the refreshed list.")
+    } message: { message in
+      Text(message)
     }
   }
 
