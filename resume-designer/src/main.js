@@ -195,10 +195,14 @@ setActiveProfileDeletedHandler(async () => {
   // the ordering is what makes the pointer change safe, and a second copy of
   // that reasoning here is how the two platforms drift.
   if (!(await switchToProfileDurably(replacement.id))) {
+    // REPORTED, not just logged. The caller keeps the deletion owed on a
+    // `false` and tries again on the next fetch; returning nothing would tell
+    // it this had been dealt with, and it never would be.
     console.error('[profiles] could not move off the deleted workspace — staying put');
-    return;
+    return false;
   }
   window.location.reload();
+  return true;
 });
 
 // Built-in resume variants (for initial migration)

@@ -1481,12 +1481,23 @@ async function reconcileRemoteDeletions() {
   if (purged.length) console.info(`[profiles] purged ${purged.length} deleted workspace(s)`);
 
   if (activeProfileDeleted) {
-    activeProfileDeleted = false;
     try {
-      await activeProfileDeletedHandler?.();
+      // CLEARED ONLY ON A MOVE. Clearing it before the await meant one refused
+      // switch — a disk write temporarily rejected is enough — ended the matter:
+      // the handler returns, nothing retries, and the tombstone is already
+      // accounted for, so sync will never redeliver it. The app then goes on
+      // saving edits into a namespace that is dead on every device, and they
+      // vanish at the next launch, which picks a live workspace instead.
+      //
+      // `false` specifically, not any falsy value: a handler that returns
+      // nothing has done what it was going to do (the ones here reload, so
+      // there is no "after"), and only an explicit refusal means "still owed".
+      const moved = await activeProfileDeletedHandler?.();
+      if (moved !== false) activeProfileDeleted = false;
     } catch (err) {
-      // The landing itself stands: those units ARE on disk, and forfeiting them
-      // over a failed reconciliation would re-fetch content that already landed.
+      // Left OWED on a throw, for the same reason. The landing itself stands:
+      // those units ARE on disk, and forfeiting them over a failed
+      // reconciliation would re-fetch content that already landed.
       console.error('[sync] could not move off a remotely deleted workspace:', err);
     }
   }

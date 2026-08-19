@@ -401,6 +401,31 @@ describe('a tombstone for the workspace this device has open', () => {
     expect(merged.find((p) => p.id === PROFILE).deletedAt).toBe(DELETED.deletedAt);
   });
 
+  it('keeps the move owed when the handler could not do it', async () => {
+    // A refused switch — a disk write temporarily rejected is enough — used to
+    // end the matter: the flag was cleared before the await, so nothing retried.
+    // And the tombstone is already accounted for, so sync NEVER REDELIVERS IT:
+    // the retry cannot come from another copy of the same unit. The app goes on
+    // saving into a namespace that is dead on every device, and the next launch
+    // picks a live workspace and leaves those edits where nothing reads them.
+    const refuses = vi.fn(async () => false);
+    setActiveProfileDeletedHandler(refuses);
+    await applyUnits([registryUnit([DELETED, OTHER_LIVE])]);
+    expect(refuses).toHaveBeenCalledTimes(1);
+
+    // The next fetch carries something else entirely — no registry unit, so
+    // nothing re-reports the deletion. It is asked again only because the move
+    // is still OWED, which is the whole point.
+    const accepts = vi.fn(async () => true);
+    setActiveProfileDeletedHandler(accepts);
+    await applyUnits([resumeUnit('v-9', { name: 'Ada', summary: 'unrelated' })]);
+    expect(accepts).toHaveBeenCalledTimes(1);
+
+    // …and once it HAS moved, an unrelated fetch does not ask again.
+    await applyUnits([resumeUnit('v-9', { name: 'Ada', summary: 'unrelated again' })]);
+    expect(accepts).toHaveBeenCalledTimes(1);
+  });
+
   it('purges an INACTIVE deleted workspace, but never the active one', async () => {
     // A tombstone hides a listing; on the device that ran the delete the content
     // went with it. On every other device only the listing changed, so the
