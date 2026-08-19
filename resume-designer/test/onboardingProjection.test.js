@@ -24,6 +24,21 @@ describe('buildOnboarding', () => {
     expect([again.displayStep, again.totalSteps]).toEqual([1, 5]);
   });
 
+  // The native key step clears its "Saving…" when this changes. It used to
+  // watch `hasKey` and `notice` instead, and replacing a working key with
+  // another working key moves neither — so the step sat disabled on "Saving…"
+  // and a mistyped replacement could only be escaped by leaving the screen.
+  it('carries the completed-key-save count, which a working replacement moves', () => {
+    const before = buildOnboarding({ open: true, hasKey: true, keySaves: 3 });
+    const after = buildOnboarding({ open: true, hasKey: true, keySaves: 4 });
+
+    expect(after.keySaves).toBe(4);
+    // The two values the step used to watch are identical across the save that
+    // just completed; the counter is the only thing that reports it.
+    expect([after.hasKey, after.notice]).toEqual([before.hasKey, before.notice]);
+    expect(after.keySaves).not.toBe(before.keySaves);
+  });
+
   it('never lets the counter run past the total', () => {
     for (const isNewResumeMode of [false, true]) {
       for (let step = 0; step <= 5; step += 1) {

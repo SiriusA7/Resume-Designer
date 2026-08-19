@@ -48,6 +48,10 @@ struct OnboardingView: Decodable, Equatable {
   var canDismiss: Bool
   var hasProviders: Bool
   var hasKey: Bool
+  /// Completed key-save attempts. A counter rather than a status because the
+  /// step needs to know an attempt FINISHED, and a status that lands on the
+  /// value it already had says nothing.
+  var keySaves: Int
   var displayStep: Int
   var totalSteps: Int
 

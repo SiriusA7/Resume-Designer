@@ -116,8 +116,14 @@ struct OnboardingKeyStep: View {
     }
     // The wizard's own notice is the result channel: a refused keychain write
     // has to keep the user here rather than promise AI that is about to fail.
-    .onChange(of: view.hasKey) { _, _ in saving = false }
-    .onChange(of: view.notice) { _, _ in saving = false }
+    //
+    // Cleared on the COUNTER, not on those two values. Replacing a key that
+    // already worked with another that works moves neither — `hasKey` was true
+    // and stays true, the notice was nil and stays nil — so this sat on
+    // "Saving…" with the button disabled, and the only way out of a mistyped
+    // replacement was to leave the screen. A counter changes on every completed
+    // attempt, including the ones whose outcome looks like the state before it.
+    .onChange(of: view.keySaves) { _, _ in saving = false }
   }
 
   private var saveLabel: String { saving ? "Saving…" : "Save key" }

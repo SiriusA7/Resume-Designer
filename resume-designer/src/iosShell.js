@@ -200,7 +200,7 @@ export function buildDiffReview({
  */
 export function buildOnboarding({
   open = false, step = 0, mode = null, isNewResumeMode = false, canDismiss = false,
-  hasProviders = false, hasKey = false, importText = '', filePreview = null,
+  hasProviders = false, hasKey = false, keySaves = 0, importText = '', filePreview = null,
   question = 0, questions = [], answers = {}, improved = null,
   jobDescriptions = [], targetJob = null,
   jobGaps = [], models = [], model = '', reasoning = 'medium', generating = null,
@@ -232,6 +232,11 @@ export function buildOnboarding({
     canDismiss: !!canDismiss,
     hasProviders: !!hasProviders,
     hasKey: !!hasKey,
+    // How many key saves have COMPLETED. The native step clears its "Saving…"
+    // on this changing rather than on `hasKey` or `notice` changing: replacing
+    // a working key with another working key moves neither, so the step used to
+    // sit disabled on "Saving…" with no way to retry.
+    keySaves: Number(keySaves) || 0,
     displayStep,
     totalSteps,
 
