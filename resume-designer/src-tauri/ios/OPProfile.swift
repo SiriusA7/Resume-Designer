@@ -449,6 +449,16 @@ private struct ProfileFieldRow: View {
 
   @FocusState private var focused: Bool
   @State private var draft = ""
+  /// The workspace this row was last focused in.
+  ///
+  /// Focus reports to the sync guard, which stops a `data:userProfile` unit
+  /// being ADOPTED under the draft. It does nothing about the other way the
+  /// profile underneath can change: a tombstone for the workspace switches to a
+  /// replacement and RELOADS the page, and this sheet is native, so it survives
+  /// with the draft intact — and the next keystroke writes that draft into a
+  /// profile it was never about. Cloned workspaces make the paths match, so
+  /// nothing downstream refuses it.
+  @State private var focusedIn: ShellSnapshot.Where?
   /// A picker's choice was refused because the profile had moved on.
   @State private var staleChoice = false
 
@@ -465,6 +475,10 @@ private struct ProfileFieldRow: View {
       }
     }
     .padding(.vertical, 2)
+    // A picker never takes focus, so its workspace is recorded when the row
+    // renders — which is the last moment before a tap that the row was, in
+    // fact, showing this workspace's value.
+    .onAppear { if focusedIn == nil { focusedIn = model.snapshot.whereAmI } }
     .alert("That skill moved", isPresented: $staleChoice) {
       Button("OK", role: .cancel) {}
     } message: {
@@ -473,7 +487,10 @@ private struct ProfileFieldRow: View {
     .onChange(of: focused) { _, isFocused in
       // Seed on the way in; on the way out the field goes back to rendering
       // what actually landed, including anything the store normalised.
-      if isFocused { draft = field.value }
+      if isFocused {
+        draft = field.value
+        focusedIn = model.snapshot.whereAmI
+      }
       // TOLD TO THE SYNC GUARD. `userProfileHolderBusy` knew only about the
       // mounted React holder, which is not this — so a `data:userProfile` unit
       // landing during this focus was adopted and republished while the binding
@@ -526,6 +543,11 @@ private struct ProfileFieldRow: View {
       get: { focused ? draft : field.value },
       set: { newValue in
         draft = newValue
+        // Not into a workspace this row was never focused in. Two string
+        // compares, unlike the profile revision the picker sends — that one is
+        // about adoptions and is worth keeping off the typing path; this is
+        // about which workspace the keystroke belongs to.
+        guard focusedIn == model.snapshot.whereAmI else { return }
         // Every keystroke, because there is no working copy on the other side:
         // the bridge writes through to the stored profile and this sheet reads
         // it back, which is what keeps a native edit out of the flush contract
@@ -548,6 +570,13 @@ private struct ProfileFieldRow: View {
     Binding(
       get: { field.value },
       set: {
+        // The workspace as well as the revision. The revision counts ADOPTIONS,
+        // and a workspace switch reloads the page — which resets that counter,
+        // so a stale number can match the new workspace's by starting over.
+        guard focusedIn == model.snapshot.whereAmI else {
+          staleChoice = true
+          return
+        }
         model.profile("setField", [
           "path": field.path,
           "value": $0,
@@ -719,7 +748,11 @@ private struct ProfileExperienceScreen: View {
   /// Which employer name is being typed into, and what has been typed.
   @FocusState private var focusedEmployer: String?
   @State private var companyDrafts: [String: String] = [:]
+  /// The workspace those drafts were typed in. See `commitCompany`.
+  @State private var companyFrom: ShellSnapshot.Where?
   @State private var pendingDeleteID: String?
+  /// The workspace that prompt was raised in. See the dialog's own comment.
+  @State private var deleteFrom: ShellSnapshot.Where?
   /// The employer's name as it stood when Delete was tapped, including a rename
   /// still sitting in the field. The commit that follows is a round trip
   /// through JS, so the snapshot would still be naming the old employer while
@@ -834,6 +867,7 @@ private struct ProfileExperienceScreen: View {
     // This field is the one on this screen that is NOT written per keystroke,
     // so the window is the whole time the keyboard is up rather than a debounce.
     .onChange(of: focusedEmployer) { _, current in
+      if current != nil { companyFrom = model.snapshot.whereAmI }
       model.send("setNativeEditing", [
         "scope": "profile", "holder": "employer", "value": current == nil ? "false" : "true",
       ])
@@ -849,6 +883,17 @@ private struct ProfileExperienceScreen: View {
       Button("Delete", role: .destructive) {
         guard let employer = deleteTarget else { return }
         pendingDeleteID = nil
+        // The index/key check the bridge does is a check WITHIN a profile. Two
+        // workspaces cloned from one backup carry the same employer ids and
+        // role keys, so after a tombstone reloads the page under this sheet it
+        // passes against the replacement — and removes every position at an
+        // employer nobody named.
+        guard deleteFrom == model.snapshot.whereAmI else {
+          deleteFrom = nil
+          staleWarning = true
+          return
+        }
+        deleteFrom = nil
         model.profile("deleteEmployer", [
           "index": String(employer.leadIndex), "key": employer.leadKey,
         ]) { ok in staleWarning = !ok }
@@ -966,6 +1011,10 @@ private struct ProfileExperienceScreen: View {
   /// value means storage never sees the empty state at all.
   private func commitCompany(_ id: String) {
     guard let draft = companyDrafts.removeValue(forKey: id) else { return }
+    // Same as the field rows: this screen survives the reload a workspace
+    // tombstone causes, and a company name typed in one workspace must not land
+    // in the one that replaced it.
+    guard companyFrom == model.snapshot.whereAmI else { return }
     guard let employer = employers.first(where: { $0.id == id }), employer.company != draft else {
       return
     }
@@ -1064,6 +1113,14 @@ private struct ProfileDatesScreen: View {
   @Environment(\.dismiss) private var dismiss
 
   @State private var seeded = false
+  /// The workspace this picker was opened in.
+  ///
+  /// Everything below is seeded ONCE and then held in Swift, so a tombstone
+  /// that reloads the page underneath leaves the picker showing the deleted
+  /// workspace's dates — and `role.index`/`role.key` still match in a workspace
+  /// cloned from the same backup, so the write is accepted and overwrites its
+  /// dates with values carried over from a workspace that is gone.
+  @State private var openedIn: ShellSnapshot.Where?
   @State private var start: ProfileMonth?
   @State private var end: ProfileMonth?
   @State private var ongoing = false
@@ -1157,6 +1214,7 @@ private struct ProfileDatesScreen: View {
     // into a one-tap revert to the pre-fetch date.
     .onAppear {
       seed()
+      openedIn = model.snapshot.whereAmI
       model.send("setNativeEditing", ["scope": "profile", "holder": "dates", "value": "true"])
     }
     // Both ways out land here: a pop, and the `dismiss()` that `commitRange`
@@ -1167,6 +1225,16 @@ private struct ProfileDatesScreen: View {
     .onDisappear {
       model.send("setNativeEditing", ["scope": "profile", "holder": "dates", "value": "false"])
     }
+  }
+
+  /// Whether this is still the workspace the picker was opened in. Reports the
+  /// refusal through the same alert a stale role does — the person is looking
+  /// at dates that no longer belong to anything, and silence would read as the
+  /// pick simply not registering.
+  private func stillHere() -> Bool {
+    if openedIn == model.snapshot.whereAmI { return true }
+    refused = true
+    return false
   }
 
   /// Seeded once. The snapshot republishes on every keystroke elsewhere, and a
@@ -1216,7 +1284,7 @@ private struct ProfileDatesScreen: View {
   /// never the strings: a display string built here could disagree with the
   /// pair, and the run gate acts on the pair.
   private func commitRange() {
-    guard let role, let start else { return }
+    guard let role, let start, stillHere() else { return }
     model.profile("setDates", [
       "index": String(role.index),
       "key": role.key,
@@ -1232,7 +1300,7 @@ private struct ProfileDatesScreen: View {
   }
 
   private func clearDates() {
-    guard let role else { return }
+    guard let role, stillHere() else { return }
     model.profile("setDates", [
       "index": String(role.index),
       "key": role.key,
@@ -1244,7 +1312,7 @@ private struct ProfileDatesScreen: View {
   }
 
   private func commitText() {
-    guard let role, !typed.isEmpty, typed != role.dates.display else { return }
+    guard let role, !typed.isEmpty, typed != role.dates.display, stillHere() else { return }
     model.profile("setDates", [
       "index": String(role.index),
       "key": role.key,
