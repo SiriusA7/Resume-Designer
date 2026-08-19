@@ -5123,6 +5123,8 @@ private struct StructureSheet: View {
   /// dialog inside the webview, behind this sheet, where nobody would see it
   /// and its promise would never settle.
   @State private var pendingRemoval: Removal?
+  /// The workspace the focused field is being typed into. See the focus handler.
+  @State private var focusedIn: ShellSnapshot.Where?
 
   private struct Removal: Identifiable {
     let path: String
@@ -5327,6 +5329,14 @@ private struct StructureSheet: View {
       // Drop the draft once focus leaves, so the field goes back to rendering
       // the store's value — including any normalisation the store applied.
       if let previous { drafts[previous] = nil }
+      // WHICH WORKSPACE this typing belongs to, recorded where the typing
+      // starts. The holder below is not this and cannot be: it defers an
+      // ADOPTION, and a tombstoned workspace is not adopted — it reloads the
+      // page, and `moveOffDeletedWorkspace` waits only for the onboarding
+      // wizard. The sheet, `focusedPath` and the draft are all native and
+      // outlive that reload, so the next keystroke wrote the old workspace's
+      // draft into the replacement résumé at the same path.
+      focusedIn = current == nil ? nil : model.snapshot.whereAmI
       // TOLD TO THE SYNC GUARD, because it cannot see a `@FocusState`. The web
       // side asks the DOM for an active contentEditable, which is nothing here,
       // and `store.isDirty` goes false again after the 500 ms save debounce —
@@ -5425,6 +5435,8 @@ private struct StructureSheet: View {
       },
       set: { newValue in
         drafts[field.path] = newValue
+        // Not into a workspace this was never typed in. See the focus handler.
+        guard focusedIn == model.snapshot.whereAmI else { return }
         // Write on every keystroke rather than on blur: the canvas behind the
         // sheet is the point of the app, and it should track what is typed.
         // `path` is echoed back exactly as received — never built here.
