@@ -75,6 +75,26 @@ let lastRun = null;
 let applied = new Set();
 /** The résumé `applied`/`lastRun` belong to — see the reset in `getJobsState`. */
 let appliedFor = null;
+/** The open résumé was replaced by sync since `applied` was collected. */
+let adoptedSinceApplied = false;
+let watchingAdoptions = false;
+
+/**
+ * Notice the open résumé being replaced under the sheet.
+ *
+ * Installed lazily from the projection rather than at import, so a module that
+ * merely imports this one does not subscribe to the store as a side effect.
+ * `documentAdopted` rather than `change`: `change` fires on every keystroke,
+ * and clearing the applied set on each one would grey-out nothing while the
+ * person typed.
+ */
+function watchForAdoptedDocument() {
+  if (watchingAdoptions) return;
+  watchingAdoptions = true;
+  store.subscribe((event) => {
+    if (event === 'documentAdopted') adoptedSinceApplied = true;
+  });
+}
 let draft = null;
 
 // The NATIVE editor's half of the sync busy guard.
@@ -139,8 +159,16 @@ export function getJobsState() {
   // report itself is per-résumé and re-read below, but the applied set and the
   // run metadata are NOT persisted, and carrying them across a switch would
   // grey out recommendations on a résumé they were never applied to.
-  if (variantId !== appliedFor) {
+  watchForAdoptedDocument();
+  // …and an adoption of the résumé ALREADY open, which leaves `variantId`
+  // unchanged and so slips past the test above. The projection reads the newly
+  // adopted report immediately, and `applied` is a set of INDEXES into the
+  // report it was collected from — so an index applied against the old one
+  // greys out an unrelated recommendation in the new one, and blocks
+  // reapplying the one that actually needs it.
+  if (variantId !== appliedFor || adoptedSinceApplied) {
     appliedFor = variantId;
+    adoptedSinceApplied = false;
     applied = new Set();
     lastRun = null;
   }

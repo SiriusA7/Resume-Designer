@@ -12,6 +12,7 @@ import { DIFF_TYPES, getPathLabel } from '../diffEngine.js';
 import { applyChangeToStore, applyChangesToStore, selectUndecided } from '../changeApply.js';
 import { publishDiffReview } from '../iosShell.js';
 import * as changeSession from '../changeSession.js';
+import { store } from '../store.js';
 import { isSupersededSession } from '../changeSessionGuard.js';
 import {
   applyAllInlineChanges, applyInlineChange, hideInlineChanges, rejectInlineChange,
@@ -255,6 +256,19 @@ export default function DiffDialog() {
     () => isSupersededSession(csRef.current, changeSession.getChangeSet(), ownedRef.current),
     [],
   );
+
+  // The document under the review being REPLACED by sync. The inline-change
+  // session ends itself on this, but a standalone review — Jobs' Tailor and
+  // History's compare, where `ownedRef` is false — has no session to end, so it
+  // stayed open and actionable against a résumé it was never computed from. If
+  // the fetched copy removed an anchored role, applying then falls back to the
+  // recorded index and edits whichever role moved up into it.
+  //
+  // Closed for owned sessions too: theirs has just been ended underneath them,
+  // and a dialog outliving its own session is the thing this avoids elsewhere.
+  useEffect(() => store.subscribe((event) => {
+    if (event === 'documentAdopted') setOpen(false);
+  }), []);
 
   useEffect(() => changeSession.subscribe(() => {
     if (superseded()) {
