@@ -29,7 +29,7 @@ import {
 import {
   getConfiguredProviders, getAllModels, isConfigured, validateModelId, getDefaultModelId,
 } from '../../aiService.js';
-import { getSettings, getVariantAnalysis } from '../../persistence.js';
+import { getSettings, getVariantAnalysis, downloadFile } from '../../persistence.js';
 import { showDiffView } from '../../diffView.js';
 import { getCurrentId } from '../../variantManager.js';
 import { store } from '../../store.js';
@@ -271,13 +271,8 @@ export default function JobsDialog() {
   };
 
   const handleExport = () => {
-    const blob = new Blob([exportJobDescriptions()], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'job-descriptions.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    // See downloadFile: an `<a download>` is inert in WKWebView.
+    downloadFile(exportJobDescriptions(), 'job-descriptions.json', 'application/json');
   };
 
   const runAnalysis = async (selectedJobs, modelId, reasoningEffort) => {

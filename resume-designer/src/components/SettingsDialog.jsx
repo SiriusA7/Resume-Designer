@@ -23,7 +23,7 @@ import {
 import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
-import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
+import { getSettings, saveSettings, saveApiKey, downloadFile } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
   isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable, hasUsableSecret,
@@ -448,15 +448,12 @@ export default function SettingsDialog() {
   };
 
   const handleExportUsage = () => {
-    const blob = new Blob([exportUsageData()], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `token-usage-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // See downloadFile: an `<a download>` is inert in WKWebView.
+    downloadFile(
+      exportUsageData(),
+      `token-usage-${new Date().toISOString().split('T')[0]}.json`,
+      'application/json',
+    );
   };
 
   const handleClearUsage = async () => {

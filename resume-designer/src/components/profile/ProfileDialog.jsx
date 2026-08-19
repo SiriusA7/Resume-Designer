@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
-import { getUserProfile, saveUserProfile } from '../../persistence.js';
+import { getUserProfile, saveUserProfile, downloadFile } from '../../persistence.js';
 import { registerUserProfileHolder } from '../../userProfileHolder.js';
 import { profileToMarkdown } from '../../profileMarkdown.js';
 import { completeProfile, parseProfileImport } from '../../profileBridge.js';
@@ -147,14 +147,10 @@ export default function ProfileDialog() {
   };
 
   const handleExport = () => {
-    const md = profileToMarkdown(profileRef.current);
-    const blob = new Blob([md], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'user-profile.md';
-    a.click();
-    URL.revokeObjectURL(url);
+    // Through the shared helper, not a hand-rolled `<a download>`: WKWebView
+    // does nothing with one — no file, no error — so on iOS without the shell
+    // this button silently produced nothing. See downloadFile in persistence.js.
+    downloadFile(profileToMarkdown(profileRef.current), 'user-profile.md', 'text/markdown');
   };
 
   const handleImport = (file) => {
