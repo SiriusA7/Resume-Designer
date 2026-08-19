@@ -225,15 +225,12 @@ function retryMoveLater() {
 }
 
 async function moveOffDeletedWorkspace() {
-  const replacement = listProfiles().find((p) => p.id !== getActiveProfileId());
-  if (!replacement) {
-    // Nothing live to move to, which the boot path is already the answer for:
-    // `resolveActiveProfile` rebuilds or creates one. Reloading into it beats
-    // staying on a workspace that no longer exists.
-    console.warn('[profiles] the open workspace was deleted elsewhere and no live one remains');
-    window.location.reload();
-    return;
-  }
+  // FIRST, before anything that could reload. The branch below reloads outright
+  // when no live workspace is left to move to, and reaching it with the wizard
+  // open threw away exactly what this deferral exists to protect — so the one
+  // case where the person has the most to lose, a first run with a single
+  // workspace, was the one case that bypassed the guard entirely.
+  //
   // NOT WHILE THE WIZARD IS UP. A reload discards its interview answers, the
   // imported résumé and anything generated — none of which is stored anywhere
   // yet, so `switchToProfileDurably`'s flush cannot help. Losing ten minutes of
@@ -264,6 +261,15 @@ async function moveOffDeletedWorkspace() {
       });
     }
     return false;
+  }
+  const replacement = listProfiles().find((p) => p.id !== getActiveProfileId());
+  if (!replacement) {
+    // Nothing live to move to, which the boot path is already the answer for:
+    // `resolveActiveProfile` rebuilds or creates one. Reloading into it beats
+    // staying on a workspace that no longer exists.
+    console.warn('[profiles] the open workspace was deleted elsewhere and no live one remains');
+    window.location.reload();
+    return;
   }
   // The durable helper, not the pointer move: it saves the open editors first.
   // Their bytes go into the dead namespace and are lost with it either way, but
