@@ -647,6 +647,22 @@ export const appStorage = {
    * Passthrough (browser localStorage) is synchronous, so it is always durable.
    */
   async flush() {
+    // READ-ONLY IS NEVER DURABLE, and it has to say so before anything else
+    // here. `setItem` returns early in this mode, so nothing is ever queued —
+    // `dirty` stays empty and `writeFailures` never moves, and the test below
+    // would answer `true` for a session in which not one byte reached disk.
+    //
+    // That answer is what durability-gated callers act on: `importFullBackup
+    // Durably` announces a restore and reloads, profile creation and switching
+    // reload on it, and the PDF export builds from a disk that never received
+    // this session's changes. All three are worse than the failure they are
+    // checking for, because they are confident.
+    //
+    // The degraded recovery mode this covers is entered by `initAppStorage`
+    // when the disk store cannot be read and there is nothing to fall back to;
+    // the print window's own read-only mode reaches this too, and never calls
+    // flush, because it never writes.
+    if (readOnly) return false;
     if (mode === 'passthrough') return true;
     const before = writeFailures;
     if (dirty.size) drain();

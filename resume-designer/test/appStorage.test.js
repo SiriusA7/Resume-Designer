@@ -205,6 +205,18 @@ describe('cached mode (disk backend)', () => {
     expect(appStorage.getItem('resume-zoom')).toBe('2'); // cache still serves it
   });
 
+  it('reports read-only as NOT durable, so nothing announces a save it did not make', async () => {
+    const backend = makeBackend({ 'resume-designer-data': '{}' });
+    await initAppStorage({ backend, readOnly: true });
+    appStorage.setItem('resume-zoom', '2');
+    // `setItem` returns before queuing in this mode, so `dirty` stays empty and
+    // no write can fail — the naive "did any write fail?" test answers `true`
+    // for a session in which nothing reached disk. Callers act on this: the
+    // backup restore announces success and reloads, profile create/switch
+    // reload, and the PDF export builds from a disk that never saw the change.
+    expect(await appStorage.flush()).toBe(false);
+  });
+
   it('rejects in readOnly mode when disk data cannot load (print window aborts, never captures stale)', async () => {
     localStorage.setItem('resume-designer-data', '{"v":1}');
     const backend = makeBackend();
@@ -409,7 +421,14 @@ describe('a disk load that fails has somewhere to fall back to, or refuses', () 
     // exactly as it is for that launch to load.
     appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
     expect(localStorage.getItem('resume-designer-applications')).toBeNull();
-    await expect(appStorage.flush()).resolves.toBe(true);
+    // …and `flush` SAYS so. This asserted `true` until now, directly against
+    // the sentence above it: nothing is queued in this mode, so the "did any
+    // write fail?" test had nothing to fail and answered yes-it-is-durable for
+    // a session in which not one byte reached disk. Every durability-gated
+    // caller believed it — the backup restore announced a restore and reloaded,
+    // profile create and switch reloaded, the PDF export built from a disk that
+    // never saw the change.
+    await expect(appStorage.flush()).resolves.toBe(false);
   });
 });
 
