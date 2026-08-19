@@ -40,6 +40,10 @@ struct ProfileView: Decodable, Equatable {
   /// sonner toast rendered in the canvas, which is invisible under a sheet, so
   /// it crosses as state and every screen says so.
   var saveFailed: Bool
+  /// WHICH profile these rows are. A control that holds no focus — a picker's
+  /// menu — can sit open across an adoption, and every path it sends is a
+  /// position, so it echoes this and the write is refused if it has moved on.
+  var revision: Int
   /// A parsed markdown import waiting on the grouping question.
   var pendingImport: PendingImport?
   var sections: [Section]
@@ -431,6 +435,8 @@ private struct ProfileFieldRow: View {
 
   @FocusState private var focused: Bool
   @State private var draft = ""
+  /// A picker's choice was refused because the profile had moved on.
+  @State private var staleChoice = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -445,6 +451,11 @@ private struct ProfileFieldRow: View {
       }
     }
     .padding(.vertical, 2)
+    .alert("That skill moved", isPresented: $staleChoice) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text("Your profile changed on another device while the menu was open, so nothing was set. Try again from the refreshed list.")
+    }
     .onChange(of: focused) { _, isFocused in
       // Seed on the way in; on the way out the field goes back to rendering
       // what actually landed, including anything the store normalised.
@@ -510,10 +521,25 @@ private struct ProfileFieldRow: View {
     )
   }
 
+  /// A picker's value — proficiency, and anything else offered as a menu.
+  ///
+  /// It carries the profile revision, unlike the text binding above, and the
+  /// difference is not an oversight in either direction: a text field holds the
+  /// sync guard for as long as it has focus, so no adoption can land under it,
+  /// while a menu has no focus at all and can sit open across one. `field.path`
+  /// is a POSITION — `skills[1].proficiency` — so an adopted profile that
+  /// deleted or reordered the skills leaves the tap setting the proficiency of
+  /// whichever skill moved into that row.
   private var choice: Binding<String> {
     Binding(
       get: { field.value },
-      set: { model.profile("setField", ["path": field.path, "value": $0]) }
+      set: {
+        model.profile("setField", [
+          "path": field.path,
+          "value": $0,
+          "revision": String(model.snapshot.profile?.revision ?? -1),
+        ]) { ok in staleChoice = !ok }
+      }
     )
   }
 }

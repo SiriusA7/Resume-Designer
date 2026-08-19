@@ -416,3 +416,45 @@ describe('the flush contract', () => {
     expect(getUserProfile()).toMatchObject({ personalSummary: 'first', careerGoals: 'second' });
   });
 });
+
+describe('a write aimed at a profile that has moved on', () => {
+  it('refuses a picker\u2019s choice made across an adoption', async () => {
+    // A text row holds the sync guard while it has focus, so no adoption can
+    // land under it. A PICKER has no focus and its menu can sit open across
+    // one — and `skills[1].proficiency` is a position, so the tap would set the
+    // proficiency of whichever skill moved into that row.
+    const { registerUserProfileHolder, adoptStoredUserProfile, userProfileAdoptions } =
+      await import('../src/userProfileHolder.js');
+    seed({ skills: [{ name: 'Swift', proficiency: 'expert' }, { name: 'Rust', proficiency: 'novice' }] });
+
+    const drawnFrom = String(userProfileAdoptions());
+    // The profile is replaced while the menu is open.
+    const stop = registerUserProfileHolder({ isBusy: () => false, adopt: () => {} });
+    adoptStoredUserProfile();
+
+    expect(() => applyProfile({
+      action: 'setField', path: 'skills[1].proficiency', value: 'expert', revision: drawnFrom,
+    })).toThrow(/older profile/);
+    expect(getUserProfile().skills[1].proficiency).toBe('novice');
+
+    // Re-opened against what is on screen now, it goes through.
+    applyProfile({
+      action: 'setField',
+      path: 'skills[1].proficiency',
+      value: 'expert',
+      revision: String(userProfileAdoptions()),
+    });
+    expect(getUserProfile().skills[1].proficiency).toBe('expert');
+    stop();
+  });
+
+  it('still takes a write from a control that is guarded by focus', () => {
+    // Every keystroke from a focused row arrives with no revision at all, and
+    // must not start failing: that row reports its focus to the sync guard, so
+    // an adoption cannot land underneath it in the first place.
+    seed({ personalSummary: 'before' });
+    applyProfile({ action: 'setField', path: 'personalSummary', value: 'after' });
+    expect(getUserProfile().personalSummary).toBe('after');
+  });
+});
+

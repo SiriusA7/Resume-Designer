@@ -32,6 +32,7 @@ import { DEFAULT_PROFILE, markdownToProfile } from './profileMarkdown.js';
 import { assignGroupIds, companyKey, groupExperience } from './experienceGroups.js';
 import { buildDateFields, freeformDateFields, readEntryDates } from './experienceDates.js';
 import { getByPath, setByPath } from './diffEngine.js';
+import { userProfileAdoptions } from './userProfileHolder.js';
 import { generateId } from './store.js';
 import { profileCompleteness } from './accountStats.js';
 
@@ -627,6 +628,10 @@ export function buildProfile(state) {
     // crosses as state instead and the sheet says so in a banner. Swallowing it
     // leaves the user typing into a void and losing everything on a switch.
     saveFailed: !!source.saveFailed,
+    // WHICH profile these rows are, so a positional write made from a control
+    // that holds no focus — a picker's menu — can say which one it was drawn
+    // from. See `requireCurrentProfile`.
+    revision: userProfileAdoptions(),
     // A parsed import waiting on the grouping question. It cannot be asked with
     // `confirmDestructive()`: that renders a Radix AlertDialog INSIDE the
     // webview, behind the sheet, where the promise would never settle.
@@ -763,6 +768,21 @@ export function getProfileState() {
   };
 }
 
+/**
+ * Refuse a positional write aimed at a profile that has since been replaced.
+ *
+ * The adoption COUNT rather than the `data:userProfile` event: an operation
+ * that spans an adoption — a menu held open across one — has to ask whether it
+ * happened while it was away, and a listener cannot answer that.
+ */
+function requireCurrentProfile(revision, path) {
+  const seen = Number(revision);
+  if (!Number.isInteger(seen)) return;
+  if (seen !== userProfileAdoptions()) {
+    throw new Error(`${path} was aimed at an older profile`);
+  }
+}
+
 /** A shape-complete copy, safe to mutate. */
 function read() {
   return completeProfile(current());
@@ -868,6 +888,17 @@ export function applyProfile(command) {
     case 'setField': {
       const path = text(action.path);
       if (!path) throw new Error('setField needs a path');
+      // WHICH PROFILE this path counts into, when the caller can say.
+      //
+      // `skills[1].proficiency` is a position. A field ROW is safe without this
+      // because it holds the profile guard for as long as it has focus, so no
+      // adoption can land underneath it — but a picker has no focus, and its
+      // menu can sit open across one. The path then names whichever skill moved
+      // into that index.
+      //
+      // Absent means "the caller is guarded another way", which is true of every
+      // keystroke write from a focused row. Present and stale is refused.
+      requireCurrentProfile(action.revision, path);
       const profile = read();
       // `setByPath` MATERIALISES missing parents, which for a stale path — a
       // row deleted since the sheet last rendered — would grow a hole in the
