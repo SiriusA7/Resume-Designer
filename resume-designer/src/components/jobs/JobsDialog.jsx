@@ -263,12 +263,19 @@ export default function JobsDialog() {
     setIsAnalyzing(true);
     setAppliedIndexes(new Set());
     try {
-      const results = await runJobAnalysis({
+      const { results, variantId } = await runJobAnalysis({
         jobs: selectedJobs,
         modelId,
         reasoning: reasoningEffort,
         hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
       });
+      // A request is tens of seconds and this dialog can be closed and the
+      // résumé changed inside one. The report is already stored against the
+      // résumé it was run for; showing it here as well would put A's match
+      // score, gaps and recommendations under B's name — and `applyRec` would
+      // then run A's wording against B's document. The variant-change effect
+      // has already loaded B's own report, so the honest move is to leave it.
+      if (variantId && getCurrentId() !== variantId) return;
       setAnalysisResults(results);
     } catch (error) {
       toast.error(`Analysis failed: ${error.message}`);

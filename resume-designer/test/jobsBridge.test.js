@@ -355,7 +355,14 @@ describe('runJobAnalysis — the report lands on the résumé it was run for', (
       return { matchScore: 88, source: 'v1 run' };
     });
 
-    await runJobAnalysis({ jobs: [job()], modelId: 'openai/gpt-5.5' });
+    const outcome = await runJobAnalysis({ jobs: [job()], modelId: 'openai/gpt-5.5' });
+
+    // The pin comes BACK too. Fixing where the report is stored does not fix
+    // where it is shown: the web dialog sets its displayed state from this
+    // return value, so without the id it would render A's report under B's name
+    // and `applyRec` would run A's wording against B's document.
+    expect(outcome.variantId).toBe('v1');
+    expect(outcome.results).toMatchObject({ source: 'v1 run' });
 
     const stored = JSON.parse(localStorage.getItem(DATA_KEY)).variants;
     expect(stored.v1.jobAnalysis).toMatchObject({ source: 'v1 run' });

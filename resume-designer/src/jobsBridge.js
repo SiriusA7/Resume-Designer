@@ -318,8 +318,17 @@ export function buildJobs(state) {
  * only used to address the write, and `saveVariantAnalysis` already ignores a
  * variant that has been deleted.
  *
+ * The pin is RETURNED as well as used, because pinning the write only fixed
+ * where the report is stored. The report also comes back to the caller, and the
+ * web dialog set it as its displayed state — so A's recommendations rendered as
+ * B's and `applyRec` ran them against B's document. Returning the id lets a
+ * caller that shows results decide whether these are still about the résumé in
+ * front of the person; the iOS sheet does not need it, because its projection
+ * reads `getVariantAnalysis(currentId)` out of storage rather than from here.
+ *
  * @param {{jobs: Array, modelId: string, reasoning: string, hooks: object}} params
- * @returns {Promise<object>} the parsed analysis
+ * @returns {Promise<{results: object, variantId: string|null}>} the parsed
+ *   analysis and the résumé it was run against
  */
 export async function runJobAnalysis({ jobs = [], modelId = '', reasoning = 'medium', hooks = {} } = {}) {
   const model = modelId || getSettings().defaultModel || getDefaultModelId();
@@ -328,7 +337,7 @@ export async function runJobAnalysis({ jobs = [], modelId = '', reasoning = 'med
   const variantId = getCurrentId();
   const results = await analyzeAgainstJobs(model, jobs, { reasoningEffort, hooks });
   if (variantId && results) saveVariantAnalysis(variantId, results);
-  return results;
+  return { results, variantId: variantId || null };
 }
 
 /**
