@@ -217,6 +217,29 @@ describe('resize refit guard', () => {
     expect(pageHeight()).toBe('2112px');
   });
 
+  // The guard used to be "is the current zoom still the fitted value?", which
+  // any coincidence satisfies — and this is not an exotic one: both values are
+  // rounded to two decimals, so Zoom In followed by Zoom Out lands exactly back
+  // on it. The canvas was silently armed again, and the next resize or rotation
+  // refit it and persisted that over the zoom the person had chosen by hand.
+  it('stays put when a manual zoom happens to land back on the fitted value', async () => {
+    const { resizeTo } = await boot({ clientWidth: 400, clientHeight: 500 });
+
+    document.getElementById('zoom-fit').click();
+    settleFit();
+    expect(shownZoom()).toBe('45%');
+
+    document.getElementById('zoom-in').click();
+    document.getElementById('zoom-out').click();
+    expect(shownZoom()).toBe('45%'); // back on it, but chosen by hand now
+
+    // Unguarded — or guarded only by the value — this refits to 47%.
+    resizeTo(400, 900);
+    fireAndSettle('resize');
+
+    expect(shownZoom()).toBe('45%');
+  });
+
   it('stops refitting once the user zooms away from the fitted value', async () => {
     const { resizeTo } = await boot({ clientWidth: 400, clientHeight: 500 });
 

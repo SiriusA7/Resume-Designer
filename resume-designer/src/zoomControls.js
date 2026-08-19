@@ -168,14 +168,14 @@ export function initZoomControls() {
   // overwrite a zoom the user chose: fitToView goes through setZoom, which
   // persists, so an unguarded refit silently replaced a deliberate 100% with a
   // whole-document fit — 31% on a 2-page résumé, MIN_ZOOM on anything longer —
-  // and saved it. `lastFit` stays null until the user actually fits, so
-  // a zoom that was never fitted (including one restored from storage) is left
-  // alone. Debounced because a Split View drag fires continuously.
+  // and saved it. `lastFit` is set only by a fit and cleared by every other
+  // zoom, so a canvas that was never fitted — or has been zoomed since — is
+  // left alone. Debounced because a Split View drag fires continuously.
   let refitTimer = null;
   const scheduleRefit = () => {
     clearTimeout(refitTimer);
     refitTimer = setTimeout(() => {
-      if (!lastFit || currentZoom !== lastFit.zoom) return;
+      if (!lastFit) return;
       applyFit(lastFit.axis);
     }, 150);
   };
@@ -219,7 +219,17 @@ function setZoom(level, live = false) {
   // pinch mid-travel left the outstanding frame computing from its original
   // `from` value — and it overwrote every direct input until it landed on the
   // fit target. The person's own zoom simply lost for 200 ms.
-  if (!fitDriving) cancelFitTravel();
+  if (!fitDriving) {
+    cancelFitTravel();
+    // ...and it also ends the FIT, not just the travel. `lastFit` is what the
+    // resize handler consults, and it used to be validated by comparing the
+    // current zoom against the fitted one — a proxy that any coincidence
+    // satisfies. Zoom In then Zoom Out returns to the exact fitted percentage
+    // (both are rounded to two decimals), and the canvas was silently armed
+    // again: the next resize or rotation refit it and persisted that, over a
+    // zoom the person had chosen by hand.
+    lastFit = null;
+  }
   currentZoom = live ? level : Math.round(level * 100) / 100;
   applyZoom();
   if (!live) saveZoom();
