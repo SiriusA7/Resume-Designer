@@ -4,6 +4,7 @@ import {
   Upload, Download, Sparkles, Check, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -221,7 +222,17 @@ export default function ProfileDialog() {
               </Badge>
             )}
             <Button asChild variant="outline" size="sm">
-              <label className="cursor-pointer" title="Import profile from markdown file">
+              <label
+                className="cursor-pointer"
+                title="Import profile from markdown file"
+                onClick={(e) => {
+                  // A label's default action is to activate the input it wraps.
+                  // Preventing it is how this control is stopped, there being no
+                  // click handler of its own to guard. See filePickGuard.
+                  const blocked = filePickBlockedReason();
+                  if (blocked) { e.preventDefault(); toast.error(blocked); }
+                }}
+              >
                 <Upload className="h-4 w-4" />
                 Import
                 <input

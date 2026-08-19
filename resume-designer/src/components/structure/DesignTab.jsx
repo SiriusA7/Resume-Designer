@@ -18,6 +18,8 @@
  */
 
 import { useMemo, useState } from 'react';
+import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 import { Image as ImageIcon, RotateCcw, Trash2, User, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -307,6 +309,13 @@ function UploadDropzone({ onFile, children }) {
         'flex w-full cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed px-4 py-6 text-center text-muted-foreground transition-colors hover:bg-accent/50',
         dragover && 'border-primary bg-accent/50',
       )}
+      onClick={(e) => {
+        // A label's default action is to activate the input it wraps, so
+        // preventing it is how this control is stopped. Dropping still works;
+        // only the picker is dead. See filePickGuard.
+        const blocked = filePickBlockedReason();
+        if (blocked) { e.preventDefault(); toast.error(blocked); }
+      }}
       onDragOver={(e) => {
         e.preventDefault();
         setDragover(true);

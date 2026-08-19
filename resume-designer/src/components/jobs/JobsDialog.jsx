@@ -5,6 +5,7 @@ import {
   FileText, Loader2, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -248,6 +249,10 @@ export default function JobsDialog() {
   const saveEdit = (fields) => { if (editingJd) { updateJobDescription(editingJd.id, fields); setEditingJd(null); bump(); } };
 
   const handleImport = () => {
+    // Built on the fly, but it is the same dead control in WKWebView without
+    // the shell — see filePickGuard.
+    const blocked = filePickBlockedReason();
+    if (blocked) { toast.error(blocked); return; }
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';

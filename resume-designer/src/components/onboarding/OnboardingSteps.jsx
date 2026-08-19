@@ -4,6 +4,7 @@ import {
   Loader2, Lock, MessageSquareText, Plus, Sparkles, Target, Upload, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -323,7 +324,11 @@ export function ImportStep({ initialText, onParse, onFile, onBack }) {
             'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground transition-colors hover:bg-accent/30',
             dragOver && 'border-primary/50 bg-accent/30',
           )}
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => {
+            const blocked = filePickBlockedReason();
+            if (blocked) { toast.error(blocked); return; }
+            fileInputRef.current?.click();
+          }}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={async (e) => {
