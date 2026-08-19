@@ -223,21 +223,42 @@ function reportDataWrite(logicalKey, ok) {
 // refusal means a control on that sheet is showing a value that is not stored.
 const SETTINGS_BEARING_KEYS = [STORAGE_KEY, 'resume-designer-theme'];
 
+// The design services each own a key of their own, outside the blob — so a
+// refused write to any of them is invisible to the résumé and settings
+// warnings, and the Design sheet went on showing the change as saved. Same
+// mechanism, reported separately, because they are different screens and
+// "your fonts are not on disk" is not "your résumé is not on disk".
+const DESIGN_KEYS = [
+  'resume-header-style',
+  'resume-font-settings',
+  'resume-spacing-settings',
+  'resume-accent-settings',
+  'resume-photo-settings',
+];
+
+const WATCHED_KEYS = [...SETTINGS_BEARING_KEYS, ...DESIGN_KEYS];
+
 function listenForDataWrites() {
   if (watchingDataWrites) return;
   watchingDataWrites = true;
   onWriteFailure((logicalKey) => {
-    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, false);
+    if (WATCHED_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, false);
   });
   onWriteSettled((logicalKey) => {
-    if (SETTINGS_BEARING_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, true);
+    if (WATCHED_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, true);
   });
 }
 
 /** True while the résumé or the settings on screen are not known to be on disk. */
 export function dataSaveFailed() {
   listenForDataWrites();
-  return unsavedKeys.size > 0;
+  return SETTINGS_BEARING_KEYS.some((key) => unsavedKeys.has(key));
+}
+
+/** True while any design key on screen is not known to be on disk. */
+export function designSaveFailed() {
+  listenForDataWrites();
+  return DESIGN_KEYS.some((key) => unsavedKeys.has(key));
 }
 
 /**

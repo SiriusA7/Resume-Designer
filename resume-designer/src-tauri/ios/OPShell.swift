@@ -491,6 +491,11 @@ struct ShellSnapshot: Decodable, Equatable {
       var scale: Double
     }
 
+    /// A design key is not on disk. Each service writes its own, outside the
+    /// résumé blob, so neither the document warning nor the settings one can
+    /// see a refusal here.
+    var saveFailed: Bool
+
     var page: Page
     var pageSizes: [Option]
     var color: ColorSettings
@@ -4249,15 +4254,22 @@ private struct ShellView: View {
           // and two taps into an overflow menu is the wrong price for the one
           // pair of controls a person reaches for mid-sentence. Leading, where
           // a thumb already is.
+          // DISABLED DURING A CAPTURE, like the two menus above. The
+          // main-window export yields between pages, and an undo landing in one
+          // of those gaps puts a different revision of the document in the
+          // later pages than the earlier ones — one file, two résumés, and
+          // nothing in it says so.
           Button { model.send("undo") } label: {
             Image(systemName: "arrow.uturn.backward")
           }
           .accessibilityLabel("Undo")
+          .disabled(snapshot.pdfBusy)
 
           Button { model.send("redo") } label: {
             Image(systemName: "arrow.uturn.forward")
           }
           .accessibilityLabel("Redo")
+          .disabled(snapshot.pdfBusy)
 
           Button {
             model.send("setChatOpen", ["value": "true"])
@@ -4274,8 +4286,12 @@ private struct ShellView: View {
             Image(systemName: "list.bullet.rectangle")
           }
           .accessibilityLabel("Edit structure")
+          // The other two ways into the document from this bar. Same reason as
+          // undo and redo: what they change lands between the pages a capture
+          // is still taking.
+          .disabled(snapshot.pdfBusy)
 
-          styleButton
+          styleButton.disabled(snapshot.pdfBusy)
         }
         .modifier(BarCapsule())
         // Scale rather than slide: the zoom capsule is growing into the space
@@ -7316,6 +7332,26 @@ private enum DesignSection: String, CaseIterable, Identifiable {
 /// Each section gets its OWN `NavigationStack` (`.id(section)`): Typography and
 /// Header still push sub-screens, and switching chips has to land on the new
 /// section's root rather than leave someone else's sub-screen on top.
+/// "These design changes are not on disk." The fourth of these, and worded like
+/// the others because it is the same failure on the keys this sheet writes.
+///
+/// A strip rather than a Form section: this sheet is a chip switcher over a
+/// short panel, with no list to put a row in.
+private struct DesignSaveWarning: View {
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundStyle(.orange)
+      Text("Storage is full, so these design changes are not on disk. Free up space — they will go back on the next launch.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 16)
+    .padding(.bottom, 8)
+  }
+}
+
 private struct DesignSheet: View {
   @ObservedObject var model: ShellModel
   @Environment(\.dismiss) private var dismiss
@@ -7336,6 +7372,7 @@ private struct DesignSheet: View {
   var body: some View {
     VStack(spacing: 0) {
       header
+      if model.snapshot.design?.saveFailed == true { DesignSaveWarning() }
       content
     }
     // Three stops, not two. The compact one is the panel's working height and

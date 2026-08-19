@@ -72,6 +72,34 @@ describe('a chat that is not reaching disk', () => {
   });
 });
 
+describe('a design change that is not reaching disk', () => {
+  it('is reported apart from the résumé and the settings', async () => {
+    // Each design service owns a key outside the blob, so the résumé's warning
+    // and the settings one cannot see a refusal there — and the Design sheet
+    // went on showing the change as saved.
+    const { designSaveFailed } = await import('../src/persistence.js');
+    const FONTS = 'resume-font-settings';
+    // READ FIRST, which is what installs the watcher — and what production does
+    // long before any design write, because the sheet is projected from
+    // `getDesignState()` before it can be touched. A write that fails before
+    // anything has asked is a failure nobody subscribed for.
+    expect(designSaveFailed()).toBe(false);
+
+    refuse = FONTS;
+    appStorage.setItem(FONTS, JSON.stringify({ mode: 'system' }));
+    await appStorage.flush();
+    expect(designSaveFailed()).toBe(true);
+    // …and it is NOT reported as a résumé or settings failure, which are
+    // different sentences on different screens.
+    expect(dataSaveFailed()).toBe(false);
+
+    refuse = null;
+    appStorage.setItem(FONTS, JSON.stringify({ mode: 'system' }));
+    await appStorage.flush();
+    expect(designSaveFailed()).toBe(false);
+  });
+});
+
 describe('a résumé that is not reaching disk', () => {
   it('does not let one settings key answer for another', async () => {
     // The blob and the theme fail independently: the blob can be refused for

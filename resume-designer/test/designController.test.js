@@ -118,9 +118,12 @@ describe('getDesignState', () => {
     expect(Object.keys(state()).sort()).toEqual([
       'accent', 'bullets', 'color', 'fontPairings', 'fonts', 'googleFonts', 'header',
       'headerStyles', 'layout', 'layouts', 'page', 'pageSizes', 'palettes', 'photo',
-      'placements', 'radii', 'shapes', 'sizes', 'skillTags', 'spacing', 'spacingPresets',
-      'systemFonts', 'underlines',
+      'placements', 'radii', 'saveFailed', 'shapes', 'sizes', 'skillTags', 'spacing',
+      'spacingPresets', 'systemFonts', 'underlines',
     ]);
+    // Storage's answer, not a design value: each service writes its own key, so
+    // a refusal there is invisible to the résumé's warning and the settings one.
+    expect(state().saveFailed).toBe(false);
   });
 
   it('projects nothing but strings, numbers, booleans and arrays of those', () => {

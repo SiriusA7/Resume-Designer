@@ -27,7 +27,7 @@
  * notes on `hasImage` and on the header-style CSS.
  */
 
-import { getSettings, saveSettings } from './persistence.js';
+import { getSettings, saveSettings, designSaveFailed } from './persistence.js';
 import {
   FONT_PAIRINGS,
   POPULAR_GOOGLE_FONTS,
@@ -694,6 +694,9 @@ export function getDesignState() {
   const photo = getPhotoSettings();
 
   return {
+    // Each design service writes its OWN key, so a refusal there is invisible
+    // to the résumé's warning and to the settings one. The sheet says it.
+    saveFailed: designSaveFailed(),
     page: {
       size: settings.pageSize || 'continuous',
       orientation: settings.orientation || 'portrait',
