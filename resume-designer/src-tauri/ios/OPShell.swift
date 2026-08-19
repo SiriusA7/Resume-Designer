@@ -1427,6 +1427,16 @@ final class ShellModel: ObservableObject {
   /// A key write is crossing. Published, so every sheet instance agrees.
   @Published var apiKeyWriteInFlight = false
 
+  /// A rename or delete in the Profiles sheet was refused, and nobody has been
+  /// told yet.
+  ///
+  /// ON THE MODEL for the same reason the key's refusal is: the durability
+  /// check is a round trip to the page, and the sheet can be swiped away during
+  /// one. Held in the sheet's own `@State`, a refusal arriving afterwards wrote
+  /// into a view that was gone — and reopening Profiles showed the rolled-back
+  /// profile sitting there again with nothing to say why.
+  @Published var profileActionFailure: String?
+
   func saveApiKey(_ key: String) async -> Bool {
     // Each write waits for the one before it, so the LAST one asked for is the
     // last one to land — which is the only ordering a person could predict.
@@ -7933,6 +7943,11 @@ private struct HeaderScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
+  /// The picked photo could not be read. Kept in the SCREEN, unlike the sync
+  /// guards and the key's refusal: this says "the image you just chose did not
+  /// load", which is only meaningful to somebody still looking at the screen
+  /// they chose it on. A person who navigated away has nothing to act on.
+  @State private var loadFailed = false
   /// The résumé the removal prompt was raised for.
   ///
   /// The prompt is an unbounded wait and `clearDesignImage` carries no id — it
@@ -7963,12 +7978,22 @@ private struct HeaderScreen: View {
           // could leave `pick` holding a photo the user then cannot re-pick.
           pick = nil
           guard let url else {
+            // SAID, not only logged. `loadTransferable` fails on an iCloud photo
+            // that cannot be downloaded — offline, or the library is still
+            // fetching it — and a silent return leaves the screen exactly as it
+            // was, which is indistinguishable from a pick that never registered.
             NSLog("[OPShell] could not read the picked header image")
+            loadFailed = true
             return
           }
           guard model.isCurrentImageRequest(request) else { return }
           model.send("setDesignImage", ["target": "header", "dataUrl": url])
         }
+      }
+      .alert("That photo could not be read", isPresented: $loadFailed) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("It may still be downloading from iCloud. Try again, or pick another one.")
       }
       .confirmationDialog(
         "Remove the header image?", isPresented: $confirmRemove, titleVisibility: .visible
@@ -8456,6 +8481,11 @@ private struct PhotoScreen: View {
 
   @State private var pick: PhotosPickerItem?
   @State private var confirmRemove = false
+  /// The picked photo could not be read. Kept in the SCREEN, unlike the sync
+  /// guards and the key's refusal: this says "the image you just chose did not
+  /// load", which is only meaningful to somebody still looking at the screen
+  /// they chose it on. A person who navigated away has nothing to act on.
+  @State private var loadFailed = false
   /// The résumé the removal prompt was raised for.
   ///
   /// The prompt is an unbounded wait and `clearDesignImage` carries no id — it
@@ -8479,12 +8509,19 @@ private struct PhotoScreen: View {
           let url = await designImageDataURL(for: item)
           pick = nil
           guard let url else {
+            // Said rather than only logged, as on the header screen.
             NSLog("[OPShell] could not read the picked photo")
+            loadFailed = true
             return
           }
           guard model.isCurrentImageRequest(request) else { return }
           model.send("setDesignImage", ["target": "photo", "dataUrl": url])
         }
+      }
+      .alert("That photo could not be read", isPresented: $loadFailed) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("It may still be downloading from iCloud. Try again, or pick another one.")
       }
       .confirmationDialog(
         "Remove the photo?", isPresented: $confirmRemove, titleVisibility: .visible
@@ -8616,7 +8653,7 @@ private struct ProfilesSheet: View {
   @State private var renamingId: String?
   @State private var draftName = ""
   @State private var pendingDelete: ShellProfile?
-  @State private var failure: String?
+
 
   private var profiles: [ShellProfile] { model.snapshot.profiles }
   private var active: ShellProfile? { profiles.first(where: \.isActive) }
@@ -8671,7 +8708,8 @@ private struct ProfilesSheet: View {
         Button("Delete", role: .destructive) {
           Task {
             if !(await model.deleteProfile(profile.id)) {
-              failure = "Could not delete \(profile.name) — the change didn't reach disk."
+              model.profileActionFailure =
+                "Could not delete \(profile.name) — the change didn't reach disk."
             }
           }
         }
@@ -8682,7 +8720,9 @@ private struct ProfilesSheet: View {
         Text("\(profile.name) and everything in it — résumés, job descriptions, "
              + "applications and chats — will be deleted on all your devices.")
       }
-      .alert("Couldn't save", isPresented: failureBinding, presenting: failure) { _ in
+      .alert(
+        "Couldn't save", isPresented: failureBinding, presenting: model.profileActionFailure
+      ) { _ in
         Button("OK", role: .cancel) {}
       } message: { message in
         Text(message)
@@ -8738,7 +8778,7 @@ private struct ProfilesSheet: View {
     renamingId = nil
     Task {
       if !(await model.renameProfile(id, to: name)) {
-        failure = "Could not rename — the change didn't reach disk."
+        model.profileActionFailure = "Could not rename — the change didn't reach disk."
       }
     }
   }
@@ -8752,6 +8792,9 @@ private struct ProfilesSheet: View {
   }
 
   private var failureBinding: Binding<Bool> {
-    Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
+    Binding(
+      get: { model.profileActionFailure != nil },
+      set: { if !$0 { model.profileActionFailure = nil } }
+    )
   }
 }
