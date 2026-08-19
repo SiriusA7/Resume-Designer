@@ -6234,21 +6234,7 @@ private struct ChatSheet: View {
             // An INSET, not a row in a VStack: the transcript keeps the full
             // height of the sheet and scrolls under the composer, so text passes
             // behind the glass instead of stopping at an opaque band above it.
-            .safeAreaInset(edge: .bottom) {
-              ChatComposer(
-                text: $draft,
-                isSending: chat?.loading ?? false,
-                models: chat?.models ?? [],
-                currentModel: chat?.currentModel ?? "",
-                reasoningEffort: chat?.reasoningEffort ?? "medium",
-                reasoningSupported: chat?.reasoningSupported ?? false,
-                generation: fieldGeneration,
-                onSend: sendDraft,
-                onStop: { model.send("chatStop") },
-                onSelectModel: { model.send("chatSetModel", ["id": $0]) },
-                onSetReasoning: { model.send("chatSetReasoning", ["value": $0]) }
-              )
-            }
+            .safeAreaInset(edge: .bottom) { composer }
         }
       }
       .navigationBarTitleDisplayMode(.inline)
@@ -6368,6 +6354,38 @@ private struct ChatSheet: View {
         Text("The messages in it are removed. Your resume is not affected.")
       }
     }
+  }
+
+  /// The composer, extracted from the `safeAreaInset` rather than written
+  /// inline — pinning the two option menus tipped this view's expression over
+  /// the type-checker's budget, and a property has room for a `let`.
+  ///
+  /// `renderedIn` is read HERE, at the render, not inside the callbacks. Those
+  /// menus keep the callback they were presented with, so reading the workspace
+  /// when the selection is made reads whatever replaced it — the check would
+  /// pass against exactly the state it exists to catch. An empty composer holds
+  /// no chat guard, so a tombstone can land with one of these menus open.
+  private var composer: some View {
+    let renderedIn = model.snapshot.whereAmI
+    return ChatComposer(
+      text: $draft,
+      isSending: chat?.loading ?? false,
+      models: chat?.models ?? [],
+      currentModel: chat?.currentModel ?? "",
+      reasoningEffort: chat?.reasoningEffort ?? "medium",
+      reasoningSupported: chat?.reasoningSupported ?? false,
+      generation: fieldGeneration,
+      onSend: sendDraft,
+      onStop: { model.send("chatStop") },
+      onSelectModel: { id in
+        guard renderedIn == model.snapshot.whereAmI else { return }
+        model.send("chatSetModel", ["id": id])
+      },
+      onSetReasoning: { value in
+        guard renderedIn == model.snapshot.whereAmI else { return }
+        model.send("chatSetReasoning", ["value": value])
+      }
+    )
   }
 
   // MARK: transcript
@@ -8177,14 +8195,19 @@ private struct ColorScreen: View {
       }
 
       Section {
+        // Built by hand rather than through `designText`, because it trades in
+        // `Color` and not a string — which is exactly how it missed the pin the
+        // three helpers carry. The system chooser is a sheet of its own and
+        // keeps this binding across a reload.
         ColorPicker(
           "Custom color",
           selection: Binding(
             get: { designColor(model.snapshot.design?.color.customColor ?? "") ?? .accentColor },
-            set: {
+            set: { [renderedFor = model.snapshot.whereAmI] color in
+              guard renderedFor == model.snapshot.whereAmI else { return }
               model.send(
                 "setDesign",
-                ["group": "color", "property": "customColor", "value": designHex($0)]
+                ["group": "color", "property": "customColor", "value": designHex(color)]
               )
             }
           ),

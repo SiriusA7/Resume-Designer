@@ -567,7 +567,13 @@ private struct ProfileFieldRow: View {
   /// deleted or reordered the skills leaves the tap setting the proficiency of
   /// whichever skill moved into that row.
   private var choice: Binding<String> {
-    Binding(
+    // READ AT RENDER, not at selection. A menu keeps the binding it was
+    // presented with, so reading the revision inside `set` reads whatever the
+    // profile has become — which is the adopted one, so the check passed
+    // against exactly the state it was added to catch. The design bindings in
+    // OPShell capture their pin the same way and for the same reason.
+    let renderedWith = String(model.snapshot.profile?.revision ?? -1)
+    return Binding(
       get: { field.value },
       set: {
         // The workspace as well as the revision. The revision counts ADOPTIONS,
@@ -580,7 +586,7 @@ private struct ProfileFieldRow: View {
         model.profile("setField", [
           "path": field.path,
           "value": $0,
-          "revision": String(model.snapshot.profile?.revision ?? -1),
+          "revision": renderedWith,
         ]) { ok in staleChoice = !ok }
       }
     )
