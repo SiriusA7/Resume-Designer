@@ -31,6 +31,7 @@ import {
 import { getSettings, getVariantAnalysis } from '../../persistence.js';
 import { showDiffView } from '../../diffView.js';
 import { getCurrentId } from '../../variantManager.js';
+import { store } from '../../store.js';
 // The two AI compositions live in the bridge module, not in these handlers, so
 // the native Jobs sheet runs the same ones — see the note there. This component
 // owns only what is React's: its own state and its own toasts.
@@ -154,6 +155,24 @@ export default function JobsDialog() {
   // whole module array, and without this the open list keeps rendering the rows
   // that array no longer holds.
   useEffect(() => subscribeJobDescriptions(bump), []);
+
+  // Sync replacing the OPEN résumé, which is neither an open nor a variant
+  // change — the two triggers below — so the report on screen could outlive the
+  // document it was computed against indefinitely. `adoptDocument` swaps that
+  // document, and the stored report travels with the same unit, so re-reading
+  // gives the one that belongs to what is now on the canvas.
+  //
+  // It matters because Apply is not advisory: some recommendations map straight
+  // onto a field, so applying a pre-sync one writes over the text that just
+  // arrived from the other device.
+  //
+  // `documentAdopted` rather than `change`: `change` also fires for every
+  // ordinary keystroke, and reloading the report on each one would drop the
+  // applied set — and with it the greying-out of what the person had already
+  // applied — while they typed.
+  useEffect(() => store.subscribe((event) => {
+    if (event === 'documentAdopted') reloadAnalysis();
+  }), [reloadAnalysis]);
 
   useEffect(() => {
     const onOpen = () => { reloadAnalysis(); setOpen(true); };
