@@ -992,6 +992,9 @@ private struct ProfileExperienceScreen: View {
     pendingDeleteName = companyDrafts[employer.id] ?? employer.company
     focusedEmployer = nil
     pendingDeleteID = employer.id
+    // The pin the dialog checks. Declared and guarded without ever being set,
+    // the guard could only fail — which is a Delete button that does nothing.
+    deleteFrom = model.snapshot.whereAmI
   }
 
   private func companyBinding(_ employer: ProfileView.Employer) -> Binding<String> {

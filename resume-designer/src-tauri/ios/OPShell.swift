@@ -6557,14 +6557,24 @@ private struct ChatSheet: View {
   /// you are already looking at.
   private var threadsMenu: some View {
     Menu {
+      // Both pinned to the render, like every other menu here. An empty
+      // composer holds no chat guard, so a tombstone can be adopted with this
+      // menu open — and a thread id is unique only within a workspace, so a
+      // cloned one opens an unrelated chat rather than failing.
       Section {
-        Button { model.send("chatNewThread") } label: {
+        Button { [renderedIn = model.snapshot.whereAmI] in
+          guard renderedIn == model.snapshot.whereAmI else { return }
+          model.send("chatNewThread")
+        } label: {
           Label("New chat", systemImage: "square.and.pencil")
         }
       }
       Section("Chats") {
         ForEach(chat?.threads ?? []) { thread in
-          Button { model.send("chatSelectThread", ["id": thread.id]) } label: {
+          Button { [renderedIn = model.snapshot.whereAmI] in
+            guard renderedIn == model.snapshot.whereAmI else { return }
+            model.send("chatSelectThread", ["id": thread.id])
+          } label: {
             if thread.isCurrent {
               Label(thread.title, systemImage: "checkmark")
             } else {
