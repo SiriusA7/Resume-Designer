@@ -45,7 +45,27 @@ export function applyRecommendationToStore(sectionName, currentValue, suggestedV
   };
 
   if (directMappings[sectionName]) {
-    store.update(directMappings[sectionName], suggestedValue);
+    const field = directMappings[sectionName];
+    // THE ONLY PATHS THAT WRITE WITHOUT LOOKING FOR WHAT THEY REPLACE. Every
+    // other branch below uses `currentValue` to FIND its target — a contact
+    // field, a bullet — so a recommendation whose premise has gone simply finds
+    // nothing and reports it. These four wrote regardless.
+    //
+    // That is how an analysis outlives the text it describes. The report is
+    // stored per résumé and applied whenever the person gets to it: they edit
+    // the summary after running one, open Jobs an hour later, tap Apply, and
+    // the edit is replaced by a rewrite of the paragraph it superseded. A
+    // request still in flight while they type is the same thing in a smaller
+    // window, and neither is visible — the card shows the model's `current`,
+    // not what the résumé says now.
+    //
+    // Refused rather than merged: the "could not automatically apply" notice
+    // already exists for exactly this, and it leaves the person looking at
+    // both texts instead of at one that silently won.
+    if (!isAddNew && normalizeForMatch(data[field]) !== normalizeForMatch(currentValue)) {
+      return false;
+    }
+    store.update(field, suggestedValue);
     return true;
   }
 
@@ -146,6 +166,11 @@ export function applyRecommendationToStore(sectionName, currentValue, suggestedV
 }
 
 // Does the "current" value signal a new addition rather than a replacement?
+/** Compare a stored value with the model's `current`, ignoring edge whitespace. */
+function normalizeForMatch(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function isAddNewRecommendation(currentValue) {
   if (!currentValue) return true;
   const normalized = currentValue.toLowerCase().trim();
