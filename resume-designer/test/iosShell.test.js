@@ -1051,6 +1051,44 @@ describe('the Design sheet commands', () => {
     expect(nativeEditingBusy('profile')).toBe(false);
   });
 
+  it('does not let one field row release another\u2019s guard', async () => {
+    // Focus moving straight from one row to the next fires two independent
+    // callbacks. If the outgoing row's `false` lands after the incoming row's
+    // `true`, a shared holder leaves the scope unguarded while a field is still
+    // focused — and an adopted profile then replaces what the live draft is
+    // rendering, so the next keystroke writes the stale value back over it.
+    const { send } = await mount();
+    const { nativeEditingBusy } = await import('../src/iosShell.js');
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field:personal.name', value: 'true' });
+    // The next row takes focus…
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field:personal.email', value: 'true' });
+    // …and the first one's blur arrives after it.
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field:personal.name', value: 'false' });
+    expect(nativeEditingBusy('profile')).toBe(true);
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field:personal.email', value: 'false' });
+    expect(nativeEditingBusy('profile')).toBe(false);
+  });
+
+  it('lets a screen release the whole family of holders it owns', async () => {
+    // The screen-level cleanup, for the blur SwiftUI never delivers. It has to
+    // reach every row without touching the date picker on the screen it pushed
+    // to — which is why it names a family rather than clearing the scope.
+    const { send } = await mount();
+    const { nativeEditingBusy } = await import('../src/iosShell.js');
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field:personal.name', value: 'true' });
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'dates', value: 'true' });
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'field:', value: 'false' });
+    // The date picker still holds its own.
+    expect(nativeEditingBusy('profile')).toBe(true);
+
+    send({ type: 'setNativeEditing', scope: 'profile', holder: 'dates', value: 'false' });
+    expect(nativeEditingBusy('profile')).toBe(false);
+  });
+
   it('lets the sheet closing release every holder in its scope', async () => {
     // The backstop, and the one release that legitimately speaks for everything
     // inside it: a hold whose own release never arrived would otherwise stall

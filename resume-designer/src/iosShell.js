@@ -1705,6 +1705,20 @@ export function initIOSShell(deps) {
         return;
       }
       if (who) {
+        // A holder ending in ':' names a FAMILY, and releases all of it. The
+        // profile sheet has one row per field and they hand focus straight to
+        // each other — the outgoing row's `false` can arrive after the incoming
+        // row's `true` — so the rows cannot share a holder or one releases the
+        // other's guard. They take `field:<path>`; the screen they live on
+        // releases `field:` when it is popped, which is the cleanup that has to
+        // reach all of them without touching `dates` on the screen it pushed to.
+        if (who.endsWith(':')) {
+          const prefix = `${name}:${who}`;
+          for (const held of [...nativeEditing]) {
+            if (held.startsWith(prefix)) nativeEditing.delete(held);
+          }
+          return;
+        }
         nativeEditing.delete(`${name}:${who}`);
         return;
       }

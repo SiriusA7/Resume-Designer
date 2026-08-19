@@ -454,8 +454,16 @@ private struct ProfileFieldRow: View {
       // landing during this focus was adopted and republished while the binding
       // above went on showing `draft`, and the next keystroke wrote that stale
       // text over the adopted field and uploaded it as newer.
+      // ITS OWN holder, not a shared "field". Focus moving straight from one
+      // row to the next fires two independent callbacks, and if the outgoing
+      // row's `false` lands after the incoming row's `true` a shared holder
+      // leaves the scope unguarded while a field is focused — so an adopted
+      // `data:userProfile` replaces the profile under a live draft and the next
+      // keystroke writes the stale value back over it.
       model.send("setNativeEditing", [
-        "scope": "profile", "holder": "field", "value": isFocused ? "true" : "false",
+        "scope": "profile",
+        "holder": "field:\(field.path)",
+        "value": isFocused ? "true" : "false",
       ])
     }
   }
@@ -610,7 +618,7 @@ private struct ProfileFormScreen: View {
     // the destination's `onAppear` before the source's `onDisappear`, so pushing
     // INTO an editor was the thing that unguarded it.
     .onDisappear {
-      model.send("setNativeEditing", ["scope": "profile", "holder": "field", "value": "false"])
+      model.send("setNativeEditing", ["scope": "profile", "holder": "field:", "value": "false"])
     }
     .alert("That row moved", isPresented: $staleWarning) {
       Button("OK", role: .cancel) {}
@@ -975,7 +983,7 @@ private struct ProfileRoleScreen: View {
     // still focused and the guard was stuck; push forward into Dates and a
     // blanket release took down the guard that screen had just raised.
     .onDisappear {
-      model.send("setNativeEditing", ["scope": "profile", "holder": "field", "value": "false"])
+      model.send("setNativeEditing", ["scope": "profile", "holder": "field:", "value": "false"])
     }
   }
 }
