@@ -201,6 +201,18 @@ async function generatePdfInMainWindow() {
   const scrollTop = scroller?.scrollTop ?? 0;
   const scrollLeft = scroller?.scrollLeft ?? 0;
 
+  // THE EDITOR TOO, not only the native controls. The toolbar buttons were
+  // disabled for the capture, but the résumé itself is `contenteditable`: a
+  // field left focused when the export starts stays live through the two-frame
+  // wait and every page capture, and the keyboard is still up. Typing then puts
+  // one revision in the pages already taken and another in the rest.
+  //
+  // Blurred AND frozen: blurring alone dismisses the keyboard but leaves the
+  // element editable, so a tap during the capture puts the caret straight back.
+  const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+  document.activeElement?.blur?.();
+  for (const el of editables) el.setAttribute('contenteditable', 'false');
+
   root.classList.add('pdf-export-mode');
   try {
     // pdf-export-mode makes <html> the scrolling box, so a mid-document scroll
@@ -246,6 +258,9 @@ async function generatePdfInMainWindow() {
     // Restore unconditionally: leaving the class on would strand the user in a
     // chrome-less full-bleed page with no way back.
     root.classList.remove('pdf-export-mode');
+    // Restored on every exit, including the throwing ones — a résumé that
+    // cannot be typed into is a worse outcome than a failed export.
+    for (const el of editables) el.setAttribute('contenteditable', 'true');
     // `pdf-export-mode` makes <html> the scrolling box over a document as tall
     // as the whole resume. Once the class is gone `overflow: hidden` returns
     // and hides any leftover offset visually, so a non-zero scroll here is

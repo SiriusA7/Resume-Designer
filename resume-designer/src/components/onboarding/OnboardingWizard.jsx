@@ -348,17 +348,32 @@ export default function OnboardingWizard() {
   const reviewBack = useCallback(() => setStep(mode === 'job' ? 2 : 3), [mode]);
 
   const saveResume = useCallback(async () => {
-    // saveOnboardingResume throws when the variant can't be persisted (full
-    // storage). Surface that and stay on the review step — advancing to
-    // the success screen would claim a resume that doesn't exist.
-    setNotice(null);
+    // SINGLE FLIGHT. Waiting for durability opened a window this step never had
+    // before: Create is a button on a screen that stays interactive, so a second
+    // tap while the flush is pending would run `saveOnboardingResume` again —
+    // minting a second résumé id, and in job mode committing the job
+    // descriptions a second time as well.
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setBusy('save');
     try {
-      saveOnboardingResume({ parsedResume, mode, targetJob, jobDescriptions });
-    } catch (err) {
-      toast.error(err.message);
-      setNotice({ kind: 'error', text: err.message });
-      return;
-    }
+      // saveOnboardingResume throws when the variant can't be persisted (full
+      // storage). Surface that and stay on the review step — advancing to
+      // the success screen would claim a resume that doesn't exist.
+      setNotice(null);
+      // NOT REDONE ON A RETRY. The variant from the first attempt exists; only
+      // its durability was in doubt, so trying again re-flushes rather than
+      // creating a second résumé the person never asked for.
+      if (!savedRef.current) {
+        try {
+          saveOnboardingResume({ parsedResume, mode, targetJob, jobDescriptions });
+        } catch (err) {
+          toast.error(err.message);
+          setNotice({ kind: 'error', text: err.message });
+          return;
+        }
+        savedRef.current = true;
+      }
     // …and the OTHER half of that same sentence, which the throw above does not
     // cover. On a device the write goes into `appStorage`'s cache and the disk
     // refusal arrives later, so the throw never happens and the wizard says
@@ -367,15 +382,19 @@ export default function OnboardingWizard() {
     //
     // Waited for rather than warned about: this is a one-off at the end of a
     // wizard, where a moment's pause is affordable and "ready" has to mean it.
-    if (!(await appStorage.flush())) {
-      const text = 'Your resume could not be saved to disk. Free up space and try again.';
-      toast.error(text);
-      // The toast renders in the canvas, behind the native wizard. This is what
-      // the iOS side reads.
-      setNotice({ kind: 'error', text });
-      return;
+      if (!(await appStorage.flush())) {
+        const text = 'Your resume could not be saved to disk. Free up space and try again.';
+        toast.error(text);
+        // The toast renders in the canvas, behind the native wizard. This is
+        // what the iOS side reads.
+        setNotice({ kind: 'error', text });
+        return;
+      }
+      setStep(5);
+    } finally {
+      savingRef.current = false;
+      setBusy('');
     }
-    setStep(5);
   }, [parsedResume, mode, targetJob, jobDescriptions]);
 
   const finish = useCallback(() => {
@@ -405,6 +424,11 @@ export default function OnboardingWizard() {
   const [nativeGen, setNativeGen] = useState(null);
   const [improved, setImproved] = useState(null);
   const [busy, setBusy] = useState('');
+  // A durable save is in flight; a second Create must not start another.
+  const savingRef = useRef(false);
+  // The variant was created. Only its durability is outstanding, so a retry
+  // re-flushes instead of minting a second résumé.
+  const savedRef = useRef(false);
   const [notice, setNotice] = useState(null);
   const genAbortRef = useRef(null);
   const improveTokenRef = useRef(0);
@@ -672,6 +696,7 @@ export default function OnboardingWizard() {
             isTailored={jobDescriptions.length > 0}
             onBack={reviewBack}
             onCreate={saveResume}
+            saving={busy === 'save'}
           />
         );
       case 5:

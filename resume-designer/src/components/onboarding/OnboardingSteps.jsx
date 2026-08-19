@@ -1064,7 +1064,7 @@ function ReviewSectionLabel({ children }) {
   return <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{children}</p>;
 }
 
-export function ReviewStep({ resume, isTailored, onBack, onCreate }) {
+export function ReviewStep({ resume, isTailored, onBack, onCreate, saving = false }) {
   const hasName = resume?.name && resume.name !== 'Not set';
   const hasTagline = resume?.tagline && resume.tagline !== 'Not set';
   const hasSummary = resume?.summary;
@@ -1187,7 +1187,12 @@ export function ReviewStep({ resume, isTailored, onBack, onCreate }) {
         <Button variant="ghost" id="back-btn" onClick={onBack}>
           <ArrowLeft className="size-4" /> Back
         </Button>
-        <Button id="next-btn" onClick={onCreate}>Create resume</Button>
+        {/* Disabled while the résumé is being written and waited for. Without
+            it a second tap runs the whole save again and mints another résumé
+            — the wait for durability is what made that reachable. */}
+        <Button id="next-btn" onClick={onCreate} disabled={saving}>
+          {saving ? 'Creating…' : 'Create resume'}
+        </Button>
       </StepFooter>
     </div>
   );
