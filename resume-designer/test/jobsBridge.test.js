@@ -420,6 +420,27 @@ describe('runTailor — the guards around the long await', () => {
     expect(outcome.changeSet).toBeNull();
   });
 
+  it('discards tailoring whose document was replaced under it', async () => {
+    // The existence check below passes a REPLACEMENT — the id is unchanged —
+    // and the changes were generated from the copy just thrown away. The
+    // standalone-review adoption handler cannot cover this one either: the
+    // review opens only after this await returns, so when `documentAdopted`
+    // fires there is nothing open to close.
+    store.setData({ name: 'Ash', summary: 'Old summary', experience: [] }, true, 'v1');
+    generateResumeChanges.mockImplementation(async () => {
+      expect(store.adoptDocument('v1', { name: 'Ada', summary: 'from the other device' }))
+        .toBe(true);
+      return { changes: { summary: 'Tailored' } };
+    });
+
+    const outcome = await runTailor({ modelId: 'openai/gpt-5.5' });
+
+    expect(outcome.status).toBe('variant-changed');
+    expect(outcome.changeSet).toBeNull();
+    // The adopted text is still there — nothing was built against it.
+    expect(store.getData().summary).toBe('from the other device');
+  });
+
   it('loads the pinned résumé back when the user switched mid-run', async () => {
     generateResumeChanges.mockImplementation(async () => {
       currentId = 'v2';

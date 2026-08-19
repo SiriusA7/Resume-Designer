@@ -521,6 +521,13 @@ export function useChat() {
     // Stamp the committed turns with the resume active at request START (the one
     // startThreadId belongs to), not getCurrentId() at completion — see getAIResponse.
     const startVariantId = getCurrentId();
+    // The DOCUMENT, not only which resume. Sync can adopt a newer copy of the
+    // SAME resume while this runs, which leaves the id unchanged and so passes
+    // the check below — and the paths in `result.changes` were generated from
+    // the copy that has just been replaced. `documentAdopted` cannot help
+    // either: this proposal is created AFTER that event fired, so the listener
+    // that invalidates open proposals has nothing to invalidate yet.
+    const startAdoptions = store.documentAdoptions();
     setLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -583,6 +590,16 @@ export function useChat() {
         commitToThread(startThreadId, {
           id: uid(), role: 'assistant',
           content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''}`}\n\nThese edits are for the resume you started from — switch back to it and resend to apply them.`,
+          reasoning: capturedReasoning || null, run: capturedRun,
+          variantId: startVariantId, timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (store.documentAdoptions() !== startAdoptions) {
+        commitToThread(startThreadId, {
+          id: uid(), role: 'assistant',
+          content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''}`}\n\nThis resume changed on another device while I was working, so these edits are for a version you no longer have. Ask again and I will use the current one.`,
           reasoning: capturedReasoning || null, run: capturedRun,
           variantId: startVariantId, timestamp: new Date().toISOString(),
         });

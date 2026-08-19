@@ -413,6 +413,13 @@ export async function runTailor({ modelId = '', reasoning = 'medium', hooks = {}
 
   const variantId = getCurrentId();
   const variantName = variantId ? getVariants()[variantId]?.name || '' : '';
+  // The DOCUMENT as well, exactly as `runJobAnalysis` pins it. The check below
+  // asks whether the résumé still EXISTS, which a replacement passes — its id
+  // is unchanged — and the changes were generated from the copy that has just
+  // been thrown away. The standalone-review adoption handler cannot cover this
+  // one either: the review is opened only after this await returns, so at the
+  // moment `documentAdopted` fires there is nothing open to close.
+  const adoptions = store.documentAdoptions();
 
   const result = await generateResumeChanges(
     model,
@@ -423,6 +430,13 @@ export async function runTailor({ modelId = '', reasoning = 'medium', hooks = {}
     { reasoningEffort, hooks },
   );
 
+  if (store.documentAdoptions() !== adoptions) {
+    return {
+      status: 'variant-changed',
+      message: 'This resume changed on another device while the tailoring ran, so it was discarded. Run it again.',
+      changeSet: null,
+    };
+  }
   if (variantId && !Object.hasOwn(getVariants(), variantId)) {
     return {
       status: 'variant-gone',
