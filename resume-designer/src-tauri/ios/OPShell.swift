@@ -3935,7 +3935,17 @@ private struct ShellView: View {
         }
       }
       Section {
-        Button { model.send("newVariant") } label: { Label("New resume", systemImage: "plus") }
+        // Pinned like every other row in this menu. `newVariant` names no
+        // workspace, so a menu held open across a tombstone starts the wizard
+        // against the replacement — and `saveOnboardingResume()` then creates
+        // the résumé AND its job descriptions there, in a workspace whose title
+        // menu was never opened.
+        Button { [renderedIn = snapshot.whereAmI] in
+          guard renderedIn == model.snapshot.whereAmI else { return }
+          model.send("newVariant")
+        } label: {
+          Label("New resume", systemImage: "plus")
+        }
         Button {
           model.send("setLibraryOpen", ["value": "true"])
           sheet = .library
@@ -4184,8 +4194,23 @@ private struct ShellView: View {
         } label: {
           Label("Import…", systemImage: "square.and.arrow.down")
         }
-        Button { model.send("exportVariant", ["format": "json"]) } label: { Label("Export as JSON", systemImage: "curlybraces") }
-        Button { model.send("exportVariant", ["format": "md"]) } label: { Label("Export as Markdown", systemImage: "text.alignleft") }
+        // Pinned like Import above them. `exportVariant` delegates to
+        // `exportCurrentVariant()` and carries no identity at all, so a menu
+        // held open across a tombstone hands the share sheet the replacement
+        // workspace's résumé — a document the person never asked to send, under
+        // the name of one they did.
+        Button { [renderedIn = snapshot.whereAmI] in
+          guard renderedIn == model.snapshot.whereAmI else { return }
+          model.send("exportVariant", ["format": "json"])
+        } label: {
+          Label("Export as JSON", systemImage: "curlybraces")
+        }
+        Button { [renderedIn = snapshot.whereAmI] in
+          guard renderedIn == model.snapshot.whereAmI else { return }
+          model.send("exportVariant", ["format": "md"])
+        } label: {
+          Label("Export as Markdown", systemImage: "text.alignleft")
+        }
       }
       Section("Tools") {
         Button {
