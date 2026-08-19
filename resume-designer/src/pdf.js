@@ -15,6 +15,7 @@ import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { withPreviewSuppressed } from './inlineChanges.js';
+import { commitActiveInlineEdit } from './inlineEditor.js';
 
 let html2pdfModule = null;
 
@@ -230,10 +231,19 @@ async function generatePdfInMainWindow() {
   // Blurred AND frozen: blurring alone dismisses the keyboard but leaves the
   // element editable, so a tap during the capture puts the caret straight back.
   const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+  // The guard first, so it is continuous: the commit below clears
+  // `activeElement`, which is what `isBusyEditing` was answering from.
+  capturing = true;
+  // COMMITTED BEFORE FREEZING, and this ordering is the whole of it. `handleBlur`
+  // finishes the edit on a 100ms timer, and `finishEditing` bails at
+  // `!element.isContentEditable` — so freezing first meant that callback found a
+  // frozen node, returned without saving, and left `activeElement` set. The
+  // typed text stayed in the DOM and nowhere else, to be discarded by the next
+  // store-driven render, and the editing probe went on reporting a session that
+  // could never end.
+  commitActiveInlineEdit();
   document.activeElement?.blur?.();
   for (const el of editables) el.setAttribute('contenteditable', 'false');
-  // …and the sync guard the blur just released. See `isPdfCapturing`.
-  capturing = true;
 
   root.classList.add('pdf-export-mode');
   try {
