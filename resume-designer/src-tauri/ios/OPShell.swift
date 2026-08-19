@@ -3476,6 +3476,8 @@ private struct ShellView: View {
   @State private var renamingVariant = false
   @State private var renameDraft = ""
   @State private var creatingProfile = false
+  /// A picked file could not be read. See `readPickedText`.
+  @State private var importFailed = false
   /// A refused profile creation or switch, shown after the menu or alert that
   /// asked for it has gone. Named apart from `ProfilesSheet`'s own `failure`
   /// because they are different screens; the wording is deliberately the same,
@@ -3638,13 +3640,7 @@ private struct ShellView: View {
           isPresented: $importingVariant,
           allowedContentTypes: resumeImportTypes,
           allowsMultipleSelection: false
-        ) { result in
-          guard let picked = readPickedText(result, label: "resume") else { return }
-          // Only the TEXT crosses. The parse, the employer-grouping question
-          // and the write all stay in JS, so the native picker and the web one
-          // end in the same code rather than in two imports that drift.
-          model.send("importVariantText", ["text": picked.text, "name": picked.name])
-        }
+        ) { openPickedResume($0) }
         .onChange(of: renamingVariant) { _, open in
           if !open {
             model.send("setNativeEditing", [
@@ -3668,6 +3664,10 @@ private struct ShellView: View {
         } message: {
           Text("A separate profile with its own résumés, job descriptions and chats.")
         }
+        .modifier(ImportFailureAlert(
+          isPresented: $importFailed,
+          hint: "Pick a résumé exported from On Paper — a .json or .md file."
+        ))
         .alert(
           "Couldn't save",
           isPresented: Binding(
@@ -3945,6 +3945,24 @@ private struct ShellView: View {
         profileFailure = "Could not create \(name) — the change didn't reach disk."
       }
     }
+  }
+
+  /// Hand the picked résumé's TEXT to the page, or say it could not be read.
+  ///
+  /// Extracted from the `fileImporter` closure rather than written inline, for
+  /// the same reason `avatar` below is: adding the failure branch tipped this
+  /// view's expression over the type-checker's budget, and the failure is a
+  /// build timeout rather than a wrong shape.
+  ///
+  /// Only the TEXT crosses. The parse, the employer-grouping question and the
+  /// write all stay in JS, so the native picker and the web one end in the same
+  /// code rather than in two imports that drift.
+  private func openPickedResume(_ result: Result<[URL], Error>) {
+    guard let picked = readPickedText(result, label: "resume") else {
+      importFailed = true
+      return
+    }
+    model.send("importVariantText", ["text": picked.text, "name": picked.name])
   }
 
   /// The initials, as an actual circle.
@@ -4555,6 +4573,25 @@ private let resumeImportTypes: [UTType] = {
 /// Shared by the two importers so the security-scoped read — which a file from
 /// outside the app's container fails without — is written once rather than
 /// twice. Same pair `OPProfile.handleImport` opens.
+/// "Could not read that file", for the two importers that share one helper.
+///
+/// A modifier rather than the `.alert` written out at each site: both are word
+/// for word the same but for the hint, and — the reason it is not a style
+/// choice — inlining the second one tipped `ShellView`'s body over the
+/// type-checker's budget. That failure is a build timeout, not a wrong shape.
+private struct ImportFailureAlert: ViewModifier {
+  @Binding var isPresented: Bool
+  let hint: String
+
+  func body(content: Content) -> some View {
+    content.alert("Could not read that file", isPresented: $isPresented) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(hint)
+    }
+  }
+}
+
 private func readPickedText(
   _ result: Result<[URL], Error>,
   label: String
@@ -4571,6 +4608,10 @@ private func readPickedText(
     NSLog("[OPShell] \(label) import could not be read as text")
     return nil
   }
+  // `nil` is not only a log line. A security-scoped URL that cannot be opened,
+  // or a file that is not UTF-8, leaves the picker closing with the screen
+  // unchanged — which looks exactly like the selection being ignored. Every
+  // caller owes the person a word; `ProfileView`'s importer already says one.
   return (text, url.lastPathComponent)
 }
 
@@ -4606,6 +4647,8 @@ private struct SettingsSheet: View {
   /// The backup file picker, here for the same reason as the résumé one: the
   /// web input never opens under the shell.
   @State private var importingBackup = false
+  /// That file could not be read. See `readPickedText`.
+  @State private var importFailed = false
 
   private var settings: ShellSnapshot.Settings { model.snapshot.settings }
 
@@ -4776,7 +4819,10 @@ private struct SettingsSheet: View {
         allowedContentTypes: [.json],
         allowsMultipleSelection: false
       ) { result in
-        guard let picked = readPickedText(result, label: "backup") else { return }
+        guard let picked = readPickedText(result, label: "backup") else {
+          importFailed = true
+          return
+        }
         // DISMISSED FIRST. The import asks for a destructive confirmation, and
         // that dialog is web — it renders in the canvas UNDER this sheet, where
         // it cannot be seen or answered, so the import simply stalled. The
@@ -4784,6 +4830,10 @@ private struct SettingsSheet: View {
         dismiss()
         model.send("importBackupText", ["text": picked.text, "name": picked.name])
       }
+      .modifier(ImportFailureAlert(
+        isPresented: $importFailed,
+        hint: "Pick a backup .json exported from On Paper."
+      ))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
