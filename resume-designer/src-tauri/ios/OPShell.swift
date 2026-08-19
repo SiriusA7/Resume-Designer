@@ -3960,9 +3960,15 @@ private struct ShellView: View {
       // without it "Rename…" reads as applying to whichever row you last
       // looked at rather than to the one on screen.
       Section("This resume") {
-        Button {
-          renameDraft = snapshot.variantName
-          renameFrom = snapshot.whereAmI
+        // Both values in the capture list, like every other row in this menu.
+        // Read in the body they resolve live at the press — after the menu-open
+        // wait — so `renameFrom` recorded the replacement and `submitRename`
+        // validated it against itself, while `renameDraft` seeded the alert with
+        // the replacement's name. The rename then landed on a résumé this menu
+        // never showed.
+        Button { [renderedIn = snapshot.whereAmI, named = snapshot.variantName] in
+          renameDraft = named
+          renameFrom = renderedIn
           renamingVariant = true
           // Seeded ONCE from the snapshot, so a résumé renamed on another
           // device while this alert is up would be overwritten by the stale
@@ -6687,22 +6693,25 @@ private struct ChatSheet: View {
   /// document's title belongs.
   private var titleMenu: some View {
     Menu {
-      Button {
-        renameDraft = currentTitle
-        // Pinned when the alert opens, exactly as the delete beside it is. An
-        // empty composer means the chat guard allows adoption, so a synced
-        // thread list can remove this chat and select a replacement while the
-        // alert is up — and resolving `currentThread` on Rename would then put
-        // this chat's drafted title on that replacement.
-        pendingRenameThread = currentThread?.id
-        pendingThreadFrom = model.snapshot.whereAmI
+      // Pinned in the capture list, so the values are the ones this menu was
+      // DRAWN with. An empty composer means the chat guard allows adoption, so
+      // a synced thread list can remove this chat and select a replacement — and
+      // a menu keeps the closure it was presented with. Captured in the body
+      // instead, both rows recorded the replacement's thread and workspace, and
+      // the confirmation then compared the replacement with itself: Rename put
+      // this chat's drafted title on another one, and Delete permanently removed
+      // a chat the menu never named.
+      Button { [thread = currentThread?.id, renderedIn = model.snapshot.whereAmI, title = currentTitle] in
+        renameDraft = title
+        pendingRenameThread = thread
+        pendingThreadFrom = renderedIn
         showRename = true
       } label: {
         Label("Rename", systemImage: "pencil")
       }
-      Button(role: .destructive) {
-        pendingDeleteThread = currentThread?.id
-        pendingThreadFrom = model.snapshot.whereAmI
+      Button(role: .destructive) { [thread = currentThread?.id, renderedIn = model.snapshot.whereAmI] in
+        pendingDeleteThread = thread
+        pendingThreadFrom = renderedIn
         showDeleteConfirm = true
       } label: {
         Label("Delete chat", systemImage: "trash")
