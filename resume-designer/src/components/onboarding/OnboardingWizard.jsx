@@ -75,6 +75,22 @@ export default function OnboardingWizard() {
   const [parsedResume, setParsedResume] = useState(null);
   const [jobDescriptions, setJobDescriptions] = useState([]);
   const [targetJob, setTargetJob] = useState(null);
+  // The workspace this wizard is running in was deleted on another device.
+  // Nothing here can be saved to it, so Create is refused rather than writing a
+  // résumé into a namespace nothing reads — see the handler in main.js, which
+  // holds the switch back while this is open so the answers survive long enough
+  // to be copied out.
+  //
+  // DECLARED HERE, with the other state `saveResume` depends on, and NOT further
+  // down beside the refs. `saveResume` names it in its dependency array, and a
+  // dependency array is evaluated while the component RENDERS — so a `const`
+  // declared below that point is still in the temporal dead zone. Every render
+  // of this component threw `Cannot access 'workspaceGone' before
+  // initialization`, React never mounted the tree, and the iOS shell sat there
+  // with no profiles and a "?" avatar. The refs this callback also touches are
+  // safe where they are: they are read inside the callback BODY, which runs
+  // later, not in the dependency array.
+  const [workspaceGone, setWorkspaceGone] = useState(false);
   const [jobGaps, setJobGaps] = useState([]);
   const [answers, setAnswers] = useState({});
   const [question, setQuestion] = useState(0);
@@ -468,12 +484,6 @@ export default function OnboardingWizard() {
   const [nativeGen, setNativeGen] = useState(null);
   const [improved, setImproved] = useState(null);
   const [busy, setBusy] = useState('');
-  // The workspace this wizard is running in was deleted on another device.
-  // Nothing here can be saved to it, so Create is refused rather than writing a
-  // résumé into a namespace nothing reads — see the handler in main.js, which
-  // holds the switch back while this is open so the answers survive long enough
-  // to be copied out.
-  const [workspaceGone, setWorkspaceGone] = useState(false);
   // The same fact, readable from inside an async closure that captured the
   // state before its await. See `onGone` and `saveResume`.
   const workspaceGoneRef = useRef(false);
