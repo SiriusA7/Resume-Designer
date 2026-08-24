@@ -16,7 +16,10 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['test/**/*.test.js'],
+    // `.jsx` as well, so a test can RENDER a component. The suite could not do
+    // that before, which is why a component that threw on every render shipped:
+    // see test/componentBoot.test.jsx.
+    include: ['test/**/*.test.{js,jsx}'],
     clearMocks: true,
   },
 });
