@@ -141,6 +141,7 @@ export function useChat() {
   const [loading, setLoading, loadingRef] = useStateRef(false);
   const [thinking, setThinking] = useStateRef(null);
   const [contextChips, setContextChips, chipsRef] = useStateRef([]);
+  const clearChips = () => setContextChips([]);
   const [currentModel, setCurrentModelState, modelRef] = useStateRef(getInitialModel());
   const [reasoningEffort, setReasoningEffortState, reasoningRef] = useStateRef(getSettings().chatReasoningEffort || 'medium');
   const [webSearchEnabled, setWebSearchState, webSearchRef] = useStateRef(!!getSettings().chatWebSearch);
@@ -898,7 +899,6 @@ Let's begin!`);
     addChip({ type, path: path || '', content: context, label: getContextLabel(context, type, path) });
   };
   const removeChip = (index) => setContextChips(chipsRef.current.filter((_, i) => i !== index));
-  const clearChips = () => setContextChips([]);
 
   // ── threads ────────────────────────────────────────────────────────────
   const switchThread = (threadId, save = true) => {

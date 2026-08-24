@@ -339,16 +339,6 @@ export default function SettingsDialog() {
               + ' to replace it.'
             : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
 
-  const handleSaveKeys = async () => {
-    // Guard as well as disabling the controls: a keypress can land between the
-    // click and the re-render that disables them.
-    if (!beginKeyAction()) return;
-    try {
-      await runSaveKeys();
-    } finally {
-      endKeyAction();
-    }
-  };
 
   const runSaveKeys = async () => {
     // The rule itself lives in secretStore, where vitest can reach it — it has
@@ -412,6 +402,33 @@ export default function SettingsDialog() {
     setOpen(false);
   };
 
+  const handleSaveKeys = async () => {
+    // Guard as well as disabling the controls: a keypress can land between the
+    // click and the re-render that disables them.
+    if (!beginKeyAction()) return;
+    try {
+      await runSaveKeys();
+    } finally {
+      endKeyAction();
+    }
+  };
+
+
+  const runClearKeys = async () => {
+    // Writes an empty value rather than deleting the entry — see secretStore.
+    try {
+      await saveApiKey('');
+    } catch (err) {
+      setKeyError(err?.message || 'Could not clear your key from the system keychain.');
+      return;
+    }
+    setKeyError('');
+    refreshChatPanel();
+    setApiKey('');
+    // Already committed, so a following Save must not write it a second time.
+    setKeyDirty(false);
+  };
+
   const handleClearKeys = async () => {
     if (keyBusyRef.current) return;
     const ok = await confirmDestructive({
@@ -430,21 +447,6 @@ export default function SettingsDialog() {
     } finally {
       endKeyAction();
     }
-  };
-
-  const runClearKeys = async () => {
-    // Writes an empty value rather than deleting the entry — see secretStore.
-    try {
-      await saveApiKey('');
-    } catch (err) {
-      setKeyError(err?.message || 'Could not clear your key from the system keychain.');
-      return;
-    }
-    setKeyError('');
-    refreshChatPanel();
-    setApiKey('');
-    // Already committed, so a following Save must not write it a second time.
-    setKeyDirty(false);
   };
 
   const handleExportUsage = () => {

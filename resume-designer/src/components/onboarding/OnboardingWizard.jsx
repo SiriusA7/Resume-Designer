@@ -107,6 +107,32 @@ export default function OnboardingWizard() {
   const closeTimerRef = useRef(null);
   const dragStripRef = useRef(null);
 
+  // What the web keeps inside JobInputStep's own state. The native step has no
+  // component to hold it, so it lives here and rides the projection.
+  const [nativeGen, setNativeGen] = useState(null);
+  const [improved, setImproved] = useState(null);
+  const [busy, setBusy] = useState('');
+  // The same fact, readable from inside an async closure that captured the
+  // state before its await. See `onGone` and `saveResume`.
+  const workspaceGoneRef = useRef(false);
+  // A durable save is in flight; a second Create must not start another.
+  const savingRef = useRef(false);
+  // The variant was created. Only its durability is outstanding, so a retry
+  // re-flushes instead of minting a second résumé.
+  const savedRef = useRef(false);
+  const [notice, setNotice] = useState(null);
+  // Bumped once per COMPLETED key-save attempt. The native step has no other
+  // reliable signal that one finished — see `nativeSaveKey`.
+  const [keySaves, setKeySaves] = useState(0);
+  const genAbortRef = useRef(null);
+  const improveTokenRef = useRef(0);
+
+  // Jobs already persisted this session, tracked by object identity. Reaching
+  // Review runs commitJobsAndTailor, and Back→Tailor re-enters it — since
+  // addJobDescription mints a fresh id per call, re-committing the same
+  // in-memory jobs would save duplicates. Only newly-added jobs are committed.
+  const committedJobsRef = useRef(new Set());
+
   const doOpen = useCallback((options = {}) => {
     // New-resume mode (the header "+") always skips the API-key step, even with no
     // key configured. Step 0 has no cancel/skip affordance and ApiKeyStep won't
@@ -349,11 +375,6 @@ export default function OnboardingWizard() {
   const addJob = useCallback((jd) => setJobDescriptions((prev) => [...prev, jd]), []);
   const removeJob = useCallback((i) => setJobDescriptions((prev) => prev.filter((_, idx) => idx !== i)), []);
 
-  // Jobs already persisted this session, tracked by object identity. Reaching
-  // Review runs commitJobsAndTailor, and Back→Tailor re-enters it — since
-  // addJobDescription mints a fresh id per call, re-committing the same
-  // in-memory jobs would save duplicates. Only newly-added jobs are committed.
-  const committedJobsRef = useRef(new Set());
 
   const commitJobsAndTailor = useCallback(async () => {
     const committed = committedJobsRef.current;
@@ -479,25 +500,6 @@ export default function OnboardingWizard() {
   // it merely renders null while closed — the reason the other screens needed
   // their composition extracted into framework-free modules first.
 
-  // What the web keeps inside JobInputStep's own state. The native step has no
-  // component to hold it, so it lives here and rides the projection.
-  const [nativeGen, setNativeGen] = useState(null);
-  const [improved, setImproved] = useState(null);
-  const [busy, setBusy] = useState('');
-  // The same fact, readable from inside an async closure that captured the
-  // state before its await. See `onGone` and `saveResume`.
-  const workspaceGoneRef = useRef(false);
-  // A durable save is in flight; a second Create must not start another.
-  const savingRef = useRef(false);
-  // The variant was created. Only its durability is outstanding, so a retry
-  // re-flushes instead of minting a second résumé.
-  const savedRef = useRef(false);
-  const [notice, setNotice] = useState(null);
-  // Bumped once per COMPLETED key-save attempt. The native step has no other
-  // reliable signal that one finished — see `nativeSaveKey`.
-  const [keySaves, setKeySaves] = useState(0);
-  const genAbortRef = useRef(null);
-  const improveTokenRef = useRef(0);
 
   const nativeImprove = useCallback(async (value) => {
     const q = INTERVIEW_QUESTIONS[question];

@@ -469,12 +469,12 @@ function ExperienceTab({ profile, scheduleSave, refresh }) {
   // The local bump re-renders the tab so the trigger label updates; it must NOT
   // be `refresh`, which bumps the parent's `version` — the tab wrapper's React
   // key — and would remount the tab mid-interaction.
-  const setDates = (i) => (fields) => { Object.assign(items[i], fields); scheduleSave(); bumpGrouping(); };
   // Local re-render ONLY, to re-derive the grouping after a company edit. It must
   // not go through `refresh`: that bumps the parent's `version`, which is the tab
   // wrapper's React key, so blurring the company input would remount the tab and
   // unmount the button being pressed before its click fired.
   const [, bumpGrouping] = useReducer((n) => n + 1, 0);
+  const setDates = (i) => (fields) => { Object.assign(items[i], fields); scheduleSave(); bumpGrouping(); };
   const groups = groupExperience(items);
   const rewrite = (next) => { if (next) { items.splice(0, items.length, ...next); refresh(); } };
 
