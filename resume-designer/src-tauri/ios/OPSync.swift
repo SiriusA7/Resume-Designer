@@ -425,11 +425,6 @@ protocol OPSyncHost: AnyObject {
   /// being able to ask, is an empty answer.
   func syncDidConflict(_ conflicts: [SyncConflict]) async -> SyncConflictOutcome
 
-  /// A send was refused while a delegate event was in flight and its ids are
-  /// now durable. Called on a later main-actor turn, after `handleEvent` has
-  /// returned, so the host can drain that profile's deferred queue safely.
-  func syncRetryDeferred(profileId: String) async
-
   /// Sends and fetches that did not land. See `OPSyncFailure`.
   func syncDidFail(_ failures: [OPSyncFailure])
 
@@ -550,7 +545,6 @@ final class OPSyncEngine {
   /// Set only when `send` refuses work because of the marker above. All refused
   /// ids are made durable by the host before the delegate call can finish; this
   /// bit coalesces them into one post-event drain.
-  private var sendPostponedDuringEvent = false
 
   init(host: OPSyncHost) {
     self.host = host
@@ -697,7 +691,6 @@ final class OPSyncEngine {
   /// THAT profile's: routing those to the open profile's zone writes one
   /// person's résumés into another's workspace.
   func send(unitIds: [String], inProfile requested: String? = nil) async throws {
-    try refuseSendDuringDelegateEvent()
     let profileId = requested ?? self.profileId
     guard let engine, let profileId, let sharedZoneID,
           let profileZoneID = profileZoneIDs.first(where: { $0.zoneName == profileId })
@@ -705,9 +698,6 @@ final class OPSyncEngine {
     guard let scopes = await host?.syncScopes(forUnitIds: unitIds) else {
       throw OPSyncError.scopeUnknown
     }
-    // The scope ask suspends. An event may have begun while it was waiting, so
-    // check again at the last possible point before anything enters the engine.
-    try refuseSendDuringDelegateEvent()
     let changes = unitIds.map { id in
       // No answer for an id is profile-scoped, which is what every unit was
       // before the shared zone existed — including every unit a build older than
@@ -717,15 +707,30 @@ final class OPSyncEngine {
                     zoneID: scopes[id] == opSharedScope ? sharedZoneID : profileZoneID)
       )
     }
+    // QUEUED FIRST, and queued even when a delegate event is in flight. Adding
+    // pending changes is state the engine owns and is safe from inside an event
+    // — it is how `nextRecordZoneChangeBatch` is meant to be fed. Once these are
+    // in, the engine sends them on its own schedule, so the BYTES reach iCloud
+    // whether or not this call gets to force a send.
     engine.state.add(pendingRecordZoneChanges: changes)
-    try await engine.sendChanges()
-  }
 
-  private func refuseSendDuringDelegateEvent() throws {
-    guard !delegateEventInFlight else {
-      sendPostponedDuringEvent = true
-      throw OPSyncError.eventInFlight
-    }
+    // ...and `sendChanges()` is never called from inside a delegate event.
+    // CloudKit traps on a reentrant send: three identical crash reports, all
+    // `_assertionFailure` inside CloudKit under this line, reached from the
+    // retry that `finishDelegateEvent` used to schedule.
+    //
+    // Checked HERE rather than on the way in, because the scope ask above
+    // suspends and an event can begin while it waits. This is the last
+    // instruction before the call it guards, which is the only place the answer
+    // is still true when it is used.
+    //
+    // Throwing leaves the ids owed, exactly as before — the caller holds them
+    // durably and the next ordinary drain offers them again. That re-offer is a
+    // duplicate of what the engine has by then already sent, which costs a
+    // change-tag comparison and nothing else. Debt settling LATE is the safe
+    // direction; settling early is how units are lost.
+    if delegateEventInFlight { throw OPSyncError.eventInFlight }
+    try await engine.sendChanges()
   }
 
   /// The delegate methods are intentionally the only callers: their entry and
@@ -735,22 +740,24 @@ final class OPSyncEngine {
     delegateEventInFlight = true
   }
 
+  /// NOTHING IS SCHEDULED FROM HERE, and that is the point.
+  ///
+  /// This used to spawn a task that drained the deferred queue, which reached
+  /// `engine.sendChanges()` and trapped inside CloudKit — three identical crash
+  /// reports, `_assertionFailure` under `send`, reached from this closure. The
+  /// task yielded first, on the belief that a yield puts it after the delegate
+  /// call has unwound. It cannot: `defer` runs this while `handleEvent` is still
+  /// on CloudKit's stack, `handleEvent` runs on a background cooperative
+  /// executor, and the task was main-actor — two executors that a yield does not
+  /// order. There is no flag or hop that fixes it, because the app cannot
+  /// observe when CloudKit considers an event finished.
+  ///
+  /// A refused send no longer needs a retry: `send` queues its changes into the
+  /// engine BEFORE refusing, so the engine sends them on its own schedule, and
+  /// the ids stay owed until an ordinary drain settles them.
   fileprivate func finishDelegateEvent() {
     assert(delegateEventInFlight, "a CKSyncEngine delegate event must begin before it finishes")
     delegateEventInFlight = false
-    guard sendPostponedDuringEvent else { return }
-    sendPostponedDuringEvent = false
-    guard let profileId else { return }
-
-    Task { @MainActor [weak self] in
-      // This must be the task's first action. The current main-actor job has no
-      // suspension between scheduling this task and returning from handleEvent;
-      // yielding here therefore puts the drain after that delegate call has
-      // unwound, never merely at the end of its implementation.
-      await Task.yield()
-      guard let self, self.profileId == profileId else { return }
-      await self.host?.syncRetryDeferred(profileId: profileId)
-    }
   }
 
   /// Pull what changed.

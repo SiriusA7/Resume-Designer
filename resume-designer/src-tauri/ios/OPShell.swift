@@ -1930,7 +1930,10 @@ extension ShellModel {
       // throwing: `notStarted` — signed out, or an edit that beat the first
       // activation; `scopeUnknown`, the page not saying which zone these units
       // belong in, which is refused rather than routed on a guess; and
-      // `eventInFlight`, which must wait until the delegate call has returned.
+      // `eventInFlight` — which no longer waits for a retry, because there is
+      // none: `send` has already queued those changes with the engine, so the
+      // bytes go up on the engine's own schedule and only the BOOKKEEPING waits
+      // for the next ordinary drain.
       // Holding the ids is the whole of what those three need. The fourth is
       // anything `engine.sendChanges()` itself throws, and holding costs it nothing:
       // `send` queued those changes before it threw and
@@ -2065,10 +2068,13 @@ extension ShellModel {
   /// settled debt for bytes that were never sent, which is exactly what the
   /// comment on `syncDeferredReowed` says must not happen.
   ///
-  /// They CAN overlap: a start's drain suspends inside `sendChanges()`, the
-  /// engine delivers a delegate event from in there, a send postponed during it
-  /// makes `finishDelegateEvent` spawn an unserialised `Task` — and that task
-  /// calls `syncRetryDeferred`, which drains again.
+  /// They COULD overlap: a start's drain suspends inside `sendChanges()`, the
+  /// engine delivers a delegate event from in there, and a send postponed during
+  /// it made `finishDelegateEvent` spawn an unserialised `Task` that drained
+  /// again. That task is gone — it was also calling `sendChanges()` from inside
+  /// a delegate event, which traps in CloudKit — so this particular overlap can
+  /// no longer arise. The serialisation stays: it is cheap, and it is the
+  /// invariant that matters rather than the one path that used to break it.
   ///
   /// A request that arrives during a drain is remembered rather than dropped,
   /// and honoured for ONE more pass. Bounded deliberately: the retry fires from
@@ -2128,15 +2134,6 @@ extension ShellModel {
     var deferred = syncDeferred(key: key)
     deferred.subtract(offered.subtracting(reowed))
     setSyncDeferred(deferred, key: key)
-  }
-
-  /// Retry debt created by a send the transport refused during `handleEvent`.
-  /// OPSync schedules this only after that delegate call has returned. A profile
-  /// switch or purge suspension leaves the debt durable for its next ordinary
-  /// start rather than sending it through the wrong engine session.
-  func syncRetryDeferred(profileId: String) async {
-    guard !syncSuspended, syncProfileId == profileId else { return }
-    await drainSyncDeferred()
   }
 
   private func syncFullUploadOwed(profileId: String) -> Bool {
