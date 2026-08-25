@@ -38,7 +38,7 @@ import {
 // bridge draws nothing and Swift picks its own SF Symbols.
 import { TYPE_LABELS } from './historyEntryLabels.js';
 import { CHAT_THREADS_STATE_EVENT, threadsSaveFailed } from './chatThreads.js';
-import { DATA_SAVE_STATE_EVENT, dataSaveFailed } from './persistence.js';
+import { DATA_SAVE_STATE_EVENT, dataSaveFailed, designSaveFailed } from './persistence.js';
 import { store } from './store.js';
 
 export const SHELL_HANDLER = 'opShell';
@@ -815,7 +815,7 @@ export function buildChatView({
  *
  * @param {object|null} state what `designController.getDesignState()` returns
  */
-export function buildDesign(state) {
+export function buildDesign(state, saveFailed = false) {
   const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
   const text = (v) => (typeof v === 'string' ? v : '');
   // 0, never the service's own default. A number that only appears when the
@@ -841,6 +841,13 @@ export function buildDesign(state) {
   const photo = obj(s.photo);
 
   return {
+    // Storage's answer, not the design service's — the same split the document
+    // and chat projections make. REQUIRED by the Swift decoder: `Design` names
+    // it non-optionally, and a snapshot whose `design` will not decode is
+    // dropped WHOLE by `try? JSONDecoder().decode(ShellSnapshot.self)`, so the
+    // native sheet sits on a spinner and the rest of the chrome silently stops
+    // updating too.
+    saveFailed: !!saveFailed,
     page: {
       size: text(page.size),
       orientation: text(page.orientation),
@@ -2101,7 +2108,12 @@ export function initIOSShell(deps) {
           library: streamLibrary
             ? project('library', () => deps.getLibrary(libraryQuery, libraryDeep))
             : null,
-          design: streamDesign ? project('design', () => deps.getDesign()) : null,
+          design: streamDesign
+            ? project('design', () => ({
+              ...deps.getDesign(),
+              saveFailed: (deps.designSaveFailed || designSaveFailed)(),
+            }))
+            : null,
           history: streamHistory ? project('history', () => deps.getHistory(historyDiff)) : null,
           jobs: streamJobs ? project('jobs', () => deps.getJobs()) : null,
           profile: streamProfile ? project('profile', () => deps.getProfile()) : null,
