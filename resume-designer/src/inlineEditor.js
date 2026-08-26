@@ -939,7 +939,7 @@ function serializeEmphasis(el) {
 }
 
 // Extract the edited value, preserving format for special content types
-function extractEditedValue(element, path) {
+export function extractEditedValue(element, path) {
   // Check for skill tags (rendered as separate spans that need to be joined with •)
   const skillTags = element.querySelectorAll('.skill-tag, .skill-tag-inline');
   if (skillTags.length > 0) {
@@ -961,8 +961,22 @@ function extractEditedValue(element, path) {
   // not just the edited one — so editing one tool doesn't drop the others, and keep
   // each chip's bold/italic.
   if (path === 'tools') {
-    const toolScope = element.closest('.tools-bulleted') || element.closest('.tools-list')
-      || element.closest('.skill-tag-row') || element.parentElement;
+    // SCOPED TO THE WHOLE RÉSUMÉ, not to the wrapper the click landed in.
+    //
+    // Pagination gives every page its own `.tools-bulleted` (the wrappers are
+    // `cloneNode(false)`, the chips themselves are MOVED into them), so scoping
+    // to `.closest('.tools-bulleted')` collected only the chips on the page that
+    // was clicked — and this re-join writes the WHOLE `tools` string, so
+    // everything past the page break was deleted by editing one chip. Measured
+    // on a real résumé: 18 tools became 8, and the eight that survived were
+    // exactly page one.
+    //
+    // Safe to widen: a chip exists once in the document, so nothing is
+    // double-counted, and `querySelectorAll` returns document order — page one's
+    // chips and then page two's, which is the order they were written in.
+    const toolScope = element.closest('#resume-container')
+      || element.closest('.resume')
+      || element.ownerDocument;
     const toolTags = toolScope?.querySelectorAll(
       '.tool-token, .skill-tag[data-editable="tools"], .skill-tag-inline[data-editable="tools"], .highlight-bullet[data-editable="tools"]'
     );
