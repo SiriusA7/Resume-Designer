@@ -6232,12 +6232,28 @@ private struct BarCapsule: ViewModifier {
       .frame(height: 44)
 
     sized
-      .glassEffect(.regular.interactive(), in: .capsule)
       // THE WHOLE CAPSULE SWALLOWS TOUCHES. The bar is an `.overlay` over the
       // webview, and a tap that lands inside the capsule but not on a control
       // used to fall straight through to the résumé — which put the canvas into
       // inline edit and selected whatever word was underneath. Glass draws a
       // background; it does not make one hit-testable.
+      //
+      // `contentShape` does not make one hit-testable either. It SHAPES hit
+      // testing for an interaction the view already has, and a padded HStack has
+      // none of its own — so on its own it left the 20pt of horizontal padding
+      // exactly as porous as before, which is the half of this the glyph slots
+      // below do not cover.
+      //
+      // So the capsule carries an inert interaction, and it lives in the
+      // BACKGROUND on purpose: the controls sit in front of it and therefore
+      // still win every touch that lands on one, while this takes only what
+      // would otherwise have reached the résumé.
+      .background {
+        Color.clear
+          .contentShape(.capsule)
+          .onTapGesture { }
+      }
+      .glassEffect(.regular.interactive(), in: .capsule)
       .contentShape(.capsule)
   }
 }
