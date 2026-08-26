@@ -4358,7 +4358,11 @@ private struct ShellView: View {
   private var barRow: some View {
     HStack(spacing: 12) {
       if !zoomExpanded {
-        HStack(spacing: 20) {
+        // `spacing: 0` because BarButtonStyle's 40pt slots now carry the gap —
+        // see there. Keeping 20 on top of them would push the bar off a 390pt
+        // screen, which is the clipping this bar was already once redesigned to
+        // avoid.
+        HStack(spacing: 0) {
           // UNDO AND REDO FIRST, and in the bar rather than the menu they used
           // to sit in. They are document actions used constantly while editing,
           // and two taps into an overflow menu is the wrong price for the one
@@ -4415,7 +4419,7 @@ private struct ShellView: View {
       zoomControl
     }
     .font(.system(size: 17))
-    .buttonStyle(.plain)
+    .buttonStyle(BarButtonStyle())
     .foregroundStyle(.primary)
   }
 
@@ -4433,7 +4437,7 @@ private struct ShellView: View {
   /// SwiftUI — the first version of this flipped its state and never redrew —
   /// but ordinary view content inside one item diffs normally.
   private var zoomControl: some View {
-    HStack(spacing: 20) {
+    HStack(spacing: 0) {
       if zoomExpanded {
         Button {
           model.send("zoomOut")
@@ -6227,7 +6231,34 @@ private struct BarCapsule: ViewModifier {
       .padding(.horizontal, 20)
       .frame(height: 44)
 
-    sized.glassEffect(.regular.interactive(), in: .capsule)
+    sized
+      .glassEffect(.regular.interactive(), in: .capsule)
+      // THE WHOLE CAPSULE SWALLOWS TOUCHES. The bar is an `.overlay` over the
+      // webview, and a tap that lands inside the capsule but not on a control
+      // used to fall straight through to the résumé — which put the canvas into
+      // inline edit and selected whatever word was underneath. Glass draws a
+      // background; it does not make one hit-testable.
+      .contentShape(.capsule)
+  }
+}
+
+/// The bar's controls are SF Symbols, and `.plain` makes a button's hit area
+/// exactly its label — a ~17pt glyph. Every near miss fell through to the
+/// webview underneath, so tapping "next to" a control started an inline edit
+/// instead, and the smaller glyphs read as buttons that simply did not work.
+///
+/// 40pt of hit area, and the spacing the glyphs used to carry is now the padding
+/// inside each slot: with `spacing: 0`, adjacent glyphs still sit ~20pt apart,
+/// so the bar looks the same and grows by about 20pt overall.
+///
+/// `minWidth`/`minHeight`, not a fixed frame: the zoom readout is text and has
+/// to be allowed to be wider than a glyph.
+private struct BarButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .frame(minWidth: 40, minHeight: 40)
+      .contentShape(.rect)
+      .opacity(configuration.isPressed ? 0.4 : 1)
   }
 }
 
