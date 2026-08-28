@@ -113,13 +113,29 @@ describe('groupChangelog: omitting work the reader cannot use', () => {
     // subject is not.
     const md = groupChangelog([
       'feat(secret): carry the API key between devices via iCloud Keychain',
+    ], '2.2.0');
+
+    expect(md).not.toContain('iCloud');
+    expect(md).toContain('Maintenance and internal improvements.');
+  });
+
+  it('keeps a desktop cross-device subject: the backstop reads platforms, not phrasing', () => {
+    // The first version of this backstop also matched a generic
+    // "other|every|between ... devices" phrase, on the assumption that
+    // cross-device wording implies sync. It does not — the desktop app has its
+    // own cross-device story ("Export a full JSON backup any time, and import
+    // it on another machine", README.md) — so that branch silently dropped real
+    // desktop notes. Silently is the operative word: nothing downstream reports
+    // a bullet the generator declined to emit.
+    const md = groupChangelog([
+      'fix(backup): preserve history between devices during backup transfer',
       'fix(backup): say that a replace now deletes on other devices too',
       'fix(profiles): recover from a registry every device has tombstoned',
     ], '2.2.0');
 
-    expect(md).not.toContain('iCloud');
-    expect(md).not.toContain('other devices');
-    expect(md).not.toContain('every device');
+    expect(md).toContain('Preserve history between devices during backup transfer');
+    expect(md).toContain('Say that a replace now deletes on other devices too');
+    expect(md).toContain('Recover from a registry every device has tombstoned');
   });
 
   it('keeps "this device", which is about local storage and reveals nothing', () => {

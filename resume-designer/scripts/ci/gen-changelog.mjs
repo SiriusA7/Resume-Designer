@@ -57,14 +57,25 @@ const OMIT_SCOPES = new Set(['ios', 'sync']);
 const omitted = (scope) =>
   OMIT_SCOPES.has(String(scope || '').toLowerCase().split(/[-/]/)[0]);
 
-// Backstop for commits that carry a different scope but still name the platform
-// or the cross-device behaviour only sync provides — `feat(secret): carry the
-// API key between devices via iCloud Keychain` is the case that motivated it.
+// Backstop for a commit whose scope is desktop-shaped but whose subject names
+// the platform anyway — `feat(secret): carry the API key between devices via
+// iCloud Keychain` is the case that motivated it.
 //
-// Deliberately narrow. "this device" is NOT matched: it means local storage and
-// says nothing about a second one, so `fix(backup): clear an omitted key this
-// device never stored` is a real desktop fix and stays.
-const OMIT_SUBJECT = /\b(ios|iphone|ipad|ipados|icloud|cloudkit|swiftui|app store)\b|\b(?:other|every|another|across|between|all)\s+devices?\b/i;
+// CONCRETE PLATFORM TERMS ONLY. An earlier version also matched a generic
+// `other|every|between ... devices` phrase, on the assumption that cross-device
+// wording implies sync. It does not: the desktop app has its own cross-device
+// story — "Export a full JSON backup any time, and import it on another
+// machine" (README.md) — so `fix(backup): preserve history between devices
+// during backup transfer` is a real desktop note, and that branch would have
+// dropped it. Silently, which is the part that matters: nothing downstream
+// reports a bullet the generator declined to emit.
+//
+// The residue is acceptable and was checked rather than assumed. Two sync-shaped
+// subjects survive under desktop scopes ("deletes on other devices too",
+// "a registry every device has tombstoned"). Neither names a platform, and a
+// desktop reader has machines to sync backups between, so neither reveals iOS.
+// Suppressing them would mean re-adding exactly the branch that over-filters.
+const OMIT_SUBJECT = /\b(ios|iphone|ipad|ipados|icloud|cloudkit|swiftui|app store)\b/i;
 
 // User-facing commit types → section (array order = display order). Any other
 // type is treated as internal and omitted.
