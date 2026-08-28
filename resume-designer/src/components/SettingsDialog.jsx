@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 import {
   Sun, Moon, Monitor, Eye, EyeOff, X,
   SlidersHorizontal, Sparkles, RefreshCw, Database, BarChart3, UserCircle,
@@ -21,7 +23,7 @@ import {
 import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
-import { getSettings, saveSettings, saveApiKey } from '../persistence.js';
+import { getSettings, saveSettings, saveApiKey, downloadFile } from '../persistence.js';
 import {
   isKeychainAvailable, isReadOnly, isEncryptedInBrowser, shouldWriteCredential,
   isCleanupPending, recoverSecretStore, isBrowserDegraded, isBrowserUnreadable, hasUsableSecret,
@@ -32,7 +34,7 @@ import { shouldSpellcheck } from '../spellcheck.js';
 import { getTheme, setTheme } from '../theme.js';
 import {
   isTauri, getAppInfo, getUpdateChannel, setUpdateChannel,
-  getAutoUpdateCheck, setAutoUpdateCheck,
+  getAutoUpdateCheck, setAutoUpdateCheck, isIOSPlatform,
 } from '../native.js';
 import {
   getUsageSummary, getUsageByDate, exportUsageData, clearUsageData,
@@ -61,12 +63,14 @@ const THEME_OPTIONS = [
   { value: 'system', label: 'System', Icon: Monitor },
 ];
 
-// Tab order matches the original settings modal. Updates is desktop-only.
+// Tab order matches the original settings modal. Updates is desktop-only:
+// isTauri alone doesn't discriminate (it's also true on iOS), and App Store
+// builds must not self-update, so isIOSPlatform() excludes iOS explicitly.
 const TABS = [
   { id: 'account', label: 'Account', Icon: UserCircle },
   { id: 'general', label: 'General', Icon: SlidersHorizontal },
   { id: 'api-keys', label: 'AI', Icon: Sparkles },
-  ...(isTauri ? [{ id: 'updates', label: 'Updates', Icon: RefreshCw }] : []),
+  ...(isTauri && !isIOSPlatform() ? [{ id: 'updates', label: 'Updates', Icon: RefreshCw }] : []),
   { id: 'data', label: 'Data', Icon: Database },
   { id: 'usage', label: 'Usage', Icon: BarChart3 },
 ];
@@ -335,16 +339,6 @@ export default function SettingsDialog() {
               + ' to replace it.'
             : 'Your API key isn’t included, and this browser can’t store it, so you’ll enter it again next time.';
 
-  const handleSaveKeys = async () => {
-    // Guard as well as disabling the controls: a keypress can land between the
-    // click and the re-render that disables them.
-    if (!beginKeyAction()) return;
-    try {
-      await runSaveKeys();
-    } finally {
-      endKeyAction();
-    }
-  };
 
   const runSaveKeys = async () => {
     // The rule itself lives in secretStore, where vitest can reach it — it has
@@ -408,6 +402,33 @@ export default function SettingsDialog() {
     setOpen(false);
   };
 
+  const handleSaveKeys = async () => {
+    // Guard as well as disabling the controls: a keypress can land between the
+    // click and the re-render that disables them.
+    if (!beginKeyAction()) return;
+    try {
+      await runSaveKeys();
+    } finally {
+      endKeyAction();
+    }
+  };
+
+
+  const runClearKeys = async () => {
+    // Writes an empty value rather than deleting the entry — see secretStore.
+    try {
+      await saveApiKey('');
+    } catch (err) {
+      setKeyError(err?.message || 'Could not clear your key from the system keychain.');
+      return;
+    }
+    setKeyError('');
+    refreshChatPanel();
+    setApiKey('');
+    // Already committed, so a following Save must not write it a second time.
+    setKeyDirty(false);
+  };
+
   const handleClearKeys = async () => {
     if (keyBusyRef.current) return;
     const ok = await confirmDestructive({
@@ -428,31 +449,13 @@ export default function SettingsDialog() {
     }
   };
 
-  const runClearKeys = async () => {
-    // Writes an empty value rather than deleting the entry — see secretStore.
-    try {
-      await saveApiKey('');
-    } catch (err) {
-      setKeyError(err?.message || 'Could not clear your key from the system keychain.');
-      return;
-    }
-    setKeyError('');
-    refreshChatPanel();
-    setApiKey('');
-    // Already committed, so a following Save must not write it a second time.
-    setKeyDirty(false);
-  };
-
   const handleExportUsage = () => {
-    const blob = new Blob([exportUsageData()], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `token-usage-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // See downloadFile: an `<a download>` is inert in WKWebView.
+    downloadFile(
+      exportUsageData(),
+      `token-usage-${new Date().toISOString().split('T')[0]}.json`,
+      'application/json',
+    );
   };
 
   const handleClearUsage = async () => {
@@ -664,7 +667,7 @@ export default function SettingsDialog() {
             )}
 
             {/* Updates (desktop only) */}
-            {isTauri && tab === 'updates' && (
+            {isTauri && !isIOSPlatform() && tab === 'updates' && (
               <div className="space-y-6">
                 <section className="space-y-2.5">
                   <Label>Update channel</Label>
@@ -711,7 +714,17 @@ export default function SettingsDialog() {
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={exportFullBackupWithFeedback}>Export full backup</Button>
-                  <Button asChild variant="outline">
+                  <Button
+                    asChild
+                    variant="outline"
+                    onClick={(e) => {
+                      // Same dead-input problem as the résumé import: without the
+                      // native shell this label's file input never calls back, so
+                      // stop the tap and say why. See filePickGuard.
+                      const blocked = filePickBlockedReason();
+                      if (blocked) { e.preventDefault(); toast.error(blocked); }
+                    }}
+                  >
                     <label className="cursor-pointer">
                       Import backup…
                       <input

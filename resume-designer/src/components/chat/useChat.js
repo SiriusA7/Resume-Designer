@@ -14,6 +14,7 @@ import { showInlineChanges } from '../../inlineChanges.js';
 import {
   loadThreads, persistThreads, makeThread, trimMessages, clearLegacyHistory,
   migrateThreads, pickCurrentThreadId, chooseThreadAfterDelete, withContextMarker,
+  registerThreadHolder,
 } from '../../chatThreads.js';
 import { getCurrentId, loadVariant, getVariantList } from '../../variantManager.js';
 
@@ -140,6 +141,7 @@ export function useChat() {
   const [loading, setLoading, loadingRef] = useStateRef(false);
   const [thinking, setThinking] = useStateRef(null);
   const [contextChips, setContextChips, chipsRef] = useStateRef([]);
+  const clearChips = () => setContextChips([]);
   const [currentModel, setCurrentModelState, modelRef] = useStateRef(getInitialModel());
   const [reasoningEffort, setReasoningEffortState, reasoningRef] = useStateRef(getSettings().chatReasoningEffort || 'medium');
   const [webSearchEnabled, setWebSearchState, webSearchRef] = useStateRef(!!getSettings().chatWebSearch);
@@ -515,11 +517,18 @@ export function useChat() {
     }
   };
 
-  const requestAIChanges = async (instruction, targetPath = null) => {
+  const requestAIChanges = async (instruction, targetPath = null, hasExplicitContext = false) => {
     const startThreadId = currentThreadIdRef.current;
     // Stamp the committed turns with the resume active at request START (the one
     // startThreadId belongs to), not getCurrentId() at completion — see getAIResponse.
     const startVariantId = getCurrentId();
+    // The DOCUMENT, not only which resume. Sync can adopt a newer copy of the
+    // SAME resume while this runs, which leaves the id unchanged and so passes
+    // the check below — and the paths in `result.changes` were generated from
+    // the copy that has just been replaced. `documentAdopted` cannot help
+    // either: this proposal is created AFTER that event fired, so the listener
+    // that invalidates open proposals has nothing to invalidate yet.
+    const startAdoptions = store.documentAdoptions();
     setLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -548,6 +557,22 @@ export function useChat() {
       finishRequest(controller);
 
       if (!result.changes || Object.keys(result.changes).length === 0) {
+        // Nothing to apply. The router that sent us here is keyword-based
+        // (isChangeRequest), so questions land in this path constantly —
+        // "how would you improve my summary?" contains "improve" — and the
+        // change model answers them by explaining why it made no edits: "No
+        // resume edits were made because this was a question rather than an
+        // edit request." That is a non-answer to a question the user actually
+        // asked. Ask conversationally instead and let the real reply stand on
+        // its own.
+        //
+        // Only when the origin thread is still the one in view: getAIResponse
+        // captures currentThreadId itself, so retrying after a mid-request
+        // switch would commit this thread's answer into another one.
+        if (currentThreadIdRef.current === startThreadId) {
+          await getAIResponse(instruction, hasExplicitContext);
+          return;
+        }
         commitToThread(startThreadId, {
           id: uid(), role: 'assistant',
           content: result.explanation || 'No changes were generated. The AI may need more specific instructions.',
@@ -566,6 +591,16 @@ export function useChat() {
         commitToThread(startThreadId, {
           id: uid(), role: 'assistant',
           content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''}`}\n\nThese edits are for the resume you started from — switch back to it and resend to apply them.`,
+          reasoning: capturedReasoning || null, run: capturedRun,
+          variantId: startVariantId, timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (store.documentAdoptions() !== startAdoptions) {
+        commitToThread(startThreadId, {
+          id: uid(), role: 'assistant',
+          content: `${result.explanation || `Generated ${count} change${count > 1 ? 's' : ''}`}\n\nThis resume changed on another device while I was working, so these edits are for a version you no longer have. Ask again and I will use the current one.`,
           reasoning: capturedReasoning || null, run: capturedRun,
           variantId: startVariantId, timestamp: new Date().toISOString(),
         });
@@ -848,7 +883,7 @@ Let's begin!`);
       await continueInterview(text);
       return;
     }
-    if (isChangeRequest(text)) await requestAIChanges(messageWithContext, targetPath);
+    if (isChangeRequest(text)) await requestAIChanges(messageWithContext, targetPath, chips.length > 0);
     else await getAIResponse(messageWithContext, chips.length > 0);
   };
 
@@ -864,7 +899,6 @@ Let's begin!`);
     addChip({ type, path: path || '', content: context, label: getContextLabel(context, type, path) });
   };
   const removeChip = (index) => setContextChips(chipsRef.current.filter((_, i) => i !== index));
-  const clearChips = () => setContextChips([]);
 
   // ── threads ────────────────────────────────────────────────────────────
   const switchThread = (threadId, save = true) => {
@@ -903,6 +937,16 @@ Let's begin!`);
     setThreads(next);
     persistThreads(next);
     switchThread(t.id, true);
+  };
+  // Give a thread an explicit name. Deliberately does NOT bump updatedAt:
+  // selection reopens the most-recently-updated thread, so renaming one would
+  // otherwise change which thread opens next time the panel does.
+  const renameThread = (threadId, name) => {
+    const title = (name || '').trim();
+    if (!title) return;
+    const next = threadsRef.current.map((t) => (t.id === threadId ? { ...t, name: title } : t));
+    setThreads(next);
+    persistThreads(next);
   };
   const deleteThread = (threadId) => {
     if (!threadsRef.current.some((t) => t.id === threadId)) return; // not found
@@ -1091,6 +1135,40 @@ Let's begin!`);
     return unsub;
   }, [setThreads, setCurrentThreadId, setMessages]);
 
+  // This hook holds the app's ONE live copy of the thread list, and
+  // persistThreads writes it straight back over the key — so a thread list sync
+  // landed in storage was reverted by the next send and pushed back up as a
+  // clean, uncontested update (see src/chatThreads.js). Register as its holder
+  // while mounted, the same way the store adopts a fetched résumé.
+  //
+  // `adopt` re-reads storage into this state and deliberately does NOT persist:
+  // what it adopts is exactly what the caller just wrote, and a write-back would
+  // restamp the unit and send this device's copy of what it only just received.
+  // The thread on screen is kept when it survived the replacement, so a landing
+  // never moves the user to another conversation.
+  //
+  // `isBusy` is the chat's own in-flight signal, not a flag invented for sync: a
+  // streamed reply lives only in this state until it commits into the thread
+  // list, so replacing that list mid-reply drops it with nothing holding it.
+  //
+  // The cleanup is the deregistration this registration handed back, not an
+  // unconditional clear: it releases the slot only while THIS holder still owns
+  // it, so a second holder mounting before this one unmounts is not deregistered
+  // by its predecessor's teardown.
+  useEffect(() => registerThreadHolder({
+    isBusy: () => loadingRef.current || abortRef.current !== null,
+    adopt: () => {
+      const next = migrateThreads(loadThreads().threads);
+      const keep = currentThreadIdRef.current;
+      const cid = keep && next.some((t) => t.id === keep)
+        ? keep
+        : (pickCurrentThreadId(next, getCurrentId()) ?? next[0]?.id ?? null);
+      setThreads(next);
+      setCurrentThreadId(cid);
+      setMessages(next.find((t) => t.id === cid)?.messages || []);
+    },
+  }), [setThreads, setCurrentThreadId, setMessages, loadingRef, currentThreadIdRef]);
+
   useEffect(() => {
     const onSettings = () => refresh();
     window.addEventListener(SETTINGS_UPDATED_EVENT, onSettings);
@@ -1132,7 +1210,7 @@ Let's begin!`);
     // actions
     send, stop, selectModel, applyCustomSlug, removeCustomModelEntry,
     setReasoning, toggleWebSearch, addChip, openWithContext, removeChip, clearChips,
-    newThread, switchThread, deleteThread, moveThreadToCurrentVariant, jumpToVariant,
+    newThread, switchThread, deleteThread, renameThread, moveThreadToCurrentVariant, jumpToVariant,
     openDiffForMessage, applyAction,
     startInterview, refresh,
   };

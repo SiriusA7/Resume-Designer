@@ -3133,6 +3133,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-web-kit",
  "rusty-leveldb",
+ "security-framework 3.7.0",
  "semver",
  "serde",
  "serde_json",

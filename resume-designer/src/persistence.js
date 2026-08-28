@@ -5,8 +5,11 @@
 
 import { store, generateId } from './store.js';
 import { parseResume } from './parser.js';
-import { isTauri } from './native.js';
-import { appStorage } from './appStorage.js';
+import { isTauri, isIOSPlatform, stageTextForShare, notify } from './native.js';
+// The share sheet, for the exports iOS cannot download. `iosShell` does not
+// import this module, so the edge only goes one way.
+import { sharePdf, isNativeShellAvailable } from './iosShell.js';
+import { appStorage, onWriteFailure, onWriteSettled } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 // The API key lives in the OS keychain, not beside the resume data on disk.
 import {
@@ -15,6 +18,89 @@ import {
 
 const STORAGE_KEY = 'resume-designer-data';
 export const SETTINGS_UPDATED_EVENT = 'resume-designer-settings-updated';
+let persistedSaveHandler = null;
+
+/** Wired by syncModel.js through main.js to keep the module graph acyclic. */
+export function setPersistedSaveHandler(handler) {
+  persistedSaveHandler = typeof handler === 'function' ? handler : null;
+}
+
+// Stamps and announces the units a RESTORE produced. Injected for the same
+// reason the save handler is: this module must not import the sync layer.
+// Without it the tombstones a replacement restore writes never travel — the
+// blob goes in under a PHYSICAL key, which the interceptor classifies
+// 'unknown', so nothing is stamped and nothing is queued.
+let restoreStampHandler = null;
+let restoreAnnounceHandler = null;
+export function setRestoreStampHandler(handler, announceHandler) {
+  restoreStampHandler = typeof handler === 'function' ? handler : null;
+  restoreAnnounceHandler = typeof announceHandler === 'function' ? announceHandler : null;
+}
+
+/**
+ * Stamp everything the restore wrote, with the restore's own writes.
+ *
+ * Rides its flush deliberately — `importFullBackupDurably` arms a guard the
+ * moment this function's caller returns, and that guard DEFERS every other
+ * writer while the reload the restore ends with discards what was deferred.
+ * Returns the unit ids per workspace so the durable caller can announce exactly
+ * what was stamped, rather than recomputing it against a store that has since
+ * moved.
+ *
+ * THROWS RATHER THAN LOGGING, unlike the announcement below, and the asymmetry
+ * is the point. `appStorage` swallows its own observer's failures because the
+ * bytes are already stored by then and a bookkeeping error surfacing at some
+ * unrelated call site reads as a lost edit. Here the stamp is not incidental:
+ * it is what makes the restored content outrank what the server still holds. A
+ * suppressed failure — a QuotaExceededError in passthrough mode is the
+ * plausible one, since that mode's `setItem` throws synchronously — leaves a
+ * restore reported as successful, persisted, and unstamped, so the next fetch
+ * reads it as -Infinity and overwrites it with the records it just replaced.
+ * Letting it reach the caller's `try` runs the rollback, which is the outcome
+ * a person can see and retry.
+ */
+function stampRestoredWrites(restoredWrites, noteKeyWritten) {
+  const stamped = new Map();
+  if (!restoreStampHandler || !restoredWrites?.size) return stamped;
+  for (const [profileId, writes] of restoredWrites) {
+    if (!writes?.length) continue;
+    const ids = restoreStampHandler(profileId, writes, noteKeyWritten);
+    if (ids?.length) stamped.set(profileId, ids);
+  }
+  return stamped;
+}
+
+/**
+ * Announce the tombstones a restore produced, once that restore is DURABLE.
+ *
+ * Never during the restore. In cached mode nothing in the import throws —
+ * failures surface at the flush — so announcing there uploads deletions for a
+ * restore that may still be rolled back, and a rollback cannot recall them.
+ * Keyed by workspace, because the same résumé id lives in more than one.
+ *
+ * LOGS rather than throwing, unlike the stamping above. By this point the
+ * restore is on disk and correct; there is nothing to roll back to, and failing
+ * it here would report a restore that actually succeeded as a failure. The
+ * stamp is durable, so a lost announcement costs immediacy and not the content
+ * — the unit still outranks the server whenever it is next collected.
+ */
+export function commitRestoredUnits(restoredUnits) {
+  if (!restoreAnnounceHandler || !restoredUnits?.size) return;
+  for (const [profileId, ids] of restoredUnits) {
+    if (!ids?.length) continue;
+    try {
+      restoreAnnounceHandler(profileId, ids);
+    } catch (e) {
+      console.error('[backup] could not announce restored units:', e);
+    }
+  }
+}
+
+// `setSyncDirtyNotifier` stood here, and this module no longer names a dirty
+// unit at all: the handler above queues them for the storage drain, which is
+// the only place that knows the bytes reached disk. The notifier now has ONE
+// installer (syncModel's `setStorageDirtyNotifier`) rather than two, and there
+// is no longer a route that can announce a unit earlier than the drain.
 
 // Storage structure
 const DEFAULT_STORAGE = {
@@ -89,19 +175,128 @@ export function loadFromStorage() {
 // QuotaExceededError; in cached (Tauri) mode setItem never throws — disk
 // failures surface asynchronously via the facade's own toast.
 export function saveToStorage(data) {
+  listenForDataWrites();
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     return true;
   } catch (e) {
     console.error('Failed to save to storage:', e);
+    reportDataWrite(STORAGE_KEY, false);
     return false;
   }
 }
 
+// ── "this résumé is not on disk" ───────────────────────────────────────────
+//
+// The comment above says disk failures "surface asynchronously via the facade's
+// own toast". That is true, and on iOS it is not enough: the structure editor is
+// a native sheet over the page, so Sonner renders UNDERNEATH it. Someone can
+// type into the sheet, watch the canvas behind it update, and quit believing the
+// work was saved.
+//
+// So the same answer the profile sheet and the chat sheet already give — the
+// state is published, and the sheet says it. Note the profile sheet listens to
+// this same key for its own banner; that one is about ONE held copy it can
+// retry, this one is about the résumé the editor is showing.
+
+/** Fired when the flag below changes; a disk refusal is not a DOM change. */
+export const DATA_SAVE_STATE_EVENT = 'rd:data-save-state-changed';
+
+// PER KEY, not one flag for both. They fail independently: the blob can be
+// refused for want of space while the theme — a few bytes — settles in the same
+// drain, and a shared boolean let that success announce that the résumé was
+// saved. The warning has to survive until the key that failed lands.
+const unsavedKeys = new Set();
+let watchingDataWrites = false;
+
+function reportDataWrite(logicalKey, ok) {
+  const was = unsavedKeys.size > 0;
+  if (ok) unsavedKeys.delete(logicalKey);
+  else unsavedKeys.add(logicalKey);
+  if ((unsavedKeys.size > 0) === was) return;
+  window.dispatchEvent(new CustomEvent(DATA_SAVE_STATE_EVENT));
+}
+
+// The blob AND the theme. Settings live in the blob, except the theme, which
+// `theme.js` keeps in a key of its own so the first paint can read it without
+// parsing the résumé — and the native Settings sheet writes both, so either
+// refusal means a control on that sheet is showing a value that is not stored.
+const SETTINGS_BEARING_KEYS = [STORAGE_KEY, 'resume-designer-theme'];
+
+// The design services each own a key of their own, outside the blob — so a
+// refused write to any of them is invisible to the résumé and settings
+// warnings, and the Design sheet went on showing the change as saved. Same
+// mechanism, reported separately, because they are different screens and
+// "your fonts are not on disk" is not "your résumé is not on disk".
+const DESIGN_KEYS = [
+  'resume-header-style',
+  'resume-font-settings',
+  'resume-spacing-settings',
+  'resume-accent-settings',
+  'resume-photo-settings',
+];
+
+const WATCHED_KEYS = [...SETTINGS_BEARING_KEYS, ...DESIGN_KEYS];
+
+function listenForDataWrites() {
+  if (watchingDataWrites) return;
+  watchingDataWrites = true;
+  onWriteFailure((logicalKey) => {
+    if (WATCHED_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, false);
+  });
+  onWriteSettled((logicalKey) => {
+    if (WATCHED_KEYS.includes(logicalKey)) reportDataWrite(logicalKey, true);
+  });
+}
+
+/** True while the résumé or the settings on screen are not known to be on disk. */
+export function dataSaveFailed() {
+  listenForDataWrites();
+  return SETTINGS_BEARING_KEYS.some((key) => unsavedKeys.has(key));
+}
+
+/** True while any design key on screen is not known to be on disk. */
+export function designSaveFailed() {
+  listenForDataWrites();
+  return DESIGN_KEYS.some((key) => unsavedKeys.has(key));
+}
+
+/**
+ * A deleted résumé, kept as a record rather than removed.
+ *
+ * Absence cannot travel. A unit that is simply gone from the blob emits nothing,
+ * and the transport treats a missing unit as "nothing to say" rather than
+ * "delete this" — deliberately, because that is the only reading under which a
+ * device that has not finished syncing cannot wipe another device's work. So a
+ * delete that removed the entry never reached anywhere: the résumé stayed on
+ * every other device, and a fresh device or a forced refetch handed it back to
+ * the one that deleted it.
+ *
+ * A tombstone is the same `resume:<id>` unit carrying `deletedAt`. It travels,
+ * merges and resolves like any other record — newest wins, so a delete beats an
+ * older edit and loses to a newer one — and it is never pruned, because a
+ * pruned tombstone is a résumé that comes back. Same shape the profile registry
+ * already uses (see `mergeRegistry`).
+ */
+export const isDeletedVariant = (variant) => Boolean(variant && variant.deletedAt);
+
+/** Only the résumés that still exist. Tombstones are storage, not content. */
+function liveVariants(storage) {
+  const out = {};
+  for (const [id, variant] of Object.entries(storage.variants || {})) {
+    if (!isDeletedVariant(variant)) out[id] = variant;
+  }
+  return out;
+}
+
 // Get all variants
 export function getVariants() {
-  const storage = loadFromStorage();
-  return storage.variants || {};
+  return liveVariants(loadFromStorage());
+}
+
+/** The raw map, tombstones included — for the paths that must see them. */
+export function getVariantsIncludingDeleted() {
+  return loadFromStorage().variants || {};
 }
 
 // Get current variant ID
@@ -120,7 +315,7 @@ export function setCurrentVariantId(id) {
 // Save a variant
 export function saveVariant(id, name, data) {
   const storage = loadFromStorage();
-  const existingVariant = storage.variants[id];
+  const existingVariant = isDeletedVariant(storage.variants[id]) ? null : storage.variants[id];
   const now = new Date().toISOString();
   
   storage.variants[id] = {
@@ -179,14 +374,24 @@ export function generateUniqueVariantName(baseName, variants = null) {
 // Delete a variant
 export function deleteVariant(id) {
   const storage = loadFromStorage();
-  delete storage.variants[id];
-  
-  // If deleted variant was current, switch to another
+  if (!storage.variants[id]) return storage.currentVariantId;
+  // REPLACED by a tombstone, not removed — see `isDeletedVariant`. The name is
+  // kept so a conflict notice or a log line can say WHICH résumé went; nothing
+  // renders it, because every reader goes through `getVariants`.
+  const now = new Date().toISOString();
+  storage.variants[id] = {
+    id,
+    name: storage.variants[id].name,
+    deletedAt: now,
+    updatedAt: now,
+  };
+
+  // If deleted variant was current, switch to another LIVE one.
   if (storage.currentVariantId === id) {
-    const variantIds = Object.keys(storage.variants);
+    const variantIds = Object.keys(liveVariants(storage));
     storage.currentVariantId = variantIds.length > 0 ? variantIds[0] : null;
   }
-  
+
   saveToStorage(storage);
   return storage.currentVariantId;
 }
@@ -194,7 +399,7 @@ export function deleteVariant(id) {
 // Rename a variant
 export function renameVariant(id, newName) {
   const storage = loadFromStorage();
-  if (storage.variants[id]) {
+  if (storage.variants[id] && !isDeletedVariant(storage.variants[id])) {
     storage.variants[id].name = newName;
     storage.variants[id].updatedAt = new Date().toISOString();
     saveToStorage(storage);
@@ -204,7 +409,7 @@ export function renameVariant(id, newName) {
 // Save job analysis results for a specific variant
 export function saveVariantAnalysis(variantId, analysis) {
   const storage = loadFromStorage();
-  if (storage.variants[variantId]) {
+  if (storage.variants[variantId] && !isDeletedVariant(storage.variants[variantId])) {
     storage.variants[variantId].jobAnalysis = analysis;
     storage.variants[variantId].analysisUpdatedAt = new Date().toISOString();
     saveToStorage(storage);
@@ -215,13 +420,14 @@ export function saveVariantAnalysis(variantId, analysis) {
 export function getVariantAnalysis(variantId) {
   const storage = loadFromStorage();
   const variant = storage.variants[variantId];
+  if (isDeletedVariant(variant)) return null;
   return variant?.jobAnalysis || null;
 }
 
 // Clear job analysis results for a specific variant
 export function clearVariantAnalysis(variantId) {
   const storage = loadFromStorage();
-  if (storage.variants[variantId]) {
+  if (storage.variants[variantId] && !isDeletedVariant(storage.variants[variantId])) {
     storage.variants[variantId].jobAnalysis = null;
     storage.variants[variantId].analysisUpdatedAt = null;
     saveToStorage(storage);
@@ -360,13 +566,25 @@ export function initPersistence(variantId) {
     if (variantId) {
       const storage = loadFromStorage();
       const variant = storage.variants[variantId];
-      if (variant) {
+      if (variant && !isDeletedVariant(variant)) {
         // The debounced auto-save is the path that persists ongoing EDITS.
         // When the write fails (browser passthrough at storage quota), the
         // user must hear about it once — otherwise everything typed from now
         // on silently evaporates on quit/reload.
         const ok = saveVariant(variantId, variant.name, data);
-        if (!ok) {
+        if (ok) {
+          try {
+            // Stamps the résumé and its history and QUEUES them for the storage
+            // drain — it no longer announces them here. `ok` above is the
+            // write-behind cache accepting the value, not the disk taking it,
+            // and telling the transport to upload on that answer is how a
+            // change tag gets held for bytes that never landed. The handler's
+            // own comment carries the rest.
+            persistedSaveHandler?.(variantId);
+          } catch (err) {
+            console.error('[Persistence] sync bookkeeping failed after successful save:', err);
+          }
+        } else {
           storageErrorToast(
             'Storage is full — your recent edits are NOT being saved. Free up '
             + 'space (delete resumes you no longer need) or export a backup now '
@@ -416,8 +634,12 @@ import {
   splitPhysicalKey,
   physicalKey,
   withoutStoredCredentials,
+  withoutDeviceIdentity,
+  mapKey,
 } from './profileKeys.js';
+import { clearedPayloadFor, clearableKeys } from './sync/clearedPayloads.js';
 import { loadRegistry, getActiveProfileId } from './profiles.js';
+import { getProfileMapping } from './appStorage.js';
 
 export { isOwnedKey }; // re-export: backupKeys.test.js and others import it from here
 
@@ -510,6 +732,13 @@ function rollbackWipedImport(writtenKeys, priorValues) {
     try { appStorage.removeItem(k); } catch { /* keep going */ }
   }
   for (const [k, v] of priorValues) {
+    // A null here is a key that did NOT exist before the restore — the snapshot
+    // resolves each name to the address appStorage would use, and an unprefixed
+    // owned key whose physical twin is absent reads as null. `setItem` stringifies,
+    // so replaying it wrote the four characters "null" into a key that should not
+    // exist at all: readable, stampable, and uploadable to every other device as
+    // that unit's payload. The wipe above is what restores absence.
+    if (v == null) continue;
     try { appStorage.setItem(k, v); } catch { /* keep going */ }
   }
 }
@@ -548,9 +777,32 @@ export function exportFullBackup(filename) {
   const profiles = Object.create(null);
   const shared = {};
   const activeId = getActiveProfileId();
+  // A deleted workspace's bytes are not part of a backup: exported, they come
+  // back on the next restore and the workspace the person deleted is simply
+  // there again. A backup enumerates PHYSICAL keys, which know nothing about
+  // the registry, so the registry is what has to say.
+  //
+  // THE ACTIVE ONE IS EXEMPT, and getting that wrong is worse than not
+  // filtering at all. `purgeTombstonedProfiles` refuses to touch the active
+  // workspace precisely because it is still mapped and still holds live content
+  // on screen — so it is the one tombstoned namespace guaranteed to be full,
+  // and filtering it here threw away exactly what the purge was protecting.
+  //
+  // The path is not hypothetical: when the switch away from a remotely deleted
+  // workspace FAILS — most often a failed disk write — the app stays on it, and
+  // the app's own response to a failed disk write is a toast telling the person
+  // to export a backup. That backup would have omitted everything on their
+  // screen, announced success, and then destroyed the local copy on restore,
+  // because a registry id with no bucket restores as an empty workspace.
+  const deletedProfileIds = new Set(
+    (loadRegistry() || [])
+      .filter((p) => p?.deletedAt && p.id && p.id !== activeId)
+      .map((p) => p.id),
+  );
   for (const k of appStorage.keys()) {
     if (!k) continue;
     const split = splitPhysicalKey(k);
+    if (split && deletedProfileIds.has(split.profileId)) continue;
     if (split && isOwnedKey(split.logicalKey)) {
       const v = appStorage.getItem(k);
       if (v !== null) {
@@ -601,6 +853,26 @@ export function exportFullBackup(filename) {
       exportedRegistry.push({ id: pid, name: `Recovered profile (${pid.slice(0, 6)})` });
     }
   }
+  // The ACTIVE workspace goes into the envelope LIVE, even when its registry
+  // entry is tombstoned. Its bytes are included above — they are what is on
+  // screen — but bytes alone do not restore: a format-2 restore writes the
+  // tombstone unchanged, the next start resolves to some other live workspace,
+  // and `purgeTombstonedProfiles` then deletes the namespace that was just
+  // restored. The recovery backup could not recover the very thing it was taken
+  // for, which is the state the storage-failure guidance sends people to it in.
+  //
+  // `updatedAt` is refreshed so the revival OUTRANKS the tombstone it replaces —
+  // without that, the next registry merge re-tombstones it and the purge takes
+  // it again one sync later. This is the exported copy only, never live storage,
+  // the same rule the orphan synthesis above follows: restoring is an explicit
+  // act, and somebody restoring this file is asking for exactly this workspace.
+  if (activeId) {
+    const i = exportedRegistry.findIndex((p) => p?.id === activeId && p?.deletedAt);
+    if (i !== -1) {
+      const { deletedAt: _deletedAt, ...revived } = exportedRegistry[i];
+      exportedRegistry[i] = { ...revived, updatedAt: new Date().toISOString() };
+    }
+  }
 
   const backup = {
     backupFormat: 2,
@@ -637,7 +909,7 @@ export function exportFullBackup(filename) {
 // one of the call sites — the credential strip was originally applied per-site
 // and the format-1 replacement path was simply missed.
 //
-// Two jobs:
+// Three jobs:
 //
 // 1. Legacy Electron stores can hold job descriptions as an id-keyed OBJECT map
 //    — a shape the Rust migration probe explicitly counts as valid and the
@@ -666,11 +938,23 @@ export function exportFullBackup(filename) {
 //    on first launch of this version. The plaintext hop is momentary and on the
 //    same disk the Electron app was already keeping the key on in the clear, so
 //    it exposes nothing that was not already exposed.
+//
+// 3. Drop the backup's `deviceId` out of the sync-state key. That key belongs in
+//    a backup — the per-unit modification stamps in it are per-profile data — but
+//    the id beside them names the MACHINE, and restoring one device's backup onto
+//    a second gave both the same origin id, which is what undo scopes itself by.
+//    NOT exempted by `keepCredential`: a same-machine Electron migration predates
+//    sync entirely and carries no such key, so there is nothing for an exemption
+//    to preserve. See withoutDeviceIdentity for the rest of the argument.
 function normalizeImportedValue(key, value, keepCredential = false) {
-  // One call, and the flag carries the exemption. `keepCredential` spares the
-  // OpenRouter key for a same-machine migration; the dead provider keys are
-  // never spared, which the helper enforces rather than leaving to this caller.
-  const sanitized = withoutStoredCredentials(key, value, { keepOpenRouterKey: keepCredential });
+  // One call each, and the flag carries the one exemption there is.
+  // `keepCredential` spares the OpenRouter key for a same-machine migration; the
+  // dead provider keys are never spared, which the helper enforces rather than
+  // leaving to this caller, and neither is the device id.
+  const sanitized = withoutDeviceIdentity(
+    key,
+    withoutStoredCredentials(key, value, { keepOpenRouterKey: keepCredential }),
+  );
   if (key !== 'resume-designer-job-descriptions') return sanitized;
   try {
     const jd = JSON.parse(sanitized);
@@ -679,6 +963,233 @@ function normalizeImportedValue(key, value, keepCredential = false) {
     }
   } catch { /* leave malformed JSON as-is; initJobDescriptions handles it */ }
   return sanitized;
+}
+
+/**
+ * The incoming blob, with a tombstone for every résumé the restore DROPS.
+ *
+ * A replacement restore is a deletion for anything it omits — but it writes a
+ * new blob rather than calling `deleteVariant`, so nothing produced the
+ * tombstone that makes a deletion travel. `changedDataUnits` only compares ids
+ * present in the new value, so the dropped résumé was not even named: CloudKit
+ * kept its record, and the next fetch on any device handed it straight back.
+ *
+ * The tombstone carries no `data`, exactly as `deleteVariant`'s does, so every
+ * reader hides it and `landsAsResume` still accepts it on the other side.
+ */
+/**
+ * Write the "cleared" value for every synced key this restore wiped and did not
+ * put back, so the removal travels.
+ *
+ * The wipe deletes each owned key and the write loops only restore the ones the
+ * backup carries; whatever is left over is a deletion nothing announces, because
+ * an absent key produces no unit (`collectKeyUnit`). Routed through the
+ * restore's own tracked writer so the ordinary machinery carries it: the write
+ * joins the rollback set, and `stampRestoredWrites` names its unit from the
+ * comparison against the pre-wipe value like any other.
+ *
+ * @param priorValues pre-wipe snapshot, keyed by ADDRESS
+ * @param writtenAddresses the addresses this restore has already rewritten
+ * @param write (address, value, profileId, logicalKey) => void
+ */
+function clearOmittedSyncedKeys(priorValues, writtenAddresses, write, workspaces) {
+  for (const profileId of workspaces) {
+    for (const logicalKey of clearableKeys()) {
+      // The ADDRESS this workspace's key lives at. '' is the open one, where
+      // `mapKey` answers with whatever the mapping currently says — which is
+      // also what `snapshotAndWipeOwnedKeys` keyed the snapshot by.
+      const address = profileId
+        ? physicalKey(profileId, logicalKey)
+        : mapKey(getProfileMapping(), logicalKey);
+      if (writtenAddresses.has(address)) continue;
+      const cleared = clearedPayloadFor(logicalKey);
+      if (cleared === undefined) continue;
+      // WRITTEN AND NAMED even when this device already holds the cleared
+      // value. That looks like churn and is not: a replacement restore is an
+      // assertion about the WORKSPACE, not a diff against this device, and the
+      // thing it has to outrank is whatever another device has written to
+      // CloudKit since. Skipping on local equality made the assertion
+      // conditional on the one copy that is already correct — so the stale
+      // server record simply came back. The `forced` flag is what carries that
+      // through the ordinary change detection, which would otherwise see
+      // identical bytes and name nothing.
+      write(address, cleared, profileId, logicalKey);
+    }
+  }
+}
+
+/**
+ * Snapshot and wipe a set of owned keys, ONE ENTRY PER ADDRESS.
+ *
+ * Two different names can address the same cache slot: with a profile mapping
+ * on, `appStorage` resolves an unprefixed owned key to that workspace's
+ * physical key — so on an install carrying both (the incomplete-adoption
+ * recovery state `exportFullBackup` documents, where the live workspace still
+ * sits under UNPREFIXED keys), the naive loop snapshotted the value under the
+ * first name, REMOVED it, and then recorded `null` for the second. Both restore
+ * formats then read that null as "there was nothing here", wrote no tombstone
+ * for any résumé the backup drops, and left every one of those CloudKit records
+ * alive to come back on the next fetch. Resolving first and skipping repeats
+ * keeps one real value per slot.
+ */
+function snapshotAndWipeOwnedKeys(keys) {
+  const priorValues = new Map();
+  const mapping = getProfileMapping();
+  for (const k of keys) {
+    // `mapKey` IS the rule appStorage applies, so it is the only thing asked.
+    // A hand-written predicate here would have to re-derive its carve-outs for
+    // shared keys and already-physical ones, and drift the day one changes.
+    const address = mapKey(mapping, k);
+    if (priorValues.has(address)) continue;
+    priorValues.set(address, appStorage.getItem(address));
+    appStorage.removeItem(address);
+  }
+  return priorValues;
+}
+
+/**
+ * The pre-wipe value for a key a format-2 restore addresses PHYSICALLY.
+ *
+ * Mirror image of `priorSnapshotFor`, and needed for the mirror-image reason.
+ * The snapshot is keyed by the address `appStorage` resolves to, and with the
+ * profile mapping OFF — the incomplete-adoption recovery state `exportFullBackup`
+ * documents — the active workspace's keys sit UNPREFIXED, while a format-2
+ * restore addresses every workspace by its physical name. The lookup missed,
+ * every key read as "there was nothing here", and the restore wiped that
+ * workspace's résumés while writing no tombstone for any of them: deleted
+ * locally, alive on the server, and handed straight back by the next fetch.
+ */
+function priorPhysicalSnapshot(address, logicalKey, profileId, priorValues) {
+  if (priorValues.has(address)) return priorValues.get(address);
+  if (!getProfileMapping() && profileId === getActiveProfileId()) {
+    return priorValues.get(logicalKey);
+  }
+  return undefined;
+}
+
+/**
+ * The pre-wipe value for a key the caller names LOGICALLY.
+ *
+ * `collectActiveOwnedKeys` snapshots what `appStorage.keys()` reports, which is
+ * the PHYSICAL key once a profile mapping is on — while the format-1 restore
+ * writes through the logical one. Looking the snapshot up by the logical name
+ * therefore found nothing on every ordinary profiled install, and the tombstones
+ * this exists for were silently never written. The first test for it missed this
+ * because it ran with mapping OFF, where the two names are the same string.
+ */
+function priorSnapshotFor(logicalKey, priorValues) {
+  if (priorValues.has(logicalKey)) return priorValues.get(logicalKey);
+  const mapping = getProfileMapping();
+  return mapping ? priorValues.get(mapKey(mapping, logicalKey)) : undefined;
+}
+
+function withTombstonesForDroppedVariants(priorRaw, nextRaw, droppedIds = []) {
+  const prior = parseJSONSafe(priorRaw);
+  // NO EARLY RETURN on a missing prior blob. Only the tombstone loop below
+  // needs one — it is comparing against what this workspace held — while the
+  // field reset is about what the BACKUP omits, which is a fact about the
+  // backup and true whatever this device happens to have. A device with no blob
+  // for a workspace (clean, or a profile it has never opened) is exactly the one
+  // that cannot know another device holds customised settings for it, and
+  // bailing here left the restore with nothing to stamp or announce, so that
+  // record came back on the next fetch.
+  // An ABSENT incoming blob is a workspace the backup represents as empty, and
+  // that is still a deletion of everything in it. Treated as "nothing to
+  // compare", the wipe removed the résumés locally and no tombstone was written
+  // for any of them, so every CloudKit record survived and the next fetch
+  // brought the whole workspace back.
+  // RESET to the defaults when there is no incoming blob — not carried over
+  // from the prior one, and not dropped.
+  //
+  // Dropping was the original bug: the blob holds `settings` and `userProfile`
+  // beside the résumés, and a field that is simply gone is never named, because
+  // `changedDataUnits` compares the fields present in the NEXT blob. So the
+  // server kept them and the next fetch put them back — a local loss that undid
+  // itself. Carrying them over fixed the travelling and broke the promise
+  // instead: the restore confirmation says in as many words that current
+  // settings WILL be replaced, and a workspace left holding values absent from
+  // the backup is not what the person agreed to.
+  //
+  // The defaults are both. They are what "this workspace has no blob" means,
+  // they are a VALUE rather than an absence so the reset travels like any other
+  // change, and building from `DEFAULT_STORAGE` rather than spreading `prior`
+  // also means no credential can ride across — `normalizeImportedValue` strips
+  // those from an incoming blob, and this path has no incoming blob to strip.
+  const next = parseJSONSafe(nextRaw) ?? {
+    settings: DEFAULT_STORAGE.settings,
+    userProfile: DEFAULT_STORAGE.userProfile,
+    variants: {},
+  };
+  if (typeof next !== 'object') return nextRaw;
+  const nextVariants = next.variants && typeof next.variants === 'object' ? next.variants : {};
+  // The two units that live INSIDE this blob get the same treatment as every
+  // whole key: a field the backup omits is a field it clears, and an absence
+  // announces nothing. `changedDataUnits` compares the fields present in the
+  // NEXT blob, so one that is simply gone is never named — the wipe removes it
+  // here, the server keeps it, and the next fetch puts it back.
+  //
+  // Written whether or not THIS device had one, which is the part that looks
+  // like inventing a field and is not. What the reset has to outrank lives on
+  // the SERVER, and a device that never stored the field locally — a clean or
+  // offline one restoring an older backup before its first fetch — is exactly
+  // the device that cannot know another has a customised record. Absent, the
+  // restore stamps and announces nothing and that record comes back. The
+  // default is also what every reader already falls back to, so writing it
+  // explicitly changes no behaviour here; it only gives the reset something to
+  // travel as.
+  let reset = 0;
+  for (const field of ['settings', 'userProfile']) {
+    if (next[field] === undefined) {
+      next[field] = DEFAULT_STORAGE[field];
+      reset++;
+    }
+  }
+  const now = new Date().toISOString();
+  let carried = 0;
+  for (const [id, variant] of Object.entries(prior?.variants ?? {})) {
+    if (nextVariants[id]) continue;
+    if (isDeletedVariant(variant)) {
+      // CARRIED FORWARD UNCHANGED, not skipped — the same mistake the registry
+      // path made with already-deleted profiles. A résumé deleted here whose
+      // tombstone has not reached CloudKit yet is one the server still holds
+      // live; dropping the tombstone from the rebuilt blob leaves nothing to
+      // upload, and the next fetch brings the résumé back. Verbatim, so its
+      // original `deletedAt` stands: the deletion happened when it happened,
+      // and moving the time forward would have it win arguments it should not.
+      nextVariants[id] = variant;
+      carried++;
+      continue;
+    }
+    nextVariants[id] = { id, name: variant?.name, deletedAt: now, updatedAt: now };
+    droppedIds.push(id);
+  }
+  // An ABSENT incoming blob always writes, even with nothing to tombstone. The
+  // synthesized blob carries the DEFAULT settings and userProfile, and that
+  // reset is the whole point of it: a workspace holding customised values and
+  // no résumés would otherwise return `null` here, both callers would skip the
+  // write, and the local wipe would look like a reset that no unit was ever
+  // stamped or announced for — so the stale server copies come back.
+  // `variants` is only forced onto the blob when there is something to put in it
+  // or it was already there. A blob that never carried the key should not
+  // acquire an empty one just because this ran.
+  const rebuild = () => {
+    const out = { ...next };
+    if (Object.keys(nextVariants).length > 0 || next.variants !== undefined) {
+      out.variants = nextVariants;
+    }
+    return JSON.stringify(out);
+  };
+  if (nextRaw == null) return rebuild();
+  // `reset` counts too, or a backup that omits `settings` while dropping no
+  // résumés would fall through to `nextRaw` and discard the default this just
+  // decided on.
+  if (droppedIds.length === 0 && carried === 0 && reset === 0) return nextRaw;
+  return rebuild();
+}
+
+function parseJSONSafe(raw) {
+  if (typeof raw !== 'string') return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 function importFullBackupV2(parsed, keepCredential = false) {
@@ -796,31 +1307,67 @@ function importFullBackupV2(parsed, keepCredential = false) {
   // backup can exceed a browser origin's quota), and without the snapshot
   // that throw would leave the store wiped or half-restored — losing the
   // user's CURRENT profiles on a failed import.
-  const priorValues = new Map();
-  for (const k of appStorage.keys()) {
+  // OPENROUTER_KEY_KEY is deliberately NOT wiped. The credential is no longer
+  // backup data, so nothing would restore it — wiping it here would let an
+  // import silently destroy a working key. (Post-migration it is not in
+  // appStorage at all; this matters for an install that has not migrated yet.)
+  const priorValues = snapshotAndWipeOwnedKeys(appStorage.keys().filter((k) => {
     const split = splitPhysicalKey(k);
     const owned = split ? isOwnedKey(split.logicalKey) : isOwnedKey(k);
-    // OPENROUTER_KEY_KEY is deliberately NOT wiped. The credential is no longer
-    // backup data, so nothing would restore it — wiping it here would let an
-    // import silently destroy a working key. (Post-migration it is not in
-    // appStorage at all; this matters for an install that has not migrated yet.)
-    if (owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY) {
-      priorValues.set(k, appStorage.getItem(k));
-      appStorage.removeItem(k);
-    }
-  }
+    return owned || k === PROFILES_KEY || k === ACTIVE_PROFILE_KEY;
+  }));
   const removedExistingKeys = priorValues.size;
 
   const written = [];
-  const writeTracked = (k, v) => {
+  // profileId -> every synced write this restore made in THAT workspace, with
+  // the value it replaced. The interceptor cannot build this itself: these are
+  // written under physical, profile-namespaced names, which `classifyKey`
+  // answers 'unknown' for, so nothing a restore brings is stamped or announced
+  // by the ordinary path. Recorded here because the restore is the only thing
+  // that knows which workspace each key belongs to.
+  const restoredWrites = new Map();
+  const noteWrite = (pid, logicalKey, value) => {
+    if (!restoredWrites.has(pid)) restoredWrites.set(pid, []);
+    restoredWrites.get(pid).push({ logicalKey, value });
+  };
+  // `k` is the ADDRESS appStorage resolves to for every call here — physical for
+  // a profile's key, unchanged for a shared one — so the pre-wipe snapshot,
+  // which `snapshotAndWipeOwnedKeys` keys by address, answers directly.
+  const writeTracked = (k, v, pid = '', logicalKey = k) => {
     appStorage.setItem(k, v);
     written.push(k);
+    noteWrite(pid, logicalKey, v);
   };
 
   let keysImported = 0;
   let historySkipped = 0;
+  // profileId -> the unit ids tombstoned in THAT workspace. Declared out here
+  // so the return below can hand them to the durable caller.
+  // Filled at the end of the try, from the writes recorded below.
+  let restoredUnits = new Map();
   try {
-    writeTracked(PROFILES_KEY, JSON.stringify(registry));
+    // A workspace the restore OMITS is a workspace the restore deletes — and
+    // `mergeRegistry` is a union, so a merely-absent entry reads as "keep the
+    // local one". Other devices went on showing it, and their next registry
+    // edit uploaded it back for fresh ones. Written as tombstones so the
+    // removal travels the way `deleteProfile`'s does.
+    const priorRegistry = parseJSONSafe(priorValues.get(PROFILES_KEY)) || [];
+    const restoredIds = new Set(registry.map((p) => p.id));
+    const stamp = new Date().toISOString();
+    // An ALREADY-tombstoned entry is carried across UNCHANGED rather than
+    // skipped. Dropping it looks like tidying — the profile is gone, the backup
+    // does not mention it — but the tombstone is the only thing standing between
+    // that deletion and a device which still holds the live entry: `mergeRegistry`
+    // unions, so the entry this device no longer carries is simply re-adopted
+    // from the other one and the workspace comes back. Kept verbatim, not
+    // re-stamped: the deletion happened when it happened, and moving its time
+    // forward would have it win arguments it should not.
+    const withRemovals = registry.concat(
+      priorRegistry
+        .filter((p) => p?.id && !restoredIds.has(p.id))
+        .map((p) => (p.deletedAt ? p : { ...p, deletedAt: stamp, updatedAt: stamp })),
+    );
+    writeTracked(PROFILES_KEY, JSON.stringify(withRemovals));
     const active = registry.some((p) => p.id === parsed.activeProfile)
       ? parsed.activeProfile : registry[0].id;
     writeTracked(ACTIVE_PROFILE_KEY, active);
@@ -839,18 +1386,75 @@ function importFullBackupV2(parsed, keepCredential = false) {
     const history = profileEntries.filter(
       ({ logicalKey }) => logicalKey.startsWith(BACKUP_HISTORY_PREFIX)
     );
+    const blobWritten = new Set();
     for (const { physicalKey: key, logicalKey, value } of nonHistory) {
-      writeTracked(key, normalizeImportedValue(logicalKey, value, keepCredential));
+      let normalized = normalizeImportedValue(logicalKey, value, keepCredential);
+      // Same rule one level down: a résumé the restore omits is a résumé it
+      // deletes, and only a tombstone makes that travel.
+      if (logicalKey === STORAGE_KEY) {
+        normalized = withTombstonesForDroppedVariants(
+          priorPhysicalSnapshot(key, STORAGE_KEY, splitPhysicalKey(key)?.profileId ?? '', priorValues),
+          normalized,
+        );
+        blobWritten.add(splitPhysicalKey(key)?.profileId ?? '');
+      }
+      writeTracked(key, normalized, splitPhysicalKey(key)?.profileId ?? '', logicalKey);
       keysImported++;
     }
-    for (const { physicalKey: key, value } of history) {
+    // The workspaces this restore actually KEEPS: in the registry and not
+    // tombstoned. `exportFullBackup` deliberately keeps a tombstoned entry in
+    // the registry while omitting its profile bucket, so "in the registry" alone
+    // reads a deleted workspace as an empty live one — and synthesizing for it
+    // creates a default blob, cleared records for every other key, and stamps
+    // and announces the lot. If the sync session still covers that profile id,
+    // those empty records overwrite its CloudKit zone, which `deleteProfile`
+    // deliberately leaves INTACT so a revival can get the content back. The
+    // restore would make the deletion irreversible on every device.
+    const liveIds = registry.filter((p) => !p?.deletedAt).map((p) => p.id);
+    // A workspace the backup represents as EMPTY writes no blob at all, so the
+    // loop above never sees it — and the wipe already removed its résumés. The
+    // tombstones have to be synthesized from the snapshot alone, or every one of
+    // those CloudKit records outlives the restore and the next fetch undoes it.
+    for (const pid of liveIds) {
+      if (blobWritten.has(pid)) continue;
+      const key = physicalKey(pid, STORAGE_KEY);
+      const dropped = [];
+      const rebuilt = withTombstonesForDroppedVariants(
+        priorPhysicalSnapshot(key, STORAGE_KEY, pid, priorValues), null, dropped,
+      );
+      // Gated on there being something TO write, not on there being a tombstone
+      // in it: the synthesized blob also resets settings and userProfile, and a
+      // workspace with customised values and no résumés needs that written just
+      // as much. `null` here means there was no prior blob at all.
+      if (rebuilt == null) continue;
+      writeTracked(key, rebuilt, pid, STORAGE_KEY);
+    }
+    for (const { physicalKey: key, logicalKey, value } of history) {
       if (writeOwnedKeyOrSkip(key, value)) {
         written.push(key);
+        noteWrite(splitPhysicalKey(key)?.profileId ?? '', logicalKey, value);
         keysImported++;
       } else {
         historySkipped++;
       }
     }
+    // Stamped HERE, with the restore's own writes and inside its try, and the
+    // placement is the whole point. The stamp is itself an appStorage write, so
+    // it has to happen before `importFullBackupDurably` arms the restore guard —
+    // the guard DEFERS every other writer, and the reload the restore ends with
+    // discards what was deferred, leaving the tombstone unstamped and reading as
+    // -Infinity against the remote's real time. Riding this flush also makes it
+    // roll back correctly: the sync-state key is a fixed backup key, so it is in
+    // the pre-wipe snapshot. Only the ANNOUNCEMENT waits for durability.
+    // EVERY RETAINED workspace, not every key on disk. A workspace the restore
+    // deletes is skipped entirely: its profile tombstone carries that deletion
+    // and its zone goes with it, so writing cleared payloads there re-creates
+    // files for a profile that no longer exists and announces into a zone the
+    // deletion is about to remove.
+    clearOmittedSyncedKeys(
+      priorValues, new Set(written), writeTracked, liveIds,
+    );
+    restoredUnits = stampRestoredWrites(restoredWrites, (k) => written.push(k));
   } catch (err) {
     rollbackWipedImport(written, priorValues);
     throw err;
@@ -860,6 +1464,12 @@ function importFullBackupV2(parsed, keepCredential = false) {
   // function for the durability check to restore from.
   return {
     keysImported, removedExistingKeys, historySkipped,
+    // HANDED BACK, not announced here. In cached mode nothing above throws —
+    // failures surface at the flush — so announcing at this point uploads
+    // deletions for a restore that may still be rolled back, and a rollback
+    // cannot recall them. `commitRestoredUnits` is called once the flush
+    // has answered.
+    restoredUnits,
     rollback: () => rollbackWipedImport(written, priorValues),
     // For the guard's read isolation: pre-restore values (of removed keys) + the
     // keys written; appStorage normalizes both to physical form and marks the
@@ -919,11 +1529,7 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
   // Snapshot each removed value first — pass 1 below can throw
   // QuotaExceededError in passthrough mode, and the rollback restores this
   // snapshot so a failed import can't leave the workspace wiped.
-  const priorValues = new Map();
-  for (const k of collectActiveOwnedKeys()) {
-    priorValues.set(k, appStorage.getItem(k));
-    appStorage.removeItem(k);
-  }
+  const priorValues = snapshotAndWipeOwnedKeys(collectActiveOwnedKeys());
 
   // Two-pass write to handle the localStorage quota safely:
   //
@@ -978,15 +1584,82 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
 
   const written = [];
   let historySkipped = 0;
+  const droppedHere = [];
+  // Format 1 restores the ACTIVE workspace only, so everything it writes belongs
+  // to the workspace the mapping names — '' when there is none, the same
+  // convention the collection uses for the open one.
+  const activeWorkspace = getProfileMapping() ?? '';
+  // Recorded for the same reason format 2 records its writes, plus one this
+  // path has on its own: these go in under LOGICAL names, so the interceptor
+  // DOES stamp them — and then the backup's own sync-state key lands later in
+  // the same loop and replaces the table, erasing every stamp written before
+  // it. Re-stamping at the end, after that key has landed, is what survives.
+  const writes = [];
+  const noteWrite = (k, value) => writes.push({
+    logicalKey: splitPhysicalKey(k)?.logicalKey ?? k,
+    value,
+  });
+  let restoredUnits = new Map();
   try {
     for (const [k, v] of nonHistory) {
-      appStorage.setItem(k, normalizeImportedValue(k, v, keepCredential));
+      let normalized = normalizeImportedValue(k, v, keepCredential);
+      // The same rule format 2 follows, and this path needs it just as much:
+      // a replacement restore is a deletion for every résumé it omits, and only
+      // a tombstone makes that travel. `priorValues` is the pre-wipe snapshot
+      // taken above, keyed the way this path writes — the active workspace's
+      // blob, mapped or unprefixed depending on the install.
+      if (k === STORAGE_KEY || splitPhysicalKey(k)?.logicalKey === STORAGE_KEY) {
+        normalized = withTombstonesForDroppedVariants(
+          priorSnapshotFor(k, priorValues), normalized, droppedHere,
+        );
+      }
+      appStorage.setItem(k, normalized);
       written.push(k);
+      noteWrite(k, normalized);
     }
     for (const [k, v] of history) {
-      if (writeOwnedKeyOrSkip(k, v)) written.push(k);
-      else historySkipped++;
+      if (writeOwnedKeyOrSkip(k, v)) {
+        written.push(k);
+        noteWrite(k, v);
+      } else historySkipped++;
     }
+    // An envelope that carries NO blob at all is still a replacement, and still
+    // a deletion of everything the workspace held. The write loop never sees it,
+    // so the tombstones are synthesized from the snapshot alone — the same gap
+    // format 2 had, and this path needed it stated separately for the same
+    // reason it needed the rule stated separately in the first place.
+    if (!nonHistory.some(([k]) => k === STORAGE_KEY || splitPhysicalKey(k)?.logicalKey === STORAGE_KEY)) {
+      const key = activeWorkspace ? physicalKey(activeWorkspace, STORAGE_KEY) : STORAGE_KEY;
+      const rebuilt = withTombstonesForDroppedVariants(priorValues.get(key), null, droppedHere);
+      // See format 2: written whenever there is anything to write, because the
+      // synthesized blob's default settings and userProfile are a reset in
+      // their own right.
+      if (rebuilt != null) {
+        appStorage.setItem(STORAGE_KEY, rebuilt);
+        written.push(STORAGE_KEY);
+        noteWrite(key, rebuilt);
+      }
+    }
+    // See format 2: stamped here, inside the try, so it rides the restore's own
+    // flush and rolls back with it — and so the guard armed the moment this
+    // returns cannot defer it into a queue the reload discards.
+    // `written` holds the names this path PASSED to setItem, which are logical
+    // for most keys, while the snapshot is keyed by address — so they are
+    // compared in address form or every rewritten key reads as omitted.
+    // Format 1 restores the ACTIVE workspace only, so that is the one list.
+    clearOmittedSyncedKeys(
+      priorValues,
+      new Set(written.map((k) => mapKey(getProfileMapping(), k))),
+      (address, value, profileId, logicalKey) => {
+        appStorage.setItem(address, value);
+        written.push(address);
+        writes.push({ logicalKey, value });
+      },
+      [activeWorkspace],
+    );
+    restoredUnits = stampRestoredWrites(
+      new Map([[activeWorkspace, writes]]), (k) => written.push(k),
+    );
   } catch (err) {
     rollbackWipedImport(written, priorValues);
     throw err;
@@ -998,6 +1671,7 @@ export function importFullBackupFromEnvelope(parsed, { keepCredential = false } 
     keysImported: entries.length - historySkipped,
     removedExistingKeys: priorValues.size,
     historySkipped,
+    restoredUnits, // see the format-2 path
     rollback: () => rollbackWipedImport(written, priorValues),
     preRestore: priorValues, // see the format-2 path
     writtenKeys: written,
@@ -1038,7 +1712,23 @@ export async function importFullBackupDurably(parsed, { keepCredential = false }
     appStorage.endRestoreGuard();
     rollback();
     appStorage.flushDeferredWrites();
-    await appStorage.flush();
+    // ANSWERED, not assumed. Whatever refused the import — a full disk, a
+    // permissions failure — is usually still refusing a moment later, so the
+    // rollback's own writes can fail too. The cache holds the old values either
+    // way, which is why the app keeps working and why this was easy to miss;
+    // the DISK is then a mixture of a failed import and a failed rollback, and
+    // the next launch reads that. Telling somebody their previous data was
+    // restored at exactly that moment is the worst available answer: it is the
+    // one thing that would stop them exporting while the good copy is still in
+    // memory.
+    if (!(await appStorage.flush())) {
+      throw new Error(
+        'The backup could not be written to disk, and your previous data could not be '
+        + 'written back either. Everything is still here in the app, but the files on '
+        + 'disk are incomplete — export a backup from Settings BEFORE closing or '
+        + 'reloading, then free up disk space and import it.'
+      );
+    }
     throw new Error(
       'The backup could not be written to disk (is the disk full?). Your previous data was restored.'
     );
@@ -1051,6 +1741,11 @@ export async function importFullBackupDurably(parsed, { keepCredential = false }
   // queued AI/chat completion could clobber the restored cache. The boot Electron
   // migration (non-reloading) releases the guard itself right after this returns.
   appStorage.clearPreRestoreSnapshot();
+  // Only NOW, and only the ANNOUNCEMENT — the stamp already rode the restore's
+  // own flush. The restore is on disk, so the deletions it implies can be named
+  // to the transport without the risk that a rollback takes the content back
+  // while it has already uploaded their tombstones, which nothing can recall.
+  commitRestoredUnits(result.restoredUnits);
   return result;
 }
 
@@ -1251,6 +1946,14 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
       // History keys are quota-tolerant (best-effort) since they can
       // easily blow past the localStorage cap; non-history fall back
       // to a normal setItem that propagates errors.
+      //
+      // The one branch of this function that does NOT go through
+      // normalizeImportedValue, so the device-id strip is taken here too:
+      // writing an incoming sync-state key into a gap is exactly the case that
+      // adopts another machine's origin id wholesale. Today's only caller feeds
+      // this an Electron envelope, which predates sync and cannot carry that key
+      // — which is precisely why the guard belongs at the boundary rather than
+      // resting on who happens to call it.
       if (existingValue === null) {
         if (key.startsWith(BACKUP_HISTORY_PREFIX)) {
           if (writeOwnedKeyOrSkip(key, incomingValue)) {
@@ -1259,7 +1962,7 @@ export function importFullBackupMerge(parsed, { keepCredential = false } = {}) {
             historySkipped++;
           }
         } else {
-          appStorage.setItem(key, incomingValue);
+          appStorage.setItem(key, withoutDeviceIdentity(key, incomingValue));
           settingsKeysAdded++;
         }
       }
@@ -1346,6 +2049,21 @@ function generateMarkdown(data) {
 
 // Download file utility
 export function downloadFile(content, filename, mimeType) {
+  // iOS HAS NO DOWNLOAD. WKWebView does nothing with an `<a download>` blob
+  // click — no file, no error, no sign that anything was asked for — so every
+  // export here (résumé JSON, résumé Markdown, and the full backup, which all
+  // funnel through this one call) silently produced nothing at all.
+  //
+  // Staged to a temp file and handed to the share sheet instead, which is the
+  // same route the PDF export already takes and where "Save to Files" lives.
+  // Fire-and-forget by necessity — this function's callers are synchronous —
+  // so the failure path reports rather than throws into nobody's catch.
+  if (shouldShareInsteadOfDownload()) {
+    shareTextFile(content, filename).catch((error) => {
+      console.error('[export] could not share the file:', error);
+    });
+    return;
+  }
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -1355,6 +2073,49 @@ export function downloadFile(content, filename, mimeType) {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Whether this build must share rather than download — iOS under the native
+ * shell, which is the only place both halves are true.
+ */
+function shouldShareInsteadOfDownload() {
+  // THE APP ON iOS, shell or no shell. Being unable to download is a property
+  // of WKWebView, not of the shell: with `OP_NATIVE_SHELL=0` — a supported
+  // control — or an install where the shell never came up, requiring it sent
+  // every export straight back to the `<a download>` no-op, silently, in
+  // exactly the fallback environment where the web UI is what the person is
+  // using. Staging is a Tauri command and still works there; only the sheet is
+  // missing, and `shareTextFile` says so rather than doing nothing.
+  //
+  // `isTauri` is the other half and it is not redundant: mobile Safari is also
+  // iOS and CAN download, so the browser build must keep the ordinary path.
+  return isTauri && isIOSPlatform();
+}
+
+/** Stage the text and hand it to the native share sheet, reporting a failure. */
+async function shareTextFile(content, filename) {
+  try {
+    // ASKED BEFORE STAGING, not after. Staging writes a real file into the temp
+    // directory, and with no shell to hand it to there is nothing left that
+    // could clean it up — the share sheet's completion handler is what deletes
+    // it, and that only exists once a sheet has been presented. Checking first
+    // means the file is never created in the case that cannot use it.
+    if (!isNativeShellAvailable()) throw new Error('the share sheet is unavailable');
+    const staged = await stageTextForShare(filename, String(content));
+    // A shell that disappeared during the staging await would leak this one
+    // file. Nothing can be done about it from here — deleting by a
+    // renderer-supplied path would be a wider hole than the leak — and iOS
+    // reclaims the temp directory on its own.
+    if (sharePdf(staged)) return;
+    throw new Error('the share sheet is unavailable');
+  } catch (error) {
+    await notify({
+      title: 'Export failed',
+      type: 'error',
+      message: `Could not share ${filename}: ${error.message || 'Unknown error'}.`,
+    });
+  }
 }
 
 // Import from JSON file

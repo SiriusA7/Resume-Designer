@@ -5,6 +5,7 @@ import {
   FileText, Loader2, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -22,17 +23,20 @@ import {
   initJobDescriptions, getAllJobDescriptions, getActiveJobDescriptions,
   addJobDescription, updateJobDescription, deleteJobDescription, toggleJobDescriptionActive,
   parseJobDescriptionText, exportJobDescriptions, importJobDescriptions,
+  subscribeJobDescriptions,
+  registerJobEditHolder,
 } from '../../jobDescriptions.js';
 import {
-  analyzeAgainstJobs, generateResumeChanges, getConfiguredProviders,
-  getAllModels, isConfigured, validateModelId, getDefaultModelId,
+  getConfiguredProviders, getAllModels, isConfigured, validateModelId, getDefaultModelId,
 } from '../../aiService.js';
-import { getSettings, saveSettings, saveVariantAnalysis, getVariantAnalysis, getVariants } from '../../persistence.js';
-import { recordTailorDrafts } from '../../applications.js';
-import { createChangeSet } from '../../diffEngine.js';
+import { getSettings, getVariantAnalysis, downloadFile } from '../../persistence.js';
 import { showDiffView } from '../../diffView.js';
+import { getCurrentId } from '../../variantManager.js';
 import { store } from '../../store.js';
-import { getCurrentId, loadVariant } from '../../variantManager.js';
+// The two AI compositions live in the bridge module, not in these handlers, so
+// the native Jobs sheet runs the same ones — see the note there. This component
+// owns only what is React's: its own state and its own toasts.
+import { runJobAnalysis, runTailor } from '../../jobsBridge.js';
 import { applyRecommendationToStore } from '../../jobRecommendations.js';
 import { JobCard } from './JobCard.jsx';
 import { AnalysisResults } from './AnalysisResults.jsx';
@@ -117,6 +121,15 @@ export default function JobsDialog() {
   const [showRecentOnly, setShowRecentOnly] = useState(true);
   const [selectionOpen, setSelectionOpen] = useState(false);
   const [editingJd, setEditingJd] = useState(null);
+  // The edit dialog seeds title/company/description from `editingJd` ONCE, so a
+  // unit adopted underneath it left those fields showing pre-sync text and the
+  // save wrote all three back over the adopted job, stamped as a new local
+  // update. Held for as long as the dialog is open — it is a modal, so the
+  // window is bounded, and the refusal only defers: the transport forfeits the
+  // change tag and re-offers the unit once it closes.
+  const editingRef = useRef(null);
+  editingRef.current = editingJd;
+  useEffect(() => registerJobEditHolder({ isBusy: () => !!editingRef.current }), []);
   const [addError, setAddError] = useState(false);
   const collapseInit = useRef(false);
 
@@ -137,6 +150,30 @@ export default function JobsDialog() {
   }, []);
 
   useEffect(() => { initJobDescriptions(); }, []);
+
+  // The `bump` below covers every mutation this dialog makes; sync is the one
+  // writer it does not make. A job list landing from another device replaces the
+  // whole module array, and without this the open list keeps rendering the rows
+  // that array no longer holds.
+  useEffect(() => subscribeJobDescriptions(bump), []);
+
+  // Sync replacing the OPEN résumé, which is neither an open nor a variant
+  // change — the two triggers below — so the report on screen could outlive the
+  // document it was computed against indefinitely. `adoptDocument` swaps that
+  // document, and the stored report travels with the same unit, so re-reading
+  // gives the one that belongs to what is now on the canvas.
+  //
+  // It matters because Apply is not advisory: some recommendations map straight
+  // onto a field, so applying a pre-sync one writes over the text that just
+  // arrived from the other device.
+  //
+  // `documentAdopted` rather than `change`: `change` also fires for every
+  // ordinary keystroke, and reloading the report on each one would drop the
+  // applied set — and with it the greying-out of what the person had already
+  // applied — while they typed.
+  useEffect(() => store.subscribe((event) => {
+    if (event === 'documentAdopted') reloadAnalysis();
+  }), [reloadAnalysis]);
 
   useEffect(() => {
     const onOpen = () => { reloadAnalysis(); setOpen(true); };
@@ -212,6 +249,10 @@ export default function JobsDialog() {
   const saveEdit = (fields) => { if (editingJd) { updateJobDescription(editingJd.id, fields); setEditingJd(null); bump(); } };
 
   const handleImport = () => {
+    // Built on the fly, but it is the same dead control in WKWebView without
+    // the shell — see filePickGuard.
+    const blocked = filePickBlockedReason();
+    if (blocked) { toast.error(blocked); return; }
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
@@ -230,30 +271,38 @@ export default function JobsDialog() {
   };
 
   const handleExport = () => {
-    const blob = new Blob([exportJobDescriptions()], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'job-descriptions.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    // See downloadFile: an `<a download>` is inert in WKWebView.
+    downloadFile(exportJobDescriptions(), 'job-descriptions.json', 'application/json');
   };
 
   const runAnalysis = async (selectedJobs, modelId, reasoningEffort) => {
-    const model = modelId || getSettings().defaultModel || getDefaultModelId();
-    saveSettings({ analysisModel: model, analysisReasoning: reasoningEffort || 'medium' });
     setGenOp('analyze');
     setGenReasoning('');
     setLastRun(null);
     setIsAnalyzing(true);
     setAppliedIndexes(new Set());
     try {
-      const results = await analyzeAgainstJobs(model, selectedJobs, {
-        reasoningEffort: reasoningEffort || 'medium',
+      const { results, variantId, superseded } = await runJobAnalysis({
+        jobs: selectedJobs,
+        modelId,
+        reasoning: reasoningEffort,
         hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
       });
-      const id = getCurrentId();
-      if (id && results) saveVariantAnalysis(id, results);
+      // A request is tens of seconds and this dialog can be closed and the
+      // résumé changed inside one. The report is already stored against the
+      // résumé it was run for; showing it here as well would put A's match
+      // score, gaps and recommendations under B's name — and `applyRec` would
+      // then run A's wording against B's document. The variant-change effect
+      // has already loaded B's own report, so the honest move is to leave it.
+      if (variantId && getCurrentId() !== variantId) return;
+      // The same résumé, replaced under the request by sync. The report was
+      // computed against the copy that has just been thrown away, so it is not
+      // about anything on screen — and `reloadAnalysis` has already put the
+      // adopted résumé's own report there.
+      if (superseded) {
+        toast.error('This resume changed on another device while the analysis was running, so it was discarded. Run it again.');
+        return;
+      }
       setAnalysisResults(results);
     } catch (error) {
       toast.error(`Analysis failed: ${error.message}`);
@@ -264,62 +313,29 @@ export default function JobsDialog() {
   };
 
   const handleTailor = async (tailorModelId, tailorReasoningEffort) => {
-    if (activeJDs.length === 0) { toast.error('Please activate at least one job description'); return; }
-    const model = tailorModelId || getSettings().tailorModel || getSettings().defaultModel || getDefaultModelId();
-    const reasoningEffort = tailorReasoningEffort || 'medium';
-    saveSettings({ tailorModel: model, tailorReasoning: reasoningEffort });
     setGenOp('tailor');
     setGenReasoning('');
     setLastRun(null);
     setIsAnalyzing(true);
-    // Pin the tailor target BEFORE the await: a variant switch mid-generation
-    // must not attach the resulting drafts to the newly-selected variant.
-    const variantId = getCurrentId();
-    const variantName = variantId ? getVariants()[variantId]?.name || '' : '';
     try {
-      const result = await generateResumeChanges(
-        model,
-        'Tailor my entire resume for these target jobs. Optimize keywords, adjust the summary, and highlight relevant experience.',
-        null,
-        { jobDescriptions: activeJDs },
-        'tailor',
-        {
-          reasoningEffort,
-          hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
-        },
-      );
-      // The pinned variant may have been DELETED during the long generation
-      // await (the dialog can be dismissed and the resume deleted from the
-      // Library). Bail before recording drafts — otherwise recordTailorDrafts
-      // creates application records for a variant that no longer exists, leaving
-      // orphan timeline lanes that can't be opened. The loadVariant guard below
-      // is too late: it runs only after this, and only when the current variant
-      // differs.
-      if (variantId && !Object.hasOwn(getVariants(), variantId)) {
-        toast.error('The resume this tailoring was generated for no longer exists.');
-        return;
-      }
-      if (variantId) {
-        recordTailorDrafts(variantId, variantName, activeJDs);
-      }
-      if (result.changes && Object.keys(result.changes).length > 0) {
-        // The changes were generated for the pinned variant. If the user
-        // switched resumes mid-generation (the dialog can be dismissed while
-        // the request runs), switch back before diffing — otherwise the diff
-        // is computed and applied against the wrong resume. Same cross-resume
-        // guard as the chat apply flow.
-        if (variantId && getCurrentId() !== variantId) {
-          if (!loadVariant(variantId)) {
-            toast.error('The resume this tailoring was generated for no longer exists.');
-            return;
-          }
-          toast.info(`Switched back to "${variantName}" to review its tailored changes.`);
-        }
-        const changeSet = createChangeSet(store.getData(), result.changes);
+      // runTailor pins the target résumé, guards against it being deleted or
+      // switched mid-run, and records the drafts; the outcome carries the
+      // sentence for whichever way it went, so the copy is written once and
+      // the native sheet shows the same words.
+      const outcome = await runTailor({
+        modelId: tailorModelId,
+        reasoning: tailorReasoningEffort,
+        hooks: { onReasoning: (_d, full) => setGenReasoning(full), onRun: (r) => setLastRun(r) },
+      });
+      if (outcome.status === 'changes') {
+        if (outcome.message) toast.info(outcome.message);
+        // Closed before the diff opens, so the two dialogs never stack.
         setOpen(false);
-        showDiffView(changeSet);
+        showDiffView(outcome.changeSet);
+      } else if (outcome.status === 'no-changes') {
+        toast.info(outcome.message);
       } else {
-        toast.info('No changes suggested. Your resume may already be well-tailored.');
+        toast.error(outcome.message);
       }
     } catch (error) {
       toast.error(`Failed to generate changes: ${error.message}`);

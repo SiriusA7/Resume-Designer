@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Soft geometry 2 — organic O plus the minimum gesture that makes it a p:
+       bowl blob centred (532,480), radii 304/310/296/292/298/300 series;
+       counter centred (540,464) so the band thickens lower-left where the
+       descender buries. Descender: 112-wide bar tapering to 104, top edge
+       y=615 hidden inside the band, round tip r=52 at (339,852). -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <path fill="#0C0A08" fill-rule="evenodd" d="M 836.0 480.0 C 836.0 588.6 782.9 693.1 687.0 748.5 C 591.1 803.8 475.6 789.2 384.0 736.3 C 292.4 683.5 232.0 587.2 232.0 480.0 C 232.0 372.8 295.7 279.3 386.0 227.1 C 476.3 175.0 588.8 168.7 681.0 221.9 C 773.2 275.2 836.0 371.4 836.0 480.0 Z M 718.0 464.0 C 718.0 527.6 688.9 590.5 632.0 623.3 C 575.1 656.2 504.5 658.3 447.0 625.1 C 389.5 591.9 364.0 526.9 364.0 464.0 C 364.0 401.1 394.3 340.3 450.0 308.1 C 505.7 276.0 573.2 282.2 627.0 313.3 C 680.8 344.4 718.0 400.4 718.0 464.0 Z"/>
+  <path fill="#0C0A08" d="M 288 615 L 400 615 L 391 800 A 52 52 0 0 1 287 800 Z"/>
+</svg>

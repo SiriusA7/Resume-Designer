@@ -17,6 +17,7 @@
 import { toast } from 'sonner';
 import {
   isElectron, checkForUpdates, onUpdateStatus, getAutoUpdateCheck, onMenuCheckUpdates,
+  isIOSPlatform,
 } from './native.js';
 
 const UPDATE_TOAST_ID = 'rd-update-status';
@@ -94,9 +95,10 @@ export function initUpdateFlow() {
 
 // Poll for updates every 30 minutes while the app is open. Notify-only (the
 // "available" handler shows one actionable toast per version); respects the
-// Settings auto-update toggle live, and never runs in dev.
+// Settings auto-update toggle live, and never runs in dev or on iOS (same
+// #[cfg(desktop)] command as the startup check — see native.js).
 function startBackgroundPolling() {
-  if (pollTimer || import.meta.env.DEV) return;
+  if (pollTimer || import.meta.env.DEV || isIOSPlatform()) return;
   pollTimer = setInterval(() => {
     if (!getAutoUpdateCheck()) return;
     checkForUpdates('background', { notifyOnly: true }).catch(() => {});

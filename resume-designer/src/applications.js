@@ -54,27 +54,121 @@ export function getApplicationsSnapshot() {
 }
 
 /**
- * Initialize applications from storage. Self-heals an id-keyed object map to
- * the array shape this module requires (same legacy hazard jobDescriptions
- * hit) and degrades garbage to an empty list.
+ * The list inside a stored or fetched value, or `null` when it is not one.
+ * Self-heals an id-keyed object map to the array shape this module requires
+ * (same legacy hazard jobDescriptions hit).
+ *
+ * `null` rather than `[]` for an unreadable value, because the callers below
+ * need opposite answers to it: a BOOT with nothing stored starts empty, while
+ * an ADOPTION that cannot read what it was told about must keep the list it
+ * has — see adoptStoredApplications.
  */
-export function initApplications() {
+function applicationsIn(raw) {
+  if (!raw) return null;
   try {
-    const stored = appStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      applications = Array.isArray(parsed)
-        ? parsed
-        : (parsed && typeof parsed === 'object' ? Object.values(parsed) : []);
-    } else {
-      applications = [];
-    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return parsed && typeof parsed === 'object' ? Object.values(parsed) : null;
   } catch (e) {
     console.error('Failed to load applications:', e);
-    applications = [];
+    return null;
   }
+}
+
+function readStoredApplications() {
+  return applicationsIn(appStorage.getItem(STORAGE_KEY));
+}
+
+/**
+ * Whether a fetched payload is one this module could adopt — asked by the sync
+ * layer BEFORE it writes the key (src/sync/syncModel.js, KEY_OWNERS).
+ *
+ * The same reader `adoptStoredApplications` uses, so the two cannot disagree
+ * about what "readable" means. That agreement is the whole point: a payload the
+ * adoption refuses but the write accepted sits on disk as garbage, and the next
+ * boot's `initApplications` degrades it to `[]` — which the first local save
+ * then persists and pushes up as a clean, uncontested update. Refusing before
+ * the write is what keeps absence from becoming deletion on DISK as well as in
+ * memory.
+ */
+export function landsAsApplications(payload) {
+  return applicationsIn(payload) !== null;
+}
+
+/**
+ * Initialize applications from storage, degrading garbage to an empty list.
+ */
+export function initApplications() {
+  applications = readStoredApplications() ?? [];
   notify();
   return applications;
+}
+
+/**
+ * Take the list `applyUnits` has just written to storage.
+ *
+ * The cache above is this module's whole truth: every mutation edits it and
+ * `save()` serializes it back over the key. So an applications list that
+ * arrived from another device lasted exactly until the next local change,
+ * which wrote the stale cache over it, stamped the unit, and — the transport
+ * legitimately holding the record's change tag, because the page had confirmed
+ * the apply — pushed the revert up as a clean, uncontested update. No conflict
+ * was raised and the other device's records were gone. Same trap as
+ * store.adoptDocument's, and the same answer: the owner adopts, rather than
+ * being written behind.
+ *
+ * `notify()` and not merely a cache swap: React reads this module through
+ * useSyncExternalStore (hooks/useApplications.js), so a corrected cache with no
+ * notification leaves the Library rendering a list that no longer exists.
+ *
+ * A value it cannot read leaves the cache alone — absence is never deletion,
+ * and one malformed remote unit must not empty someone's application history.
+ * The list this device holds is then still the one the next local write puts
+ * back on disk, so the bad bytes are corrected rather than inherited.
+ */
+/**
+ * The live note draft, if a card has one open — `{ isBusy() }`.
+ *
+ * The same shape `registerThreadHolder` uses, and needed for the same reason
+ * one level down. `DetailPane` seeds its `notes` state from the application and
+ * re-seeds it only when the id CHANGES, so a unit adopted for the id already on
+ * screen re-rendered the card while the textarea went on showing the pre-sync
+ * note — and the next keystroke wrote that stale text back over the adopted
+ * one, and stamped the overwrite as a fresh local change.
+ *
+ * Asked BEFORE the write, like the chat's: a refusal shortens `applied`, the
+ * transport forfeits the change tag, and the unit is re-offered once the draft
+ * is closed. Nothing is lost by waiting; the note on screen is the only copy of
+ * what the person is part-way through typing.
+ */
+// A SET, not the single slot `registerThreadHolder` uses. That one is a
+// singleton because there is exactly one chat; `DetailPane` renders a card per
+// application, so every one of them registers. Holding only the newest left
+// every other card invisible to the guard: focusing any but the last-mounted
+// one reported not-busy, sync adopted the list underneath it, and the next
+// keystroke wrote the stale note back. The chat's shape was right for the chat
+// and wrong here, which is only obvious once you look at the call site.
+const noteHolders = new Set();
+
+export function registerApplicationNoteHolder(next) {
+  if (!next || typeof next.isBusy !== 'function') return () => {};
+  noteHolders.add(next);
+  return () => { noteHolders.delete(next); };
+}
+
+/** Busy if ANY mounted card holds a live draft. */
+export function applicationNoteBusy() {
+  for (const holder of noteHolders) {
+    if (holder.isBusy?.() === true) return true;
+  }
+  return false;
+}
+
+export function adoptStoredApplications() {
+  const stored = readStoredApplications();
+  if (!stored) return;
+  applications = stored;
+  notify();
 }
 
 function save() {

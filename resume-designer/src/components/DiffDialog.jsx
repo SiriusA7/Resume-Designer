@@ -10,7 +10,9 @@ import { cn } from '@/lib/utils';
 
 import { DIFF_TYPES, getPathLabel } from '../diffEngine.js';
 import { applyChangeToStore, applyChangesToStore, selectUndecided } from '../changeApply.js';
+import { publishDiffReview } from '../iosShell.js';
 import * as changeSession from '../changeSession.js';
+import { store } from '../store.js';
 import { isSupersededSession } from '../changeSessionGuard.js';
 import {
   applyAllInlineChanges, applyInlineChange, hideInlineChanges, rejectInlineChange,
@@ -255,6 +257,30 @@ export default function DiffDialog() {
     [],
   );
 
+  // The document under the review being REPLACED by sync. The inline-change
+  // session ends itself on this, but a standalone review — Jobs' Tailor and
+  // History's compare, where `ownedRef` is false — has no session to end, so it
+  // stayed open and actionable against a résumé it was never computed from. If
+  // the fetched copy removed an anchored role, applying then falls back to the
+  // recorded index and edits whichever role moved up into it.
+  //
+  // Closed for owned sessions too: theirs has just been ended underneath them,
+  // and a dialog outliving its own session is the thing this avoids elsewhere.
+  //
+  // BOTH events, because there are two ways the document underneath changes and
+  // only one of them is an adoption. A tombstone for the open résumé does not
+  // adopt anything — it calls `loadVariant`, which reaches `store.setData` and
+  // emits 'dataLoaded'. `inlineChanges.js` ends its session on both for exactly
+  // this reason; a standalone review (Jobs' Tailor, History's compare) has no
+  // session to end, so before this it simply stayed open and actionable against
+  // a résumé that had been swapped out from under it.
+  //
+  // Only a document LOAD emits 'dataLoaded' — applying a change writes through
+  // `store.update`, so a review does not close itself on its own first Apply.
+  useEffect(() => store.subscribe((event) => {
+    if (event === 'documentAdopted' || event === 'dataLoaded') setOpen(false);
+  }), []);
+
   useEffect(() => changeSession.subscribe(() => {
     if (superseded()) {
       setOpen(false);
@@ -414,6 +440,32 @@ export default function DiffDialog() {
     close();
   }, [close, superseded]);
 
+  // --- native shell ---------------------------------------------------------
+  //
+  // On iOS this dialog is drawn by SwiftUI and its own card is hidden
+  // (native-shell.css). It still RUNS, and that is deliberate: every entry
+  // point — chat's Review changes, jobs tailoring, history compare, the inline
+  // Full review banner — arrives here, and so does the one correct apply
+  // sequence. The native buttons call the handlers below rather than
+  // reimplementing them, because a second apply route is how someone accepts
+  // an edit that was never applied.
+  useEffect(() => {
+    publishDiffReview(
+      open && changeSet
+        ? {
+          open: true,
+          title: 'Review changes',
+          // `getPathLabel` is what the card headings use; resolving it here
+          // keeps Swift from needing the résumé's path grammar.
+          changes: changeSet.changes.map((c) => ({ ...c, label: getPathLabel(c.path) })),
+          applied: [...applied],
+          rejected: [...rejected],
+        }
+        : null,
+      { applyChange, rejectChange, applyAll, rejectAll, close },
+    );
+  });
+
   // Keyboard shortcuts: A apply-next · R reject-next · Enter apply-all · Esc
   // close. Ignored while typing in an input/textarea. Esc is handled here (the
   // dialog uses no built-in close button) instead of Radix's onEscapeKeyDown so
@@ -461,6 +513,11 @@ export default function DiffDialog() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
+        // The hook native-shell.css hides this card by on iOS, where SwiftUI
+        // draws the review instead. An id rather than a class so it cannot be
+        // confused with the other web dialogs, which are still the real UI
+        // there.
+        id="diff-dialog-content"
         showCloseButton={false}
         className="flex h-[90vh] max-h-[90vh] w-[92vw] max-w-[760px] flex-col gap-0 overflow-hidden p-0 glass-card"
       >

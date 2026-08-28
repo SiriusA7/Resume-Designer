@@ -5,6 +5,7 @@ import {
   ChevronDown, Settings, FileDown, User, Briefcase, History, Menu, Check, Loader2, LibraryBig,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
@@ -101,6 +102,42 @@ export default function Header() {
     return () => window.removeEventListener('rd:pdf-busy', onPdfBusy);
   }, []);
 
+  // The native iOS chrome (src-tauri/ios/OPShell.swift, via src/iosShell.js)
+  // replaces this header on iPhone/iPad but has no dialogs of its own, so its
+  // Résumé menu asks THIS component to run the three flows it already owns: the
+  // rename dialog, the delete path (confirm + last-variant guard + orphaned
+  // chat-thread reassignment), and the file picker. Reimplementing the delete
+  // path natively is how a delete quietly leaves threads behind.
+  //
+  // A ref, not the handlers directly: they close over `list`/`currentName` and
+  // are rebuilt every render, so a dependency-free listener would keep calling
+  // the first render's copy and delete against a stale variant list.
+  const flowsRef = useRef({});
+  // The résumé the rename dialog was opened for. See `openRename`.
+  const renameTargetRef = useRef(null);
+  useEffect(() => {
+    const run = (key) => () => flowsRef.current[key]?.();
+    const handlers = {
+      'rd:variant-rename': run('openRename'),
+      'rd:variant-delete': run('handleDelete'),
+      'rd:variant-import': run('pickImport'),
+      // iOS picks the file NATIVELY and sends its text: the hidden
+      // `<input type="file">` above does nothing in WKWebView, so the menu item
+      // accepted a tap and never supplied a file. A File is built from the text
+      // so the whole existing pipeline — including the grouping confirm — runs
+      // unchanged rather than being written a second time for one platform.
+      'rd:variant-import-text': (e) => {
+        const { text, name } = e.detail || {};
+        if (typeof text !== 'string' || !text) return;
+        importPicked(new File([text], name || 'resume.json', { type: 'application/json' }));
+      },
+    };
+    for (const [name, fn] of Object.entries(handlers)) window.addEventListener(name, fn);
+    return () => {
+      for (const [name, fn] of Object.entries(handlers)) window.removeEventListener(name, fn);
+    };
+  }, []);
+
   const host = typeof document !== 'undefined' ? document.getElementById('header-bar') : null;
   if (!host) return null;
 
@@ -109,30 +146,53 @@ export default function Header() {
   const newVariant = () => window.showOnboardingWizard?.({ skipApiKeyStep: true });
   const openRename = () => {
     setRenameValue(currentName);
+    // Pinned, exactly as the delete below is. The dialog stays open as long as
+    // the person keeps typing, and a focused rename field is not an inline
+    // editing session — so `isBusyEditing` lets sync through, another device's
+    // tombstone for this résumé loads a replacement, and
+    // `renameCurrentVariant` puts this résumé's new name on that one.
+    renameTargetRef.current = getCurrentId();
     setRenameOpen(true);
   };
   const submitRename = (e) => {
     e.preventDefault();
+    if (getCurrentId() !== renameTargetRef.current) {
+      setRenameOpen(false);
+      toast.error(`"${currentName}" is no longer open — nothing was renamed.`);
+      return;
+    }
     if (renameCurrentVariant(renameValue)) setRenameOpen(false);
   };
-  const pickImport = () => importInputRef.current?.click();
+  const pickImport = () => {
+    // On iOS the shell picks natively and sends the TEXT; without the shell this
+    // input is dead in WKWebView, so say so rather than accept the tap and do
+    // nothing. See filePickGuard.
+    const blocked = filePickBlockedReason();
+    if (blocked) { toast.error(blocked); return; }
+    importInputRef.current?.click();
+  };
   const onImportChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      importVariant(file, {
-        confirmGrouping: (runCount) => confirmDestructive({
-          title: runCount === 1
-            ? '1 employer has more than one role'
-            : `${runCount} employers have more than one role`,
-          description: 'Group each employer’s roles under a single company heading? Keep them separate if any of them are return stints rather than promotions.',
-          actionLabel: 'Group',
-          cancelLabel: 'Keep separate',
-          destructive: false,
-        }),
-      });
+      importPicked(file);
       e.target.value = ''; // allow re-importing the same file
     }
   };
+
+  /** One import path for both pickers — the web input and the native one. */
+  function importPicked(file) {
+    importVariant(file, {
+      confirmGrouping: (runCount) => confirmDestructive({
+        title: runCount === 1
+          ? '1 employer has more than one role'
+          : `${runCount} employers have more than one role`,
+        description: 'Group each employer’s roles under a single company heading? Keep them separate if any of them are return stints rather than promotions.',
+        actionLabel: 'Group',
+        cancelLabel: 'Keep separate',
+        destructive: false,
+      }),
+    });
+  }
 
   // deleteCurrentVariant() is unconditional now (the confirm was lifted out of
   // variantManager into the caller), so the Header owns the confirmation + the
@@ -142,12 +202,19 @@ export default function Header() {
       toast.info("You can't delete your only resume.");
       return;
     }
+    // PINNED before either prompt. Both are unbounded waits, and
+    // `deleteCurrentVariant` deletes whatever is current when it finally runs —
+    // which is not necessarily what was named in the dialog. A CloudKit
+    // tombstone for the open résumé makes `setResumeDeletedHandler` load a
+    // replacement, so confirming afterwards deleted the résumé the person never
+    // selected, having already reassigned the ORIGINAL's chat threads.
+    const targetId = getCurrentId();
     // If the resume has chat threads, ask whether to keep (→General) or delete
     // them, and reassign BEFORE deleteCurrentVariant() so the id still exists.
     // After delete, loadVariant(newId) fires dataLoaded and useChat's follow
     // effect reloads threads, so the change is reflected automatically.
     const { cancelled, hadThreads } = await handleVariantThreadsForDelete({
-      variantId: getCurrentId(),
+      variantId: targetId,
       variantName: currentName,
     });
     if (cancelled) return;
@@ -159,8 +226,20 @@ export default function Header() {
       });
       if (!ok) return;
     }
+    // REFUSED rather than redirected. Deleting `targetId` by id instead would
+    // mean a second delete route beside `deleteCurrentVariant`, which owns the
+    // last-variant guard and the reload of what replaces it — and the case this
+    // catches is one where the résumé is already gone from under us, so there
+    // is nothing left to delete anyway.
+    if (getCurrentId() !== targetId) {
+      toast.error(`"${currentName}" is no longer open — nothing was deleted.`);
+      return;
+    }
     deleteCurrentVariant();
   };
+
+  // Latest closures for the native-chrome listeners registered above.
+  flowsRef.current = { openRename, handleDelete, pickImport };
 
   // Variant action items reused by the expanded icon buttons, the kebab menu, and
   // the mobile hamburger. Delete is flagged `danger` and runs handleDelete, which

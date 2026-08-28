@@ -7,7 +7,13 @@ release/
 
 # Tauri / Rust
 src-tauri/target/
-src-tauri/gen/
+# `gen/` is generated output EXCEPT for the Apple project: the SwiftUI shell
+# lives in that Xcode project, so it is committed source and `tauri ios init`
+# is a change we review rather than accept. Its own
+# `src-tauri/gen/apple/.gitignore` still excludes build/, Externals/ and
+# xcuserdata/. See docs/ios/xcode-project-ownership.md.
+src-tauri/gen/*
+!src-tauri/gen/apple
 
 # Environment files
 .env

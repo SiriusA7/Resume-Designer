@@ -1,0 +1,20 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Loose Leaf: ink disc, two voids in conversation — a stem and a departed bowl.
+       Disc c(512,512) r340. Stem stadium x[294,424] w130, y 322 to 702, caps r65
+       c(359,387) and c(359,637). Dot void c(610,452) r120. Field bridge between them = 66.
+       Combined void bbox x[294,730] y[322,702], centred on (512,512). -->
+  <path fill="#0C0A08" fill-rule="evenodd" d="
+    M 852,512
+    A 340,340 0 1 1 172,512
+    A 340,340 0 1 1 852,512
+    Z
+    M 294,387
+    A 65,65 0 0 1 424,387
+    L 424,637
+    A 65,65 0 0 1 294,637
+    Z
+    M 730,452
+    A 120,120 0 1 1 490,452
+    A 120,120 0 1 1 730,452
+    Z" />
+</svg>

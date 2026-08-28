@@ -25,6 +25,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
 import { confirmDestructive } from '@/components/ui/confirm';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
 // Structure panel — restyled onto genuine shadcn primitives + Tailwind for the
@@ -173,6 +174,33 @@ function SectionContentList({ sectionIndex, content }) {
   );
 }
 
+/**
+ * Where `item` sits in `data[path]` NOW, or -1 if it is gone.
+ *
+ * A destructive confirm is an UNBOUNDED wait and `index` is a POSITION, so
+ * anything that replaces the array while the dialog is up leaves it aimed at a
+ * different row. Two things do. Cmd+Z: main.js binds undo at document level and
+ * skips only text inputs, and a Radix alert focuses a button, so undo fires
+ * straight through the dialog and swaps `data` for a previous version. And on
+ * iOS `store.adoptDocument`, which takes a fetched résumé while `isBusyEditing`
+ * sees neither a dirty flag nor an inline-editing session — an open confirm is
+ * neither.
+ *
+ * `ExperienceDateEditorHost` already refuses to commit a stale index for the
+ * first of those, for exactly this reason. This is the same refusal for the two
+ * deletes, which are worse: they are not recoverable by retyping.
+ */
+function currentIndexOf(path, item, fallbackIndex) {
+  const list = store.getDataRef()?.[path];
+  if (!Array.isArray(list)) return -1;
+  // By id where there is one. Undo restores a CLONE, so object identity does
+  // not survive it and the id is the only thing that does.
+  if (item?.id) return list.findIndex((entry) => entry?.id === item.id);
+  // Documents older than the ids. Reference equality still catches both cases
+  // above, because both replace the array wholesale rather than editing it.
+  return list[fallbackIndex] === item ? fallbackIndex : -1;
+}
+
 function SectionItem({ section, index, activeLayout }) {
   const type = ['skills', 'paragraph'].includes(section?.type) ? section.type : 'list';
   const removeSection = async () => {
@@ -181,7 +209,13 @@ function SectionItem({ section, index, activeLayout }) {
       description: 'The section and its items will be permanently removed from this resume.',
       actionLabel: 'Delete',
     });
-    if (ok) store.removeFromArray('sections', index);
+    if (!ok) return;
+    const at = currentIndexOf('sections', section, index);
+    if (at < 0) {
+      toast.error('That section is not there any more — nothing was deleted.');
+      return;
+    }
+    store.removeFromArray('sections', at);
   };
   return (
     <SortableItem id={section.id || `section-${index}`} className="space-y-2.5 rounded-[9px] border bg-background p-2.5">
@@ -345,7 +379,13 @@ function ExperienceItem({ exp, index, group, isLead, isRunMember, canLinkAbove, 
       description: 'The experience entry will be permanently removed from this resume.',
       actionLabel: 'Delete',
     });
-    if (ok) store.removeFromArray('experience', index);
+    if (!ok) return;
+    const at = currentIndexOf('experience', exp, index);
+    if (at < 0) {
+      toast.error('That entry is not there any more — nothing was deleted.');
+      return;
+    }
+    store.removeFromArray('experience', at);
   };
   const bulletIds = (exp.bullets || []).map((_, i) => `b-${index}-${i}`);
   return (

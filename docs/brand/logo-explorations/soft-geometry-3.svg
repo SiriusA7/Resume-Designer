@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Soft geometry 3 — vessel and level (the ORO idea): organic ring stroked
+       60 wide on centreline radii 314/304/310/300/312/306 about (512,506);
+       the pool is the region below a gently tilted S-curve waterline whose
+       endpoints (227.6,588) and (791.3,604) sit on the r=296 circle, closed
+       by an r=296 arc that hides under the ring stroke, so the visible pool
+       edge is the ring's own wobbling inner contour. Pool drawn first, ring
+       painted over it. -->
+  <rect width="1024" height="1024" fill="#0C0A08"/>
+  <path fill="#F4EFE6" d="M 227.6 588 C 410 548 610 640 791.3 604 A 296 296 0 0 1 227.6 588 Z"/>
+  <path fill="none" stroke="#F4EFE6" stroke-width="60" d="M 826.0 506.0 C 826.0 618.2 758.1 715.0 664.0 769.3 C 569.9 823.6 452.9 829.8 357.0 774.5 C 261.1 719.1 212.0 613.2 212.0 506.0 C 212.0 398.8 259.5 291.5 356.0 235.8 C 452.5 180.1 570.3 186.3 665.0 241.0 C 759.7 295.7 826.0 393.8 826.0 506.0 Z"/>
+</svg>

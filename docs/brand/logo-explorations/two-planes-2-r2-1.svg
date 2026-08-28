@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Restated r2-1 "Stated Equal": interval and weight. The equality is moved to where
+       the eye measures it — silhouettes. Disc r202 vs ring OUTER r200 (centreline 170,
+       stroke 60); the +2 is irradiation compensation, a solid reads slightly smaller
+       than an outline of equal diameter. Parent's silhouettes were 380 vs 444.
+       Gap 34 -> 40 (halo r = 202+40 = 242) so the interval holds 0.63px at 16px.
+       Offset (+232,-232), d = 328.1: hidden centreline arc
+       2*acos((328.1^2+170^2-242^2)/(2*328.1*170)) = 91.3 deg — a clean quarter of the
+       ring behind the page. Ink extents x[195,829] y[183,817]: bbox centre (512,500),
+       corrected from the parent's (546,478) — horizontal error 34 -> 0, vertical set
+       12 above geometric centre (1.17% of canvas). -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="629" cy="383" r="170" fill="none" stroke="#0C0A08" stroke-width="60"/>
+  <circle cx="397" cy="615" r="242" fill="#F4EFE6"/>
+  <circle cx="397" cy="615" r="202" fill="#0C0A08"/>
+</svg>

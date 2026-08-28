@@ -1,8 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   importFullBackupFromEnvelope, importFullBackupMerge, credentialFromEnvelope,
+  setRestoreStampHandler, commitRestoredUnits,
 } from '../src/persistence.js';
 import { OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
+import { stampRestoredWrites } from '../src/sync/syncModel.js';
+import { clearableKeys } from '../src/sync/clearedPayloads.js';
+
+// Every key a replacement restore clears for a RETAINED workspace, DERIVED
+// rather than listed: the restore enumerates the clearable set rather than
+// reading what happens to be on disk, so a key added to that map has to show up
+// here or the map and the restore have silently diverged.
+const CLEARED_UNITS = clearableKeys().map((k) => `key:${k}`);
+
+// A replacement restore NORMALISES the blob's two data fields: `settings` and
+// `userProfile` absent from a backup mean "the defaults", and the restore writes
+// them so that reset has a unit to travel as — an absent field announces
+// nothing, so the server's copy would otherwise come back.
+const blobWithoutDefaults = (raw) => {
+  const { settings: _s, userProfile: _u, ...rest } = JSON.parse(raw);
+  return JSON.stringify(rest);
+};
 
 beforeEach(() => {
   localStorage.clear();
@@ -284,7 +302,7 @@ describe('importFullBackupFromEnvelope', () => {
         'evil-key': 'pwned',
       },
     });
-    expect(localStorage.getItem('resume-designer-data')).toBe('{"summary":"hi"}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-designer-data'))).toBe('{"summary":"hi"}');
     expect(localStorage.getItem('evil-key')).toBeNull();
     expect(result.keysImported).toBe(1);
   });
@@ -296,7 +314,7 @@ describe('importFullBackupFromEnvelope', () => {
       keys: { 'resume-designer-data': '{}' },
     });
     expect(localStorage.getItem('resume-zoom')).toBeNull();
-    expect(localStorage.getItem('resume-designer-data')).toBe('{}');
+    expect(blobWithoutDefaults(localStorage.getItem('resume-designer-data'))).toBe('{}');
   });
 
   // Legacy Electron stores can hold job descriptions as an id-keyed object map
@@ -408,5 +426,374 @@ describe('import quota rollback', () => {
     expect(localStorage.getItem('resume-designer-data')).toBe('{"mine":true}');
     expect(localStorage.getItem('resume-zoom')).toBe('1.25');
     expect(localStorage.getItem('resume-designer-job-descriptions')).toBeNull();
+  });
+});
+
+// `resume-designer-sync-state` is in BACKUP_FIXED_KEYS because the per-unit
+// modification stamps in it are genuinely per-profile data a backup has to
+// carry. It also holds this device's `deviceId` — and seeding a second device
+// from the first's backup is the natural migration path, one the iOS Settings
+// sheet actively offers. Both devices then claimed the SAME origin id, and
+// store.js scopes undo by origin ("undo traverses only this device's own
+// steps"), so that invariant silently stopped holding between exactly the two
+// devices most likely to be syncing with each other.
+//
+// Dropped on the way IN rather than on the way out: the backups that can carry
+// a foreign id already exist, so only the receiving device can fix them — and
+// only the receiving device is the one that must not clone. Nothing MINTS an id
+// here; store.js's one-time memo is the single writer of that field and stays
+// so, which is why there is no second generator to race it.
+describe('the device identity in a restored sync-state key', () => {
+  const SYNC_STATE = 'resume-designer-sync-state';
+  const FOREIGN = 'device-theotherphone';
+  const sourceState = () => JSON.stringify({
+    deviceId: FOREIGN,
+    'resume:v-1': { modifiedAt: '2026-08-09T00:00:00.000Z' },
+    'key:resume-designer-applications': { modifiedAt: '2026-08-10T00:00:00.000Z' },
+  });
+  const storedState = () => JSON.parse(localStorage.getItem(SYNC_STATE));
+
+  // FIRST in this file to touch the store, deliberately: `deviceOrigin` memoises
+  // for the process, so a later test could not observe the mint. The
+  // `typeof … === 'string'` assertion is what makes a future reordering fail
+  // loudly instead of passing vacuously.
+  it('format 1: mints a different id than the backup carried, and keeps the stamps', async () => {
+    const { store } = await import('../src/store.js');
+
+    importFullBackupFromEnvelope({ backupFormat: 1, keys: { [SYNC_STATE]: sourceState() } });
+
+    // The import itself carries the foreign id nowhere.
+    expect(storedState().deviceId).toBeUndefined();
+
+    // Anything that records a step asks store.js for this device's origin, and
+    // that is the one thing that writes the field.
+    store.setData({}, true);
+
+    const after = storedState();
+    expect(typeof after.deviceId).toBe('string');
+    expect(after.deviceId.length).toBeGreaterThan(0);
+    expect(after.deviceId).not.toBe(FOREIGN);
+    // The rest of the key is per-profile data the backup is right to carry, and
+    // it survives both the import and the mint.
+    expect(after['resume:v-1']).toEqual({ modifiedAt: '2026-08-09T00:00:00.000Z' });
+    expect(after['key:resume-designer-applications'])
+      .toEqual({ modifiedAt: '2026-08-10T00:00:00.000Z' });
+  });
+
+  it('format 2: drops it per profile, and keeps that profile’s stamps', () => {
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pa', name: 'A' }, { id: 'pb', name: 'B' }],
+      activeProfile: 'pa',
+      shared: {},
+      profiles: {
+        pa: { keys: { [SYNC_STATE]: sourceState() } },
+        pb: { keys: { [SYNC_STATE]: sourceState() } },
+      },
+    });
+
+    for (const pid of ['pa', 'pb']) {
+      const stored = JSON.parse(localStorage.getItem(`resume-p--${pid}--${SYNC_STATE}`));
+      expect(stored.deviceId).toBeUndefined();
+      expect(stored['resume:v-1']).toEqual({ modifiedAt: '2026-08-09T00:00:00.000Z' });
+    }
+  });
+
+  it('merge: drops it when the incoming key lands in a gap', () => {
+    // The merge path writes an incoming owned key verbatim whenever this device
+    // has none — the one branch that does not go through the replace paths'
+    // normalizer.
+    importFullBackupMerge({ backupFormat: 1, keys: { [SYNC_STATE]: sourceState() } });
+
+    const stored = storedState();
+    expect(stored.deviceId).toBeUndefined();
+    expect(stored['resume:v-1']).toEqual({ modifiedAt: '2026-08-09T00:00:00.000Z' });
+  });
+
+  it('leaves an unparseable sync-state value alone rather than dropping it', () => {
+    // Still the user's data, and not a value this app could have read an id out
+    // of — the same rule withoutStoredCredentials follows for a blob that will
+    // not parse.
+    importFullBackupFromEnvelope({ backupFormat: 1, keys: { [SYNC_STATE]: '{ not json' } });
+    expect(localStorage.getItem(SYNC_STATE)).toBe('{ not json');
+  });
+});
+
+describe('a replacement restore deletes what it omits, and says so', () => {
+  // A restore that replaces a synced workspace is a DELETION for anything it
+  // leaves out — but it writes a new blob and a new registry rather than going
+  // through `deleteVariant`/`deleteProfile`, so nothing produced the tombstone
+  // that makes a deletion travel. Absence alone reads as "keep the local copy"
+  // on every other device, and the next fetch hands the removed thing back.
+  const DATA = 'resume-designer-data';
+
+  it('tombstones a résumé the backup leaves out', () => {
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { keep: { id: 'keep', name: 'Kept' }, gone: { id: 'gone', name: 'Dropped' } },
+    }));
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: { keep: { id: 'keep', name: 'Kept' } } }) } } },
+    });
+
+    const blob = JSON.parse(localStorage.getItem(`resume-p--pmine--${DATA}`));
+    expect(blob.variants.keep.name).toBe('Kept');
+    expect(blob.variants.gone.deletedAt).toEqual(expect.any(String));
+    expect(blob.variants.gone.data).toBeUndefined();
+  });
+
+  it('tombstones a dropped résumé on the FORMAT-1 path too', () => {
+    // Format 1 has no registry and writes the blob directly, so it needed the
+    // rule stated separately. A replacement restore is still a deletion for
+    // what it omits, whichever envelope carries it.
+    localStorage.setItem(DATA, JSON.stringify({
+      variants: { keep: { id: 'keep', name: 'Kept' }, gone: { id: 'gone', name: 'Dropped' } },
+    }));
+
+    importFullBackupFromEnvelope({
+      backupFormat: 1,
+      keys: { [DATA]: JSON.stringify({ variants: { keep: { id: 'keep', name: 'Kept' } } }) },
+    });
+
+    const blob = JSON.parse(localStorage.getItem(DATA));
+    expect(blob.variants.keep.name).toBe('Kept');
+    expect(blob.variants.gone.deletedAt).toEqual(expect.any(String));
+  });
+
+  it('tombstones a workspace whose blob the backup omits entirely', () => {
+    // A backup can represent a workspace as EMPTY by carrying no blob for it.
+    // The wipe removes the résumés locally and no write happens for that
+    // profile at all — so driving the tombstones off the INCOMING entries meant
+    // every one of those CloudKit records outlived the restore and the next
+    // fetch brought the whole workspace back.
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { a: { id: 'a', name: 'One' }, b: { id: 'b', name: 'Two' } },
+    }));
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: {},
+    });
+
+    const blob = JSON.parse(localStorage.getItem(`resume-p--pmine--${DATA}`));
+    expect(blob.variants.a.deletedAt).toEqual(expect.any(String));
+    expect(blob.variants.b.deletedAt).toEqual(expect.any(String));
+  });
+
+  it('stamps and announces the tombstones it writes', () => {
+    // Bytes are not enough. The restore writes the blob under its PHYSICAL key,
+    // which the interceptor classifies 'unknown', so nothing is stamped or
+    // queued — and the restore also replaces that workspace's stamp table with
+    // the backup's, which has no entry for a résumé the backup never knew. The
+    // tombstone then reads as -Infinity against the remote's real stamp, the
+    // live copy wins, and the deletion undoes itself on the next fetch.
+    // The REAL stamper, not a capturing fake. A fake proves only that the
+    // handler was called, which was true in all four versions of this that
+    // shipped inert; the real one computes the unit ids from the bytes.
+    const stamped = [];
+    const announced = [];
+    setRestoreStampHandler(
+      (profileId, writes) => {
+        const ids = stampRestoredWrites(profileId, writes);
+        stamped.push([profileId, ids]);
+        return ids;
+      },
+      (profileId, unitIds) => announced.push([profileId, unitIds]),
+    );
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { gone: { id: 'gone', name: 'Dropped' } },
+    }));
+
+    const result = importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+    });
+
+    // STAMPED by the import itself, because the stamp is an appStorage write and
+    // the durable wrapper arms the restore guard the moment this returns — a
+    // guard that defers every other writer, and the reload the restore ends with
+    // discards what it deferred.
+    // The shared registry write is a synced unit too — it carries the profile
+    // tombstones for any workspace the backup omits — so it is named under the
+    // '' workspace alongside the résumé tombstone in pmine's.
+    // The backup's blob carries no `settings` or `userProfile`, so both reset to
+    // their defaults and travel as units — see "resets a data FIELD the backup's
+    // blob omits" in syncStamping.test.js.
+    expect(stamped).toEqual([
+      ['', ['key:resume-designer-profiles']],
+      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
+    ]);
+    // NOT announced there. In cached mode nothing in the import throws, so
+    // naming the deletions at that point uploads them for a restore that may
+    // still be rolled back, and a rollback cannot recall them. The durable
+    // wrapper commits them once the flush has answered.
+    expect(announced).toEqual([]);
+    commitRestoredUnits(result.restoredUnits);
+    setRestoreStampHandler(null);
+    expect(announced).toEqual([
+      ['', ['key:resume-designer-profiles']],
+      ['pmine', ['resume:gone', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
+    ]);
+  });
+
+  it('keeps tombstones for the SAME résumé id in two workspaces', () => {
+    // The same id lives in two workspaces as soon as one backup was imported
+    // into both. Collected by unit id alone, the second overwrote the first and
+    // one of the two deletions was never stamped — the identity mistake this
+    // branch has already corrected in `pendingDirty`, `syncOutstanding` and
+    // `syncRecovered`, made once more.
+    const stamped = [];
+    setRestoreStampHandler((profileId, writes) => {
+      const ids = stampRestoredWrites(profileId, writes);
+      stamped.push([profileId, ids]);
+      return ids;
+    });
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pone', name: 'One', emoji: '🙂', createdAt: 'x' },
+      { id: 'ptwo', name: 'Two', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pone');
+    for (const pid of ['pone', 'ptwo']) {
+      localStorage.setItem(`resume-p--${pid}--${DATA}`, JSON.stringify({
+        variants: { shared: { id: 'shared', name: 'Same id both sides' } },
+      }));
+    }
+
+    const result = importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [
+        { id: 'pone', name: 'One', emoji: '🙂' },
+        { id: 'ptwo', name: 'Two', emoji: '🙂' },
+      ],
+      activeProfile: 'pone',
+      shared: {},
+      profiles: {},
+    });
+    commitRestoredUnits(result.restoredUnits);
+    setRestoreStampHandler(null);
+
+    // Each workspace's data fields reset alongside its tombstone, because the
+    // backup carries no blob for either — see "RESETS the data fields for a
+    // workspace the backup omits" in syncStamping.test.js.
+    expect(stamped.sort()).toEqual([
+      ['', ['key:resume-designer-profiles']],
+      ['pone', ['resume:shared', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
+      ['ptwo', ['resume:shared', 'data:settings', 'data:userProfile', ...CLEARED_UNITS]],
+    ]);
+  });
+
+  it('FAILS the restore when the stamping throws, instead of persisting it unstamped', () => {
+    // The stamp is not incidental bookkeeping here — it is what makes the
+    // restored content outrank what the server still holds. Suppressed, the
+    // restore is reported as successful, persisted, and unstamped, so the next
+    // fetch reads it as -Infinity and overwrites it with the very records it
+    // just replaced. A QuotaExceededError is the plausible trigger: passthrough
+    // mode's `setItem` throws synchronously, and the sync-state key is written
+    // last, when the store is at its fullest.
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem(`resume-p--pmine--${DATA}`, JSON.stringify({
+      variants: { keep: { id: 'keep', name: 'Mine' } },
+    }));
+    setRestoreStampHandler(() => { throw new Error('QuotaExceededError'); });
+
+    expect(() => importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: { pmine: { keys: { [DATA]: JSON.stringify({ variants: {} }) } } },
+    })).toThrow(/quota/i);
+    setRestoreStampHandler(null);
+
+    // Rolled back, not half-applied: the workspace still holds what it did.
+    const blob = JSON.parse(localStorage.getItem(`resume-p--pmine--${DATA}`));
+    expect(blob.variants.keep.name).toBe('Mine');
+    expect(blob.variants.keep.deletedAt).toBeUndefined();
+  });
+
+  it('keeps a tombstone the backup leaves out, instead of tidying it away', () => {
+    // The tombstone is the ONLY thing standing between a deletion and a device
+    // that still holds the live entry: `mergeRegistry` unions, so an entry this
+    // device stops carrying is simply re-adopted from the other one and the
+    // workspace comes back. Dropping an already-tombstoned profile looks like
+    // tidying — it is gone, and the backup does not mention it — and is how the
+    // deletion gets undone by the very device that performed it.
+    const deletedAt = '2020-01-01T00:00:00.000Z';
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+      { id: 'pgone', name: 'Deleted a while ago', emoji: '🙂', createdAt: 'x', deletedAt, updatedAt: deletedAt },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: {},
+    });
+
+    const registry = JSON.parse(localStorage.getItem('resume-designer-profiles'));
+    const gone = registry.find((p) => p.id === 'pgone');
+    expect(gone).toBeDefined();
+    // Carried across VERBATIM, not re-stamped: the deletion happened when it
+    // happened, and moving its time forward would have it win arguments it
+    // should not.
+    expect(gone.deletedAt).toBe(deletedAt);
+  });
+
+  it('tombstones a workspace the backup leaves out', () => {
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x' },
+      { id: 'pgone', name: 'Old', emoji: '🙂', createdAt: 'x' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+
+    importFullBackupFromEnvelope({
+      backupFormat: 2,
+      kind: 'full',
+      registry: [{ id: 'pmine', name: 'Ash', emoji: '🙂' }],
+      activeProfile: 'pmine',
+      shared: {},
+      profiles: {},
+    });
+
+    const registry = JSON.parse(localStorage.getItem('resume-designer-profiles'));
+    expect(registry.find((p) => p.id === 'pmine').deletedAt).toBeUndefined();
+    // Present and tombstoned, not merely absent: `mergeRegistry` is a union, so
+    // an absent entry is "keep the local one" on every other device.
+    expect(registry.find((p) => p.id === 'pgone').deletedAt).toEqual(expect.any(String));
   });
 });

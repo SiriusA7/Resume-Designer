@@ -126,7 +126,14 @@ Full build, signing, notarization, and release details are in [`resume-designer/
 
 ## Contributing
 
-Issues and pull requests are welcome. For anything substantial, please open an issue first to discuss the approach. By contributing, you agree your contributions are licensed under the project's CC BY-NC-SA 4.0 license.
+Issues and pull requests are welcome. For anything substantial, please open an issue first to discuss the approach.
+
+By contributing, you agree to both of the following:
+
+- **Everyone receives your contribution under CC BY-NC-SA 4.0** — the same license as the rest of the project.
+- **The project's copyright holder** (identified in [`LICENSE`](LICENSE)), **and their successors and assigns, additionally receive a perpetual, worldwide, non-exclusive, irrevocable, sublicensable license** to use, modify, and distribute your contribution under any terms, including in binaries distributed through app stores.
+
+You keep the copyright in your work. The second grant exists for one specific reason: CC BY-NC-SA forbids applying DRM or additional terms to the licensed material, and every app store does both. Without it, a single merged contribution would make On Paper impossible to ship through the App Store. The grant is non-exclusive and takes nothing away from the first one.
 
 ## License
 

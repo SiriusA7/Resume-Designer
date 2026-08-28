@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Restated: the same circle stated twice — once as substance, once as contour.
+       Ring c(650,374), centreline r190, stroke 64, drawn FIRST. Solid disc c(410,614)
+       r190 in front, carrying a Paper halo disc r224 (= 190 + 34 gap) beneath it, so
+       the ring passes BEHIND the disc: centres offset (+240,-240), d=339.4, and the
+       ring centreline is hidden where within 224 of the disc centre — an arc of
+       2*acos((d^2+190^2-224^2)/(2*d*190)) = ~77deg, emerging each side across a
+       crisp 34-unit gap. Ink extents x[220,872] y[152,804]; ring outer edge r222. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="650" cy="374" r="190" fill="none" stroke="#0C0A08" stroke-width="64"/>
+  <circle cx="410" cy="614" r="224" fill="#F4EFE6"/>
+  <circle cx="410" cy="614" r="190" fill="#0C0A08"/>
+</svg>

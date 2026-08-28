@@ -4,13 +4,18 @@ import {
 } from '../src/appStorage.js';
 import { __resetSecretStoreForTests, initSecretStore, getSecret } from '../src/secretStore.js';
 import {
-  loadRegistry, getActiveProfileId, setActiveProfile,
-  createProfile, renameProfile, deleteProfile,
+  loadRegistry, listProfiles, getActiveProfileId, setActiveProfile,
+  createProfile, renameProfile, deleteProfile, exportProfileBackup,
   ensureProfilesInitialized, extractSharedApiKey, isAdoptionPending, hasProfileNamespaces,
-  activateProfileMappingForPrint,
+  isInitialProfileFetchPending,
+  activateProfileMappingForPrint, markInitialProfileFetchSettled,
+  whenInitialProfileFetchSettled,
 } from '../src/profiles.js';
-import { PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY } from '../src/profileKeys.js';
+import {
+  PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY, physicalKey,
+} from '../src/profileKeys.js';
 import { getSettings, saveSettings, saveApiKey } from '../src/persistence.js';
+import { shouldShowOnboarding } from '../src/onboarding.js';
 
 beforeEach(() => {
   __resetAppStorageForTests();
@@ -123,8 +128,91 @@ describe('registry CRUD', () => {
     expect(() => deleteProfile(a.id)).toThrow(/active/i);
     deleteProfile(b.id);
     expect(appStorage.keys().some((k) => k.includes(b.id))).toBe(false);
-    expect(loadRegistry()).toHaveLength(1);
-    expect(() => deleteProfile(a.id)).toThrow(); // last remaining
+    // Tombstoned, not dropped: the raw registry still carries b's entry (a
+    // union merge would otherwise resurrect it), but it is hidden from the
+    // listing a person sees.
+    expect(loadRegistry()).toHaveLength(2);
+    expect(loadRegistry().find((p) => p.id === b.id).deletedAt).toEqual(expect.any(String));
+    expect(listProfiles()).toHaveLength(1);
+    // Names the guard, not merely "something threw". A bare toThrow() here
+    // survived the guard changing from counting raw entries to counting
+    // visible ones — the branch that fires and the message both changed, and
+    // the assertion could not tell. Raw count is 2 and visible is 1 at this
+    // point, so this is exactly where the two guards disagree.
+    expect(() => deleteProfile(a.id)).toThrow(/last profile/i);
+  });
+});
+
+describe('registry entry stamps', () => {
+  it('stamps updatedAt on rename', () => {
+    const created = createProfile({ name: 'Work' });
+    expect(created.updatedAt).toBeUndefined();
+    renameProfile(created.id, { name: 'Renamed' });
+    const entry = loadRegistry().find((p) => p.id === created.id);
+    expect(entry.name).toBe('Renamed');
+    expect(typeof entry.updatedAt).toBe('string');
+  });
+
+  it('tombstones on delete instead of dropping the entry', () => {
+    createProfile({ name: 'Keep' }); // deleteProfile refuses to drop the last profile
+    const created = createProfile({ name: 'Doomed' });
+    deleteProfile(created.id);
+    const entry = loadRegistry().find((p) => p.id === created.id);
+    expect(entry).toBeDefined();
+    expect(typeof entry.deletedAt).toBe('string');
+    expect(typeof entry.updatedAt).toBe('string');
+  });
+
+  it('hides tombstoned profiles from the listing', () => {
+    const kept = createProfile({ name: 'Kept' });
+    const gone = createProfile({ name: 'Gone' });
+    deleteProfile(gone.id);
+    const ids = listProfiles().map((p) => p.id);
+    expect(ids).toContain(kept.id);
+    expect(ids).not.toContain(gone.id);
+  });
+
+  // Regression: the last-profile guard used to count the raw registry array,
+  // which was equivalent to "visible profiles" before tombstones stuck
+  // around. With a tombstone present the raw count no longer reflects what a
+  // person can see, so it must count listProfiles() instead — otherwise the
+  // guard stops firing once any tombstone exists and the last visible profile
+  // becomes deletable, leaving listProfiles() empty with no path back.
+  //
+  // Neither profile here is active, so the active-profile guard cannot be
+  // what blocks the second delete — only the last-VISIBLE-profile guard can.
+  it('still refuses to delete the last visible profile when a tombstone is present', () => {
+    const ghost = createProfile({ name: 'Ghost' });
+    const solo = createProfile({ name: 'Solo' });
+    deleteProfile(ghost.id); // 2 live profiles at this point -> guard allows it
+    expect(loadRegistry()).toHaveLength(2); // ghost's tombstone still occupies a slot
+    expect(listProfiles()).toHaveLength(1); // but only solo is visible
+
+    expect(() => deleteProfile(solo.id)).toThrow(/last profile/i);
+    expect(listProfiles()).toHaveLength(1);
+    expect(listProfiles()[0].id).toBe(solo.id);
+  });
+
+  // Regression: before tombstoning, a deleted profile's entry was gone from
+  // the registry outright, so setActiveProfile could never target it. Now the
+  // entry still physically exists (deletedAt set) — validation must check
+  // listProfiles(), not the raw registry, or a person could switch back into
+  // a workspace they just deleted.
+  it('setActiveProfile refuses a tombstoned profile', () => {
+    const { b } = seedRegistry(); // a is active, b is not
+    deleteProfile(b.id);
+    expect(() => setActiveProfile(b.id)).toThrow();
+  });
+
+  // Same regression, for export: a tombstoned entry's physical keys are
+  // already gone, so finding it in the raw registry would silently produce
+  // an empty backup instead of the "unknown profile" error a stale id
+  // deserves.
+  it('exportProfileBackup refuses a tombstoned profile', () => {
+    const { b } = seedRegistry();
+    deleteProfile(b.id);
+    // Deliberately NOT async — an unknown id throws synchronously.
+    expect(() => exportProfileBackup(b.id)).toThrow(/unknown profile/i);
   });
 });
 
@@ -517,6 +605,111 @@ describe('adoption migration', () => {
     expect(getActiveProfileId()).toBe(first);
   });
 
+  // Regression: the dangling-pointer heal above used to fall back to
+  // registry[0], which is safe only because a deleted profile could never
+  // occupy that slot — its entry was dropped outright. Tombstoning changed
+  // that: a deleted-but-not-last profile now stays in the raw array and can
+  // sit at index 0. Reachable with no sync involved: two profiles, delete the
+  // non-active one (both guards allow it), then lose the active pointer — the
+  // exact state this fallback exists to absorb. Boot must land on the live
+  // profile, not the tombstoned one at registry[0].
+  it('heals a dangling active pointer onto the live profile, never a tombstoned one', async () => {
+    const a = createProfile({ name: 'A' });
+    const b = createProfile({ name: 'B' });
+    setActiveProfile(b.id); // b active
+    deleteProfile(a.id); // a not active, not last -> both guards allow; a is tombstoned
+    // Sanity: the tombstoned entry really is sitting at registry[0], which is
+    // exactly the slot the boot fallback reads.
+    expect(loadRegistry()[0].id).toBe(a.id);
+    expect(loadRegistry()[0].deletedAt).toEqual(expect.any(String));
+
+    appStorage.removeItem(ACTIVE_PROFILE_KEY); // active pointer lost/corrupted
+    setProfileMapping(null); // simulate fresh boot
+
+    const resolved = await ensureProfilesInitialized();
+
+    expect(resolved).toBe(b.id); // the live profile, not a's tombstone
+    expect(getActiveProfileId()).toBe(b.id);
+  });
+
+  it('durably revives a local workspace when every registry entry is tombstoned', async () => {
+    const tombstoneStamp = '2099-08-02T00:00:00.000Z';
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify([
+        { id: 'pempty', name: 'Empty', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z', deletedAt: '2099-08-01T00:00:00.000Z', updatedAt: '2099-08-01T00:00:00.000Z' },
+        { id: 'plocal', name: 'Local', emoji: '🙂', createdAt: '2026-07-02T00:00:00.000Z', deletedAt: tombstoneStamp, updatedAt: tombstoneStamp },
+      ]),
+      [ACTIVE_PROFILE_KEY]: 'pmissing',
+      [physicalKey('plocal', 'resume-designer-data')]: '{"variants":{"keep":{}}}',
+    });
+    await initAppStorage({ backend });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const resolved = await ensureProfilesInitialized();
+      const listed = listProfiles();
+
+      expect(resolved).toBe('plocal');
+      expect(listed).not.toHaveLength(0);
+      expect(listed.map((p) => p.id)).toContain(resolved);
+      const diskRegistry = JSON.parse(backend.files.get(PROFILES_KEY));
+      const revived = diskRegistry.find((p) => p.id === resolved);
+      expect(revived.deletedAt).toBeUndefined();
+      expect(new Date(revived.updatedAt).getTime()).toBeGreaterThan(new Date(tombstoneStamp).getTime());
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('revives the workspace this device was last in, ahead of any other candidate', async () => {
+    // The branch a real device almost always takes: its own active id IS in the
+    // registry, just tombstoned by the other device. Both candidates below hold
+    // local data, so only the preference order can decide — which is what pins
+    // it. Without that first preference the device would revive a workspace it
+    // was not using and had no reason to open.
+    const stamp = '2026-08-02T00:00:00.000Z';
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify([
+        { id: 'pother', name: 'Other', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z', deletedAt: stamp, updatedAt: stamp },
+        { id: 'pmine', name: 'Mine', emoji: '🙂', createdAt: '2026-07-02T00:00:00.000Z', deletedAt: stamp, updatedAt: stamp },
+      ]),
+      [ACTIVE_PROFILE_KEY]: 'pmine',
+      [physicalKey('pother', 'resume-designer-data')]: '{"variants":{"theirs":{}}}',
+      [physicalKey('pmine', 'resume-designer-data')]: '{"variants":{"mine":{}}}',
+    });
+    await initAppStorage({ backend });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      // 'pother' is first in the registry and equally eligible, so this fails if
+      // the choice ever falls back to registry order.
+      expect(await ensureProfilesInitialized()).toBe('pmine');
+      const diskRegistry = JSON.parse(backend.files.get(PROFILES_KEY));
+      expect(diskRegistry.find((p) => p.id === 'pmine').deletedAt).toBeUndefined();
+      expect(diskRegistry.find((p) => p.id === 'pother').deletedAt).toBe(stamp);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('keeps the ordinary live-profile fallback unchanged without reviving a tombstone', async () => {
+    const registry = [
+      { id: 'pdead', name: 'Deleted', emoji: '🙂', createdAt: '2026-07-01T00:00:00.000Z', deletedAt: '2026-08-02T00:00:00.000Z', updatedAt: '2026-08-02T00:00:00.000Z' },
+      { id: 'plive', name: 'Live', emoji: '🙂', createdAt: '2026-07-02T00:00:00.000Z' },
+    ];
+    const backend = makeBackend({
+      [PROFILES_KEY]: JSON.stringify(registry),
+      [ACTIVE_PROFILE_KEY]: 'pdead',
+    });
+    await initAppStorage({ backend });
+
+    const resolved = await ensureProfilesInitialized();
+
+    expect(resolved).toBe('plive');
+    expect(listProfiles().map((p) => p.id)).toEqual(['plive']);
+    expect(JSON.parse(backend.files.get(PROFILES_KEY))).toEqual(registry);
+  });
+
   it('rebuilds a lost registry from existing namespaced data (no data loss)', async () => {
     // Corrupt/missing registry while workspaces exist on disk: recovery must
     // re-list the observed namespaces, never adopt-as-new (which would orphan
@@ -543,6 +736,40 @@ describe('adoption migration', () => {
     expect(id).toBe('pfixed');
     expect(localStorage.getItem('resume-p--pfixed--resume-designer-data')).toBe('{"variants":{}}');
     expect(localStorage.getItem('resume-profile-adoption-pending')).toBeNull();
+  });
+
+  it('finishes a marker-only adoption before asking and merging account profiles', async () => {
+    const localData = '{"variants":{"local":{"name":"Local work"}}}';
+    const backend = makeBackend({
+      'resume-profile-adoption-pending': '1',
+      'resume-designer-data': localData,
+    });
+    await initAppStorage({ backend });
+
+    let registryAtAsk = null;
+    let localDataAtAsk = null;
+    const ask = vi.fn(async () => {
+      registryAtAsk = JSON.parse(backend.files.get(PROFILES_KEY) ?? 'null');
+      const localId = registryAtAsk?.[0]?.id;
+      localDataAtAsk = localId
+        ? backend.files.get(physicalKey(localId, 'resume-designer-data'))
+        : null;
+      return {
+        status: 'known',
+        profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+      };
+    });
+
+    const active = await ensureProfilesInitialized({ askAccount: ask });
+
+    expect(localDataAtAsk).toBe(localData);
+    expect(active).toBe(registryAtAsk[0].id);
+    expect(active).not.toBe('paccount');
+    expect(listProfiles().map((profile) => profile.id)).toEqual(
+      expect.arrayContaining([active, 'paccount']),
+    );
+    expect(backend.files.get(physicalKey(active, 'resume-designer-data'))).toBe(localData);
+    expect(backend.files.has(physicalKey('paccount', 'resume-designer-data'))).toBe(false);
   });
 
   it('extractSharedApiKey never clobbers an existing shared key', async () => {
@@ -951,5 +1178,163 @@ describe('saveSettings blob-credential fallback', () => {
     expect(blob.settings.openrouterKey).toBe('sk-legacy');
     // And the overlay masks it — reads still see the shared value.
     expect(getSettings().openrouterKey).toBe('sk-new');
+  });
+});
+
+describe('account-first profile bootstrap', () => {
+  let backend;
+
+  beforeEach(async () => {
+    backend = makeBackend();
+    await initAppStorage({ backend });
+  });
+
+  it('takes the account profiles and mints no starter', async () => {
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+
+    expect(await ensureProfilesInitialized({ askAccount: ask })).toBe('paccount');
+    expect(JSON.parse(backend.files.get(PROFILES_KEY)).map((p) => p.id)).toEqual(['paccount']);
+    // The starter marker is deleted by Step 4, so assert the behaviour it stood
+    // for: a known account adopts what is there and mints nothing alongside it.
+    expect(JSON.parse(backend.files.get(PROFILES_KEY)).map((p) => p.id)).toEqual(['paccount']);
+  });
+
+  it('does not treat a known account registry as onboarding-ready content', async () => {
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+
+    await ensureProfilesInitialized({ askAccount: ask });
+
+    expect(shouldShowOnboarding()).toBe(false);
+
+    const ready = whenInitialProfileFetchSettled();
+    appStorage.setItem('resume-designer-data', JSON.stringify({
+      variants: { existing: { builtIn: false, data: { name: 'Account résumé' } } },
+    }));
+    markInitialProfileFetchSettled('ready');
+
+    await expect(ready).resolves.toBe('ready');
+    expect(shouldShowOnboarding()).toBe(false);
+  });
+
+  it('gets the pending marker onto DISK with the registry, not after it', async () => {
+    // The marker used to be queued after the flush that made the registry
+    // durable, so it belonged to a later write-behind window. iOS terminating
+    // the app in between left the registry on disk with no marker, and the next
+    // launch skipped the account branch and treated the fetch as ready — the
+    // race this marker exists to close, one window over. Asserted against the
+    // BACKEND rather than the cache, and with no flush of its own, because the
+    // cache would hold it either way and prove nothing.
+    await ensureProfilesInitialized({ askAccount: async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }) });
+
+    expect(backend.files.get(PROFILES_KEY)).toBeDefined();
+    expect(backend.files.get('resume-profile-initial-fetch-pending')).toBe('1');
+  });
+
+  it('is STILL pending on the next launch when the first pull never settled', async () => {
+    // The readiness state is in-memory, and that covered only the launch that
+    // derived the registry from the account. A device whose first profile-zone
+    // fetch failed — or that exited before it settled — persisted the registry
+    // anyway, so the next launch loaded it, skipped the account branch entirely,
+    // and left readiness at `ready`. The onboarding timer then opened the
+    // non-dismissible first-run wizard over a workspace whose contents were
+    // still on their way, which is the race the deferral exists to prevent.
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+    await ensureProfilesInitialized({ askAccount: ask });
+    expect(isInitialProfileFetchPending()).toBe(true);
+
+    // The app exits here — no settle of any kind. Relaunch: the registry is on
+    // disk, so the account is not consulted at all.
+    const askAgain = vi.fn(async () => ({ status: 'unavailable' }));
+    await ensureProfilesInitialized({ askAccount: askAgain });
+
+    expect(askAgain).not.toHaveBeenCalled();
+    expect(isInitialProfileFetchPending()).toBe(true);
+    expect(shouldShowOnboarding()).toBe(false);
+  });
+
+  it('stops waiting once a pull has actually answered ready', async () => {
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+    await ensureProfilesInitialized({ askAccount: ask });
+    markInitialProfileFetchSettled('ready');
+    await appStorage.flush();
+
+    await ensureProfilesInitialized({ askAccount: async () => ({ status: 'unavailable' }) });
+
+    expect(isInitialProfileFetchPending()).toBe(false);
+  });
+
+  it('keeps waiting after an UNAVAILABLE answer, which is not an answer', async () => {
+    // 'unavailable' means sync could not say what the account holds — the exact
+    // state that must wait again rather than fall through to the wizard. The
+    // wait is bounded by whenInitialProfileFetchSettled's own timeout, so a
+    // device that can never fetch pays a delay rather than looping.
+    const ask = vi.fn(async () => ({
+      status: 'known',
+      profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }));
+    await ensureProfilesInitialized({ askAccount: ask });
+    markInitialProfileFetchSettled('unavailable');
+    await appStorage.flush();
+
+    await ensureProfilesInitialized({ askAccount: async () => ({ status: 'unavailable' }) });
+
+    expect(isInitialProfileFetchPending()).toBe(true);
+  });
+
+  it('keeps genuine first-run onboarding for a settled empty account profile', async () => {
+    await ensureProfilesInitialized({ askAccount: async () => ({
+      status: 'known',
+      profiles: [{ id: 'pempty', name: 'Empty', createdAt: '2026-07-01T00:00:00.000Z' }],
+    }) });
+
+    expect(shouldShowOnboarding()).toBe(false);
+    markInitialProfileFetchSettled('ready');
+    expect(shouldShowOnboarding()).toBe(true);
+  });
+
+  it('bounds an unavailable initial fetch without falling into authoring', async () => {
+    vi.useFakeTimers();
+    try {
+      await ensureProfilesInitialized({ askAccount: async () => ({
+        status: 'known',
+        profiles: [{ id: 'paccount', name: 'Account', createdAt: '2026-07-01T00:00:00.000Z' }],
+      }) });
+
+      const readiness = whenInitialProfileFetchSettled({ timeoutMs: 250 });
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(readiness).resolves.toBe('unavailable');
+      expect(shouldShowOnboarding()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([['empty'], ['unavailable']])('mints a starter when the account answers %s', async (status) => {
+    const ask = vi.fn(async () => ({ status }));
+    const id = await ensureProfilesInitialized({ askAccount: ask });
+
+    expect(id).toMatch(/^p/);
+    // Likewise: an empty or unreachable account mints exactly one workspace and
+    // opens it. Asserting the registry and the pointer, not the deleted marker.
+    const registry = JSON.parse(backend.files.get(PROFILES_KEY));
+    expect(registry).toHaveLength(1);
+    expect(registry[0].id).toBe(id);
+    expect(backend.files.get(ACTIVE_PROFILE_KEY)).toBe(id);
   });
 });

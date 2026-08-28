@@ -1,0 +1,27 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Insertion Mark: cobalt squircle, a proofreader's caret cut out of it.
+       Squircle: rounded square [192,832] side 640, corner r176.
+       Caret: 130-unit void stroke (half-width 65), centreline apex (512,420),
+       arm ends (322,610) and (702,610), 45-degree arms, rounded outer apex r65,
+       rounded end caps r65, sharp inner miter landing at (512,511.92).
+       Perpendicular offset = 65/sqrt(2) = 45.96. -->
+  <path fill="#2B2BFF" fill-rule="evenodd" d="
+    M 368,192
+    L 656,192
+    A 176,176 0 0 1 832,368
+    L 832,656
+    A 176,176 0 0 1 656,832
+    L 368,832
+    A 176,176 0 0 1 192,656
+    L 192,368
+    A 176,176 0 0 1 368,192
+    Z
+    M 466.04,374.04
+    A 65,65 0 0 1 557.96,374.04
+    L 747.96,564.04
+    A 65,65 0 0 1 656.04,655.96
+    L 512,511.92
+    L 367.96,655.96
+    A 65,65 0 0 1 276.04,564.04
+    Z" />
+</svg>

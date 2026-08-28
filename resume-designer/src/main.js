@@ -3,26 +3,75 @@
  * Integrates all components: store, header bar, chat panel, inline editor, structure panel
  */
 
-import { store } from './store.js';
-import { appStorage, initAppStorage, markStorageReady } from './appStorage.js';
+import { store, generateId } from './store.js';
+import { getByPath, diffResumeData } from './diffEngine.js';
+import {
+  appStorage, initAppStorage, markStorageReady, setStorageWriteObserver,
+} from './appStorage.js';
 import { initSecretStore } from './secretStore.js';
 import {
   ensureProfilesInitialized, extractSharedApiKey, loadRegistry, isAdoptionPending,
-  hasProfileNamespaces, stripDeadProviderCredentials,
+  hasProfileNamespaces, stripDeadProviderCredentials, getActiveProfileId, purgeTombstonedProfiles,
+  listProfiles, switchToProfileDurably,
+  markInitialProfileFetchSettled, whenInitialProfileFetchSettled,
 } from './profiles.js';
 import { renderResumeForLayout } from './renderer.js';
-import { initPdfExport } from './pdf.js';
+import { initPdfExport, isPdfCapturing } from './pdf.js';
 import { paginate, resetPaginatedState } from './pagination.js';
 import { normalizePageSize, DEFAULT_PAGE_WIDTH_IN } from './pageSetup.js';
-import { initInlineEditor, refreshInlineEditor, getActiveInlineEditable } from './inlineEditor.js';
-import { initVariants } from './variantManager.js';
+import {
+  initInlineEditor,
+  refreshInlineEditor,
+  getActiveInlineEditable,
+  suspendBlurCommit,
+  commitActiveInlineEdit,
+} from './inlineEditor.js';
+import {
+  initVariants, loadVariant, duplicateVariant, exportCurrentVariant, renameCurrentVariant,
+  subscribeVariants, getVariantsSnapshot,
+  getVariantList, getCurrentId, refreshVariants, createVariant,
+} from './variantManager.js';
 import { refreshChatPanel, startProfileInterviewFromPanel } from './chatPanel.js';
 import { initDiffView } from './diffView.js';
-import { initInlineChanges, decorateRenderedResume, isPreviewSuppressed } from './inlineChanges.js';
+import {
+  initInlineChanges, decorateRenderedResume, isPreviewSuppressed,
+  getPendingChanges, applyInlineChange, rejectInlineChange,
+  applyAllInlineChanges, rejectAllInlineChanges,
+} from './inlineChanges.js';
 import { applyPendingToData } from './changePreview.js';
 import * as changeSession from './changeSession.js';
 import { initSettingsModal, openSettings } from './settingsModal.js';
-import { initZoomControls } from './zoomControls.js';
+import { initZoomControls, getZoom, fitToView, fitToWidth, setZoomLevel } from './zoomControls.js';
+import { exportFullBackupWithFeedback, importBackupFromFile } from './backupFlow.js';
+import {
+  initIOSShell, buildDocumentOutline, buildLibrary, buildDesign, buildHistory,
+  initIOSProfileBootstrap, askAccountProfiles, resolveAccountProfiles, reportProfilesResolved,
+  nativeEditingBusy,
+} from './iosShell.js';
+import { registerNativeProfileEditing } from './userProfileHolder.js';
+import { registerNativeChatEditing } from './chatThreads.js';
+import {
+  collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts,
+  registerPersistedSaveHandler, touchUnit,
+  registerEditingProbe, isSyncEnabled, setSyncEnabled,
+  installStorageStamping, setStorageDirtyNotifier, setActiveProfileDeletedHandler,
+  stampRestoredWrites,
+  announceRestoredUnits,
+  setResumeDeletedHandler,
+  setResumeChangedHandler,
+} from './sync/syncModel.js';
+import {
+  getDesignState, applyDesign, resetDesign, setDesignImage, clearDesignImage,
+} from './designController.js';
+import { buildJobs, getJobsState, applyJobs } from './jobsBridge.js';
+import { buildProfile, getProfileState, applyProfile } from './profileBridge.js';
+import { searchLibrary } from './librarySearch.js';
+import { getAllApplications, subscribeApplications } from './applications.js';
+// The Workspaces sheet's stats, through the same functions the desktop Account
+// section formats with, so the two never round or label a rate differently.
+import { computeStats } from './applicationStats.js';
+import { formatRate, formatDays } from './accountStats.js';
+import { getAllJobDescriptions, subscribeJobDescriptions } from './jobDescriptions.js';
 import { initWindowDrag } from './tauriDrag.js';
 import {
   migrateBuiltInVariants,
@@ -32,28 +81,213 @@ import {
   getCurrentVariantId,
   getVariants,
   importFullBackupDurably,
+  saveApiKey,
+  setPersistedSaveHandler,
+  setRestoreStampHandler,
 } from './persistence.js';
 import {
   isTauri,
   getPlatform,
   openExternal,
   startupUpdateCheck,
+  getAppInfo,
   onMenuOpenSettings,
   probeLegacyElectronData,
   importLegacyElectronData,
 } from './native.js';
-import { initTheme } from './theme.js';
+import { initTheme, getTheme, setTheme } from './theme.js';
 import { openJobDescriptionPanel, onJobPanelVariantChange } from './jobDescriptionPanel.js';
 import { initJobDescriptions } from './jobDescriptions.js';
 import { initApplications } from './applications.js';
 import { initLearnedAnswers } from './learnedAnswers.js';
 import { openUserProfilePanel } from './userProfilePanel.js';
-import { shouldShowOnboarding, showOnboardingWizard } from './onboarding.js';
+import {
+  shouldShowOnboarding, showOnboardingWizard, isOnboardingOpen, whenOnboardingClosed,
+} from './onboarding.js';
 import { initFontService } from './fontService.js';
 import { initHeaderStyleService, applyHeaderStyle, getHeaderStyleSettings } from './headerStyleService.js';
 import { initSpacingService, applySpacingSettings, getSpacingSettings, saveSpacingSettings } from './spacingService.js';
 import { initAccentService } from './accentService.js';
 import { initPhotoService } from './photoService.js';
+
+// Keep persistence below the sync model in the import graph: main owns the
+// callback wiring between them, so neither feature module imports the other.
+registerPersistedSaveHandler(setPersistedSaveHandler);
+
+// Same edge, one layer down: the sync model stamps every OTHER synced unit from
+// appStorage.setItem itself. Only the résumé and its history are named by the
+// save handler above (it alone knows the variant id); everything else — job
+// descriptions, applications, chat threads, token usage, learned answers, the
+// design settings, the profile registry, and the blob's `settings` /
+// `userProfile` — was written straight to storage and named to nobody, so it
+// went up once on the first full sweep and never again. appStorage cannot
+// import the sync layer, so the wiring lands here, before anything can write.
+installStorageStamping(setStorageWriteObserver);
+
+// The other edge into the sync layer, and the same reason as the save handler:
+// a restore writes each workspace's blob under its PHYSICAL key, which the
+// interceptor classifies 'unknown', so the tombstones a replacement restore
+// produces are stamped and announced by nobody. Wired here because persistence
+// must not import the sync layer, nor the sync layer persistence.
+setRestoreStampHandler(stampRestoredWrites, announceRestoredUnits);
+
+// Same edge, same reason. A fetched résumé for the open variant is adopted by
+// the store, which repaints #resume from scratch — and an inline edit exists
+// ONLY in the DOM until blur commits it, so a sync landing mid-word would
+// delete the characters being typed. The sync model refuses to land one while
+// this says yes; it cannot ask the DOM itself (it is storage-only, and the same
+// file runs on iOS), so main.js hands it the question.
+// The web's inline editor OR a focused native structure field. Both are "a
+// person is typing into this résumé right now", and the DOM answer cannot see
+// the SwiftUI one — see nativeEditingBusy.
+//
+// …OR a PDF capture, which is not typing but has the same requirement: the
+// capture takes each page's rect in turn, so a document adopted between two of
+// them puts one résumé on the early pages and another on the late ones.
+registerEditingProbe(() => (
+  getActiveInlineEditable() !== null || nativeEditingBusy('document') || isPdfCapturing()
+));
+registerNativeProfileEditing(() => nativeEditingBusy('profile'));
+// And the native chat composer, whose unsent draft is Swift state the hook's
+// own refs cannot see — see registerNativeChatEditing.
+registerNativeChatEditing(() => nativeEditingBusy('chat'));
+
+// Another device deleted the workspace open here. The sync layer merges the
+// tombstone and stops; moving off it is the app's job, because picking the
+// replacement is a registry question and reloading differs by platform — the
+// same split `switchToProfileDurably` documents by stopping at the pointer.
+//
+// Left alone, the pointer keeps naming a workspace `listProfiles` no longer
+// shows, `appStorage` stays mapped to its namespace, and every edit lands in
+// `resume-p--<dead>--…` until the next launch resolves elsewhere and they are
+// gone — written where nothing will ever read them.
+// The résumé on screen, deleted on another device. Same division as the
+// workspace handler below: the sync layer lands the tombstone and says so, and
+// what to open instead is the variant list's question.
+// The other half of the handler below: a résumé RENAMED or edited on another
+// device. Only the cached list needs saying — `adoptLoadedDocument` has already
+// handed the bytes to the editor if the changed one happened to be open.
+setResumeChangedHandler(() => refreshVariants());
+
+setResumeDeletedHandler((deletedIds, openVariantId) => {
+  // The list first, and for EVERY deletion. `getVariants` already stops
+  // returning them, but what the header and the library render is a cached
+  // snapshot that only variantManager's own mutations refresh — so without this
+  // a résumé deleted elsewhere stayed on the list, and the last-résumé guard
+  // kept counting it.
+  refreshVariants();
+  if (!openVariantId) return;
+
+  const live = Object.keys(getVariants()).filter((id) => !deletedIds.includes(id));
+  if (live.length === 0) {
+    // A FRESH ONE, not the deleted one left on screen. Leaving it there looked
+    // harmless — the persistence path refuses to write over a tombstone, so it
+    // cannot be resurrected — but that is exactly what makes it cruel: the
+    // editor still accepts typing and the auto-save silently discards every
+    // keystroke, so the work is gone at the next reload with nothing having
+    // said so. The app's own invariant is that there is always at least one
+    // résumé, which is why the header refuses to delete the last one.
+    console.warn('[variants] every résumé was deleted elsewhere — starting a fresh one');
+    createVariant('My Resume');
+    return;
+  }
+  loadVariant(live[0]);
+});
+
+// Whether a deferred switch is already waiting on the wizard, so repeated
+// reports of the same deletion do not stack up waiters.
+let waitingForWizard = false;
+
+// A retry of the move itself, for when it fails rather than when it is
+// deferred. The wizard wake-up fires ONCE, and a disk that is momentarily full
+// makes that one attempt return false — after which the move is still owed and
+// nothing drives it, because reconciliation only runs when another record
+// lands. Same gap as the wake-up itself had, one level down.
+//
+// Backed off to 30s and never given up on: the alternative to trying again is a
+// session spent editing a workspace that is dead on every device, and every
+// attempt is one flush that ends the moment it succeeds, because success
+// reloads the page.
+let moveRetryTimer = null;
+let moveRetryDelay = 2000;
+
+function retryMoveLater() {
+  // Not while the wizard holds it: that path re-arms its own waiter, and a
+  // timer as well would be two things racing to do the same move.
+  if (moveRetryTimer || waitingForWizard) return;
+  moveRetryTimer = setTimeout(async () => {
+    moveRetryTimer = null;
+    if ((await moveOffDeletedWorkspace()) === false) {
+      moveRetryDelay = Math.min(moveRetryDelay * 2, 30_000);
+      retryMoveLater();
+    }
+  }, moveRetryDelay);
+}
+
+async function moveOffDeletedWorkspace() {
+  // FIRST, before anything that could reload. The branch below reloads outright
+  // when no live workspace is left to move to, and reaching it with the wizard
+  // open threw away exactly what this deferral exists to protect — so the one
+  // case where the person has the most to lose, a first run with a single
+  // workspace, was the one case that bypassed the guard entirely.
+  //
+  // NOT WHILE THE WIZARD IS UP. A reload discards its interview answers, the
+  // imported résumé and anything generated — none of which is stored anywhere
+  // yet, so `switchToProfileDurably`'s flush cannot help. Losing ten minutes of
+  // setup without touching anything is a worse first impression than the
+  // workspace being stale for a moment longer.
+  //
+  // Deferred AND declared, because deferring alone would be a trap: the
+  // workspace is gone on every device, so a résumé finished here would be
+  // written into a namespace nothing reads and would look saved. The wizard is
+  // told, says so, and refuses to create. Returning false keeps the move owed,
+  // so it happens on the next fetch after the wizard closes.
+  if (isOnboardingOpen()) {
+    window.dispatchEvent(new CustomEvent('rd:workspace-deleted'));
+    console.warn('[profiles] the open workspace was deleted elsewhere; waiting for the wizard');
+    // WOKEN BY THE WIZARD CLOSING, not only by the next fetch. Keeping the move
+    // owed is what makes a retry possible, but the retry is driven by
+    // `reconcileRemoteDeletions`, which runs when a record lands — and none has
+    // to. Without this, someone could close the warning and spend the rest of
+    // the session editing a workspace that is dead on every device.
+    if (!waitingForWizard) {
+      waitingForWizard = true;
+      whenOnboardingClosed().then(async () => {
+        waitingForWizard = false;
+        // The result matters. This is the one wake-up the wizard gets, and a
+        // disk that is momentarily full turns it into a no-op that nothing
+        // follows up.
+        if ((await moveOffDeletedWorkspace()) === false) retryMoveLater();
+      });
+    }
+    return false;
+  }
+  const replacement = listProfiles().find((p) => p.id !== getActiveProfileId());
+  if (!replacement) {
+    // Nothing live to move to, which the boot path is already the answer for:
+    // `resolveActiveProfile` rebuilds or creates one. Reloading into it beats
+    // staying on a workspace that no longer exists.
+    console.warn('[profiles] the open workspace was deleted elsewhere and no live one remains');
+    window.location.reload();
+    return;
+  }
+  // The durable helper, not the pointer move: it saves the open editors first.
+  // Their bytes go into the dead namespace and are lost with it either way, but
+  // the ordering is what makes the pointer change safe, and a second copy of
+  // that reasoning here is how the two platforms drift.
+  if (!(await switchToProfileDurably(replacement.id))) {
+    // REPORTED, not just logged. The caller keeps the deletion owed on a
+    // `false` and tries again on the next fetch; returning nothing would tell
+    // it this had been dealt with, and it never would be.
+    console.error('[profiles] could not move off the deleted workspace — staying put');
+    retryMoveLater();
+    return false;
+  }
+  window.location.reload();
+  return true;
+}
+
+setActiveProfileDeletedHandler(moveOffDeletedWorkspace);
 
 // Built-in resume variants (for initial migration)
 const BUILT_IN_VARIANTS = [
@@ -310,6 +544,10 @@ function showMigrationToast(probe, result = null) {
 
 // Initialize the application
 export async function init() {
+  // The full native shell is wired after the app services below, as it always
+  // has been. This bootstrap-only command must exist earlier because profile
+  // resolution is exactly what waits for its answer.
+  initIOSProfileBootstrap({ syncAccountProfiles: resolveAccountProfiles });
   // FIRST: bring up the storage facade, THEN pull in any legacy Electron data,
   // THEN resolve profiles — and only after ALL THREE settle, open the React
   // mount gate. On the first Tauri boot after an Electron install the facade
@@ -325,7 +563,20 @@ export async function init() {
   try {
     await initAppStorage();
     await maybeAutoMigrateLegacyData();
-    await ensureProfilesInitialized();   // profiles resolve BEFORE the React gate opens
+    await ensureProfilesInitialized({ askAccount: askAccountProfiles });
+    reportProfilesResolved();            // profiles resolve BEFORE the React gate opens
+    // The workspace that was ACTIVE when its tombstone arrived. The purge in
+    // the sync reconciliation skips it on purpose — it was still mapped and
+    // still being read — and that reconciliation only runs when a NEW tombstone
+    // lands, so nothing ever came back for it: the switch away happened, the
+    // reload happened, and its bytes stayed for good. Here it is no longer
+    // active, and this runs on every start rather than only on a fetch.
+    try {
+      const purged = purgeTombstonedProfiles();
+      if (purged.length) console.info(`[profiles] purged ${purged.length} deleted workspace(s) at start`);
+    } catch (err) {
+      console.error('[profiles] could not purge deleted workspaces:', err);
+    }
     // ensureProfilesInitialized runs extractSharedApiKey on its HAPPY paths
     // only: an adoption that cannot finish (browser quota, a Tauri disk
     // failure) returns early without it. Left to that, a credential still
@@ -525,6 +776,138 @@ export async function init() {
 
   // Initialize shared text formatting tools in bottom toolbar
   initTextTools();
+
+  // Bridge to the native iOS chrome. Installs window.__opShell and its
+  // listeners on every platform but stays dormant until the SwiftUI shell
+  // calls activate(), so desktop and the browser are unaffected. Wired last:
+  // its commands drive the controls and window globals set up above.
+  initIOSShell({
+    subscribeVariants, getVariantsSnapshot, loadVariant, duplicateVariant, renameCurrentVariant,
+    exportCurrentVariant, getZoom, fitToView, fitToWidth, setZoomLevel, openSettings,
+    // Settings sheet.
+    getTheme, setTheme, getSettings, saveSettings, saveApiKey, getAppInfo,
+    exportFullBackupWithFeedback, importBackupFromFile,
+    // Structure panel. The document only ever leaves through this projection,
+    // and only ever comes back as a path the projection handed out.
+    getDocument: () => buildDocumentOutline(store.getDataRef()),
+    updateField: (path, value) => store.update(path, value),
+    // Reorder by rewriting the WHOLE array through the same `store.update`
+    // every other edit uses, rather than adding a second mutation path. The
+    // list path comes from the projection, so it is always a real array.
+    moveListItem: (listPath, from, to) => {
+      const current = getByPath(store.getDataRef(), listPath);
+      if (!Array.isArray(current)) return;
+      if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+      if (from < 0 || from >= current.length || to < 0 || to > current.length) return;
+      const next = current.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, moved);
+      store.update(listPath, next);
+    },
+    // Add and remove go through the store's own array mutators rather than
+    // rewriting the whole array: both emit `arrayItemAdded`/`arrayItemRemoved`,
+    // which is what the renderer and the inline editor listen for. The WHAT of
+    // a new item is decided in iosShell.js — this only carries it.
+    addListItem: (listPath, item) => store.addToArray(listPath, item),
+    removeListItem: (listPath, index) => store.removeFromArray(listPath, index),
+    // CloudKit sync. The model owns what a unit is; the shell only carries it.
+    // `getActiveProfileId` is here rather than imported by the shell because
+    // the zone is per-profile and Swift has no way to read the pointer.
+    // `unitScopes` is here for the same reason: which zone a unit belongs in
+    // follows from what the unit is, so the transport asks instead of deciding.
+    collectUnit, collectUnits, unitScopes, applyUnits, resolveConflicts, touchUnit,
+    syncAccountProfiles: resolveAccountProfiles,
+    markInitialProfileFetchSettled,
+    // ONE notifier, and now ONE installer. Persistence used to take it too and
+    // announce the résumé and its history on the save that wrote them — before
+    // the drain, so on a cache acceptance rather than on disk. Those units are
+    // queued for the drain now, so the interceptor is the only thing that names
+    // a dirty unit. It stays silent on desktop, where the postMessage it wraps
+    // is guarded by isNativeShellAvailable().
+    setSyncDirtyNotifier: setStorageDirtyNotifier,
+    getActiveProfileId,
+    // The iCloud switch, off until the person turns it on. Read on every
+    // snapshot so the native toggle shows what is stored rather than what it
+    // last set.
+    getSyncEnabled: isSyncEnabled, setSyncEnabled,
+    generateId,
+    subscribeDocument: (cb) => store.subscribe(cb),
+    // Both modules notify on a REFUSED disk write as well as on a change, which
+    // is the half the shell could not see: a native sheet has no DOM for the
+    // shell's mutation observer to watch.
+    subscribeJobs: (cb) => subscribeJobDescriptions(cb),
+    subscribeApplications: (cb) => subscribeApplications(cb),
+    // AI change review, routed to the live session rather than a copy of it.
+    // Library search, against the same searchLibrary the desktop dialog uses.
+    getLibrary: (query, deep) => buildLibrary(
+      searchLibrary(query, {
+        variants: getVariantList().map((v) => ({ ...v, data: getVariants()[v.id]?.data })),
+        applications: getAllApplications(),
+        deep,
+      }),
+      getVariantList(),
+      getAllApplications(),
+    ),
+    // Account stats for the Workspaces sheet — the same four sources desktop's
+    // Account section reads, computed there rather than in the shell so the two
+    // cannot disagree about what "applications" or "résumés" counts.
+    getAccountStats: () => {
+      const stats = computeStats(getAllApplications());
+      return {
+        resumes: getVariantList().length,
+        jobDescriptions: getAllJobDescriptions().length,
+        applications: stats.sent,
+        responseRate: formatRate(stats.responseRate),
+        interviewRate: formatRate(stats.interviewRate),
+        medianDaysToResponse: formatDays(stats.medianDaysToResponse),
+      };
+    },
+    getPendingChanges,
+    applyInlineChange,
+    rejectInlineChange,
+    applyAllInlineChanges,
+    rejectAllInlineChanges,
+    // The Design sheet. Every one of these is the SAME function the web Design
+    // tab calls — designController.js exists precisely so there is one
+    // implementation of apply-save-repaginate rather than a second one written
+    // in Swift. The projection is built here for the same reason the outline is.
+    getDesign: () => buildDesign(getDesignState()),
+    applyDesign,
+    resetDesign,
+    setDesignImage,
+    clearDesignImage,
+    // Version history.
+    getHistory: (diff) => buildHistory(store.getHistoryEntries(), getCurrentId(), diff),
+    // Both of these re-check the timestamp the version was SHOWN with before
+    // acting on the index. History indices are positional and renumber: at
+    // MAX_HISTORY (100) pushHistory shifts the whole array down by one, so an
+    // index Swift captured a moment ago can address a different version by the
+    // time the user confirms — and a restore is a whole-document overwrite, not
+    // a merge. Refusing is the only safe answer; the sheet re-renders from the
+    // next snapshot and the user picks again.
+    restoreVersion: (index, timestamp) => {
+      const entries = store.getHistoryEntries();
+      if (entries[index]?.timestamp !== timestamp) return false;
+      return store.restoreToEntry(index);
+    },
+    compareVersion: (index, timestamp) => {
+      const entries = store.getHistoryEntries();
+      if (entries[index]?.timestamp !== timestamp) return null;
+      const past = store.getHistoryEntryData(index);
+      const current = store.getData();
+      if (!past || !current) return null;
+      // Same argument order the web dialog uses: the HISTORICAL version is the
+      // "before" and the live document is the "after", so the diff reads as
+      // "what has changed since then" rather than as a proposal to apply.
+      return diffResumeData(past, current);
+    },
+    // Jobs and Profile. Same rule as the design sheet: the bridge modules hold
+    // the one implementation, and this only hands them over.
+    getJobs: () => buildJobs(getJobsState()),
+    jobsAction: (action) => applyJobs(action),
+    getProfile: () => buildProfile(getProfileState()),
+    profileAction: (action) => applyProfile(action),
+  });
   
   // Check for first-time user onboarding
   console.log('[Main] Setting up onboarding check...');
@@ -556,9 +939,14 @@ export async function init() {
 
   // Check onboarding after a short delay to ensure UI is ready
   console.log('[Main] Scheduling onboarding check in 300ms...');
-  setTimeout(() => {
+  setTimeout(async () => {
     console.log('[Main] Running onboarding check NOW');
     try {
+      const readiness = await whenInitialProfileFetchSettled();
+      if (readiness !== 'ready') {
+        console.warn('[Main] Initial profile fetch unavailable; deferring onboarding until a later launch');
+        return;
+      }
       const shouldShow = shouldShowOnboarding();
       console.log('[Main] shouldShowOnboarding returned:', shouldShow);
       if (shouldShow) {
@@ -1049,8 +1437,11 @@ function initUndoRedo() {
       return;
     }
     
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    const modKey = isMac ? e.metaKey : e.ctrlKey;
+    // metaKey on Apple platforms, ctrlKey elsewhere — accepting either avoids a
+    // deprecated navigator.platform read and matches the two other handlers in
+    // this codebase (inlineEditor.js, zoomControls.js). No shortcut in this
+    // block uses both.
+    const modKey = e.metaKey || e.ctrlKey;
     
     if (modKey && e.key === 'z' && !e.shiftKey) {
       e.preventDefault();
@@ -1072,6 +1463,21 @@ function initUndoRedo() {
 
 let lastFormattingTarget = null;
 
+// The last range the user actually selected inside a formatting target.
+//
+// Kept CONTINUOUSLY rather than read on demand, because by the time a format
+// command runs the live selection can be gone: opening the native iOS panel
+// resigns first responder so the keyboard stops covering it, and an unfocused
+// editable reports a COLLAPSED selection at the end of its text. Reading that
+// would apply every command to the wrong place — and turn "Clear formatting"
+// from clearing a word into clearing the whole field.
+let lastFormattingRange = null;
+
+// The target and range the native format panel is acting on, frozen for as long
+// as it is open. `null` whenever it is closed, which is what leaves every other
+// caller on the live selection.
+let heldFormatting = null;
+
 function isTextInputElement(element) {
   return !!element && (
     element.tagName === 'TEXTAREA' ||
@@ -1081,6 +1487,23 @@ function isTextInputElement(element) {
 
 function isEditableFormattingTarget(element) {
   return isTextInputElement(element) || !!element?.isContentEditable;
+}
+
+/**
+ * The selection's offsets in `editable`, or null when the selection is not
+ * actually in there.
+ *
+ * The difference from `getSelectionOffsetsInEditable` is the whole point: that
+ * one answers "end of the text" for a selection it cannot find, which is the
+ * right default for applying a command and exactly the wrong thing to REMEMBER.
+ * Recording it would overwrite a real range with a fake one every time focus
+ * left the element.
+ */
+function selectionOffsetsIfInside(editable) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  if (!editable.contains(selection.getRangeAt(0).commonAncestorContainer)) return null;
+  return getSelectionOffsetsInEditable(editable);
 }
 
 function getSelectionOffsetsInEditable(editable) {
@@ -1234,6 +1657,53 @@ function clearInlineFormatting(value, start, end) {
   return { value: nextValue, start: selectionStart, end: selectionStart + cleared.length };
 }
 
+/** Record the live selection, if it is genuinely inside a formatting target. */
+function rememberFormattingRange() {
+  const target = isEditableFormattingTarget(document.activeElement)
+    ? document.activeElement
+    : getActiveInlineEditable();
+  if (!target) return;
+  const range = isTextInputElement(target)
+    ? { start: target.selectionStart ?? 0, end: target.selectionEnd ?? 0 }
+    : selectionOffsetsIfInside(target);
+  if (!range) return;
+  lastFormattingRange = { target, ...range };
+}
+
+/**
+ * Freeze what the native format panel will act on, for as long as it is open.
+ *
+ * The suspension comes FIRST and unconditionally: this arrives over
+ * `evaluateJavaScript`, so it can land after the blur that opening the panel
+ * causes, and beating `handleBlur`'s 100ms timer is what keeps the target
+ * attached at all. The range is taken from what was already remembered rather
+ * than read live, for the same reason — by now there may be nothing to read.
+ */
+function holdFormattingTarget() {
+  suspendBlurCommit(true);
+  heldFormatting =
+    lastFormattingRange && document.contains(lastFormattingRange.target)
+      ? { ...lastFormattingRange }
+      : null;
+}
+
+/** Let go, and commit what the panel changed. */
+function releaseFormattingTarget() {
+  const wasHolding = heldFormatting !== null;
+  heldFormatting = null;
+  suspendBlurCommit(false);
+  // The commands wrote through to the DOM but nothing committed them: the
+  // inline editor saves on `finishEditing`, and that is precisely what was
+  // suspended. Closing the panel is the end of the edit.
+  if (wasHolding) commitActiveInlineEdit();
+}
+
+/** The frozen range, when it belongs to this target. */
+function heldOffsetsFor(target) {
+  if (!heldFormatting || heldFormatting.target !== target) return null;
+  return { start: heldFormatting.start, end: heldFormatting.end };
+}
+
 function applyTextCommand(command) {
   const active = document.activeElement;
   const inlineActive = getActiveInlineEditable();
@@ -1251,9 +1721,11 @@ function applyTextCommand(command) {
   }
   if (!target) return;
 
+  const held = heldOffsetsFor(target);
+
   if (isTextInputElement(target)) {
-    const start = target.selectionStart ?? 0;
-    const end = target.selectionEnd ?? start;
+    const start = held ? held.start : (target.selectionStart ?? 0);
+    const end = held ? held.end : (target.selectionEnd ?? start);
     let result = null;
 
     if (command === 'bold') result = toggleWrappedRange(target.value || '', start, end, '**');
@@ -1276,8 +1748,9 @@ function applyTextCommand(command) {
     )?.set;
     if (valueSetter) valueSetter.call(target, result.value);
     else target.value = result.value;
-    target.focus();
-    target.setSelectionRange(result.start, result.end);
+    advanceOrRestore(target, result, held, () => {
+      target.setSelectionRange(result.start, result.end);
+    });
     target.dispatchEvent(new Event('input', { bubbles: true }));
     return;
   }
@@ -1285,7 +1758,7 @@ function applyTextCommand(command) {
   if (!target.isContentEditable) return;
 
   const value = target.textContent || '';
-  const offsets = getSelectionOffsetsInEditable(target);
+  const offsets = held ?? getSelectionOffsetsInEditable(target);
   let result = null;
 
   if (command === 'bold') result = toggleWrappedRange(value, offsets.start, offsets.end, '**');
@@ -1296,9 +1769,29 @@ function applyTextCommand(command) {
   if (!result) return;
 
   target.textContent = result.value;
-  target.focus();
-  setSelectionInEditable(target, result.start, result.end);
+  advanceOrRestore(target, result, held, () => {
+    setSelectionInEditable(target, result.start, result.end);
+  });
   target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * After a command: put the caret back, or — when the native panel is holding
+ * this target — move the held range to where the text now is.
+ *
+ * The branch exists because `focus()` is what re-opens the keyboard, and the
+ * panel dismissed it on purpose. Advancing the held range instead is also what
+ * makes a SECOND command land correctly: bolding "Swift" makes it "**Swift**",
+ * so a following Italic has to aim at the wider range, not the original one.
+ */
+function advanceOrRestore(target, result, held, restore) {
+  if (held) {
+    heldFormatting.start = result.start;
+    heldFormatting.end = result.end;
+    return;
+  }
+  target.focus();
+  restore();
 }
 
 function adjustGlobalFontScale(delta) {
@@ -1346,8 +1839,14 @@ function initTextTools() {
   });
 
   document.addEventListener('selectionchange', () => {
+    rememberFormattingRange();
     updateTextToolbarState();
   });
+
+  // The native iOS format panel, which opens over a selection it then has to
+  // outlive. See `holdFormattingTarget`.
+  window.addEventListener('rd:format-hold', holdFormattingTarget);
+  window.addEventListener('rd:format-release', releaseFormattingTarget);
 
   toolbar.addEventListener('mousedown', (e) => {
     if (e.target.closest('.text-tool-btn')) {

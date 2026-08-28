@@ -1,0 +1,26 @@
+{
+  "identifier": "com.onpaper.app",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "On Paper"
+      }
+    ],
+    "security": {
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com data:; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com data:; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: https://ipc.localhost https://openrouter.ai https://api.github.com ws: http: https:; worker-src 'self' blob:;"
+    }
+  },
+  "bundle": {
+    "targets": [
+      "app"
+    ],
+    "createUpdaterArtifacts": false,
+    "iOS": {
+      "minimumSystemVersion": "26.0"
+    }
+  },
+  "plugins": {
+    "updater": null
+  }
+}

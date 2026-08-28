@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Restated r2-4 "One Circle": kill the risk. The two statements collapse onto ONE
+       circle, c(536,500): left of the vertical diameter it is solid to r270, right of
+       it it is contour (centreline r240, stroke 60, outer 270 — the silhouettes land
+       on the same circle across the seam to 0 units), split by a 34-unit Paper channel
+       at x[519,553]. Not a dot and a ring: one circle in two states, and the equal-
+       radius conceit is finally literal. The +2 irradiation compensation used in r2-1
+       and r2-3 is deliberately +0 here — a 2-unit ledge at a shared seam reads as an
+       error, and continuity outranks irradiation. Chord at x=519: half-length
+       sqrt(270^2-17^2) = 269.46, so the solid half runs (519,230.54)->(519,769.46),
+       arc 172.8 deg, flags 0 0 (centre resolves to (536,500)). Channel cut faces are
+       flat verticals (round caps would shorten each stub ~30) and mirror the solid's
+       chord face. Mass centroid sits 39 left of bbox centre (solid half area 114511 vs
+       arc 45239, 2.5:1): bbox shifted +24 right of canvas centre so silhouette-centre
+       and mass-centre straddle 512 (+24 / -15); vertical lifted 12 (512 -> 500).
+       Ink extents x[266,806] y[230,770]. Coral on Paper. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="536" cy="500" r="240" fill="none" stroke="#E8503A" stroke-width="60"/>
+  <rect x="519" y="220" width="34" height="560" fill="#F4EFE6"/>
+  <path d="M519,230.54 A270,270 0 0 0 519,769.46 Z" fill="#E8503A"/>
+</svg>

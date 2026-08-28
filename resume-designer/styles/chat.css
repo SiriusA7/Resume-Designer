@@ -322,6 +322,12 @@
     transform: translateX(-100%);
     transition: transform 0.3s ease;
     box-shadow: 4px 0 20px rgba(0, 0, 0, 0.1);
+    /* --chat-panel-width is pinned inline on :root by ChatPanel.jsx, so it wins
+       over any :root rule here — clamp on the element instead. `min()` keeps the
+       drawer from swallowing the whole screen on a phone or overflowing a narrow
+       Split View. */
+    width: min(var(--chat-panel-width, 320px), 88vw);
+    max-width: 88vw;
   }
 
   .chat-panel.open {

@@ -10,7 +10,15 @@ import { appStorage } from './appStorage.js';
 // too — not only in createChangeSet's pre-filter. diffEngine imports nothing
 // from this module (only the npm `diff` package), so sharing creates no cycle.
 import { setByPath } from './diffEngine.js';
-import { BACKUP_HISTORY_PREFIX } from './profileKeys.js';
+import { BACKUP_HISTORY_PREFIX, SYNC_STATE_KEY } from './profileKeys.js';
+// The history bound, from a leaf module both this store and the sync layer can
+// import — see historyLimits.js for why neither of them may own it.
+import { MAX_HISTORY } from './historyLimits.js';
+// The union rule, which this store and the sync layer have to agree on to the
+// letter. syncMerge.js is pure — no storage, no DOM, no app imports — so
+// importing it here cannot close a cycle with syncModel.js's import of this
+// file. See adoptHistory below.
+import { mergeHistory, entryIdentity } from './sync/syncMerge.js';
 
 // Cryptographically-secure random suffix (replaces Math.random; getRandomValues
 // has no secure-context requirement, so it works in the Tauri custom-scheme
@@ -24,6 +32,56 @@ export function randomSuffix() {
 // Generate unique IDs for new items
 export function generateId(prefix = 'item') {
   return `${prefix}-${Date.now()}-${randomSuffix()}`;
+}
+
+// This device's identity, stamped as `origin` on every history entry this store
+// writes.
+//
+// Version history syncs, so a merged timeline holds entries this user never
+// stepped through on this machine. Undo is a record of steps taken HERE (see
+// isOwnStep below), and telling the two apart needs a name for "here".
+//
+// It lives in `resume-designer-sync-state`, the device-local key the sync layer
+// already keeps its bookkeeping in — classified `local` in src/sync/syncKeys.js,
+// so it never leaves the machine — rather than in a key of its own: a new key is
+// a new file in the disk store and a new section in every backup, for one
+// string. It sits ALONGSIDE that key's `{ unitId: { modifiedAt } }` entries and
+// cannot collide with one, because every unit id carries a prefix (`resume:`,
+// `key:`, `data:`), and touchUnit's read-modify-write preserves it.
+//
+// Generated once and then reused, because it has to be STABLE: an id that
+// changed between sessions would make this user's own earlier entries look
+// foreign and strand their whole history behind their own undo. Memoised for
+// the process, which is enough — switching profiles reloads the window, so the
+// cached id can never outlive the profile whose key it came from.
+let originId = null;
+function deviceOrigin() {
+  if (originId) return originId;
+
+  let recorded = {};
+  try {
+    const raw = appStorage.getItem(SYNC_STATE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === 'object') recorded = parsed;
+  } catch {
+    // Unreadable bookkeeping. A fresh id is written over it below; the
+    // timestamps in it were this device's own view of sync and are recoverable.
+  }
+
+  if (typeof recorded.deviceId === 'string' && recorded.deviceId) {
+    originId = recorded.deviceId;
+    return originId;
+  }
+
+  originId = `device-${randomSuffix()}`;
+  try {
+    appStorage.setItem(SYNC_STATE_KEY, JSON.stringify({ ...recorded, deviceId: originId }));
+  } catch (e) {
+    // Quota, or a browser passthrough refusing the write. The id still holds
+    // for this session, so undo behaves; the next boot generates another one.
+    console.warn('Failed to record this device id:', e);
+  }
+  return originId;
 }
 
 // Comparable sort key for an experience entry: higher = more recent. Drives the
@@ -90,7 +148,12 @@ export const CHANGE_TYPES = {
   IMPORT: 'import',
   REORDER: 'reorder',
   ADD: 'add',
-  REMOVE: 'remove'
+  REMOVE: 'remove',
+  // Not a change this user made: the LOSING side of a sync conflict, parked in
+  // history by src/sync/syncModel.js so "newer wins" destroys nothing. Named
+  // here because two places have to agree on the string — the park that writes
+  // it and the undo/redo traversal that steps over it.
+  SYNC_CONFLICT: 'sync-conflict'
 };
 
 // Sections gained an `area` in 2026-07. Every pre-existing section is a sidebar
@@ -115,6 +178,8 @@ export function migrateSectionAreas(data) {
 function createStore() {
   let data = null;
   let isDirty = false;
+  // See `documentAdoptions()`.
+  let adoptions = 0;
   const listeners = new Set();
   let saveCallback = null;
   let saveTimeout = null;
@@ -131,11 +196,56 @@ function createStore() {
   // Each entry: { data, timestamp, description, changeType, path? }
   let history = [];
   let historyIndex = -1;
-  const MAX_HISTORY = 100; // Increased for version history
   let isUndoRedoAction = false;
   let currentVariantId = null;
   let pendingChangeDescription = null;
   let pendingChangeType = CHANGE_TYPES.EDIT;
+
+  // The undo timeline is a record of the steps THIS USER TOOK ON THIS DEVICE,
+  // and since version history syncs, a merged timeline holds entries that are
+  // neither. The traversal below steps over every one of them: no Cmd+Z, and no
+  // Cmd+Shift+Z, ever lands on an entry the user did not make here.
+  //
+  // Two kinds reach the array, and they are ONE rule, not two:
+  //
+  // - A parked sync conflict — another device's REJECTED résumé, the losing
+  //   side of "newer wins", archived by src/sync/syncModel.js so nothing is
+  //   destroyed. Never a step anyone took here.
+  // - An ordinary entry another device wrote, brought in by the union merge
+  //   (adoptHistory). Edit on the phone, open the Mac, press Cmd+Z, and undo
+  //   would hand back the phone's document rather than your own last state.
+  //   Nothing is lost, but it reads as loss.
+  //
+  // An entry with NO `origin` is this device's. History was device-local before
+  // sync existed, so every entry written before the field really was written
+  // here — and reading absence the other way would strand a user's entire
+  // existing history behind their own undo.
+  //
+  // Skipped entries stay exactly where they are in the array —
+  // getHistoryEntries still lists them and restoreToEntry still restores them,
+  // which is the entire point of keeping them. Only the traversal narrows.
+  //
+  // Doing it here rather than at each place such an entry can be inserted is
+  // what makes the rule hold everywhere at once: at historyIndex 0 there is no
+  // slot below the current entry for adoptHistoryEntry to use, a variant this
+  // device has never opened can load with a park as its only entry, and a
+  // history merge can leave either kind at the end. Each of those puts a
+  // version the user never chose one Cmd+Z away, and they are all the same
+  // mistake.
+  const isParked = (entry) => entry?.changeType === CHANGE_TYPES.SYNC_CONFLICT;
+  const isForeign = (entry) => entry?.origin != null && entry.origin !== deviceOrigin();
+  const isOwnStep = (entry) => !isParked(entry) && !isForeign(entry);
+  // The index undo/redo would move to from `from`, or -1 when there is none.
+  const undoTarget = (from) => {
+    let i = from - 1;
+    while (i >= 0 && !isOwnStep(history[i])) i -= 1;
+    return i;
+  };
+  const redoTarget = (from) => {
+    let i = from + 1;
+    while (i < history.length && !isOwnStep(history[i])) i += 1;
+    return i < history.length ? i : -1;
+  };
 
   return {
     // Get current data (returns a clone to prevent direct mutation)
@@ -160,15 +270,49 @@ function createStore() {
         this.loadHistory(variantId);
       }
       
-      // If no history was loaded, initialize with current state
-      if (history.length === 0) {
+      // If no history was loaded, initialize with current state.
+      //
+      // Or whenever the entry the loaded history calls current is NOT one of
+      // this user's own steps (isOwnStep) — a parked conflict loser, or an
+      // entry another device wrote. Both leave the timeline claiming a version
+      // the user never chose is the one on screen, and sync produces them two
+      // ways:
+      //
+      // - A variant this device has never opened has no history for parkLoser
+      //   to insert into, so syncModel.js's storage path writes `{ history:
+      //   [loser], historyIndex: 0 }`. loadHistory takes its success path on
+      //   that, so no 'Initial state' was pushed and the rejected version was
+      //   marked current, permanently.
+      // - A history unit for a variant that is not loaded is merged straight
+      //   into its key, with mergeHistory's index — the NEWEST entry, which the
+      //   union routinely takes from the other device. Nothing there is a park,
+      //   so a park-only check passed, the dialog marked a remote entry
+      //   current, and one edit plus one Cmd+Z put that device's résumé on
+      //   screen.
+      //
+      // Recording the state actually on screen fixes both: it lands at the end,
+      // so there is no redo future for pushHistory to splice away either, and
+      // the merged entries survive. A missing entry (an empty history, or a
+      // stored index that points past the array) is repaired the same way.
+      //
+      // What this must NOT ask is whether the current entry's data still EQUALS
+      // the document. updateSilent writes UI-only state (an accordion's
+      // `_expanded`, `experienceSortMode`) into `data` and persists it without
+      // a history entry, by design — so that drift is ordinary and expected,
+      // not a broken invariant. Re-pointing on it appended an 'Initial state'
+      // every time a résumé was reopened after an accordion toggle, which
+      // doubled the length of version history and made Cmd+Z take two presses
+      // per real edit. See the regression test in test/storeHistory.test.js.
+      const current = history[historyIndex];
+      if (!current || !isOwnStep(current)) {
         history.push({
           data: deepClone(data),
           timestamp: new Date().toISOString(),
           description: 'Initial state',
-          changeType: CHANGE_TYPES.INITIAL
+          changeType: CHANGE_TYPES.INITIAL,
+          origin: deviceOrigin()
         });
-        historyIndex = 0;
+        historyIndex = history.length - 1;
       }
       
       this.emit('dataLoaded', data);
@@ -224,12 +368,15 @@ function createStore() {
         history.splice(historyIndex + 1);
       }
       
-      // Create history entry with metadata
+      // Create history entry with metadata. `origin` says the step was taken on
+      // THIS device, which is what keeps another device's undo out of it once
+      // this entry syncs — see isOwnStep.
       const entry = {
         data: deepClone(data),
         timestamp: new Date().toISOString(),
         description: description || pendingChangeDescription || 'Edit',
-        changeType: changeType || pendingChangeType || CHANGE_TYPES.EDIT
+        changeType: changeType || pendingChangeType || CHANGE_TYPES.EDIT,
+        origin: deviceOrigin()
       };
       
       // Add the NEW current state
@@ -252,6 +399,225 @@ function createStore() {
       this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
     },
     
+    // Whether `variantId` is the variant on screen AND work on it is still in
+    // flight. src/sync/syncModel.js asks before it lands a fetched résumé:
+    // adopting one repaints the canvas, and a repaint over work in flight
+    // destroys it.
+    //
+    // Two things count as in flight, and the second cannot be seen from here:
+    //
+    // - `isDirty` — an edit this store has taken but no save has written yet.
+    //   It also stands in for the OTHER half of the same race: the fetch path
+    //   compares the remote stamp against the last PERSISTED one (syncModel's
+    //   modifiedAtFor), and the save debounce has no max wait, so under
+    //   continuous editing that stamp goes arbitrarily stale and a remote copy
+    //   older than the live document can outrank it. Dirty says "the recorded
+    //   time is not the document's time", which is the honest answer.
+    // - `sessionActive`, passed in — an inline-editing session. Text typed into
+    //   a contentEditable exists ONLY in the DOM until blur commits it through
+    //   `update` (src/inlineEditor.js), so `isDirty` is false while a person is
+    //   mid-word. This module has no DOM, so the caller reports it.
+    //
+    // Refusing rather than deferring is what the caller does with a true here,
+    // and nothing is lost by it: the refusal shortens the applied count, the
+    // transport forfeits the record's change tag, and the next save — which the
+    // in-flight edit is about to trigger — meets the conflict path, where both
+    // copies are compared and the loser is parked.
+    // Whether `variantId` is the résumé on screen. The one question only this
+    // module can answer — `currentVariantId` is private to it — and the sync
+    // layer needs it without a side effect: a landed TOMBSTONE has no document
+    // to adopt, so `adoptDocument`'s false cannot distinguish "not the loaded
+    // one" from "nothing to adopt".
+    isLoadedVariant(variantId) {
+      return Boolean(variantId) && variantId === currentVariantId;
+    },
+
+    isBusyEditing(variantId, sessionActive = false) {
+      if (!variantId || variantId !== currentVariantId) return false;
+      return isDirty || sessionActive === true;
+    },
+
+    // Adopt a résumé that arrived from another device as the LOADED variant's
+    // document, called by src/sync/syncModel.js when a `resume:` unit lands.
+    // Returns false when `variantId` is not the loaded variant, which tells the
+    // caller the storage write it has already done is the whole job.
+    //
+    // It exists for the same reason adoptHistory and adoptHistoryEntry do, one
+    // layer over: sync applies a fetched résumé by merging it into
+    // `resume-designer-data` ON DISK, but the loaded variant's document also
+    // lives HERE, in `data`, and the debounced save writes `data` back over
+    // that blob. So an applied résumé survived exactly until the next save,
+    // which wrote the stale in-memory document over it, stamped it with a fresh
+    // `modifiedAt`, and — this device legitimately holding the server's change
+    // tag, because the page had confirmed the apply — pushed it up as a clean,
+    // uncontested update. No conflict was raised and nothing was parked. Only
+    // the store can tell whether this is the variant on screen: currentVariantId
+    // is private to it.
+    //
+    // `isDirty` goes FALSE and no save is scheduled: what is adopted is exactly
+    // what the caller has just written to storage, so there is nothing left to
+    // persist, and saving would restamp the unit and send back what this device
+    // has only just received. A debounce already in flight cannot resurrect the
+    // replaced document either — scheduleSave's timer re-reads isDirty when it
+    // fires.
+    //
+    // The replaced document is not discarded silently. Every edit path records
+    // its result in `history` (pushHistory) BEFORE the save debounce runs, so
+    // the version this replaces is in that résumé's version history and one
+    // restore away — which is where "newer wins" says a loser belongs. The one
+    // writer that marks the store dirty without recording history is
+    // updateSilent, and what it writes is transient UI state by definition (an
+    // accordion's `_expanded`, the sort mode).
+    //
+    // `history` is otherwise left alone: this is not a step the user took here,
+    // and the step the OTHER device took arrives by itself as that variant's
+    // history unit (adoptHistory). historyIndex therefore keeps pointing at the
+    // entry it pointed at before, and `data` drifts from it — the same drift
+    // updateSilent produces, which setData is explicitly written to tolerate
+    // (see the comment there).
+    //
+    // 'change' is the event, because it is the one a whole-document replacement
+    // of the SAME variant already emits — undo, redo and restoreToEntry all use
+    // it — and every renderer hangs off it: the canvas (main.js), React
+    // (useResumeStore.js) and the iOS shell's document snapshot. 'dataLoaded'
+    // is the other candidate and it is the wrong one: subscribers read that as a
+    // DIFFERENT document backing the render (variant switch, import, restore)
+    // and act accordingly — ending a pending inline-change session, re-settling
+    // the chat threads for a variant that has not changed.
+    adoptDocument(variantId, document) {
+      if (!variantId || variantId !== currentVariantId) return false;
+      // Absence is never deletion: a unit carrying no document leaves the one
+      // on screen where it is rather than blanking the résumé.
+      if (!document || typeof document !== 'object') return false;
+
+      data = deepClone(migrateSectionAreas(document));
+      isDirty = false;
+      // BEFORE the render, and a signal of its own. 'change' is deliberately
+      // what this emits (see above) so subscribers do not treat an adoption as a
+      // variant switch — but an AI proposal under review is anchored to the
+      // document it was made against, and this replaced that document. Left
+      // standing, Apply acts on whatever now occupies the recorded position:
+      // `resolveAnchoredPath` falls back to the index when its anchor is gone,
+      // so a role deleted on the other device means the edit lands on the role
+      // that moved up into its place.
+      //
+      // A third event rather than promoting this to 'dataLoaded': that would
+      // also re-settle the chat threads for a variant that has not changed,
+      // which is the reason 'change' was chosen in the first place.
+      adoptions += 1;
+      this.emit('documentAdopted', data);
+      this.emit('change', data);
+      return true;
+    },
+
+    /// How many times the open document has been replaced by an adoption.
+    ///
+    /// The event says "it just happened"; this says "has it happened SINCE",
+    /// which is the question an operation suspended across one has to ask. A
+    /// listener cannot answer it — the answer has to survive the await, and
+    /// whoever is awaiting may not have been subscribed when it fired.
+    documentAdoptions() {
+      return adoptions;
+    },
+
+    // Insert a history entry this store did not produce — the losing side of a
+    // sync conflict, parked by src/sync/syncModel.js so "newer wins" destroys
+    // nothing. Returns false when `variantId` is not the loaded variant, which
+    // tells the caller to write that variant's history key directly instead.
+    //
+    // Going through the store is not a nicety: saveHistory() rewrites the whole
+    // key from THIS array, so an entry written straight to storage for the
+    // loaded variant is erased by the next edit's save.
+    //
+    // WHERE the entry lands answers to two constraints, and only positions
+    // strictly below historyIndex satisfy both:
+    //
+    // - At or below historyIndex, never after it. Everything after the index is
+    //   the redo future, and pushHistory() splices the future away on the next
+    //   edit — precisely how a parked entry used to vanish.
+    // - Below it, not AT it, so historyIndex — which moves up with the
+    //   insertion — still points at the same ENTRY it pointed at before.
+    //   Parking changes what history holds, never what the document shows.
+    //
+    // It is one slot below the current entry rather than at index 0 because
+    // pushHistory() evicts from the FRONT when history passes MAX_HISTORY, and
+    // a park at the front would be the first thing a full history dropped.
+    //
+    // With historyIndex 0 there is no slot below the current entry, so the
+    // entry goes to 0 and the index to 1 — the arrangement in which a park sits
+    // exactly one undo away. Undo keeping away from it is NOT this function's
+    // doing and cannot be: see isParked above, where the traversal skips parked
+    // entries wherever they ended up.
+    adoptHistoryEntry(variantId, entry) {
+      if (!variantId || variantId !== currentVariantId || !entry) return false;
+
+      history.splice(Math.max(0, historyIndex - 1), 0, entry);
+      historyIndex = Math.max(0, historyIndex + 1);
+      this.saveHistory();
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+      return true;
+    },
+
+    // Union another device's history for this variant into the loaded one,
+    // called by src/sync/syncModel.js when a history unit arrives. Returns
+    // false when `variantId` is not the loaded variant, which tells the caller
+    // to merge into that variant's key directly.
+    //
+    // It exists for the same reason adoptHistoryEntry does: saveHistory()
+    // rewrites the whole key from THIS array, so a merge written straight to
+    // storage for the loaded variant is erased by the next edit. The merge
+    // itself is mergeHistory's — the local side has to be the in-memory array,
+    // not a re-read of the key, because setData() pushes an 'Initial state'
+    // entry that no save has reached yet.
+    //
+    // `data` is untouched — a merge changes what history holds, not what the
+    // document shows — so historyIndex has to keep pointing at the entry the
+    // document IS on, or the store-wide invariant `history[historyIndex].data
+    // === data` breaks and undo hands the user a state they were never in.
+    // Taking mergeHistory's own index (the newest entry) broke exactly that:
+    // the union interleaves by timestamp, so the newest entry is routinely the
+    // other device's — or a loser IT parked.
+    //
+    // The entry is MOVED to the end rather than pointed at where it sorted,
+    // because everything after historyIndex is the redo future and
+    // pushHistory() splices the future away on the next edit: a mid-array index
+    // would delete the entries this merge just brought in — parked losers
+    // included — one keystroke later. At the end, both hold: the index is on
+    // the document's own entry AND there is no future to splice.
+    adoptHistory(variantId, remote) {
+      if (!variantId || variantId !== currentVariantId || !remote) return false;
+
+      const current = history[historyIndex] ?? null;
+      const merged = mergeHistory({ history, historyIndex }, remote).history;
+      if (current) {
+        // By identity, not by reference: the union keeps one object per
+        // identity, so an entry both devices hold comes back as the remote's
+        // deserialised twin. A current entry the cap dropped is re-appended —
+        // whatever else history holds, it has to hold the live document.
+        //
+        // The current entry's identity is computed ONCE. Inside the callback it
+        // canonical-serialised a whole résumé up to MAX_HISTORY times per merge,
+        // for a value that cannot change.
+        const identity = entryIdentity(current);
+        const at = merged.findIndex((e) => entryIdentity(e) === identity);
+        if (at >= 0) {
+          merged.push(merged.splice(at, 1)[0]);
+        } else {
+          merged.push(current);
+          // mergeHistory returns an array already at the bound, so re-appending
+          // puts it one over. The oldest goes — the same end pushHistory's
+          // shift() and mergeHistory's slice(-MAX_HISTORY) drop, and the only
+          // one that can be dropped safely.
+          if (merged.length > MAX_HISTORY) merged.shift();
+        }
+      }
+      history = merged;
+      historyIndex = merged.length - 1;
+      this.saveHistory();
+      this.emit('historyChanged', { canUndo: this.canUndo(), canRedo: this.canRedo() });
+      return true;
+    },
+
     // Save history to storage (quota throws survive the browser passthrough,
     // hence the try/catch; cached mode never throws here)
     saveHistory() {
@@ -293,22 +659,24 @@ function createStore() {
       return false;
     },
     
-    // Check if undo is available
+    // Check if undo is available (parked sync conflicts are not undo steps —
+    // see isParked)
     canUndo() {
-      return historyIndex > 0;
+      return undoTarget(historyIndex) >= 0;
     },
-    
+
     // Check if redo is available
     canRedo() {
-      return historyIndex < history.length - 1;
+      return redoTarget(historyIndex) >= 0;
     },
-    
+
     // Undo last change
     undo() {
-      if (!this.canUndo()) return false;
-      
+      const target = undoTarget(historyIndex);
+      if (target < 0) return false;
+
       isUndoRedoAction = true;
-      historyIndex--;
+      historyIndex = target;
       data = deepClone(history[historyIndex].data);
       isDirty = true;
       this.saveHistory(); // Persist after undo
@@ -322,10 +690,11 @@ function createStore() {
     
     // Redo last undone change
     redo() {
-      if (!this.canRedo()) return false;
-      
+      const target = redoTarget(historyIndex);
+      if (target < 0) return false;
+
       isUndoRedoAction = true;
-      historyIndex++;
+      historyIndex = target;
       data = deepClone(history[historyIndex].data);
       isDirty = true;
       this.saveHistory(); // Persist after redo

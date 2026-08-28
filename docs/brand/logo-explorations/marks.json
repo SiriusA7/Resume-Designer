@@ -1,0 +1,232 @@
+{
+ "territories": [
+  {
+   "slug": "stem-counter",
+   "territory": "Stem and counter",
+   "thesis": "The P taken apart: a stem and a bowl that never touch, so the eye closes the letter and the drawing never does.",
+   "marks": [
+    {
+     "id": "stem-counter-1",
+     "name": "Colophon",
+     "file": "docs/brand/logo-explorations/stem-counter-1.svg",
+     "idea": "A solid vertical ink lozenge (140 wide, 540 tall, fully rounded ends) and, 90 units to its right with their tops exactly aligned, a heavy disc of outer radius 200 with a small 120-unit-wide round counter punched through its centre; the bar descends 140 units below the disc's bottom, so the eye closes a bold uppercase P.",
+     "why": "This is the first pinned reference restated in On Paper's own materials \u2014 heavy black on warm paper, a printer's-mark seriousness that matches 'substance, clearly expressed'. The tiny counter keeps it at the P end of the territory's range: mass first, letter second.",
+     "colour": "#0C0A08 ink on #F4EFE6 paper",
+     "risk": "It reads as the numeral 10 (or 'IO') at least as readily as a deconstructed P \u2014 a stranger may see a bar and a record before a letter. The counter (~2px) and the gap (~1.4px) both survived my 16px downscale test but are at the absolute limit; a poor rasteriser could fuse the gap and turn it into a plain bold P. It does not read as a page, a fold, or a font letterform."
+    },
+    {
+     "id": "stem-counter-2",
+     "name": "Open Counter",
+     "file": "docs/brand/logo-explorations/stem-counter-2.svg",
+     "idea": "Everything one 72-unit monoline: a vertical coral rule (72 by 560, rounded ends) and, 110 units to its right with tops aligned, a monoline ring of outer radius 216 whose counter is 288 units wide; the rule descends 128 units below the ring, which is the only thing still whispering P.",
+     "why": "This is the interval the brand guide explicitly asks for: at this counter size the mark stops being a P and becomes an O with a rule beside it \u2014 and On Paper is an O and a P. Coral monoline is the closest of the three to the user's outlined-coral reference, and the quietest, most contemporary drawing.",
+     "colour": "#E8503A coral on #F4EFE6 paper",
+     "risk": "The O-dominance cuts both ways: first readings may be '10', 'IO', or a power symbol beside a line rather than any letter at all. The 72-unit coral stroke drops to about 1px at 16px and is the faintest of the three against warm paper \u2014 it passed the downscale test but with the least margin. No fold, document, or font-letterform reading."
+    },
+    {
+     "id": "stem-counter-3",
+     "name": "Spine",
+     "file": "docs/brand/logo-explorations/stem-counter-3.svg",
+     "idea": "On a full-bleed ink ground, a 96-unit round-capped white stroke that bows 48 units leftward along a circular arc of radius 514.5 (chord from y310 to y744 at x307) \u2014 a spine flexing away from the letter \u2014 and, about 100 units to its right, a 96-unit white ring of outer radius 198 whose top aligns with the stroke's cap top.",
+     "why": "The humane end of the territory: the first reference's stem 'curves like a spine', and the bow supplies the hand-felt imperfection the user liked in Ola without faking an organic blob. White on ink is the calm, polished night version of the brand \u2014 a colophon that breathes.",
+     "colour": "#FFFFFF white on #0C0A08 ink ground",
+     "risk": "The round-capped bowed stroke honestly reads as an opening parenthesis \u2014 '(O' \u2014 or a crescent beside a ring, before it reads as a P stem. Worse, the bow is the mark's one gesture and it flattens to nearly straight at 16px (confirmed in my downscale test), so at icon size this collapses toward mark 2 without mark 2's considered proportions. No fold or document reading."
+    }
+   ]
+  },
+  {
+   "slug": "two-planes",
+   "territory": "Two aligned planes",
+   "thesis": "One profile, many tailored documents \u2014 drawn as two related planes rather than a stack of paper.",
+   "marks": [
+    {
+     "id": "two-planes-1",
+     "name": "Pivot",
+     "file": "docs/brand/logo-explorations/two-planes-1.svg",
+     "idea": "A solid coral portrait plane (360x520, rounded corners), with an identical plane rotated 20 degrees about their shared bottom-left corner showing from behind as a tapering wedge along the left edge and a small corner tip above the top edge, separated everywhere by a clean 40-unit paper gap.",
+     "why": "It enacts the brand's central truth literally: the same plane twice, related by a single rotation about a shared anchor point \u2014 the shared corner is the shared source, and the rotation is the act of tailoring. The offset is rotational, not translational, which is what keeps it from being a stack.",
+     "colour": "#E8503A on Paper #F4EFE6",
+     "risk": "The closest of the three to the common two-documents/copy icon \u2014 a stranger could plausibly say 'two cards' or 'a red card being dealt'. The detached corner tip above the plane is honest geometry of the rotation but can read as a stray fleck below about 24px."
+    },
+    {
+     "id": "two-planes-2",
+     "name": "Restated",
+     "file": "docs/brand/logo-explorations/two-planes-2.svg",
+     "idea": "The same circle stated twice: a solid ink disc (r190) in front, and an equal-radius monoline ring (stroke 64) offset up the 45-degree diagonal that passes behind the disc, hidden for about 77 degrees of its arc and re-emerging on both sides across crisp 34-unit gaps.",
+     "why": "One source, restated \u2014 substance once, contour once, identical radius \u2014 with no document imagery at all. The two weights of the same circle quietly echo the O of On Paper, and the depth pass gives the aligned planes a real spatial relationship rather than a flat duplication.",
+     "colour": "#0C0A08 on Paper #F4EFE6",
+     "risk": "Reads as a generic dot-and-ring pairing \u2014 could be described as linked rings, a pearl and a band, or an abstract eclipse. The equal-radius conceit, which is the actual idea, is invisible without being told; an earlier deeper-overlap tuning read as an eyeball and was rebuilt, so the concept is sensitive to spacing."
+    },
+    {
+     "id": "two-planes-3",
+     "name": "Die Cut",
+     "file": "docs/brand/logo-explorations/two-planes-3.svg",
+     "idea": "A coral disc (r330) from which the second plane has been lifted out entirely: a 300x420 rounded-rectangle void tilted 8 degrees, cut clean through the disc's centre, leaving a minimum 90-unit coral band at the void's corners.",
+     "why": "The tailored document exists only as the gap it left in the complete source \u2014 absence as proof that something was taken and used. It fuses the O (the disc) with the page (the void) in one two-element form, and it is the best 16px survivor of the set, with the tilt still perceptible at icon size.",
+     "colour": "#E8503A on Paper #F4EFE6",
+     "risk": "The void is a blank tilted rectangle, so despite the figure being a disc a stranger could describe this as 'a page inside a red circle' \u2014 document-adjacent, though not a folded corner and not a bare sheet icon. The tilt and total featurelessness of the void are what hold it back from the generic document read; remove either and it fails."
+    }
+   ]
+  },
+  {
+   "slug": "caret",
+   "territory": "Caret and margin",
+   "thesis": "Authorship and review, in the oldest marks in editing: the insertion caret, the margin rule, the cursor.",
+   "marks": [
+    {
+     "id": "caret-1",
+     "name": "Proof",
+     "file": "docs/brand/logo-explorations/caret-1.svg",
+     "idea": "A horizontal ink bar (centreline y=300, x 224-800, stroke 96, round caps) with a coral proofreader's caret hovering beneath it: two 96-unit round-capped strokes rising from feet (352,724) and (672,724) to an apex at (512,468) - a 64-degree point whose cap stops a deliberate 72-unit gap below the bar, total ink spanning y 252-772 so the composition centres on 512.",
+     "why": "This is the product's ethic drawn literally: the settled line of text above, the suggested insertion waiting below it, not yet allowed to touch. The proofreader's caret is the oldest review mark there is, and pairing it with the rule is what keeps it an editing gesture rather than a floating arrow.",
+     "colour": "Ink #0C0A08 rule and Coral #E8503A caret on a Paper #F4EFE6 ground",
+     "risk": "Checked against the three failure modes: not a play button (monoline, not a solid triangle) and not an upload arrow (no stem, no tray) - but a caret alone is cousin to a chevron, and a chevron-up under a horizontal bar can read as a collapse/scroll-to-top UI glyph or an inverted eject symbol. The steep 64-degree apex and the anchoring rule are the defence; a stranger seeing it cold may still say 'arrow under a line'. No fold, document, or letterform reading."
+    },
+    {
+     "id": "caret-2",
+     "name": "Margin",
+     "file": "docs/brand/logo-explorations/caret-2.svg",
+     "idea": "An ink circle (centre 512,512, radius 300, stroke 88) holding a single coral vertical rule (stroke 88, round caps, centreline x=392, y 400-624) that floats fully inside the ring at the left third of the counter - a margin rule set across a circular page, minimum clearance to the ring about 48 units.",
+     "why": "The margin is where review lives, and setting it inside the O makes the brand's own initial without a monogram: the whole (one career, one circle) disciplined by one editorial line. It sits in the quiet register of the pinned ORO reference - monoline, one accent, negative space doing the talking.",
+     "colour": "Ink #0C0A08 ring with a Coral #E8503A rule on a Paper #F4EFE6 ground",
+     "risk": "Nothing of the play button, chevron, or upload arrow in it. The honest weaknesses are different: a vertical bar inside a circle can be misread as a circled numeral 1, a coin slot, or a power-symbol relative, and 'margin' is the least self-explanatory idea of the three - a stranger sees a handsome abstract before they see editing. The off-centre placement is the only thing carrying the meaning."
+    },
+    {
+     "id": "caret-3",
+     "name": "Counterpoint",
+     "file": "docs/brand/logo-explorations/caret-3.svg",
+     "idea": "A solid white geometric P - stem 96 wide (x 320-416, y 280-760), bowl a 160-radius semicircle capping a rectangle (y 280-600, rightmost point x=704) - whose counter is a wide proofreader's caret cut in negative space: a chevron slot with edge slopes of 0.85 (99-degree apex), perpendicular width 52, outer apex (532,336), inner apex (532,404), flat feet at y=444 running from x=404.9 to 659.1, leaving 45 units of ink at the tightest point by the bowl's curve.",
+     "why": "The letter and the review mark are one object: the P's counter is literally the insertion caret, negative space doing the work exactly as in the pinned cut-out-P reference, with the heavy editorial mass of the black split-P. White on the signature coral makes the strongest app-icon candidate of the three.",
+     "colour": "White #FFFFFF mark on a full-bleed Coral #E8503A ground",
+     "risk": "It is a letterform - drawn from circles and rectangles, not a font, but it will be described as 'a P'. My first construction (a steep 45-degree caret) rendered as a letter A inside the P - a 'PA' monogram - so I rebuilt the counter wide and shallow at 99 degrees, which reads as a caret; verified by rendering both. Residual risks: the wide caret can be read as a roof or a rank-insignia chevron inside the bowl, and at 16px the slot plugs into a simple notch so the caret is only legible at 32px and up. The hole is a hollow chevron band, not a solid triangle, so no play-button reading; no fold, page corner, or generic document reading."
+    }
+   ]
+  },
+  {
+   "slug": "soft-geometry",
+   "territory": "Soft geometry",
+   "thesis": "A circle that is not quite a circle. The imperfection carries 'human', which nothing else here does.",
+   "marks": [
+    {
+     "id": "soft-geometry-1",
+     "name": "Pebble",
+     "file": "docs/brand/logo-explorations/soft-geometry-1.svg",
+     "idea": "A solid coral O drawn as a hand-felt ring: the outer edge is a six-anchor organic blob (radii 336/342/324/334/320/330 about centre 512,512) that swells at the lower right and flattens at the upper left, and the counter is its own organic blob shifted off-axis to (500,496), so the band breathes from 96 to 154 units thick as it travels round with no findable seam.",
+     "why": "This is the one mark in the whole exploration that carries 'human' \u2014 the imperfection is deliberate and calm, the O is On Paper's own initial, and coral on warm paper is the brand's signature pairing at its most direct.",
+     "colour": "#E8503A coral on #F4EFE6 paper ground",
+     "risk": "It sits very close to the pinned Ola reference \u2014 a client could fairly call it derivative \u2014 and alone it says only 'O': nothing of paper, careers, or documents. At a glance it could be any warm ring or donut mark; the wobble is quiet enough that some viewers will read a plain circle."
+    },
+    {
+     "id": "soft-geometry-2",
+     "name": "Soft p",
+     "file": "docs/brand/logo-explorations/soft-geometry-2.svg",
+     "idea": "The organic O in ink (bowl blob at 532,480 with off-axis counter at 540,464) plus one gesture: a 112-unit-wide vertical stem, tapering slightly to 104 and leaning a hair left, hanging from the bowl's lower left with a round 52-radius tip at (339,852) \u2014 its top edge buried inside the band so the join reads as one written stroke, turning the O into a lowercase p.",
+     "why": "It is literally the brief's 'minimum possible gesture that makes it a P': every part of the O survives, and the single descender adds the product's initial while the wobble keeps it human rather than typographic. Verified at 16px it still reads p unambiguously.",
+     "colour": "#0C0A08 ink on #F4EFE6 paper ground",
+     "risk": "It is a letterform \u2014 constructed from arithmetic, not a font, but a stranger would still describe it as 'a rounded lowercase p', which walks the edge of the monogram clich\u00e9 the brand guide warns about. The stubby tail can also flicker into a speech-bubble-with-tail reading, and its inset placement (56 units in from the bowl's left extreme) is a tail, not a true stem, which a type-literate eye may find unorthodox."
+    },
+    {
+     "id": "soft-geometry-3",
+     "name": "Waterline",
+     "file": "docs/brand/logo-explorations/soft-geometry-3.svg",
+     "idea": "A thin paper-coloured organic ring (60-unit stroke on centreline radii 300\u2013314 about 512,506) on an ink ground, its lower third filled solid: the fill's top edge is a gently tilted S-curve waterline from (227.6,588) to (791.3,604) \u2014 rising left of centre, dipping right \u2014 whose ends climb slightly where they meet the ring, like a meniscus, while the fill's underside hides beneath the stroke so the visible pool edge is the ring's own wobbling inner contour.",
+     "why": "It takes the ORO reference's level-in-a-vessel and makes it literal for this brand: paper settling and filling an ink vessel is 'substance, clearly expressed', and it is the quietest, most editorial of the three \u2014 the register the brand's 'calm, polished' words ask for.",
+     "colour": "#F4EFE6 paper on #0C0A08 ink ground",
+     "risk": "It is the most derivative of the three \u2014 anyone who knows ORO will see the source. The 60-unit ring renders under 1px at 16px (my 16px proof held, but it is faint next to the solid marks), and the form can be read as a moon horizon, a half-closed eye, or a drink in a glass \u2014 none of which say paper or careers."
+    }
+   ]
+  },
+  {
+   "slug": "one-line",
+   "territory": "One continuous line",
+   "thesis": "A single unbroken stroke that becomes several things \u2014 one source, many expressions, drawn literally.",
+   "marks": [
+    {
+     "id": "one-line-1",
+     "name": "One Loop",
+     "file": "docs/brand/logo-explorations/one-line-1.svg",
+     "idea": "A single closed monoline loop: a near-complete ring (centre 512,432, r 240, 310 degrees of it present) whose missing lower-left segment is replaced by a hairpin descender \u2014 down a left leg tangent to the ring at its 9 o'clock point, around a semicircular U-turn (r 85, bottom at y 827), and back up to rejoin the ring at (442,661.56), so the whole mark is one unbroken 72-unit stroke that silhouettes as a lowercase p built from an O.",
+     "why": "It is O and P literally made of the same line \u2014 one career profile, many expressions \u2014 and the loop closes on itself, which suits a local-first, self-contained product. The entire path has exactly one corner (a soft 73-degree elbow where the ring meets the right leg, the same joint a p's bowl makes with its stem); everything else is tangent-continuous.",
+     "colour": "#E8503A (Coral) stroke on #F4EFE6 (Paper) ground",
+     "risk": "The honest misreads are balloon-on-a-string or a downward magnifying glass, since the descender hangs from the ring rather than spanning its full height like a true p stem; and the hairpin's 98-unit inner gap closes at 16px, so the descender degrades to a solid rounded stem at icon size (a graceful degrade, but a real one)."
+    },
+    {
+     "id": "one-line-2",
+     "name": "On the Line",
+     "file": "docs/brand/logo-explorations/one-line-2.svg",
+     "idea": "One open 80-unit stroke: a horizontal baseline runs in from the left at y 712, flows tangentially into a ring (centre 628,512, r 200) at the ring's bottom point, travels 290 degrees anticlockwise around it, and stops in the lower-left at (440.1,580.4) \u2014 one end is the flat start of the writing line, the other hovers inside the O's opening, aimed back at where it began.",
+     "why": "It is the brand name drawn as a gesture \u2014 the O sitting ON the line of the page \u2014 and the closest of the three to the pinned ORO horizon mark: quiet, wide, calm. The two ends do compositional work: the left cap anchors the baseline like the start of a sentence, and the terminal cap gives the O the slight imperfection the Ola references prize.",
+     "colour": "#0C0A08 (Ink) stroke on #F4EFE6 (Paper) ground",
+     "risk": "It reads O far more than P \u2014 there is no P in this mark at all \u2014 and at glance distance it can misread as a sun on a horizon, a lasso, or a handwritten lowercase o with an entry stroke; the 51.6-unit surface gap between the loose end and the baseline closes below about 24px, fusing it into a solid o-on-a-line."
+    },
+    {
+     "id": "one-line-3",
+     "name": "Pen Knot",
+     "file": "docs/brand/logo-explorations/one-line-3.svg",
+     "idea": "A capital P written without lifting the pen, as one open 72-unit path: up a vertical stem from (374,806), tangent into the bowl at the bowl's 9 o'clock point (374,390), 270 degrees clockwise around the bowl (centre 546,390, r 172), leaving tangentially at 6 o'clock, then straight left across the stem to a tail at (306,562) \u2014 and at the single crossing (374,562) the horizontal tail passes visibly OVER the stem, the under-strand interrupted by a 32-unit gap on each side, woven like the knot reference.",
+     "why": "This is the territory's weave expressed as authorship: the visible over-under says a human hand wrote this P in one continuous motion, which is exactly the brand's review-everything, human-in-the-loop stance. The line itself is genuinely a single d attribute with no corners anywhere \u2014 every junction is tangent \u2014 so the calm comes from geometry, not styling.",
+     "colour": "#FFFFFF (White) stroke on #0C0A08 (Ink) ground",
+     "risk": "The bar crossing the stem gives it a real echo of the ruble sign and a faint Rx one, and the weave gaps vanish below roughly 48px, so at icon size it flattens to a plain crossed P; also, honestly, the interruption is rendered with a ground-colour patch plus a retrace of the over-strand \u2014 the drawn line is one path, but the woven effect needs those two helper elements, exactly as the pinned knot mark must."
+    }
+   ]
+  },
+  {
+   "slug": "figure-ground",
+   "territory": "Figure and ground",
+   "thesis": "The mark cut out of a solid field, so the letter is made of the background and never drawn at all.",
+   "marks": [
+    {
+     "id": "figure-ground-1",
+     "name": "Letterpress",
+     "file": "docs/brand/logo-explorations/figure-ground-1.svg",
+     "idea": "A solid coral disc (r 340 at 512,512) with a geometric P punched clean through it \u2014 flat top edge softened by a 36-unit corner, a 120-unit stem dropping to a round 60-radius foot at y 722, the bowl a solid half-circle void of radius 135 tangent to the stem's right edge \u2014 and a 42-radius coral dot floating free inside the bowl as the counter, ringed by 93 units of void.",
+     "why": "This is the pinned reference 4 made fully confident: the letter is made of the ground and never drawn, so there is exactly one silhouette at any size. The floating counter gives it life at 1024 and degrades gracefully \u2014 at 16px it fills in first and the bowl reads as a solid hole, and the P is still legible (verified in a rasterised 16px test).",
+     "colour": "#E8503A coral field; the void is genuine transparency, so the P is whatever ground the mark sits on \u2014 Paper #F4EFE6 in app contexts, white on a white page.",
+     "risk": "A coral disc with a white geometric P sits one step from the Product Hunt icon \u2014 the construction differs (solid void bowl, floating counter, flat top) but the gestalt at a glance is close. It is also the safest, least surprising of the three, and the counter dot is invisible below about 32px."
+    },
+    {
+     "id": "figure-ground-2",
+     "name": "Loose Leaf",
+     "file": "docs/brand/logo-explorations/figure-ground-2.svg",
+     "idea": "A solid ink disc (r 340 at 512,512) holding two separate voids in conversation: a rounded vertical stem (a 130-by-380 stadium, x 294\u2013424, y 322\u2013702) and a free-floating 120-radius dot at (610,452) where a P's bowl would sit, kept apart by a 66-unit bridge of ink.",
+     "why": "It is the product's one-line story drawn in negative: the stem is the constant (one career profile), the detached disc is the tailored document sent out on its own \u2014 and together they still read as the P. It fuses the two references the client pinned hardest: the split stem-and-circle P (ref 1) and the negative-space cut (ref 4).",
+     "colour": "#0C0A08 ink field; voids are transparent, so the two shapes are made of the ground beneath.",
+     "risk": "It is essentially Patreon's old bar-and-circle mark inverted, and without the brand nearby it can read as 'IO' or a lowercase 'i\u00b7' before it reads as P. The 66-unit ink bridge between the voids is below the 90-unit floor I hold voids to; at 16px it nearly fuses \u2014 which collapses it into mark 1's connected P, a soft failure of the 'two shapes' idea rather than a legibility failure."
+    },
+    {
+     "id": "figure-ground-3",
+     "name": "Insertion Mark",
+     "file": "docs/brand/logo-explorations/figure-ground-3.svg",
+     "idea": "A cobalt rounded square (640 units, x/y 192\u2013832, corner radius 176 \u2014 a squircle, not a circle) with a proofreader's caret cut out of it: a 130-unit-wide bent channel whose 45-degree arms run from rounded 65-radius end caps at (322,610) and (702,610) up to a rounded outer apex over (512,420), the sharp inner point of the field landing exactly on the canvas centre (512,512).",
+     "why": "It is the brand guide's own suggested direction \u2014 the caret as authorship and review \u2014 and the only mark of the three that carries 'every suggestion reviewed by the person before it lands': the caret is the human insertion point, cut from the surface itself. The squircle field makes it feel native beside iOS icons rather than a sticker on one.",
+     "colour": "#2B2BFF cobalt field (the palette's 'focus' colour, matching what a caret means); the caret is transparent ground.",
+     "risk": "A chevron-up in a rounded square belongs to the scroll-to-top/upload genre, and a stranger would call it an arrow before an editor's caret; nothing in it says paper or P without the wordmark alongside. Cobalt is also the brand's designated rare colour, so using it as the icon colour promotes it above its stated role \u2014 though the mark recolours to coral or ink trivially."
+    }
+   ]
+  }
+ ],
+ "read": "Eighteen marks, six territories \u2014 and one idea that outruns the rest: a stem and a counter held apart, so the eye closes the letter and the drawing never does. It is an O and a P at the same time, which is the relationship the brand guide asked for without becoming a monogram, and it is the only thing here that none of the references already owns.",
+ "shortlist": [
+  {
+   "id": "stem-counter-1",
+   "note": "The clearest statement of the idea \u2014 and the one to argue about. Its own designer flags that it reads as the numeral 10 as readily as a P, and I read it that way too. That ambiguity is either the whole point or the whole problem."
+  },
+  {
+   "id": "figure-ground-2",
+   "note": "The same idea inverted: stem and counter cut out of one disc. One silhouette, which makes it the strongest of the entire set at 16px and the most assured beside other icons."
+  },
+  {
+   "id": "soft-geometry-2",
+   "note": "The only mark carrying 'human'. An organic ring with the smallest gesture that makes it a p, its counter deliberately off-centre \u2014 which is what keeps it from looking generated."
+  },
+  {
+   "id": "caret-3",
+   "note": "The most finished as an icon, and the most conventional: a letter in a square trades distinctiveness for instant legibility. The caret in the counter is where review happens."
+  },
+  {
+   "id": "stem-counter-3",
+   "note": "Colophon with a bowed stem, and the bow is the entire difference \u2014 a drawn mark rather than a constructed one. Honest caveat: the bow flattens toward straight at icon size."
+  }
+ ],
+ "failed": "Four are dead ends and worth saying so plainly. Pivot is the stack-of-paper icon the brief warned against. Proof and Insertion Mark both read as an upload button \u2014 a caret alone points, and pointing is a control, not an identity. On the Line loses its shape below about 32px. Margin is clean but reads as a pause control before it reads as a margin rule."
+}

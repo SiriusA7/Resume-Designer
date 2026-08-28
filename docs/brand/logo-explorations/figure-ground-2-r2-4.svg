@@ -1,0 +1,28 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Loose Leaf r2-4 "Embrace": the stem gives up being a bar - it bows and orbits
+       the dot at constant clearance. Not describable as a circle and a bar.
+       Disc c(512,501) r340. Dot void c(601,501) r100.
+       Bow void: arc stroke w88 (= 85 nominal + 3 curve-reads-thinner comp, 3.5%),
+       centreline R234 concentric with the dot, span 96deg about west (+/-48deg;
+       +/-46 intended + 2deg per end = ~8 units of arc, round-cap compensation),
+       round caps r44 at c(444.4,327.1)/(444.4,674.9). Outer r278, inner r190.
+       Channel dot-to-bow = 90 uniform, caps included (cap centres sit on R234).
+       Assembly bbox [323,701] x [283,719], centred (512,501).
+       Overshoot: 0 - no flat edge exists anywhere in the composition. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <path fill="#0C0A08" fill-rule="evenodd" d="
+    M 852,501
+    A 340,340 0 1 1 172,501
+    A 340,340 0 1 1 852,501
+    Z
+    M 415,707.6
+    A 278,278 0 0 1 415,294.4
+    A 44,44 0 0 1 473.9,359.8
+    A 190,190 0 0 0 473.9,642.2
+    A 44,44 0 0 1 415,707.6
+    Z
+    M 701,501
+    A 100,100 0 1 1 501,501
+    A 100,100 0 1 1 701,501
+    Z" />
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Soft geometry 1 — "Pebble": an organic O. Outer blob centred (512,512),
+       six anchors, radii 336/342/324/334/320/330 (swells lower-right, flattens
+       upper-left). Counter is its own blob, centred off-axis at (500,496),
+       radii 200/208/210/198/204/196 — band runs 96 to 154 units thick. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <path fill="#E8503A" fill-rule="evenodd" d="M 848.0 512.0 C 848.0 632.0 788.8 747.1 683.0 808.2 C 577.2 869.3 450.2 850.5 350.0 792.6 C 249.8 734.7 178.0 631.3 178.0 512.0 C 178.0 392.7 253.0 292.0 352.0 234.9 C 451.0 177.7 574.9 167.3 677.0 226.2 C 779.1 285.2 848.0 392.0 848.0 512.0 Z M 700.0 496.0 C 700.0 567.5 668.4 639.0 604.0 676.1 C 539.6 713.3 460.0 715.4 395.0 677.9 C 330.0 640.4 302.0 566.7 302.0 496.0 C 302.0 425.3 334.9 355.8 398.0 319.3 C 461.1 282.9 537.4 291.2 598.0 326.3 C 658.6 361.3 700.0 424.5 700.0 496.0 Z"/>
+</svg>

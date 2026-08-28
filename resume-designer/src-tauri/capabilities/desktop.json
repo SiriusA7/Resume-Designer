@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Desktop-only: window chrome control, the hidden PDF-export print window, the self-hosted updater, and relaunch-after-update.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main", "pdf-print-*"],
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:webview:allow-create-webview-window",
+    "core:webview:allow-webview-close",
+    "updater:default",
+    "process:default",
+    "process:allow-restart"
+  ]
+}

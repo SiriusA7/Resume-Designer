@@ -205,6 +205,18 @@ describe('cached mode (disk backend)', () => {
     expect(appStorage.getItem('resume-zoom')).toBe('2'); // cache still serves it
   });
 
+  it('reports read-only as NOT durable, so nothing announces a save it did not make', async () => {
+    const backend = makeBackend({ 'resume-designer-data': '{}' });
+    await initAppStorage({ backend, readOnly: true });
+    appStorage.setItem('resume-zoom', '2');
+    // `setItem` returns before queuing in this mode, so `dirty` stays empty and
+    // no write can fail — the naive "did any write fail?" test answers `true`
+    // for a session in which nothing reached disk. Callers act on this: the
+    // backup restore announces success and reloads, profile create/switch
+    // reload, and the PDF export builds from a disk that never saw the change.
+    expect(await appStorage.flush()).toBe(false);
+  });
+
   it('rejects in readOnly mode when disk data cannot load (print window aborts, never captures stale)', async () => {
     localStorage.setItem('resume-designer-data', '{"v":1}');
     const backend = makeBackend();
@@ -368,6 +380,55 @@ describe('boot migration (localStorage → disk adoption)', () => {
     await initAppStorage({ backend, readOnly: true });
     expect(backend.write).not.toHaveBeenCalled();
     expect(localStorage.getItem('resume-designer-data')).toBe('{"v":1}');
+  });
+});
+
+describe('a disk load that fails has somewhere to fall back to, or refuses', () => {
+  const failingBackend = () => ({
+    loadAll: vi.fn(async () => { throw new Error('storage_load_all failed'); }),
+    write: vi.fn(async () => {}),
+    delete: vi.fn(async () => {}),
+    clear: vi.fn(async () => {}),
+  });
+
+  it('uses localStorage when localStorage is still where the data is', async () => {
+    // The pre-adoption install: the disk store has never been populated, so
+    // localStorage genuinely holds the resumes and passthrough over it is the
+    // real data rather than a blank slate.
+    localStorage.setItem('resume-designer-data', '{"variants":{"v-1":{}}}');
+    await initAppStorage({ backend: failingBackend() });
+
+    expect(appStorage.getItem('resume-designer-data')).toBe('{"variants":{"v-1":{}}}');
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    expect(localStorage.getItem('resume-designer-applications')).toBe('[{"id":"a-1"}]');
+  });
+
+  it('refuses to accept work when localStorage was already emptied by adoption', async () => {
+    // The established install, and the case that lost data. Adoption empties
+    // localStorage once the disk store owns the keys, so passthrough here is not
+    // a fallback — it is a blank, WRITABLE store. Edits went into localStorage,
+    // the next launch found the disk store non-empty and skipped adoption, and
+    // they were never read again: the session's work gone and the older disk
+    // data back in its place.
+    expect(localStorage.length).toBe(0);
+    await initAppStorage({ backend: failingBackend() });
+
+    // Reads answer empty — there is genuinely nothing loaded.
+    expect(appStorage.getItem('resume-designer-data')).toBeNull();
+
+    // …and a write goes NOWHERE durable. Not to localStorage, where the next
+    // launch would never look, and not to the disk store, which must stay
+    // exactly as it is for that launch to load.
+    appStorage.setItem('resume-designer-applications', '[{"id":"a-1"}]');
+    expect(localStorage.getItem('resume-designer-applications')).toBeNull();
+    // …and `flush` SAYS so. This asserted `true` until now, directly against
+    // the sentence above it: nothing is queued in this mode, so the "did any
+    // write fail?" test had nothing to fail and answered yes-it-is-durable for
+    // a session in which not one byte reached disk. Every durability-gated
+    // caller believed it — the backup restore announced a restore and reloaded,
+    // profile create and switch reloaded, the PDF export built from a disk that
+    // never saw the change.
+    await expect(appStorage.flush()).resolves.toBe(false);
   });
 });
 

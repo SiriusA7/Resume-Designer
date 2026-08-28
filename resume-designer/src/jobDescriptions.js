@@ -4,7 +4,7 @@
  */
 
 import { randomSuffix } from './store.js';
-import { appStorage } from './appStorage.js';
+import { appStorage, currentWriteSequence, onWriteFailure } from './appStorage.js';
 import { storageErrorToast } from './storageToast.js';
 
 const STORAGE_KEY = 'resume-designer-job-descriptions';
@@ -12,37 +12,161 @@ const STORAGE_KEY = 'resume-designer-job-descriptions';
 // In-memory cache of job descriptions
 let jobDescriptions = [];
 
+// Re-read callbacks for whoever renders this list. Nothing subscribed here
+// until sync could replace the whole key from under an open dialog: JobsDialog
+// re-reads the cache after each of its OWN mutations (a `bump` reducer) and the
+// native sheet re-reads on every publish, so both cover every writer they drive
+// themselves — and neither covers the one they do not.
+const subscribers = new Set();
+
+/** Subscribe to replacements of the whole list. Returns an unsubscribe. */
+export function subscribeJobDescriptions(callback) {
+  subscribers.add(callback);
+  return () => subscribers.delete(callback);
+}
+
+/**
+ * Parse a stored value into the array shape this module requires, or `null`
+ * when it is not one.
+ *
+ * Self-heals an id-keyed OBJECT map (a legacy Electron shape that earlier
+ * migrations wrote through verbatim — stores migrated before the import
+ * normalizer still hold it): spreading an object in getAllJobDescriptions()
+ * threw and killed the Jobs dialog.
+ *
+ * `null` for anything else, because the two callers need opposite answers to
+ * it — see adoptStoredJobDescriptions.
+ */
+function parseList(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return parsed && typeof parsed === 'object' ? Object.values(parsed) : null;
+  } catch (e) {
+    console.error('Failed to load job descriptions:', e);
+    return null;
+  }
+}
+
+/**
+ * Whether a fetched payload is one this module could adopt — asked by the sync
+ * layer BEFORE it writes the key (src/sync/syncModel.js, KEY_OWNERS).
+ *
+ * The same reader `adoptStoredJobDescriptions` uses, so the two cannot disagree
+ * about what "readable" means. That agreement is the whole point: a payload the
+ * adoption refuses but the write accepted sits on disk as garbage, and the next
+ * boot's `initJobDescriptions` degrades it to `[]` — which the first local save
+ * then persists and pushes up as a clean, uncontested update. Refusing before
+ * the write is what keeps absence from becoming deletion on DISK as well as in
+ * memory.
+ */
+export function landsAsJobDescriptions(payload) {
+  return parseList(payload) !== null;
+}
+
 /**
  * Initialize job descriptions from storage
  */
 export function initJobDescriptions() {
-  try {
-    const stored = appStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      // Self-heal an id-keyed OBJECT map (a legacy Electron shape that earlier
-      // migrations wrote through verbatim — stores migrated before the import
-      // normalizer still hold it). This module requires an array; spreading an
-      // object here threw and killed the Jobs dialog.
-      jobDescriptions = Array.isArray(parsed)
-        ? parsed
-        : (parsed && typeof parsed === 'object' ? Object.values(parsed) : []);
-    }
-  } catch (e) {
-    console.error('Failed to load job descriptions:', e);
-    jobDescriptions = [];
-  }
+  const stored = appStorage.getItem(STORAGE_KEY);
+  if (stored) jobDescriptions = parseList(stored) ?? [];
   return jobDescriptions;
+}
+
+/**
+ * Take the list `applyUnits` has just written to storage.
+ *
+ * The cache above is this module's whole truth: every mutation edits it and
+ * `save()` serializes it back over the key. So a job list that arrived from
+ * another device lasted exactly until the next local change, which wrote the
+ * stale cache over it, stamped the unit, and — the transport legitimately
+ * holding the record's change tag, because the page had confirmed the apply —
+ * pushed the revert up as a clean, uncontested update. No conflict was raised
+ * and the other device's postings were gone. Same trap as store.adoptDocument's,
+ * and the same answer: the owner adopts, rather than being written behind.
+ *
+ * Subscribers are told because a corrected cache the screen has not re-read is
+ * only half of it: the Jobs dialog renders straight out of this array.
+ *
+ * A value it cannot read leaves the cache alone — absence is never deletion,
+ * and one malformed remote unit must not empty someone's job list. The list
+ * this device holds is then still the one the next local write puts back on
+ * disk, so the bad bytes are corrected rather than inherited.
+ */
+/**
+ * The live job-edit draft, if `JobEditDialog` has one open — `{ isBusy() }`.
+ *
+ * `JobsDialog` holds `editingJd` and the child seeds title/company/description
+ * from it once. A unit adopted while that dialog is open replaced the module
+ * list underneath them, and saving afterwards wrote all three stale fields back
+ * over the adopted job and stamped the overwrite as a new local update.
+ *
+ * Asked BEFORE the write, like the chat's and the application note's: refusing
+ * forfeits the change tag and the unit is re-offered once the dialog closes.
+ */
+// A SET, for the same reason the application note's is: there is more than one
+// editor. The web `JobsDialog` is one; the iOS shell's own `JobEditorScreen`
+// keeps its draft in Swift `@State` and is another, and on that platform the
+// React dialog stays mounted with `editingJd == null` — so a single slot would
+// have whichever registered last speak for both.
+const editHolders = new Set();
+
+export function registerJobEditHolder(next) {
+  if (!next || typeof next.isBusy !== 'function') return () => {};
+  editHolders.add(next);
+  return () => { editHolders.delete(next); };
+}
+
+/** Busy if ANY editor — web dialog or native sheet — holds a draft. */
+export function jobEditBusy() {
+  for (const holder of editHolders) {
+    if (holder.isBusy?.() === true) return true;
+  }
+  return false;
+}
+
+export function adoptStoredJobDescriptions() {
+  const list = parseList(appStorage.getItem(STORAGE_KEY));
+  if (!list) return;
+  jobDescriptions = list;
+  subscribers.forEach((cb) => cb());
 }
 
 /**
  * Save job descriptions to storage
  */
+// Whether the last write reached storage. Read through `jobStorageFailed()`.
+let saveFailed = false;
+// The id of the write the flag is about — see `currentWriteSequence`.
+let lastSaveSeq = 0;
+
+// The refusal that arrives LATE, which on a device is every refusal there is.
+// `setItem` answers as soon as the write-behind cache takes the value, so the
+// assignment below is a claim about memory, not disk: out of space, the Jobs
+// sheet went on showing the job with no failure banner, and it was gone after a
+// restart. The synchronous catch covers only the browser's quota throw.
+//
+// Gated on the write id so an older write's refusal cannot speak for a newer
+// save that succeeded. Subscribers are told because nothing else will notice —
+// a disk failure is not a mutation either sheet drives.
+onWriteFailure((logicalKey, seq) => {
+  if (logicalKey !== STORAGE_KEY || seq < lastSaveSeq) return;
+  saveFailed = true;
+  subscribers.forEach((cb) => cb());
+});
+
 function save() {
   try {
     appStorage.setItem(STORAGE_KEY, JSON.stringify(jobDescriptions));
+    // Read straight after the write and FOR THIS KEY: `setItem` is re-entrant
+    // (the sync stamper writes its own key from inside it), so the most recent
+    // id globally belongs to somebody else's write.
+    lastSaveSeq = currentWriteSequence(STORAGE_KEY);
+    saveFailed = false;
   } catch (e) {
     console.error('Failed to save job descriptions:', e);
+    saveFailed = true;
     // Browser passthrough at storage quota: the in-memory list still holds
     // the JD, but it won't survive a reload — say so instead of vanishing it.
     storageErrorToast(
@@ -51,6 +175,23 @@ function save() {
       { once: true },
     );
   }
+}
+
+/**
+ * True when the last write did not reach storage.
+ *
+ * The toast above is the whole story on the desktop and none of it under the
+ * native iOS shell, where nothing renders the web's toasts: a job added at
+ * quota looked saved, sat in the list for the rest of the session, and was
+ * gone on the next launch. The native sheet renders this instead, the same way
+ * the profile sheet renders `saveFailed`.
+ *
+ * Same caveat as there: `appStorage.setItem` only throws in the browser's
+ * passthrough mode. In the app the write is coalesced and queued, so a disk
+ * failure surfaces through `appStorage.flush()` rather than here.
+ */
+export function jobStorageFailed() {
+  return saveFailed;
 }
 
 /**

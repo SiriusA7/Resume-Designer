@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button.jsx';
 import { Input } from '../ui/input.jsx';
@@ -15,6 +15,7 @@ import {
 import { cn } from '@/lib/utils';
 import {
   addApplication, deleteApplication, setApplicationStatus, updateApplication,
+  registerApplicationNoteHolder,
   APPLICATION_STATUSES, STATUS_LABELS,
 } from '../../applications.js';
 import { getAllJobDescriptions, getJobDescription } from '../../jobDescriptions.js';
@@ -38,9 +39,26 @@ function ApplicationCard({ app, onRequestDelete }) {
   const [notes, setNotes] = useState(app.notes || '');
   const [showJd, setShowJd] = useState(false);
   const jd = app.jobId ? getJobDescription(app.jobId) : null;
+  // Whether this textarea currently holds a live draft. Only a FOCUSED field
+  // does: the note is persisted on every keystroke, so an unfocused card has
+  // nothing in it that storage does not already have.
+  const editing = useRef(false);
 
-  // Re-seed local notes when switching between applications.
-  useEffect(() => { setNotes(app.notes || ''); }, [app.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-seed when the application changes UNDERNEATH us, not only when we switch
+  // to a different one. Keyed on `app.id` alone, a note adopted from another
+  // device for the id already on screen re-rendered the card while this
+  // textarea went on showing the pre-sync text — and the next keystroke wrote
+  // that stale text back over the adopted note, and uploaded the overwrite as a
+  // fresh local change. Skipped while focused, because then the draft on screen
+  // is the newer thing; sync defers instead, via the holder below.
+  useEffect(() => {
+    if (!editing.current) setNotes(app.notes || '');
+  }, [app.id, app.notes]);
+
+  // Told to the sync layer so an adoption WAITS rather than racing a live
+  // draft. The refusal shortens `applied`, the transport forfeits the change
+  // tag, and the unit is re-offered the moment the field loses focus.
+  useEffect(() => registerApplicationNoteHolder({ isBusy: () => editing.current }), []);
 
   return (
     <div className="space-y-2 rounded-md border p-3">
@@ -87,6 +105,8 @@ function ApplicationCard({ app, onRequestDelete }) {
         // disk write (write-behind, DRAIN_COALESCE_MS), so a burst of keystrokes
         // collapses into one backend write, not one per keystroke.
         onChange={(e) => { const v = e.target.value; setNotes(v); updateApplication(app.id, { notes: v }); }}
+        onFocus={() => { editing.current = true; }}
+        onBlur={() => { editing.current = false; }}
         placeholder="Notes (e.g. recruiter said reapply in 6 months)"
         className="min-h-[52px] text-[12.5px]"
       />
@@ -242,7 +262,18 @@ export default function DetailPane({ variant, applications, onAfterDelete, onClo
       variantName: variant.name,
     });
     if (cancelled) return;
-    if (isCurrent) {
+    // RE-READ, not the render-time `isCurrent`. The prompt above is an
+    // unbounded wait, and a CloudKit tombstone for the open résumé makes
+    // `setResumeDeletedHandler` load a replacement during one — so a closure
+    // still holding `isCurrent === true` sent this down the
+    // `deleteCurrentVariant` branch, which deletes whatever is current NOW: the
+    // replacement, which nobody asked to delete, having already reassigned this
+    // résumé's chat threads.
+    //
+    // Nothing is refused here, unlike the header's delete: this pane already
+    // has a by-id branch for a résumé that is not the open one, and that branch
+    // is exactly right for a target that stopped being current mid-prompt.
+    if (getCurrentId() === variant.id) {
       if (deleteCurrentVariant().ok) onAfterDelete();
     } else {
       deleteVariant(variant.id);

@@ -33,8 +33,12 @@ let requestRerender = () => {};
 // (notifying React listeners that set state) and re-renders — none of which
 // call setData. On first load / no session it never fires. Named (not inline)
 // so repeated init calls dedupe in the store's listener Set.
+// 'documentAdopted' is the same event for this module's purposes: a different
+// document is backing the render, and every anchor in the pending change set
+// was resolved against the one it replaced.
 function endSessionOnDataLoaded(event) {
-  if (event !== 'dataLoaded' || !session.getChangeSet()) return;
+  if (event !== 'dataLoaded' && event !== 'documentAdopted') return;
+  if (!session.getChangeSet()) return;
   hideInlineChanges();
 }
 
@@ -237,6 +241,28 @@ export function rejectInlineChange(path) {
   if (!session.getChangeSet()) return;
   session.setStatus(path, 'rejected');
   if (!session.hasPending()) hideInlineChanges(); else requestRerender();
+}
+
+/**
+ * Every change still awaiting a decision, in change-set order.
+ *
+ * Exported for the native iOS review sheet, which renders a LIST rather than
+ * the web's per-element hover menus and so needs the whole pending set at once.
+ * Reads the live session, not a message's frozen `pendingChanges`: applying or
+ * rejecting one has to remove it from the list.
+ */
+export function getPendingChanges() {
+  const changeSet = session.getChangeSet();
+  if (!changeSet) return [];
+  const pending = new Set(session.pendingPaths());
+  return changeSet.changes.filter((c) => pending.has(c.path));
+}
+
+/** Reject everything still pending, ending the review session. */
+export function rejectAllInlineChanges() {
+  if (!session.getChangeSet()) return;
+  session.setAllPending('rejected');
+  hideInlineChanges();
 }
 
 export function applyAllInlineChanges() {

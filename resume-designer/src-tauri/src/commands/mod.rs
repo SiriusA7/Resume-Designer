@@ -25,12 +25,17 @@ pub struct PendingPdfPath(pub Mutex<Option<PathBuf>>);
 #[derive(Default)]
 pub struct PreviewPdfPath(pub Mutex<Option<PathBuf>>);
 
-#[cfg(target_os = "macos")]
-mod pdf_macos;
+// WKWebView.createPDF — macOS AND iOS. One implementation, because it is
+// literally one API: `WKPDFConfiguration` and `createPDF` are not cfg-gated in
+// objc2-web-kit, and the module reaches for no AppKit type. Gating it to
+// `macos` alone is what left iOS on the "not supported on this platform"
+// branch even though Phase 0 had already measured createPDF working there.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod pdf_apple;
 #[cfg(target_os = "windows")]
 mod pdf_windows;
-// Shared per-sheet → multi-page PDF merge (pure lopdf) for both desktop captures.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+// Shared per-sheet → multi-page PDF merge (pure lopdf) for every capture.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 mod pdf_merge;
 
 // `pub` so `generate_handler!` in lib.rs can name the commands as
@@ -218,7 +223,7 @@ pub async fn capture_pdf_from_window(
         }
     };
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     let result = {
         let _ = page_size;
         // Prefer the per-sheet rects (one PDF page each, merged + scaled). Fall
@@ -227,7 +232,7 @@ pub async fn capture_pdf_from_window(
             .filter(|v| !v.is_empty())
             .or_else(|| capture_rect.clone().map(|r| vec![r]))
             .unwrap_or_default();
-        pdf_macos::capture_pdf(target, save_path, rects).await
+        pdf_apple::capture_pdf(target, save_path, rects).await
     };
     #[cfg(target_os = "windows")]
     let result = {
@@ -243,7 +248,7 @@ pub async fn capture_pdf_from_window(
             .unwrap_or_default();
         pdf_windows::capture_pdf(target, save_path, rects).await
     };
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     let result = {
         let _ = (target, save_path, capture_rect, capture_rects);
         PdfResult::error("PDF export is not supported on this platform")
@@ -260,6 +265,26 @@ pub async fn capture_pdf_from_window(
     Ok(result)
 }
 
+/// The path of the just-generated preview PDF.
+///
+/// For iOS, where the preview is a native `PDFView` over the file itself rather
+/// than a pdf.js rasterisation in the page. Reading the same bytes as base64,
+/// shipping them through the JS bridge and re-encoding them into a message just
+/// to hand them back to the same process is several megabytes of round trip for
+/// a file that is already on disk.
+///
+/// Returns only a path this process wrote itself, in its own temp directory.
+#[tauri::command]
+pub async fn pdf_preview_path(preview: State<'_, PreviewPdfPath>) -> Result<String, String> {
+    let slot = preview
+        .0
+        .lock()
+        .map_err(|_| "preview slot lock poisoned".to_string())?;
+    slot.clone()
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| "No preview PDF available".to_string())
+}
+
 /// Read the just-generated preview PDF as base64 so the renderer can show it in
 /// an `<iframe>` before the user saves. Read-only — never writes.
 #[tauri::command]
@@ -274,6 +299,96 @@ pub async fn read_pdf_preview(preview: State<'_, PreviewPdfPath>) -> Result<Stri
     let path = path.ok_or_else(|| "No preview PDF available".to_string())?;
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read preview PDF: {}", e))?;
     Ok(STANDARD.encode(bytes))
+}
+
+/// Copy the preview temp PDF to a sibling temp file named the way the user
+/// named it, and return that path so iOS can hand it to a share sheet.
+///
+/// iOS has no "save to a path" dialog. `tauri-plugin-dialog`'s `save_file`
+/// approximates one with `UIDocumentPickerViewController(.exportToService)`,
+/// which it presents on tao's view controller — and that never appears once the
+/// native shell has nested tao inside a `UIHostingController` (the picker's
+/// remote view service launches and then shows nothing). A share sheet is the
+/// platform's actual answer for "get this file out of the app": it offers Save
+/// to Files, AirDrop, Mail and Messages in one place, and `OPShell.swift`
+/// presents it from the hosting controller itself.
+///
+/// The rename matters because a share sheet shows the FILE's name, and the temp
+/// is called `on-paper-preview-<pid>-<nanos>.pdf`.
+///
+/// The renderer supplies only a name, never a path: the source is always the
+/// server-side preview slot, and the destination is always the temp dir.
+#[tauri::command]
+pub async fn stage_pdf_for_share(
+    file_name: String,
+    preview: State<'_, PreviewPdfPath>,
+) -> Result<String, String> {
+    let source = {
+        let slot = preview
+            .0
+            .lock()
+            .map_err(|_| "preview slot lock poisoned".to_string())?;
+        slot.clone()
+    };
+    let source = source.ok_or_else(|| "No preview PDF available".to_string())?;
+
+    // Take only the final path component and drop anything that could redirect
+    // the write: the renderer must not be able to name a destination outside
+    // the temp dir, even with a compromised script.
+    let stem: String = std::path::Path::new(&file_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
+        .take(80)
+        .collect();
+    let stem = stem.trim().trim_matches('.');
+    let stem = if stem.is_empty() { "Resume" } else { stem };
+
+    let dest = std::env::temp_dir().join(format!("{}.pdf", stem));
+    std::fs::copy(&source, &dest).map_err(|e| format!("Failed to stage PDF: {}", e))?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Write renderer-supplied TEXT to a temp file and return its path, so iOS can
+/// hand it to the share sheet.
+///
+/// The web export path is `downloadFile`, an `<a download>` blob click, and
+/// WKWebView does nothing with one — so every "Export as JSON / Markdown /
+/// backup" on iOS silently produced no file at all. This is the same staging
+/// `stage_pdf_for_share` does, for content the renderer already holds rather
+/// than a file the Rust side made.
+///
+/// The renderer names the file but cannot choose where it lands: only the final
+/// component is taken and everything that could redirect the write is dropped,
+/// exactly as above. An extension supplied by the caller is kept — the share
+/// sheet needs `.json` vs `.md` to offer sensible destinations — but only from a
+/// short allow-list, so a name cannot smuggle in an executable one.
+#[tauri::command]
+pub async fn stage_text_for_share(file_name: String, contents: String) -> Result<String, String> {
+    let path = std::path::Path::new(&file_name);
+    let stem: String = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
+        .take(80)
+        .collect();
+    let stem = stem.trim().trim_matches('.');
+    let stem = if stem.is_empty() { "Export" } else { stem };
+
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .filter(|e| matches!(e.as_str(), "json" | "md" | "txt"))
+        .unwrap_or_else(|| "txt".to_string());
+
+    let dest = std::env::temp_dir().join(format!("{}.{}", stem, ext));
+    std::fs::write(&dest, contents.as_bytes())
+        .map_err(|e| format!("Failed to stage export: {}", e))?;
+    Ok(dest.to_string_lossy().into_owned())
 }
 
 /// Copy the preview temp PDF to the user-confirmed path (from `pick_pdf_save_path`),

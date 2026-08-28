@@ -1,14 +1,17 @@
 /**
- * Profile registry + lifecycle. Storage-only module: imports the appStorage
- * facade and pure key helpers, no DOM and no React, so vitest imports it
- * directly. The switch/reload orchestration lives in the UI (AccountSection).
+ * Profile registry + lifecycle. The durable half of profile switching lives
+ * here so desktop and the native shell share the same save-before-pointer
+ * ordering; each UI still owns its own reload.
  */
-import { appStorage, setProfileMapping } from './appStorage.js';
+import { appStorage, setProfileMapping, getProfileMapping } from './appStorage.js';
+import { store } from './store.js';
+import { flushPendingProfileSave } from './userProfilePanel.js';
 import {
   PROFILES_KEY, ACTIVE_PROFILE_KEY, OPENROUTER_KEY_KEY,
   isOwnedKey, isSharedKey, isPhysicalKey, isValidProfileId, physicalKey, splitPhysicalKey,
-  withoutDeadProviderCredentials, withoutStoredCredentials,
+  withoutDeadProviderCredentials, withoutStoredCredentials, withoutDeviceIdentity,
 } from './profileKeys.js';
+import { mergeRegistry } from './sync/syncMerge.js';
 
 // Starts with `resume-` ON PURPOSE so appStorage's one-time localStorage→disk
 // adoption (OWNED_PREFIX = 'resume-') copies it too — otherwise an incomplete
@@ -18,6 +21,23 @@ import {
 // not a history key), so isOwnedKey is false → backups never carry it and the
 // key mapping never namespaces it.
 const PROFILE_ADOPTION_MARKER = 'resume-profile-adoption-pending';
+/**
+ * Durable "this registry came from the ACCOUNT and its first content pull has
+ * not completed".
+ *
+ * The readiness state below is in-memory, and that was enough only for the
+ * launch that derived the registry. A device whose first profile-zone fetch
+ * FAILED — or that exited before it settled — persisted the registry anyway, so
+ * the next launch loaded it, skipped the whole account branch, and left
+ * readiness at `ready`. The onboarding timer in main.js then opened the
+ * non-dismissible first-run wizard over a workspace whose contents were still
+ * on their way, which is the exact race the deferral exists to prevent.
+ *
+ * Device-local and never synced (`classifyKey` answers 'unknown'), and not an
+ * owned key, so a restore neither wipes it nor carries it between devices —
+ * it is a fact about THIS device's boot, not about the account.
+ */
+const INITIAL_FETCH_PENDING_MARKER = 'resume-profile-initial-fetch-pending';
 
 // Fired on the window after a registry mutation that stays on the current page
 // (rename; the switch/create paths reload instead). Header chrome that reads
@@ -32,6 +52,60 @@ export const PROFILES_CHANGED_EVENT = 'rd:profiles-changed';
 // hide it behind an empty namespace after reload. Session-scoped on purpose:
 // the next boot re-runs init and either succeeds or re-enters this state.
 let initDegraded = false;
+
+// A known account's registry arrives before that profile's zone contents. The
+// first-run decision must wait for native sync to finish that initial pull or a
+// missing local completion flag looks like a genuinely fresh workspace.
+let initialProfileFetchState = 'ready'; // 'ready' | 'pending' | 'unavailable'
+let settleInitialProfileFetch = null;
+let initialProfileFetchPromise = Promise.resolve('ready');
+
+function resetInitialProfileFetchState() {
+  if (settleInitialProfileFetch) settleInitialProfileFetch('unavailable');
+  initialProfileFetchState = 'ready';
+  settleInitialProfileFetch = null;
+  initialProfileFetchPromise = Promise.resolve('ready');
+}
+
+function deferUntilInitialProfileFetch() {
+  // Written before the wait, not after it: the point is to survive a launch
+  // that never reaches the settle at all.
+  appStorage.setItem(INITIAL_FETCH_PENDING_MARKER, '1');
+  initialProfileFetchState = 'pending';
+  initialProfileFetchPromise = new Promise((resolve) => {
+    settleInitialProfileFetch = resolve;
+  });
+}
+
+export function isInitialProfileFetchPending() {
+  return initialProfileFetchState === 'pending';
+}
+
+export function markInitialProfileFetchSettled(status = 'ready') {
+  const settled = status === 'ready' ? 'ready' : 'unavailable';
+  // Cleared only by a REAL answer. 'unavailable' means sync could not say what
+  // the account holds, which is exactly the state that must wait again next
+  // launch rather than fall through to the first-run wizard. The wait is
+  // bounded by `whenInitialProfileFetchSettled`'s own timeout, so a device that
+  // can never fetch pays a delay rather than looping.
+  if (settled === 'ready') appStorage.removeItem(INITIAL_FETCH_PENDING_MARKER);
+  initialProfileFetchState = settled;
+  const resolve = settleInitialProfileFetch;
+  settleInitialProfileFetch = null;
+  resolve?.(settled);
+  return settled;
+}
+
+export function whenInitialProfileFetchSettled({ timeoutMs = 10_000 } = {}) {
+  if (!isInitialProfileFetchPending()) return Promise.resolve(initialProfileFetchState);
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve('unavailable'), timeoutMs);
+    initialProfileFetchPromise.then((status) => {
+      clearTimeout(timeout);
+      resolve(status);
+    });
+  });
+}
 
 // True while a first-profile adoption is incomplete — marker persisted, OR
 // this session's init degraded without managing to persist one (see above).
@@ -83,6 +157,15 @@ export function loadRegistry() {
 
 function saveRegistry(registry) {
   appStorage.setItem(PROFILES_KEY, JSON.stringify(registry));
+}
+
+/**
+ * The profiles a person should see. `loadRegistry` returns the raw array,
+ * tombstones included, because the merge needs them; every UI and every
+ * iteration over "the profiles" wants this instead.
+ */
+export function listProfiles() {
+  return (loadRegistry() || []).filter((p) => !p?.deletedAt);
 }
 
 // Adoption is a two-phase move, split so that NO unprefixed source is ever
@@ -347,10 +430,11 @@ function rebuildRegistryFromKeys() {
  * would repeat against the same full store. On failure we degrade to mapping-off
  * — the app runs on the unprefixed workspace and a later boot retries.
  */
-export async function ensureProfilesInitialized() {
+export async function ensureProfilesInitialized({ askAccount = async () => ({ status: 'unavailable' }) } = {}) {
   initDegraded = false;
+  resetInitialProfileFetchState();
   try {
-    return await resolveActiveProfile();
+    return await resolveActiveProfile(askAccount);
   } catch (err) {
     console.error('[profiles] adoption failed unexpectedly; running on unprefixed data:', err);
     initDegraded = true; // markerless recovery state — see isAdoptionPending
@@ -359,8 +443,111 @@ export async function ensureProfilesInitialized() {
   }
 }
 
-async function resolveActiveProfile() {
+function firstByRegistryOrder(entries) {
+  return entries.reduce((best, entry) => {
+    const entryCreatedAt = String(entry.createdAt ?? '');
+    const bestCreatedAt = String(best.createdAt ?? '');
+    if (entryCreatedAt !== bestCreatedAt) return entryCreatedAt < bestCreatedAt ? entry : best;
+    return entry.id < best.id ? entry : best;
+  });
+}
+
+function chooseTombstoneToRevive(registry, activeId) {
+  const previouslyActive = registry.find((entry) => entry.id === activeId);
+  if (previouslyActive) return previouslyActive;
+
+  const withLocalData = registry.filter((entry) => appStorage.keys().some((key) => {
+    const split = splitPhysicalKey(key);
+    return split?.profileId === entry.id && isOwnedKey(split.logicalKey);
+  }));
+  if (withLocalData.length) return firstByRegistryOrder(withLocalData);
+
+  const newestStamp = registry.reduce((newest, entry) => {
+    const entryStamp = String(entry.updatedAt ?? '');
+    const newestValue = String(newest.updatedAt ?? '');
+    return entryStamp > newestValue ? entry : newest;
+  });
+  const tied = registry.filter((entry) => String(entry.updatedAt ?? '') === String(newestStamp.updatedAt ?? ''));
+  return firstByRegistryOrder(tied);
+}
+
+function revivalStamp(entry) {
+  const parsed = [entry.deletedAt, entry.updatedAt]
+    .map((stamp) => Date.parse(stamp ?? ''))
+    .filter(Number.isFinite);
+  const prior = parsed.length ? Math.max(...parsed) : 0;
+  return new Date(Math.max(Date.now(), prior + 1)).toISOString();
+}
+
+async function resolveActiveProfile(askAccount) {
   let registry = loadRegistry() || rebuildRegistryFromKeys();
+  // A registry already on disk skips the account branch below entirely, so this
+  // is the only place a LATER launch can learn that its first pull never
+  // finished. See the marker's own note.
+  if (registry && appStorage.getItem(INITIAL_FETCH_PENDING_MARKER)) {
+    deferUntilInitialProfileFetch();
+  }
+  let accountActive = null;
+  let recoveredMarkerOnlyAdoption = false;
+
+  // A durable marker with no registry/pointer is the supported crash boundary
+  // immediately after a first adoption starts. The unprefixed workspace still
+  // belongs to a LOCAL profile, not to whichever account profile a later lookup
+  // happens to return. Recover and finish that local identity before asking the
+  // account; only the registry is merged afterward, never the workspace bytes.
+  if (!registry && appStorage.getItem(PROFILE_ADOPTION_MARKER)) {
+    const id = generateProfileId();
+    const profile = { id, name: adoptionProfileName(), emoji: '🙂', createdAt: new Date().toISOString() };
+    saveRegistry([profile]);
+    appStorage.setItem(ACTIVE_PROFILE_KEY, id);
+    if (!(await appStorage.flush())) {
+      console.error('[profiles] interrupted adoption recovery did not reach disk');
+      return null;
+    }
+    if (!(await finishAdoption(id))) {
+      console.warn('[profiles] adoption incomplete — running on unprefixed data this session');
+      return id;
+    }
+    registry = [profile];
+    recoveredMarkerOnlyAdoption = true;
+  }
+
+  if (!registry || recoveredMarkerOnlyAdoption) {
+    let account = { status: 'unavailable' };
+    try {
+      account = await askAccount();
+    } catch (err) {
+      console.warn('[profiles] account profile lookup unavailable:', err);
+    }
+    if (account?.status === 'known' && Array.isArray(account.profiles) && account.profiles.length) {
+      registry = recoveredMarkerOnlyAdoption
+        ? mergeRegistry(registry, account.profiles)
+        : account.profiles;
+      saveRegistry(registry);
+      const live = registry.filter((entry) => !entry?.deletedAt);
+      if (live.length && !recoveredMarkerOnlyAdoption) {
+        accountActive = firstByRegistryOrder(live).id;
+        appStorage.setItem(ACTIVE_PROFILE_KEY, accountActive);
+      }
+      // ARMED BEFORE THE BARRIER, so the marker and the registry cross it
+      // together. Queued after, it belonged to a LATER write-behind window:
+      // iOS terminating the app in between left the registry durable with no
+      // marker, and the next launch skipped the account branch and treated the
+      // fetch as ready — the very race this marker was added to close, one
+      // window over. The adoption path above states the same rule for the same
+      // reason: the marker reaches disk first, and what it guards crosses its
+      // own barrier while it holds.
+      if (!recoveredMarkerOnlyAdoption) deferUntilInitialProfileFetch();
+      if (!(await appStorage.flush())) {
+        if (recoveredMarkerOnlyAdoption) {
+          console.warn('[profiles] account registry merge did not reach disk; keeping the recovered local profile');
+          registry = loadRegistry() || registry;
+        } else {
+          throw new Error('account profile registry did not reach disk');
+        }
+      }
+    }
+  }
 
   if (!registry) {
     // Marker reaches disk FIRST; registry + pointer cross their own durability
@@ -398,9 +585,37 @@ async function resolveActiveProfile() {
     return id;
   }
 
-  let active = getActiveProfileId();
-  if (!registry.some((p) => p.id === active)) {
-    active = registry[0].id;
+  let active = accountActive || getActiveProfileId();
+  // A TOMBSTONED entry does not count as membership, which is not the same
+  // check as "is it in the array": the entry is still physically there (see
+  // deleteProfile), and the app would map into a workspace no listing shows and
+  // no switcher can leave. Another device can delete the workspace this one is
+  // sitting in; the heal below is what gets out of it.
+  if (!registry.some((p) => p.id === active && !p?.deletedAt)) {
+    const firstLive = registry.find((p) => !p?.deletedAt);
+    if (firstLive) {
+      active = firstLive.id;
+    } else {
+      // No single device permits deleting its last visible workspace. An empty
+      // live set can only be the merge of individually legal deletes, so revive
+      // one entry rather than map the app into a tombstone nothing lists.
+      const registryBefore = registry;
+      const revive = chooseTombstoneToRevive(registry, active);
+      registry = registry.map((entry) => (entry.id === revive.id
+        ? { ...entry, deletedAt: undefined, updatedAt: revivalStamp(entry) }
+        : entry));
+      saveRegistry(registry);
+      if (!(await appStorage.flush())) {
+        try { saveRegistry(registryBefore); } catch { /* keep going */ }
+        await appStorage.flush();
+        console.error('[profiles] all-tombstoned recovery did not reach disk; running with profile mapping disabled');
+        initDegraded = true;
+        setProfileMapping(null);
+        return null;
+      }
+      active = revive.id;
+      console.warn(`[profiles] all profiles were tombstoned; revived profile "${active}"`);
+    }
     appStorage.setItem(ACTIVE_PROFILE_KEY, active);
   }
   if (appStorage.getItem(PROFILE_ADOPTION_MARKER)) {
@@ -502,8 +717,10 @@ export function getActiveProfileId() {
 }
 
 export function setActiveProfile(id) {
-  const registry = loadRegistry() || [];
-  if (!registry.some((p) => p.id === id)) throw new Error(`Unknown profile id: ${id}`);
+  // listProfiles(), not loadRegistry(): a tombstoned entry is still physically
+  // present in the raw registry (see deleteProfile), so validating against the
+  // raw array would let a person switch into a workspace they just deleted.
+  if (!listProfiles().some((p) => p.id === id)) throw new Error(`Unknown profile id: ${id}`);
   appStorage.setItem(ACTIVE_PROFILE_KEY, id);
 }
 
@@ -528,6 +745,94 @@ export async function activateProfileDurably(id, restoreId) {
   return false;
 }
 
+/**
+ * Save every active editor, then durably point the next boot at `id`.
+ *
+ * The order is load-bearing: the resume and profile editors must write first,
+ * then their storage writes must reach disk, and only then may the active
+ * profile pointer change. Reloading belongs to the caller because desktop
+ * reloads the window while iOS reloads its WKWebView.
+ */
+/**
+ * Every open editor's work, on disk. False if any part of it did not land.
+ *
+ * THE BARRIER, in one place. `store.saveNow()` and `flushPendingProfileSave()`
+ * push what is still sitting in the editors' save debounce into `appStorage`;
+ * `appStorage.flush()` gets what is in `appStorage` onto the disk. Neither half
+ * covers the other, which is the whole trap: `activateProfileDurably` awaits
+ * only the second and reads as durable, so a caller reaching for it instead of
+ * this one loses whatever was still debounced.
+ *
+ * It exists as a function because it had been written out three times — here,
+ * in the desktop Account section, and nowhere at all in the iOS create path,
+ * which is how a résumé edit still inside the debounce was discarded by the
+ * webview reload that followed. Callers abort on false rather than proceeding:
+ * a switch or a create that continues past this loses the edit it did not save.
+ */
+export async function flushActiveEdits() {
+  const savedResume = store.saveNow();
+  const savedProfile = flushPendingProfileSave();
+  const durable = await appStorage.flush();
+  return savedResume && savedProfile && durable;
+}
+
+export async function switchToProfileDurably(id) {
+  const activeId = getActiveProfileId();
+  if (!id || id === activeId || isAdoptionPending()) return false;
+
+  if (!(await flushActiveEdits())) return false;
+
+  return activateProfileDurably(id, activeId);
+}
+
+/**
+ * Remove the stored bytes of every workspace whose tombstone has arrived.
+ *
+ * A tombstone hides a listing; on the device that ran `deleteProfile` the
+ * content was removed in the same breath. On every OTHER device only the
+ * listing changed, so the résumés sat in `resume-p--<id>--…` for ever —
+ * consuming storage, and copied into every backup, which enumerates physical
+ * keys and knows nothing about the registry.
+ *
+ * The ACTIVE workspace is skipped even when tombstoned: `appStorage` is still
+ * mapped to it and the app is still reading it, so pulling its bytes out from
+ * underneath is how a live session starts answering null. The switch away
+ * happens first, and the next start purges it as an inactive one.
+ *
+ * Returns the ids it emptied, for the caller's log.
+ */
+export function purgeTombstonedProfiles() {
+  // Not during a restore. `removeItem` is DEFERRED while the guard is armed, so
+  // these deletes would be recorded and replayed later — against a registry the
+  // restore may have replaced, and a rollback may have put back. Its three
+  // siblings (`createProfile`, `activateProfileDurably`, `deleteProfileDurably`)
+  // all refuse for the same reason; this is the one that deletes, so it refuses
+  // hardest. The next start purges instead.
+  if (appStorage.isRestoreGuardActive()) return [];
+  // BOTH notions of "in use", because they diverge exactly when this is most
+  // dangerous. `getActiveProfileId` is the PERSISTED pointer, which during a
+  // durable switch already names the next boot — while this process stays
+  // mapped to the workspace it is leaving until the reload (see
+  // `getProfileMapping`, which says so). Skipping only the pointer would let a
+  // tombstone purge the bytes the live session is still reading, and the
+  // symptom is storage answering null mid-edit.
+  const inUse = new Set([getActiveProfileId(), getProfileMapping()].filter(Boolean));
+  const tombstoned = (loadRegistry() || [])
+    .filter((p) => p?.deletedAt && p.id && !inUse.has(p.id))
+    .map((p) => p.id);
+  const purged = [];
+  for (const id of tombstoned) {
+    const prefix = physicalKey(id, '');
+    const keys = appStorage.keys().filter((k) => k && k.startsWith(prefix));
+    if (keys.length === 0) continue;
+    for (const k of keys) {
+      try { appStorage.removeItem(k); } catch { /* keep going */ }
+    }
+    purged.push(id);
+  }
+  return purged;
+}
+
 export function createProfile({ name, emoji = '🙂' }) {
   // During a restore the registry write would only be deferred (and discarded on
   // reload); throw so callers (incl. importProfileBackup) surface it rather than
@@ -546,7 +851,14 @@ export function createProfile({ name, emoji = '🙂' }) {
 export function renameProfile(id, { name, emoji }) {
   const registry = loadRegistry() || [];
   saveRegistry(registry.map((p) => (p.id === id
-    ? { ...p, ...(name !== undefined ? { name } : {}), ...(emoji !== undefined ? { emoji } : {}) }
+    ? {
+      ...p,
+      ...(name !== undefined ? { name } : {}),
+      ...(emoji !== undefined ? { emoji } : {}),
+      // mergeRegistry settles a collision on this stamp. Without it a rename on
+      // one device loses to an unstamped entry on another.
+      updatedAt: new Date().toISOString(),
+    }
     : p)));
 }
 
@@ -569,13 +881,26 @@ export async function renameProfileDurably(id, patch) {
 
 export function deleteProfile(id) {
   const registry = loadRegistry() || [];
-  if (registry.length <= 1) throw new Error('Cannot delete the last profile.');
+  // listProfiles(), not the raw array: a tombstone still occupies a slot in
+  // `registry` (see below), so counting it here stops this guard from firing
+  // once any tombstone exists — silently handing protection of the last
+  // VISIBLE profile to the active-profile guard, which only holds while the
+  // active id is itself a listed profile.
+  if (listProfiles().length <= 1) throw new Error('Cannot delete the last profile.');
   if (id === getActiveProfileId()) throw new Error('Cannot delete the active profile — switch away first.');
   const prefix = physicalKey(id, '');
   for (const k of appStorage.keys()) {
     if (k && k.startsWith(prefix)) appStorage.removeItem(k);
   }
-  saveRegistry(registry.filter((p) => p.id !== id));
+  // TOMBSTONE, not a drop. Under a union merge a dropped entry is restored by
+  // the other device's copy on the next sync, and the workspace reappears
+  // forever. This is metadata: it hides a listing and destroys no content —
+  // the profile's résumés are removed locally by the code above exactly as
+  // before, and its CloudKit zone is left alone.
+  const stamp = new Date().toISOString();
+  saveRegistry(registry.map((p) => (p.id === id
+    ? { ...p, deletedAt: stamp, updatedAt: stamp }
+    : p)));
 }
 
 /**
@@ -608,8 +933,18 @@ export async function deleteProfileDurably(id) {
 // Deliberately NOT async: an unknown id throws synchronously (programmer
 // error), while the returned promise covers only the download itself.
 export function exportProfileBackup(profileId, filename) {
-  const registry = loadRegistry() || [];
-  const profile = registry.find((p) => p.id === profileId);
+  // listProfiles() PLUS the workspace still in use. The premise of the old
+  // comment — "a tombstoned entry's physical keys are already gone (see
+  // deleteProfile)" — holds only for a workspace deleted HERE. A tombstone that
+  // arrived from another device leaves the bytes in place, deliberately, while
+  // this device is still mapped to them: `purgeTombstonedProfiles` refuses to
+  // touch the active one for exactly that reason. Refusing to export it threw
+  // "unknown profile" over content that is demonstrably still there, and it is
+  // the one workspace whose export somebody might urgently need.
+  const inUse = new Set([getActiveProfileId(), getProfileMapping()].filter(Boolean));
+  const profile = (loadRegistry() || []).find(
+    (p) => p?.id === profileId && (!p.deletedAt || inUse.has(p.id)),
+  );
   if (!profile) throw new Error(`Unknown profile id: ${profileId}`);
   const prefix = physicalKey(profileId, '');
   const keys = {};
@@ -654,14 +989,25 @@ export function exportProfileBackup(profileId, filename) {
   });
 }
 
-// Remove a just-imported profile's partial keys and its registry entry so a
-// failed import never leaves a half-written workspace the user can switch into.
+// Remove a just-imported profile's partial keys and TOMBSTONE its registry
+// entry — not drop it — so a failed import never leaves a half-written
+// workspace the user can switch into. Same reasoning as deleteProfile, and it
+// applies here now that the registry syncs via a union merge (landRegistry,
+// syncModel.js): createProfile's write above races the storage interceptor's
+// dirty notification, and the import loop between it and this rollback is
+// long enough a window for another device to have already pulled the
+// "with this id" registry off CloudKit. A dropped entry is exactly what that
+// device's own next push — still carrying the id, untombstoned — resurrects
+// on the following union. A tombstone is retained by every merge instead.
 function rollbackImportedProfile(id) {
   const prefix = physicalKey(id, '');
   for (const k of appStorage.keys()) {
     if (k && k.startsWith(prefix)) appStorage.removeItem(k);
   }
-  saveRegistry((loadRegistry() || []).filter((p) => p.id !== id));
+  const stamp = new Date().toISOString();
+  saveRegistry((loadRegistry() || []).map((p) => (p.id === id
+    ? { ...p, deletedAt: stamp, updatedAt: stamp }
+    : p)));
 }
 
 export async function importProfileBackup(parsed) {
@@ -681,7 +1027,16 @@ export async function importProfileBackup(parsed) {
     for (const [k, v] of Object.entries(parsed.keys)) {
       // Profile exports written before the strip still carry the credential;
       // sanitize on the way in so it cannot land back in plaintext storage.
-      appStorage.setItem(physicalKey(profile.id, k), withoutStoredCredentials(k, v));
+      //
+      // And drop the exporting device's `deviceId` out of the sync-state key:
+      // this is the boundary that carries ONE workspace between two machines, so
+      // it is the most direct way for both of them to end up claiming the same
+      // origin id — the thing undo scopes itself by. The per-unit stamps beside
+      // it are per-profile data and stay. See withoutDeviceIdentity.
+      appStorage.setItem(
+        physicalKey(profile.id, k),
+        withoutDeviceIdentity(k, withoutStoredCredentials(k, v)),
+      );
     }
   } catch (err) {
     // Browser passthrough: setItem throws synchronously at localStorage quota

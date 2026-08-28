@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Restated r2-3 "Standing O": toward the O. The 45-deg offset rotates to vertical
+       and the depth order flips — the ring is IN FRONT for the first time, so the O is
+       complete and unbroken. Ring c(512,347), centreline r164, stroke 60 (outer 194,
+       counter r100... inner edge 134, halo inner 100). Disc c(512,651) r196 behind it
+       (+2 over ring outer 194: irradiation compensation, solid vs outline), drawn
+       first, then cut by a Paper-on-ink halo annulus stroke 128 = 60 + 2*34, so the
+       substance passes behind the contour across the family 34 gap on BOTH sides of
+       the stroke. d = 304; disc's nearest approach to ring centre 108 > halo inner
+       100: nothing enters the counter — the eyeball tuning stays 8 units away.
+       Visible disc = the lune beyond radial 228: tips at +/-40.1 deg, full 392 width
+       at its equator. Ink extents x[316,708] y[153,847]: bbox centre (512,500),
+       lifted 12 from geometric (1.17%). White on Ink. -->
+  <rect width="1024" height="1024" fill="#0C0A08"/>
+  <circle cx="512" cy="651" r="196" fill="#FFFFFF"/>
+  <circle cx="512" cy="347" r="164" fill="none" stroke="#0C0A08" stroke-width="128"/>
+  <circle cx="512" cy="347" r="164" fill="none" stroke="#FFFFFF" stroke-width="60"/>
+</svg>

@@ -17,6 +17,7 @@
     "tauri:build:mac:arm64": "tauri build --target aarch64-apple-darwin",
     "tauri:build:mac:x64": "tauri build --target x86_64-apple-darwin",
     "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc",
+    "ios:sim": "bash scripts/ios-sim.sh",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "lint": "eslint ."
@@ -74,6 +75,7 @@
     "@commitlint/config-conventional": "^19.8.1",
     "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2",
+    "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.5.0",
     "eslint": "^10.4.1",

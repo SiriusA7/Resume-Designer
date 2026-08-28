@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Converge 1 "Echo": a fusion, not a pick. Open Counter's page-open counter at
+       Colophon's mass, holding Spine's bow at Margin's interior station, in Margin's
+       coral. O: c(512,500), centreline r284, stroke 120, outer 344, counter r224 -
+       counter:outer = 0.65 (Open Counter's openness) at Colophon's 140 tempered -20
+       so the O stays an O. Ring:rule weight 120:64 = 1.9, holding Fine Rule's ~2:1
+       verdict (caret-2-r2-1). Bow: Spine's gesture re-derived from the page itself -
+       arc radius 224 = the counter's own radius; caps (456,372)/(456,620), chord
+       drawn 248 = 240 intended + 8 round-cap comp (4/end); sagitta 37.45, apex
+       (418.55,496); stroke 64 = 62 nominal + 2 curve-reads-thinner comp (3.2%).
+       Station: cap centreline 56 left of centre - Margin's displacement pulled in
+       from 0.47r to 0.25r so Margin's own >=48 clearance rule survives the bow:
+       clearance 52.3 top cap, 59.6 bottom cap, 98.5 at apex. In-counter lift: bow
+       centre y496 = ring centre 500 - 4 (0.89% of counter d448, Caret O precedent).
+       Mark lift 12 (1.17% of canvas). Overshoot 0: all-curve composition, no flat
+       edge to level with. Ink extents x[168,856] y[156,844] - 688 square, inside
+       the 720 optical area. Monochrome check: flatten the bow to Ink and both
+       elements still read on Paper. -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <circle cx="512" cy="500" r="284" fill="none" stroke="#0C0A08" stroke-width="120"/>
+  <path d="M 456 372 A 224 224 0 0 0 456 620" fill="none" stroke="#E8503A" stroke-width="64" stroke-linecap="round"/>
+</svg>

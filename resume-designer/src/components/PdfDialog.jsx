@@ -137,8 +137,13 @@ export default function PdfDialog() {
           </DialogDescription>
         </DialogHeader>
 
+        {/* `pdf-preview-box` below is a styling hook, not a Tailwind class: the
+            native iOS shell shortens this box (styles/native-shell.css) so the
+            dialog's Save button still fits on a phone. 60vh plus the header,
+            filename row and footer overflows a 760pt viewport by exactly enough
+            to push Save off the bottom edge. */}
         {hasPreview && (
-          <div className="relative h-[60vh] w-full overflow-auto rounded-md border bg-muted/30 p-3">
+          <div className="pdf-preview-box relative h-[60vh] w-full overflow-auto rounded-md border bg-muted/30 p-3">
             <div ref={setHostNode} className="flex flex-col items-center gap-3" />
             {status === 'loading' && (
               <div className="pointer-events-none absolute inset-0 grid place-items-center text-sm text-muted-foreground">

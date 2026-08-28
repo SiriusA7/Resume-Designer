@@ -16,7 +16,11 @@ import { getSecret, hasNoCredentialConfigured, recoverSecretStore } from './secr
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { flushPendingProfileSave } from './userProfilePanel.js';
-import { probeLegacyElectronData, importLegacyElectronData } from './native.js';
+import {
+  probeLegacyElectronData, importLegacyElectronData, notify, isIOSPlatform,
+} from './native.js';
+import { confirmDestructive } from '@/components/ui/confirm';
+import { isSyncEnabled } from './sync/syncModel.js';
 
 /**
  * Bridge the visual gap between "user clicked OK on the post-import alert" and
@@ -164,12 +168,15 @@ function showImportSuccessAndReload(message) {
       // imported keys. Writes stay guarded and saves stay suspended until reload;
       // the user exports a copy, then reloads.
       appStorage.discardDeferredWrites();
-      alert(
-        'Your backup was imported, but it could NOT be saved to disk — your '
-        + 'disk may be full. Free up space, then use Settings → Data → Export '
-        + 'Backup to save a copy. Reloading or closing the app before the copy '
-        + 'is saved will lose the imported data.'
-      );
+      await notify({
+        title: 'Import not saved',
+        type: 'error',
+        message:
+          'Your backup was imported, but it could NOT be saved to disk — your '
+          + 'disk may be full. Free up space, then use Settings → Data → Export '
+          + 'Backup to save a copy. Reloading or closing the app before the copy '
+          + 'is saved will lose the imported data.',
+      });
       return;
     }
     reloadWithOverlay('Loading your imported data…');
@@ -198,7 +205,7 @@ export function exportFullBackupWithFeedback() {
     console.log(`[backup] Exported ${keysExported} keys to ${filename}`);
   } catch (err) {
     console.error('[backup] Export failed:', err);
-    alert(`Export failed: ${err.message ?? String(err)}`);
+    void notify({ title: 'Export failed', type: 'error', message: `Export failed: ${err.message ?? String(err)}` });
   }
 }
 
@@ -245,14 +252,36 @@ export async function importBackupFromFile(file) {
     const profileNote = isFormat2Full && Array.isArray(preview.registry)
       ? ` across ${preview.registry.length} ${preview.registry.length === 1 ? 'profile' : 'profiles'}`
       : '';
-    const ok = confirm(
-      `Restore from backup?\n\n` +
-        `This backup contains ${incoming} keys${profileNote} ` +
-        `(created ${preview.createdAt || 'unknown date'}).\n\n` +
-        `Your current resumes, job descriptions, history, and ` +
-        `settings will be REPLACED.\n\n` +
-        `The app will reload after import.`
-    );
+    const ok = await confirmDestructive({
+      title: 'Restore from backup?',
+      description:
+        `This backup contains ${incoming} keys${profileNote} `
+        + `(created ${preview.createdAt || 'unknown date'}). `
+        + `Your current resumes, job descriptions, history, and settings will be REPLACED. `
+        // Said out loud because a replace is no longer a local act. The résumés
+        // this backup omits are now tombstoned, and a tombstone TRAVELS — it
+        // removes them on every device signed into the same account, not just
+        // this one. Nothing in the old copy suggested that, and it is not a
+        // consequence anyone would infer from the word "replace".
+        // Gated on the PLATFORM as well, and not redundantly: `isSyncEnabled`
+        // reads a suspension flag whose absence means "running", so it answers
+        // true on desktop — where there is no CloudKit transport at all — and
+        // the sentence would be describing something that cannot happen.
+        + (isIOSPlatform() && isSyncEnabled()
+          // SCOPED, because the unscoped promise is one this device cannot
+          // keep. A replacement can only remove what it can name, and a résumé
+          // created on another device that has not reached this one yet is not
+          // in the pre-wipe snapshot, so no tombstone is written for it and the
+          // next fetch adopts it as new. Saying so lets somebody who cares sync
+          // first; claiming otherwise would have them find out afterwards.
+          ? `Because iCloud sync is on, this also removes those resumes from your `
+            + `other devices. Anything created elsewhere that has not synced to `
+            + `this device yet will not be removed. `
+          : '')
+        + `The app will reload after import.`,
+      actionLabel: 'Replace and reload',
+      cancelLabel: 'Cancel',
+    });
     if (!ok) return;
 
     // Flush all pending debounced writers (resume store + profile panel) before
@@ -303,7 +332,7 @@ export async function importBackupFromFile(file) {
     // suspendSaves) or a re-latched prior suspension must not be unlocked here.
     if (suspendedHere) store.resumeSaves(); // import rolled back — app keeps running
     console.error('[backup] Import failed:', err);
-    alert(`Import failed: ${err.message ?? String(err)}`);
+    await notify({ title: 'Import failed', type: 'error', message: `Import failed: ${err.message ?? String(err)}` });
   }
 }
 
@@ -327,20 +356,24 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
   try {
     const probe = await probeLegacyElectronData();
     if (!probe?.found) {
-      alert('No data from a previous (Electron) installation was found on this computer.');
+      await notify({ title: 'Nothing to import', message: 'No data from a previous (Electron) installation was found on this computer.' });
       return;
     }
 
     const envelope = await importLegacyElectronData();
     const incoming = envelope?.keys ? Object.keys(envelope.keys).length : 0;
-    const ok = confirm(
-      `Import data from your previous desktop app?\n\n` +
-        `Found ${incoming} keys from the legacy (Electron) installation.\n\n` +
-        (merging
-          ? `They will be MERGED into your current data (your current resumes win on any conflict).`
-          : `Your current resumes, job descriptions, history, and settings will be REPLACED.`) +
-        `\n\nThe app will reload after import.`
-    );
+    const ok = await confirmDestructive({
+      title: 'Import data from your previous desktop app?',
+      description:
+        `Found ${incoming} keys from the legacy (Electron) installation. `
+        + (merging
+          ? `They will be MERGED into your current data (your current resumes win on any conflict). `
+          : `Your current resumes, job descriptions, history, and settings will be REPLACED. `)
+        + `The app will reload after import.`,
+      actionLabel: merging ? 'Merge and reload' : 'Replace and reload',
+      cancelLabel: 'Cancel',
+      destructive: !merging,
+    });
     if (!ok) return;
 
     try {
@@ -464,6 +497,6 @@ export async function importLegacyElectronWithFeedback(mode = 'replace') {
       catch (restoreErr) { console.error('[backup] could not restore the previous key:', restoreErr); }
     }
     console.error('[backup] Legacy import failed:', err);
-    alert(`Couldn't import data from the previous app: ${err.message ?? String(err)}`);
+    await notify({ title: 'Import failed', type: 'error', message: `Couldn't import data from the previous app: ${err.message ?? String(err)}` });
   }
 }

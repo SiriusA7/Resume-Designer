@@ -4,6 +4,7 @@ import {
   Loader2, Lock, MessageSquareText, Plus, Sparkles, Target, Upload, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -146,16 +147,29 @@ export function ApiKeyStep({ defaultKey, hasProviders, onValidate, goTo }) {
           Your API key is stored locally on your device and is sent only to OpenRouter to make AI requests.
         </p>
       </StepBody>
-      <StepFooter className="justify-end">
-        <Button id="validate-and-continue" disabled={validating} onClick={handleContinue}>
-          {validating ? (
-            <>
-              <Loader2 className="size-4 animate-spin" /> Validating…
-            </>
-          ) : (
-            hasProviders ? 'Continue' : 'Validate & continue'
-          )}
-        </Button>
+      <StepFooter className="flex-col items-stretch">
+        <div className="flex justify-end gap-2">
+          <Button id="validate-and-continue" disabled={validating} onClick={handleContinue}>
+            {validating ? (
+              <>
+                <Loader2 className="size-4 animate-spin" /> Validating…
+              </>
+            ) : (
+              hasProviders ? 'Continue' : 'Validate & continue'
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={validating}
+            onClick={() => goTo(1)}
+          >
+            Skip for now
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          You can add a key later in Settings. Everything except the AI
+          assistant works without one.
+        </p>
       </StepFooter>
     </div>
   );
@@ -310,7 +324,11 @@ export function ImportStep({ initialText, onParse, onFile, onBack }) {
             'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground transition-colors hover:bg-accent/30',
             dragOver && 'border-primary/50 bg-accent/30',
           )}
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => {
+            const blocked = filePickBlockedReason();
+            if (blocked) { toast.error(blocked); return; }
+            fileInputRef.current?.click();
+          }}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={async (e) => {
@@ -1051,7 +1069,7 @@ function ReviewSectionLabel({ children }) {
   return <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{children}</p>;
 }
 
-export function ReviewStep({ resume, isTailored, onBack, onCreate }) {
+export function ReviewStep({ resume, isTailored, onBack, onCreate, saving = false }) {
   const hasName = resume?.name && resume.name !== 'Not set';
   const hasTagline = resume?.tagline && resume.tagline !== 'Not set';
   const hasSummary = resume?.summary;
@@ -1174,7 +1192,12 @@ export function ReviewStep({ resume, isTailored, onBack, onCreate }) {
         <Button variant="ghost" id="back-btn" onClick={onBack}>
           <ArrowLeft className="size-4" /> Back
         </Button>
-        <Button id="next-btn" onClick={onCreate}>Create resume</Button>
+        {/* Disabled while the résumé is being written and waited for. Without
+            it a second tap runs the whole save again and mints another résumé
+            — the wait for durability is what made that reachable. */}
+        <Button id="next-btn" onClick={onCreate} disabled={saving}>
+          {saving ? 'Creating…' : 'Create resume'}
+        </Button>
       </StepFooter>
     </div>
   );
