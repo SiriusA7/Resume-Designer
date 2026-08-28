@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>On Paper</title>
   <!-- Liquid-glass opt-in. MUST run before the stylesheets below so the
        <html>/<body> background is transparent from the first paint — otherwise
@@ -26,7 +26,19 @@
           'isTauri' in window ||
           '__TAURI_INTERNALS__' in window ||
           '__TAURI__' in window;
-        if (inTauri || params.has('translucent')) {
+        // iOS has no NSVisualEffectView vibrancy layer behind the webview, so
+        // clearing to transparent there leaves a bare black UIView. Only the
+        // desktop targets (macOS/Windows/Linux) get the glass treatment.
+        // iPadOS serves a DESKTOP-class user agent — measured on an iPad Pro
+        // (iOS 27): "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)…" with
+        // navigator.platform "MacIntel". A UA test alone therefore MISSES iPad,
+        // re-enabling the glass treatment and turning the app transparent over a
+        // bare black UIView. The touch-point check is the discriminator: iPadOS
+        // reports maxTouchPoints 5, a real Mac reports 0.
+        var isIOS =
+          /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if ((inTauri && !isIOS) || params.has('translucent')) {
           document.documentElement.setAttribute('data-tauri', 'true');
         }
       } catch (_) {
@@ -54,6 +66,11 @@
        :root[data-tauri="true"], so it is inert in a plain browser and only
        turns the chrome translucent inside the Tauri desktop shell. -->
   <link rel="stylesheet" href="/styles/glass.css">
+  <!-- Native iOS shell overrides. Loaded LAST and fully gated behind
+       html.op-native-shell, a class only src/iosShell.js adds and only when the
+       SwiftUI chrome (src-tauri/ios/OPShell.swift) says it is installed. Inert
+       on desktop, in the browser, and in the print/PDF window. -->
+  <link rel="stylesheet" href="/styles/native-shell.css">
 </head>
 <body>
   <div id="root"></div>

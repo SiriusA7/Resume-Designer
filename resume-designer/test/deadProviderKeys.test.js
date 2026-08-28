@@ -142,6 +142,53 @@ describe('export boundary', () => {
     localStorage.setItem('resume-p--pmine--resume-designer-data', dirty);
   };
 
+  it('keeps a deleted workspace out, but never the one still on screen', async () => {
+    // Two halves, and getting the second wrong is worse than not filtering.
+    // A tombstoned workspace's bytes must not travel — restored, the workspace
+    // the person deleted is simply back. But the ACTIVE one is exempt, because
+    // `purgeTombstonedProfiles` deliberately leaves it full: it is still mapped
+    // and still holding what is on screen.
+    //
+    // The path that makes this bite: when the switch away from a remotely
+    // deleted workspace fails — a failed disk write — the app STAYS on it, and
+    // its own response to a failed disk write is a toast telling the person to
+    // export a backup. Filtering the active one dropped everything they were
+    // looking at, reported success, and a restore of that file then replaced
+    // the local copy with an empty workspace.
+    localStorage.setItem('resume-designer-profiles', JSON.stringify([
+      { id: 'pmine', name: 'Ash', emoji: '🙂', createdAt: 'x', deletedAt: '2026-08-18T00:00:00.000Z' },
+      { id: 'pgone', name: 'Old', emoji: '🙂', createdAt: 'x', deletedAt: '2026-08-18T00:00:00.000Z' },
+    ]));
+    localStorage.setItem('resume-designer-active-profile', 'pmine');
+    localStorage.setItem('resume-p--pmine--resume-designer-data', JSON.stringify({
+      variants: { v1: { name: 'On screen right now' } },
+    }));
+    localStorage.setItem('resume-p--pgone--resume-designer-data', JSON.stringify({
+      variants: { v9: { name: 'Deleted elsewhere' } },
+    }));
+    const readDownload = captureDownload();
+
+    exportFullBackup();
+    const json = await readDownload();
+
+    expect(json).toContain('On screen right now');
+    expect(json).not.toContain('Deleted elsewhere');
+
+    // AND its registry entry goes in LIVE. Bytes alone do not restore: a
+    // format-2 restore writes the tombstone unchanged, the next start resolves
+    // to the other live workspace, and the purge then deletes the namespace
+    // that was just restored — so the recovery backup could not recover the one
+    // thing it was taken for. Refreshed `updatedAt` so the revival outranks the
+    // tombstone rather than being re-tombstoned by the next merge.
+    const envelope = JSON.parse(json);
+    const mine = envelope.registry.find((p) => p.id === 'pmine');
+    expect(mine.deletedAt).toBeUndefined();
+    expect(mine.updatedAt).toEqual(expect.any(String));
+    // The one deleted elsewhere keeps its tombstone — restoring must not bring
+    // back a workspace this device is not showing anybody.
+    expect(envelope.registry.find((p) => p.id === 'pgone').deletedAt).toBeTruthy();
+  });
+
   it('keeps them out of a whole-app backup', async () => {
     seed();
     const readDownload = captureDownload();

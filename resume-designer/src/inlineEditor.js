@@ -8,9 +8,17 @@ import { openChatWithContext, addContextChip } from './chatPanel.js';
 import { getPendingChange, applyInlineChange, rejectInlineChange, getCurrentChangeSet, getOriginalContent } from './inlineChanges.js';
 import { showDiffView } from './diffView.js';
 import { appStorage } from './appStorage.js';
+import { EDITABLE_TEXT_ATTRS } from './spellcheck.js';
 
 let isInitialized = false;
 let activeElement = null;
+// The native iOS format panel makes the web view resign first responder, so the
+// keyboard — which lives in a window ABOVE any sheet — stops covering it. That
+// blurs whatever is being edited, and `handleBlur` would then commit and
+// re-render the whole résumé, DETACHING the very node the panel's buttons are
+// aimed at. Measured: every button went quietly dead. While this is set, blur
+// leaves the session alone; main.js clears it and commits when the panel closes.
+let blurCommitSuspended = false;
 let hintDismissed = false;
 let hasEditedOnce = false;
 let hoveredElement = null;
@@ -855,6 +863,12 @@ function startEditing(element) {
   // Make editable
   element.contentEditable = 'true';
   element.spellcheck = true;
+  // spellcheck does NOT govern autocorrect in WebKit, and résumé text is written
+  // straight back to the store — so an autocorrection would be persisted with no
+  // undo. Set the attributes explicitly.
+  for (const [attr, value] of Object.entries(EDITABLE_TEXT_ATTRS)) {
+    element.setAttribute(attr, value);
+  }
   element.classList.add('editing');
   
   // Focus and select all text
@@ -912,6 +926,7 @@ function finishEditing(element) {
   // Remove editing state
   element.contentEditable = 'false';
   element.spellcheck = false;
+  for (const attr of Object.keys(EDITABLE_TEXT_ATTRS)) element.removeAttribute(attr);
   element.classList.remove('editing');
   
   if (activeElement === element) {
@@ -927,19 +942,39 @@ function finishEditing(element) {
 }
 
 // Re-apply markdown emphasis (**bold**, _italic_, ++underline++) onto an element's
-// plain text from its rendered <strong>/<em>/<u> children, so a round-trip through
-// contentEditable doesn't silently drop formatting. Shared by bullet lists and tool
-// chips.
-function serializeEmphasis(el) {
-  let result = (el.textContent || '').trim();
-  el.querySelectorAll('strong').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `**${t}**`); });
-  el.querySelectorAll('em').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `_${t}_`); });
-  el.querySelectorAll('u').forEach((n) => { const t = n.textContent; if (t) result = result.replace(t, `++${t}++`); });
-  return result;
+// plain text from its rendered children, so a round-trip through contentEditable
+// doesn't silently drop formatting. Shared by bullet lists and tool chips.
+//
+// `b`/`i` are included alongside `strong`/`em` because WebKit's own execCommand —
+// the iPad shortcut bar, and macOS's Edit menu — inserts the presentational tags.
+// Querying only the semantic ones dropped that formatting on every round trip.
+//
+// WALKED IN ORDER, not matched by text. This used to take the element's plain
+// text and `String.replace()` each formatted node's text into it — which finds
+// the FIRST occurrence, not the node's own. "foo <b>foo</b>" serialised as
+// "**foo** foo": the bold silently moved to the other word, and that is what
+// got saved. Repeated words are ordinary in a résumé — a tool listed twice, a
+// company name inside its own bullet — so this was not an exotic case.
+const EMPHASIS_MARKERS = { strong: '**', b: '**', em: '_', i: '_', u: '++' };
+
+export function serializeEmphasis(el) {
+  const walk = (node) => {
+    if (node.nodeType === 3) return node.nodeValue || '';
+    if (node.nodeType !== 1) return '';
+    const inner = Array.from(node.childNodes).map(walk).join('');
+    const marker = EMPHASIS_MARKERS[node.tagName.toLowerCase()];
+    if (!marker) return inner;
+    // Markers hug the text, not the spaces around it: "**bold **next" is not
+    // emphasis to any reader of the stored string, and WebKit is happy to put
+    // a trailing space inside the tag it creates.
+    const [, lead, body, trail] = inner.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    return body ? `${lead}${marker}${body}${marker}${trail}` : inner;
+  };
+  return Array.from(el.childNodes).map(walk).join('').trim();
 }
 
 // Extract the edited value, preserving format for special content types
-function extractEditedValue(element, path) {
+export function extractEditedValue(element, path) {
   // Check for skill tags (rendered as separate spans that need to be joined with •)
   const skillTags = element.querySelectorAll('.skill-tag, .skill-tag-inline');
   if (skillTags.length > 0) {
@@ -961,8 +996,22 @@ function extractEditedValue(element, path) {
   // not just the edited one — so editing one tool doesn't drop the others, and keep
   // each chip's bold/italic.
   if (path === 'tools') {
-    const toolScope = element.closest('.tools-bulleted') || element.closest('.tools-list')
-      || element.closest('.skill-tag-row') || element.parentElement;
+    // SCOPED TO THE WHOLE RÉSUMÉ, not to the wrapper the click landed in.
+    //
+    // Pagination gives every page its own `.tools-bulleted` (the wrappers are
+    // `cloneNode(false)`, the chips themselves are MOVED into them), so scoping
+    // to `.closest('.tools-bulleted')` collected only the chips on the page that
+    // was clicked — and this re-join writes the WHOLE `tools` string, so
+    // everything past the page break was deleted by editing one chip. Measured
+    // on a real résumé: 18 tools became 8, and the eight that survived were
+    // exactly page one.
+    //
+    // Safe to widen: a chip exists once in the document, so nothing is
+    // double-counted, and `querySelectorAll` returns document order — page one's
+    // chips and then page two's, which is the order they were written in.
+    const toolScope = element.closest('#resume-container')
+      || element.closest('.resume')
+      || element.ownerDocument;
     const toolTags = toolScope?.querySelectorAll(
       '.tool-token, .skill-tag[data-editable="tools"], .skill-tag-inline[data-editable="tools"], .highlight-bullet[data-editable="tools"]'
     );
@@ -979,13 +1028,33 @@ function extractEditedValue(element, path) {
 function handleBlur(e) {
   const editable = e.target.closest('[data-editable]');
   if (!editable) return;
-  
+
   // Small delay to allow click on another editable
   setTimeout(() => {
+    // Checked HERE rather than above, because the suspension can legitimately
+    // arrive between the blur and this timer: on iOS the blur is caused by
+    // native code that suspends in the same gesture, and `evaluateJavaScript`
+    // is asynchronous. 100ms is ample for that hop.
+    if (blurCommitSuspended) return;
     if (activeElement === editable) {
       finishEditing(editable);
     }
   }, 100);
+}
+
+/**
+ * Keep the current editing session alive across a blur (see
+ * `blurCommitSuspended`). Only the iOS format panel uses this, and it must
+ * always be paired with a release — a suspension left on would mean edits stop
+ * committing when the user taps away.
+ */
+export function suspendBlurCommit(suspend) {
+  blurCommitSuspended = !!suspend;
+}
+
+/** Commit whatever is being edited, if anything. */
+export function commitActiveInlineEdit() {
+  if (activeElement) finishEditing(activeElement);
 }
 
 // Handle keydown
@@ -994,12 +1063,16 @@ function handleKeyDown(e) {
   if (!editable || !editable.isContentEditable) return;
 
   const modKey = e.metaKey || e.ctrlKey;
-  if (modKey && !e.altKey && e.key.toLowerCase() === 'b') {
-    e.preventDefault();
-    toggleBoldInEditable(editable);
-    return;
+  if (modKey && !e.altKey) {
+    // '**' bold, '_' italic, '++' underline — the same markers serializeEmphasis reads.
+    const marker = { b: '**', i: '_', u: '++' }[e.key.toLowerCase()];
+    if (marker) {
+      e.preventDefault();
+      toggleMarkerInEditable(editable, marker);
+      return;
+    }
   }
-  
+
   // Enter key finishes editing (except for multiline fields)
   if (e.key === 'Enter' && !e.shiftKey) {
     const isMultiline = editable.dataset.multiline === 'true';
@@ -1074,9 +1147,16 @@ function handleKeyDown(e) {
   }
 }
 
-function toggleBoldInEditable(editable) {
-  // Skip structural rich text nodes that are reconstructed by specialized extractors.
-  if (editable.querySelector('.skill-tag, .skill-tag-inline, .highlight-bullet')) {
+function toggleMarkerInEditable(editable, marker) {
+  // Skip structural rich text nodes that are reconstructed by specialized extractors:
+  // the textContent round-trip below would flatten their markup. `matches` is needed
+  // as well as `querySelector` because these chips are sometimes the editable ITSELF,
+  // not a descendant — renderer.js emits
+  // `<span class="highlight-bullet" data-editable="tools">` per tool — and
+  // querySelector only ever looks at descendants, so the guard missed exactly the
+  // elements it exists to protect.
+  const RICH_TEXT_SELECTOR = '.skill-tag, .skill-tag-inline, .highlight-bullet';
+  if (editable.matches(RICH_TEXT_SELECTOR) || editable.querySelector(RICH_TEXT_SELECTOR)) {
     return;
   }
 
@@ -1088,7 +1168,7 @@ function toggleBoldInEditable(editable) {
 
   const start = getTextOffset(editable, range.startContainer, range.startOffset);
   const end = getTextOffset(editable, range.endContainer, range.endOffset);
-  const result = toggleBoldMarkdown(editable.textContent || '', start, end);
+  const result = toggleMarkdownMarker(editable.textContent || '', start, end, marker);
 
   editable.textContent = result.value;
   setSelectionInEditable(editable, result.start, result.end);
@@ -1117,42 +1197,76 @@ function setSelectionInEditable(editable, start, end) {
   selection.addRange(range);
 }
 
-function toggleBoldMarkdown(value, start, end) {
+/**
+ * Toggle a markdown emphasis marker around [start, end) of `value`.
+ * Marker is the literal wrapper: '**' bold, '_' italic, '++' underline.
+ * Exported for unit testing; the DOM wrapper is toggleMarkerInEditable.
+ */
+export function toggleMarkdownMarker(value, start, end, marker) {
+  // A DOM selection can run backwards (anchor after focus), so normalise before
+  // slicing — otherwise `selected` is empty and every branch below misbehaves.
   const selectionStart = Math.min(start, end);
   const selectionEnd = Math.max(start, end);
-  const selected = value.slice(selectionStart, selectionEnd);
+  const len = marker.length;
 
+  // Collapsed caret: toggle an EMPTY marker pair, so "turn emphasis on, then
+  // type" works and pressing the shortcut again inside the pair cancels it.
+  // Reachable only after the caret is moved — startEditing select-alls on focus
+  // — which is why an earlier no-op version of this branch went unnoticed.
   if (selectionStart === selectionEnd) {
-    const hasOuterBold = selectionStart >= 2 &&
-      value.slice(selectionStart - 2, selectionStart) === '**' &&
-      value.slice(selectionStart, selectionStart + 2) === '**';
+    const insideEmptyPair =
+      selectionStart >= len &&
+      value.slice(selectionStart - len, selectionStart) === marker &&
+      value.slice(selectionStart, selectionStart + len) === marker;
 
-    if (hasOuterBold) {
-      const nextValue = value.slice(0, selectionStart - 2) + value.slice(selectionStart + 2);
-      return { value: nextValue, start: selectionStart - 2, end: selectionStart - 2 };
+    if (insideEmptyPair) {
+      const caret = selectionStart - len;
+      return {
+        value: value.slice(0, caret) + value.slice(selectionStart + len),
+        start: caret,
+        end: caret,
+      };
     }
 
-    const nextValue = value.slice(0, selectionStart) + '****' + value.slice(selectionStart);
-    return { value: nextValue, start: selectionStart + 2, end: selectionStart + 2 };
+    const caret = selectionStart + len;
+    return {
+      value: value.slice(0, selectionStart) + marker + marker + value.slice(selectionStart),
+      start: caret,
+      end: caret,
+    };
   }
 
-  if (selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4) {
-    const unwrapped = selected.slice(2, -2);
-    const nextValue = value.slice(0, selectionStart) + unwrapped + value.slice(selectionEnd);
-    return { value: nextValue, start: selectionStart, end: selectionStart + unwrapped.length };
+  const before = value.slice(0, selectionStart);
+  const selected = value.slice(selectionStart, selectionEnd);
+  const after = value.slice(selectionEnd);
+
+  // Markers INSIDE the selection? Unwrap. This is the default path in the app:
+  // startEditing ends with range.selectNodeContents(element), so a click selects
+  // the whole RAW value including its markers. Must be tested before the
+  // markers-outside case. The length guard keeps a selection that is nothing but
+  // the marker itself (e.g. '**') from "unwrapping" to an empty string.
+  if (selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= 2 * len) {
+    const unwrapped = selected.slice(len, -len);
+    return {
+      value: before + unwrapped + after,
+      start: selectionStart,
+      end: selectionStart + unwrapped.length,
+    };
   }
 
-  const hasOuterBold = selectionStart >= 2 &&
-    value.slice(selectionStart - 2, selectionStart) === '**' &&
-    value.slice(selectionEnd, selectionEnd + 2) === '**';
-
-  if (hasOuterBold) {
-    const nextValue = value.slice(0, selectionStart - 2) + selected + value.slice(selectionEnd + 2);
-    return { value: nextValue, start: selectionStart - 2, end: selectionEnd - 2 };
+  // Markers OUTSIDE the selection? Unwrap outward.
+  if (before.endsWith(marker) && after.startsWith(marker)) {
+    return {
+      value: before.slice(0, -len) + selected + after.slice(len),
+      start: selectionStart - len,
+      end: selectionEnd - len,
+    };
   }
-
-  const nextValue = value.slice(0, selectionStart) + `**${selected}**` + value.slice(selectionEnd);
-  return { value: nextValue, start: selectionStart + 2, end: selectionEnd + 2 };
+  return {
+    value: `${before}${marker}${selected}${marker}${after}`,
+    start: selectionStart + len,
+    end: selectionEnd + len,
+  };
 }
 
 // Handle input for validation/feedback

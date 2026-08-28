@@ -1,18 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the main window and any hidden PDF-export print window",
+  "description": "Permissions valid on every platform, for the main window and the hidden PDF-export print window. The pdf-print-* glob matches nothing on iOS, where there is no second window.",
   "windows": ["main", "pdf-print-*"],
   "permissions": [
     "core:default",
     "core:window:default",
-    "core:window:allow-start-dragging",
-    "core:window:allow-toggle-maximize",
-    "core:window:allow-close",
-    "core:window:allow-destroy",
     "core:webview:default",
-    "core:webview:allow-create-webview-window",
-    "core:webview:allow-webview-close",
     "core:event:default",
     "core:app:default",
     "core:resources:default",
@@ -23,9 +17,6 @@
     "dialog:allow-ask",
     "dialog:allow-confirm",
     "shell:allow-open",
-    "updater:default",
-    "process:default",
-    "process:allow-restart",
     "os:default",
     "os:allow-platform"
   ]

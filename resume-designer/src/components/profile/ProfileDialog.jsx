@@ -4,6 +4,7 @@ import {
   Upload, Download, Sparkles, Check, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -11,9 +12,10 @@ import { Badge } from '@/components/ui/badge';
 import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
-import { getUserProfile, saveUserProfile } from '../../persistence.js';
-import { DEFAULT_PROFILE, profileToMarkdown, markdownToProfile } from '../../profileMarkdown.js';
-import { assignGroupIds, groupExperience } from '../../experienceGroups.js';
+import { getUserProfile, saveUserProfile, downloadFile } from '../../persistence.js';
+import { registerUserProfileHolder } from '../../userProfileHolder.js';
+import { profileToMarkdown } from '../../profileMarkdown.js';
+import { completeProfile, parseProfileImport } from '../../profileBridge.js';
 import { ProfileTabContent } from './ProfileTabs.jsx';
 
 const SAVE_DELAY = 500;
@@ -32,14 +34,10 @@ const PROFILE_TABS = [
 
 // A deep, shape-complete clone of the stored profile to edit against (so edits
 // never mutate the persisted object until saved, and every key/array exists).
+// `completeProfile` lives in profileBridge.js because the native sheet builds
+// the same shape from the same stored blob.
 function buildWorkingCopy() {
-  const stored = getUserProfile() || {};
-  const cloned = JSON.parse(JSON.stringify(stored));
-  return {
-    ...DEFAULT_PROFILE,
-    ...cloned,
-    contactInfo: { ...DEFAULT_PROFILE.contactInfo, ...(cloned.contactInfo || {}) },
-  };
+  return completeProfile(getUserProfile());
 }
 
 /**
@@ -110,6 +108,26 @@ export default function ProfileDialog() {
   // Save + remount the tab so a structural change (add/delete) shows.
   const refresh = useCallback(() => { scheduleSave(); bump(); }, [scheduleSave]);
 
+  // This dialog holds the app's ONE live copy of the user profile, and it is
+  // mounted for the app's whole lifetime — so a profile sync landed in storage
+  // was reverted by the next keystroke's debounced save, which wrote the
+  // open-time snapshot back over the whole field and pushed it up as a clean,
+  // uncontested update (see src/userProfileHolder.js). Register as its holder
+  // while mounted, the same way useChat does for the thread list.
+  //
+  // `adopt` rebuilds the working copy from storage — which is exactly what the
+  // caller just wrote — and bumps so the uncontrolled inputs remount onto it. It
+  // deliberately does NOT save: a write-back would restamp the unit and send
+  // this device's copy of what it only just received.
+  //
+  // `isBusy` is the dialog's own in-flight signal rather than a flag invented
+  // for sync: an edit lives only in `profileRef` until the debounce fires, and a
+  // fired-and-failed save is still in flight because flush() has to retry it.
+  useEffect(() => registerUserProfileHolder({
+    isBusy: () => saveTimeoutRef.current !== null || failedSaveRef.current,
+    adopt: () => { profileRef.current = buildWorkingCopy(); bump(); },
+  }), []);
+
   useEffect(() => {
     const onOpen = () => { profileRef.current = buildWorkingCopy(); bump(); setOpen(true); };
     // Report the flush result back through the event detail so the synchronous
@@ -129,22 +147,15 @@ export default function ProfileDialog() {
   };
 
   const handleExport = () => {
-    const md = profileToMarkdown(profileRef.current);
-    const blob = new Blob([md], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'user-profile.md';
-    a.click();
-    URL.revokeObjectURL(url);
+    // Through the shared helper, not a hand-rolled `<a download>`: WKWebView
+    // does nothing with one — no file, no error — so on iOS without the shell
+    // this button silently produced nothing. See downloadFile in persistence.js.
+    downloadFile(profileToMarkdown(profileRef.current), 'user-profile.md', 'text/markdown');
   };
 
   const handleImport = (file) => {
     file.text().then(async (text) => {
-      const imported = markdownToProfile(text);
-      const entries = Array.isArray(imported?.workExperience) ? imported.workExperience : [];
-      const grouped = assignGroupIds(entries);
-      const runCount = groupExperience(grouped).filter((g) => g.roles.length > 1).length;
+      const { imported, grouped, runCount } = parseProfileImport(text);
       if (runCount > 0) {
         const ok = await confirmDestructive({
           title: runCount === 1
@@ -157,11 +168,7 @@ export default function ProfileDialog() {
         });
         if (ok) imported.workExperience = grouped;
       }
-      profileRef.current = {
-        ...DEFAULT_PROFILE,
-        ...imported,
-        contactInfo: { ...DEFAULT_PROFILE.contactInfo, ...(imported.contactInfo || {}) },
-      };
+      profileRef.current = completeProfile(imported);
       // Record the write result on the SAME tracked-save flag the debounce
       // uses. A direct save that fails (passthrough quota) must not look
       // durable: without this, closing the dialog leaves no pending timer and
@@ -211,7 +218,17 @@ export default function ProfileDialog() {
               </Badge>
             )}
             <Button asChild variant="outline" size="sm">
-              <label className="cursor-pointer" title="Import profile from markdown file">
+              <label
+                className="cursor-pointer"
+                title="Import profile from markdown file"
+                onClick={(e) => {
+                  // A label's default action is to activate the input it wraps.
+                  // Preventing it is how this control is stopped, there being no
+                  // click handler of its own to guard. See filePickGuard.
+                  const blocked = filePickBlockedReason();
+                  if (blocked) { e.preventDefault(); toast.error(blocked); }
+                }}
+              >
                 <Upload className="h-4 w-4" />
                 Import
                 <input

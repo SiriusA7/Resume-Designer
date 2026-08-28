@@ -1,0 +1,186 @@
+name: resume-designer
+options:
+  bundleIdPrefix: com.onpaper.app
+  deploymentTarget:
+    iOS: 26.0
+fileGroups: [../../src]
+configs:
+  debug: debug
+  release: release
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: On Paper
+      # INERT — kept in step only so this file does not read as a lie.
+      #
+      # The Tauri CLI exports PRODUCT_BUNDLE_IDENTIFIER from its MERGED config
+      # on every build, overwriting whatever is here. Proven: with this set to
+      # com.onpaper.app and tauri.conf.json still saying com.resumedesigner.app,
+      # the build exported the latter and the launch failed. The authoritative
+      # value is `identifier` in src-tauri/tauri.ios.conf.json.
+      #
+      # iOS is deliberately NOT the desktop identifier. Desktop is frozen at
+      # com.resumedesigner.app — Tauri derives the app-data directory from it,
+      # so changing it there factory-resets every shipped user through the
+      # updater. iOS had never shipped when this was chosen, so nothing was
+      # addressed by it yet. Frozen from the first iOS release onward.
+      PRODUCT_BUNDLE_IDENTIFIER: com.onpaper.app
+      # HAND-MAINTAINED. `tauri ios init` writes DEVELOPMENT_TEAM straight into
+      # the pbxproj and never records it here, so `xcodegen generate` silently
+      # drops it and device builds stop signing. Keeping it in project.yml makes
+      # it survive regeneration. Simulator builds ignore it.
+      DEVELOPMENT_TEAM: "847VH25R7U"
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      groups: [app]
+targets:
+  resume-designer_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      # HAND-MAINTAINED. The SwiftUI shell is compiled straight from its tracked
+      # home so there is exactly one copy of it. See docs/ios/xcode-project-ownership.md.
+      - path: ../../ios
+        name: Shell
+      - path: Assets.xcassets
+      # HAND-MAINTAINED `excludes`. Externals is empty when `tauri ios init`
+      # first runs and holds the 365 MB libapp.a afterwards, so a later
+      # `xcodegen generate` copies that static library into the app bundle's
+      # Resources. It is LINKED via the `libapp.a` dependency below; it must
+      # never be a resource.
+      - path: Externals
+        excludes: ["**/*.a"]
+      - path: resume-designer_iOS
+      - path: assets
+        buildPhase: resources
+        type: folder
+      - path: LaunchScreen.storyboard
+      # Apple's required-reason API declaration. Listed EXPLICITLY as a
+      # resource rather than left inside `resume-designer_iOS`, so it cannot
+      # depend on xcodegen guessing a build phase from an extension it does not
+      # know — and so it is visible here, in the file that survives
+      # `tauri ios init`, rather than only as a file on disk that a regeneration
+      # could drop.
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
+    info:
+      path: resume-designer_iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIImageName: LaunchLogo
+          UIColorName: LaunchBackground
+          UIImageRespectsSafeAreaInsets: false
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: 1.0.0
+        CFBundleVersion: "1.0.0"
+        # HAND-MAINTAINED, and the most load-bearing lines in this file.
+        #
+        # THE APP IS INVISIBLE WITHOUT UIApplicationSceneManifest. tao never
+        # assigns its UIWindow a `windowScene` on its own; declaring a static
+        # scene manifest is what makes iOS hand one over, which
+        # `src-tauri/src/ios_view.rs` then attaches. Without it the webview
+        # stays 0x0 and the app launches to a black screen.
+        #
+        # These keys were added by hand during Phase 0 and lived only in the
+        # generated Info.plist, where `tauri ios init` deleted them (measured,
+        # 2026-08-10). Declaring them here means xcodegen writes them back on
+        # every regeneration instead.
+        CFBundleDisplayName: On Paper
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: TaoSceneDelegate
+        ITSAppUsesNonExemptEncryption: false
+        # Lets a silent CloudKit push wake the app to fetch while it is not in
+        # front. Without it the push is delivered only when the app is already
+        # running, which is the case that needed it least.
+        UIBackgroundModes:
+          - remote-notification
+    entitlements:
+      path: resume-designer_iOS/resume-designer_iOS.entitlements
+      # HAND-MAINTAINED. xcodegen writes the .entitlements file itself from
+      # this block whenever `properties` is present alongside `path` — never
+      # hand-edit the .entitlements file, `xcodegen generate` overwrites it.
+      # Container is iCloud.com.onpaper.app, NOT the desktop identifier
+      # com.resumedesigner.app: iOS and the container never shipped when that
+      # one was frozen, so the brand name was still free here.
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.onpaper.app
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
+        # SILENT pushes, and only silent ones. CloudKit uses APNs to say "this
+        # database changed"; nothing is ever shown, no alert, no badge, no
+        # sound, and iOS never asks the person for notification permission —
+        # that prompt belongs to UNUserNotificationCenter, which this app does
+        # not touch. Without this entitlement a device only learns of a change
+        # when it happens to fetch: at launch, on returning to the foreground,
+        # or on CKSyncEngine's own schedule, which is where the half-minute lag
+        # between two devices came from.
+        # PER CONFIGURATION, via the build setting below. This entitlement is
+        # written once into a file both configurations share, so hard-coding it
+        # asks for the DEVELOPMENT APNs environment in an archive as well — and
+        # a distribution profile grants production, so the export either fails
+        # on mismatched entitlements or ships a build whose silent pushes never
+        # arrive. The second is the dangerous one: sync still works, just with
+        # the half-minute lag this entitlement exists to remove, and nothing
+        # says so.
+        aps-environment: $(APS_ENVIRONMENT)
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      configs:
+        debug:
+          APS_ENVIRONMENT: development
+        release:
+          APS_ENVIRONMENT: production
+      base:
+        ENABLE_BITCODE: false
+        ARCHS: [arm64]
+        VALID_ARCHS: arm64 
+        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+      groups: [app]
+    dependencies:
+      - framework: libapp.a
+        embed: false
+      - sdk: CoreGraphics.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+      - sdk: WebKit.framework
+    preBuildScripts:
+      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+        name: Build Rust Code
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
+          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a

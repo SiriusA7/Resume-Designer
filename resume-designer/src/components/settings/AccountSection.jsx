@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Check, Download, MoreHorizontal, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { filePickBlockedReason } from '@/filePickGuard';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,12 +14,11 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { appStorage } from '../../appStorage.js';
-import { store } from '../../store.js';
-import { flushPendingProfileSave } from '../../userProfilePanel.js';
 import {
-  loadRegistry, getActiveProfileId, activateProfileDurably, createProfile,
+  listProfiles, getActiveProfileId, activateProfileDurably, createProfile,
   renameProfileDurably, deleteProfile, deleteProfileDurably, exportProfileBackup,
-  importProfileBackup, isAdoptionPending, PROFILES_CHANGED_EVENT,
+  importProfileBackup, isAdoptionPending, PROFILES_CHANGED_EVENT, switchToProfileDurably,
+  flushActiveEdits,
 } from '../../profiles.js';
 import { getVariants, getUserProfile } from '../../persistence.js';
 import { getAllJobDescriptions } from '../../jobDescriptions.js';
@@ -61,19 +61,12 @@ function Avatar({ name, className }) {
   );
 }
 
-// Flush every pending edit of the active profile to disk before a switch/export
-// reloads or serializes. Reports false on a passthrough-quota failure that
-// appStorage.flush() alone would miss (store.saveNow / flushPendingProfileSave
-// now surface it). Callers abort so unsaved edits aren't lost.
-async function flushActiveEdits() {
-  const savedResume = store.saveNow();
-  const savedProfile = flushPendingProfileSave();
-  const durable = await appStorage.flush();
-  return savedResume && savedProfile && durable;
-}
+// `flushActiveEdits` was written out here as well as inside
+// `switchToProfileDurably`, and a third caller that needed it had neither — see
+// its doc comment in profiles.js. It is imported now so there is one of it.
 
 export function AccountSection() {
-  const [registry, setRegistry] = useState(() => loadRegistry() || []);
+  const [registry, setRegistry] = useState(() => listProfiles());
   const [editingId, setEditingId] = useState(null);
   const [draftName, setDraftName] = useState('');
   const [adding, setAdding] = useState(false);
@@ -89,7 +82,7 @@ export function AccountSection() {
   const adopting = isAdoptionPending();
 
   const refresh = () => {
-    setRegistry(loadRegistry() || []);
+    setRegistry(listProfiles());
     // Notify header chrome that reads the registry independently (AccountAvatar)
     // so a renamed active profile updates its initials/label without a reload.
     window.dispatchEvent(new CustomEvent(PROFILES_CHANGED_EVENT));
@@ -112,12 +105,8 @@ export function AccountSection() {
 
   const switchTo = async (id) => {
     if (id === activeId || adopting) return;
-    if (!(await flushActiveEdits())) {
-      toast.error('Could not save your latest changes — profile switch cancelled.');
-      return;
-    }
-    if (!(await activateProfileDurably(id, activeId))) {
-      toast.error("Could not switch profiles — the change didn't reach disk.");
+    if (!(await switchToProfileDurably(id))) {
+      toast.error("Could not switch profiles — the latest changes didn't reach disk.");
       return;
     }
     window.location.reload();
@@ -372,7 +361,11 @@ export function AccountSection() {
                 <Plus className="size-3.5" /> New profile
               </Button>
               <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={onImport} />
-              <Button variant="outline" size="sm" className="h-8" disabled={adopting} onClick={() => fileRef.current?.click()}>
+              <Button variant="outline" size="sm" className="h-8" disabled={adopting} onClick={() => {
+                const blocked = filePickBlockedReason();
+                if (blocked) { toast.error(blocked); return; }
+                fileRef.current?.click();
+              }}>
                 <Upload className="size-3.5" /> Import profile
               </Button>
             </>

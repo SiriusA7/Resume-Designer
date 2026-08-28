@@ -72,14 +72,34 @@ tauri-plugin-updater = "2"
 # superset update check (commands/updater.rs).
 semver = "1"
 
-[target.'cfg(target_os = "macos")'.dependencies]
+# Shared by every Apple target: the WKWebView.createPDF export
+# (commands/pdf_apple.rs) and, on iOS, the view-hierarchy workaround in
+# src/ios_view.rs plus the native shell installer in src/ios_shell.rs.
+#
+# One block for both, because createPDF is one API: `WKPDFConfiguration` is not
+# cfg-gated in objc2-web-kit and the selector exists on both platforms. Only
+# the `WKWebView` *binding* is macOS-only (0.3.2 ships no iOS class at all),
+# which pdf_apple.rs handles with a raw msg_send on iOS rather than another dep.
+# The old split gave iOS a cut-down set on the assumption that objc2-web-kit
+# needs AppKit; it does not — it needs it only for the macOS class.
+#
 # Versions pinned to match what Tauri 2.11 / wry 0.55 pull in transitively, so
 # the dep tree contains a single copy of each crate. See `cargo tree -d` to
 # verify there are no duplicates.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSString", "NSGeometry"] }
-objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2", "objc2-app-kit"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKPDFConfiguration", "block2"] }
 block2 = "0.6"
+# keyring 3.6.3 cannot set kSecAttrSynchronizable, so Apple secret storage
+# uses PasswordOptions directly while other targets keep keyring.
+security-framework = "3.7.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS only: WKWebView is an NSView there, so its bindings need AppKit. Cargo
+# unions features across target blocks, so this adds to the Apple block above.
+objc2-web-kit = { version = "0.3", features = ["objc2-app-kit"] }
+
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # windows 0.61 matches the transitive version webview2-com 0.38 pulls in;
@@ -88,11 +108,11 @@ block2 = "0.6"
 webview2-com = "0.38"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com"] }
 
-# Pure-Rust PDF writer shared by the macOS + Windows PDF export: merge the
-# per-sheet WebView captures into one multi-page PDF (commands/pdf_merge.rs).
-# macOS scales each WKWebView page from CSS px to physical size; Windows
+# Pure-Rust PDF writer shared by every native PDF export: merge the per-sheet
+# WebView captures into one multi-page PDF (commands/pdf_merge.rs). macOS and
+# iOS scale each WKWebView page from CSS px to physical size; Windows
 # concatenates per-sheet WebView2 prints that are already physically sized.
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))'.dependencies]
 lopdf = "0.36"
 
 [profile.release]

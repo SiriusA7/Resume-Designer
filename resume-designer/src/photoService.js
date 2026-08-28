@@ -158,3 +158,17 @@ export function initPhotoService() {
 
 // Export defaults
 export { DEFAULT_PHOTO };
+
+/**
+ * The value this key holds when it has never been customised.
+ *
+ * Exported so a replacement restore can CLEAR the key by writing what "no
+ * customisation" means, rather than deleting it — a deleted key announces
+ * nothing (`collectKeyUnit`), so the old customisation would survive on
+ * CloudKit and come back on the next fetch. The default stays owned here; the
+ * sync layer asks for it rather than keeping a second copy that would be wrong
+ * the first time this one changed.
+ */
+export function defaultPhotoSettings() {
+  return { ...DEFAULT_PHOTO };
+}

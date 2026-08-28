@@ -1,0 +1,29 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Loose Leaf r2-2 "Counterproof": the two voids fuse into one P-silhouette void
+       and the floating element flips polarity - an ink counter disc inside the bowl.
+       Disc c(512,501) r340. P void bbox [362,662] x [271,731], centred (512,501).
+       Bowl circle c(512,421) r150; apex 271 overshoots the flat top y276 by 5
+       (1.67% of d300). Flat top runs (390,276)-(473.6,276); junction x = 512-sqrt(1475).
+       Stem x[362,474] w112; top-left corner r28 (arc c(390,304)); bottom cap r56
+       c(418,675); drawn bottom 731 = 721 intended + 10 round-cap compensation.
+       Bowl underside flat at y571 (bowl bottom tangent). Descender 160 below it.
+       Counter ink island c(512,421) r72; ring void 78 uniform (= 75 nominal + 4% curve comp). -->
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <path fill="#0C0A08" fill-rule="evenodd" d="
+    M 852,501
+    A 340,340 0 1 1 172,501
+    A 340,340 0 1 1 852,501
+    Z
+    M 362,304
+    A 28,28 0 0 1 390,276
+    L 473.6,276
+    A 150,150 0 1 1 512,571
+    L 474,571
+    L 474,675
+    A 56,56 0 0 1 362,675
+    Z
+    M 584,421
+    A 72,72 0 1 1 440,421
+    A 72,72 0 1 1 584,421
+    Z" />
+</svg>

@@ -23,8 +23,19 @@
   --transition-fast: 150ms ease;
   --transition-normal: 250ms ease;
   
-  /* Layout dimensions */
-  --header-height: 56px;
+  /* Layout dimensions
+     --header-height carries the iOS top safe-area inset (Dynamic Island /
+     notch) baked in, not just the visual header content height. Under the
+     universal box-sizing: border-box (below), `.app .header-bar`'s own
+     `padding-top: env(safe-area-inset-top)` shrinks its CONTENT box rather
+     than growing the element — so the inset has to come from a taller
+     token instead, or the header's painted band stays 56px tall while its
+     content overflows below the border into the resume underneath.
+     Every consumer (`.app-content`'s `calc(100vh - var(--header-height))`,
+     the fixed-position panel toggles, etc.) reads this token, so baking the
+     inset in here keeps them all correct for free. On desktop env() resolves
+     to 0px, so this is exactly 56px there. */
+  --header-height: calc(56px + env(safe-area-inset-top));
   --chat-panel-width: 320px;
   --structure-panel-width: 380px;
 }
@@ -212,6 +223,8 @@ body {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .app-content {
@@ -220,6 +233,25 @@ body {
   height: calc(100vh - var(--header-height));
   overflow: hidden; /* Children handle their own scrolling */
   position: relative;
+}
+
+/* Safe area — only meaningful once index.html opts into viewport-fit=cover.
+   env() resolves to 0px everywhere else, so these are inert on desktop.
+   `.zoom-controls` is position:absolute inside .preview-area with bottom:24px
+   (main.css:743-758); .app-content is sized from the viewport height, so its
+   bottom edge IS the bottom of the visible viewport once the content extends
+   under the home indicator.
+   Scoped with an ancestor (`.app`, `.app-content`) rather than the bare class:
+   the later, unconditional `.header-bar { padding: 0 var(--space-lg); … }`
+   and `.zoom-controls { bottom: 24px; … }` rules further down this file have
+   equal specificity and would otherwise win the cascade by source order,
+   silently discarding these insets. */
+.app .header-bar {
+  padding-top: env(safe-area-inset-top);
+}
+
+.app-content .zoom-controls {
+  bottom: calc(24px + env(safe-area-inset-bottom));
 }
 
 /* ==========================================================================
@@ -873,13 +905,48 @@ html[data-theme="dark"] .header-variant-select {
   padding-bottom: 100px; /* Space for bottom toolbar */
   overflow: auto; /* Scroll both directions */
   display: flex;
-  justify-content: center;
+  /* NOT `center`: a centred flex item wider than the scrollport overflows on
+     BOTH sides, and start-side overflow is not scrollable in any engine — the
+     left edge of the page becomes unreachable. Centring is done by the child's
+     auto margins instead, which stay inside the scrollable region. */
+  justify-content: flex-start;
   align-items: flex-start;
 }
 
 .resume-container {
   width: 8.5in;
   min-width: 8.5in;
+  /* A transform does NOT extend an ancestor's scrollable overflow, and
+     start-side overflow is unreachable in every engine. With `top center` the
+     scaled page grew symmetrically outside #resume-scroller and only the right
+     half could be scrolled to — above ~106% zoom the left margin was simply
+     gone (measured: at 2x, 228px over each edge, 196px of scroll).
+
+     So scale from `top left` and make the element's own FOOTPRINT track the
+     scaled width, which puts the overflow back into normal layout where it is
+     scrollable:
+       margin-left  centres while there is room, clamping to 0 once the page is
+                    wider than the scrollport so its left edge sits exactly on
+                    the scroll origin;
+       margin-right reserves the width the transform adds (and goes negative
+                    below 100%, correctly shrinking the footprint to 8.5in*zoom).
+     `--zoom` is published by applyZoom() in zoomControls.js; the 1 fallback
+     keeps this identical to the old rule before the first paint. */
+  margin-left: max(0px, calc((100% - 8.5in * var(--zoom, 1)) / 2));
+  margin-right: calc((var(--zoom, 1) - 1) * 8.5in);
+  /* And the same for the BOTTOM, which the width fix above quietly left out.
+     Below 100% the transform shrinks what you see but not what layout reserves,
+     so the scroller went on offering the full unscaled height: measured at 42%,
+     795px of empty scroll below a 527px page — far enough to scroll the résumé
+     completely off the screen.
+
+     The width could be written as a constant because a page is always 8.5in
+     wide. A page is NOT always 11in tall — pagination, editing and a font swap
+     all change it — and no CSS length reads an element's own height, so
+     `--page-height` is published from JS (see publishPageHeight in
+     zoomControls.js). Its 0px fallback is the old behaviour exactly, which is
+     what the export stylesheets rely on before they zero these out. */
+  margin-bottom: calc((var(--zoom, 1) - 1) * var(--page-height, 0px));
   background: white;
   border-radius: 4px;
   box-shadow:
@@ -887,8 +954,18 @@ html[data-theme="dark"] .header-variant-select {
     0 10px 40px rgba(0, 0, 0, 0.1);
   flex-shrink: 0;
   overflow: hidden;
-  transform-origin: top center;
+  transform-origin: top left;
   transition: transform 0.2s ease;
+}
+
+/* Fit-to-view's measure-then-apply sequence must be instantaneous: the
+   transition makes getBoundingClientRect() report in-flight values while
+   getZoom() reports the target, which makes pagination.js measure wrongly. It
+   is also what causes the visible out-and-back wobble on fit-to-view.
+   Ordinary user-initiated zoom (buttons, shortcuts) does not add this class,
+   so it keeps its 0.2s animation. */
+.resume-container.is-zooming {
+  transition: none;
 }
 
 /* ===== On-screen pagination — true page "sheets" ===== */
@@ -1487,11 +1564,14 @@ html[data-theme="dark"] .header-variant-select {
 
 /* 1200px: Second stage - collapse button text */
 @media (max-width: 1200px) {
+  /* --structure-panel-width only: nothing sets it as an inline style, so this
+     override is live and .structure-panel (editor.css) consumes it. The sibling
+     --chat-panel-width override was deleted — ChatPanel.jsx pins that property
+     inline on :root, which outranks any @media :root rule. */
   :root {
-    --chat-panel-width: 280px;
     --structure-panel-width: 340px;
   }
-  
+
   /* Hide Tools button text and arrow */
   .header-tools-btn .btn-text,
   .header-tools-btn .dropdown-arrow {
@@ -1521,10 +1601,6 @@ html[data-theme="dark"] .header-variant-select {
 
 /* 1050px: Third stage - collapse more buttons */
 @media (max-width: 1050px) {
-  :root {
-    --chat-panel-width: 260px;
-  }
-  
   /* Hide Import/Export text */
   .header-import-btn .btn-text,
   .header-export-btn .btn-text {

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#F4EFE6"/>
+  <!-- One closed loop. Ring: centre (512,432) r 240. Left leg tangent at (272,432),
+       right leg meets the ring at (442,661.56) [dx -70, dy sqrt(240^2-70^2)=229.56],
+       hairpin U-turn r 85 through (357,827). Stroke 72 throughout. -->
+  <path d="M 272 432 A 240 240 0 1 1 442 661.56 L 442 742 A 85 85 0 0 1 272 742 Z"
+        fill="none" stroke="#E8503A" stroke-width="72"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

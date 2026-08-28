@@ -1,0 +1,178 @@
+/* ==========================================================================
+   Native iOS shell
+
+   On iPhone and iPad the chrome is SwiftUI (src-tauri/ios/OPShell.swift) and
+   the webview shows ONLY the résumé canvas. Everything here is gated behind
+   `html.op-native-shell`, a class added by src/iosShell.js exclusively when
+   Swift calls `window.__opShell.activate()`. Desktop, the browser and the
+   print/PDF window never carry it, so this file is inert for them — which is
+   also the design decision on record: nothing is deleted from the web chrome,
+   only bypassed on iOS.
+
+   Loaded LAST in index.html so these win over main.css and glass.css without
+   needing !important.
+
+   The hidden controls are NOT removed: the native chrome drives them by
+   clicking them (see src/iosShell.js), so `display: none` is load-bearing —
+   swapping it for a React conditional would break the commands.
+   ========================================================================== */
+
+html.op-native-shell {
+  /* The SwiftUI navigation bar replaces the web header AND owns the top safe
+     area, so the header's height — and the Dynamic Island inset baked into it —
+     must both come out of the layout, or the canvas starts 100px down a page
+     that has no header on it. */
+  --header-height: 0px;
+}
+
+html.op-native-shell .header-bar {
+  display: none;
+}
+
+/* SwiftUI insets the webview inside the device's safe area already; applying
+   env() again here double-counts it on a notched phone in landscape. */
+html.op-native-shell .app {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The floating zoom pill is replaced by the native bottom toolbar. It carried
+   the text-formatting tools too, which is why the native toolbar has a Format
+   menu — hiding this without that menu would have silently dropped bold,
+   italic, underline, bullets and text size on iOS. */
+html.op-native-shell .zoom-controls {
+  display: none;
+}
+
+/* The onboarding / new-résumé wizard is drawn natively (OPOnboarding.swift).
+   The component still RUNS — it owns the step machine and pushes its state
+   across the bridge — but its own overlay must not paint, or the desktop card
+   shows through behind the native sheet during and after the presentation.
+
+   `display: none` rather than unmounting, for the reason at the top of this
+   file: the component is load-bearing, only its chrome is redundant. It also
+   keeps `hasOpenModal()` matching `.onboarding-overlay.show`, which is what
+   withdraws the native bars while the wizard is up — that check reads the DOM,
+   not visibility, so hiding the overlay does not quietly re-show them. */
+html.op-native-shell .onboarding-overlay {
+  display: none;
+}
+
+/* The change-review dialog, for the same reason and by the same arrangement:
+   drawn natively, but the component keeps running because it owns the apply
+   sequence every entry point depends on.
+
+   Scoped to this dialog by its own id rather than to `[role="dialog"]` — the
+   other web dialogs are still the real UI on iOS, and hiding them all would
+   leave taps landing on nothing. */
+html.op-native-shell #diff-dialog-content {
+  display: none;
+}
+
+/* The two floating panel toggles become buttons in the native bottom toolbar.
+   These are the round buttons that sat on top of the résumé's name. */
+html.op-native-shell .chat-panel-toggle,
+html.op-native-shell .structure-panel-toggle {
+  display: none;
+}
+
+/* The little chat bubble that appears beside whatever text you are editing, and
+   the menu it opens. Every one of its actions ends in the WEB chat panel —
+   `openChatWithContext` / `addContextChip` in inlineEditor.js — so on iOS it was
+   a desktop button sitting on the native canvas that opened the desktop chat
+   over the native one.
+
+   Hidden rather than rerouted, because there is nowhere to route it TO: the
+   native chat sheet carries threads, messages and sending, and deliberately not
+   context chips or proposed changes (see buildChatView in iosShell.js). The
+   menu's other half, Apply/Reject on a pending change, is not lost with it —
+   changes are reviewed in the native review sheet. */
+html.op-native-shell .editable-ai-container,
+html.op-native-shell .editable-ai-menu {
+  display: none;
+}
+
+/* `padding-bottom: 70–100px` across main.css exists to keep the floating pill
+   from covering the page; the pill is gone here, so that exact reservation is
+   not what this is.
+
+   Both ends are the same case: the canvas extends UNDER the bars — it ignores
+   every safe area, so the résumé shows through their glass — which means the
+   scroller has to reserve each bar's height itself, or the first line of page
+   one and the last line of the last page live permanently behind chrome.
+   Reserved as padding rather than inset as layout, so the page still scrolls
+   up behind the bars, which is the effect.
+
+   52px each, which is what the bars measure: the bottom toolbar runs 792pt to
+   836pt on an 874pt screen, so 52 plus the home indicator's own inset clears it
+   with a few points to spare. The bottom half of this was `16px` and read as
+   correct for as long as the canvas reserved the page's full UNSCALED height —
+   below 100% zoom that surplus was accidentally acting as the buffer. Giving
+   the height its own margin (see main.css) took the accident away and left the
+   last inch of the résumé under the toolbar. */
+html.op-native-shell .resume-scroller {
+  padding: 16px;
+  padding-top: calc(env(safe-area-inset-top) + 52px);
+  padding-bottom: calc(env(safe-area-inset-bottom) + 52px);
+}
+
+/* ...and no scrollbar on it. It is the last piece of web chrome still drawn on
+   the native canvas, and it was drawn WRONG: zooming in pans the scroller
+   sideways (the pinch anchors the page under your fingers, so scrollLeft grows
+   with the zoom), and the vertical bar travelled left across the screen with
+   it instead of staying at the edge.
+
+   Measured in a real engine at zooms from 42% to 150%: the scrollport's right
+   edge never moves off the screen edge and the document never scrolls
+   horizontally, so nothing about our layout puts the bar there — it is WebKit
+   painting the indicator in the scrolled content's space rather than the
+   scrollport's.
+
+   Hidden rather than chased, because a bar is not what this surface wants
+   anyway. It is a pinch-zoomable document with its own zoom readout, not a
+   list, and every other piece of web chrome on it is already hidden here. Only
+   the canvas: the web dialogs still scroll and still say so. */
+html.op-native-shell .resume-scroller {
+  scrollbar-width: none;
+}
+html.op-native-shell .resume-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================================================
+   Dialogs on a phone
+
+   These are still web dialogs — only the chrome went native — and they were
+   written for a desktop window. Two things go wrong on a 390x844pt screen, and
+   both make a dialog's PRIMARY ACTION unreachable rather than merely ugly:
+
+   1. The dialog can be taller than the viewport, so its footer falls off the
+      bottom with nothing to scroll.
+   2. SwiftUI hides the bottom toolbar while a dialog is open (so the toolbar
+      does not cover it), and the webview then extends under the home
+      indicator, where taps are the system's swipe-up gesture, not ours.
+
+   Capping the height and reserving the inset fixes both. Scoped to the native
+   shell: desktop windows are tall enough and have no home indicator.
+   ========================================================================== */
+html.op-native-shell [role='dialog'],
+html.op-native-shell [role='alertdialog'] {
+  /* Both insets, because the viewport now spans the whole window: the canvas
+     extends under the navigation bar as well as the toolbar, so a dialog sized
+     to the full height would put its own header under the status bar. */
+  max-height: calc(
+    100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+  );
+  overflow-y: auto;
+  /* Stop a flick at the end of the dialog's scroll from scrolling the résumé
+     behind it. */
+  overscroll-behavior: contain;
+}
+
+/* The PDF preview's 60vh box plus the header, filename row and footer overflows
+   the viewport by just enough to push Save off-screen. Shortening the box is
+   better than scrolling the whole dialog: the preview is the one part of it
+   that is happy at any size. */
+html.op-native-shell .pdf-preview-box {
+  height: 40vh;
+}

@@ -7,7 +7,7 @@ import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 
 import { completeOnboarding, shouldShowOnboarding } from '../../onboarding.js';
-import { loadRegistry } from '../../profiles.js';
+import { listProfiles } from '../../profiles.js';
 import {
   INTERVIEW_QUESTIONS,
   validateOpenRouterKey,
@@ -30,6 +30,8 @@ import {
 } from '../../aiService.js';
 import { getSettings, saveSettings, saveApiKey, SETTINGS_UPDATED_EVENT } from '../../persistence.js';
 import { refreshChatPanel } from '../../chatPanel.js';
+import { appStorage } from '../../appStorage.js';
+import { publishOnboarding } from '../../iosShell.js';
 import { initWindowDrag } from '../../tauriDrag.js';
 import {
   ApiKeyStep,
@@ -73,6 +75,22 @@ export default function OnboardingWizard() {
   const [parsedResume, setParsedResume] = useState(null);
   const [jobDescriptions, setJobDescriptions] = useState([]);
   const [targetJob, setTargetJob] = useState(null);
+  // The workspace this wizard is running in was deleted on another device.
+  // Nothing here can be saved to it, so Create is refused rather than writing a
+  // résumé into a namespace nothing reads — see the handler in main.js, which
+  // holds the switch back while this is open so the answers survive long enough
+  // to be copied out.
+  //
+  // DECLARED HERE, with the other state `saveResume` depends on, and NOT further
+  // down beside the refs. `saveResume` names it in its dependency array, and a
+  // dependency array is evaluated while the component RENDERS — so a `const`
+  // declared below that point is still in the temporal dead zone. Every render
+  // of this component threw `Cannot access 'workspaceGone' before
+  // initialization`, React never mounted the tree, and the iOS shell sat there
+  // with no profiles and a "?" avatar. The refs this callback also touches are
+  // safe where they are: they are read inside the callback BODY, which runs
+  // later, not in the dependency array.
+  const [workspaceGone, setWorkspaceGone] = useState(false);
   const [jobGaps, setJobGaps] = useState([]);
   const [answers, setAnswers] = useState({});
   const [question, setQuestion] = useState(0);
@@ -88,6 +106,32 @@ export default function OnboardingWizard() {
   const jobGenReasoningRef = useRef(getSettings().onboardingReasoning || 'medium');
   const closeTimerRef = useRef(null);
   const dragStripRef = useRef(null);
+
+  // What the web keeps inside JobInputStep's own state. The native step has no
+  // component to hold it, so it lives here and rides the projection.
+  const [nativeGen, setNativeGen] = useState(null);
+  const [improved, setImproved] = useState(null);
+  const [busy, setBusy] = useState('');
+  // The same fact, readable from inside an async closure that captured the
+  // state before its await. See `onGone` and `saveResume`.
+  const workspaceGoneRef = useRef(false);
+  // A durable save is in flight; a second Create must not start another.
+  const savingRef = useRef(false);
+  // The variant was created. Only its durability is outstanding, so a retry
+  // re-flushes instead of minting a second résumé.
+  const savedRef = useRef(false);
+  const [notice, setNotice] = useState(null);
+  // Bumped once per COMPLETED key-save attempt. The native step has no other
+  // reliable signal that one finished — see `nativeSaveKey`.
+  const [keySaves, setKeySaves] = useState(0);
+  const genAbortRef = useRef(null);
+  const improveTokenRef = useRef(0);
+
+  // Jobs already persisted this session, tracked by object identity. Reaching
+  // Review runs commitJobsAndTailor, and Back→Tailor re-enters it — since
+  // addJobDescription mints a fresh id per call, re-committing the same
+  // in-memory jobs would save duplicates. Only newly-added jobs are committed.
+  const committedJobsRef = useRef(new Set());
 
   const doOpen = useCallback((options = {}) => {
     // New-resume mode (the header "+") always skips the API-key step, even with no
@@ -105,7 +149,7 @@ export default function OnboardingWizard() {
     // on the API-key step — no skip, no cancel, only a reload. Snapshot at open
     // so the affordance doesn't pop in mid-wizard (completeOnboarding fires at
     // the end).
-    setCanDismiss(skipApiKeyStep || !shouldShowOnboarding() || (loadRegistry()?.length ?? 0) > 1);
+    setCanDismiss(skipApiKeyStep || !shouldShowOnboarding() || listProfiles().length > 1);
 
     setIsNewResumeMode(skipApiKeyStep);
     setStep(skipApiKeyStep ? 1 : 0);
@@ -118,6 +162,12 @@ export default function OnboardingWizard() {
     setQuestion(0);
     setImportText('');
     setFilePreview(null);
+    // The saved guard is per RUN, not per session. It exists so a retry after a
+    // durability failure re-flushes rather than creating a second résumé — but
+    // left standing from the previous run it made the NEXT "New resume" skip
+    // saveOnboardingResume entirely: the wizard flushed, showed the success
+    // screen, and created nothing. Reset with the rest of the run's state.
+    savedRef.current = false;
 
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
@@ -222,6 +272,51 @@ export default function OnboardingWizard() {
     return { saved: true, valid: await validateOpenRouterKey(key) };
   }, []);
 
+  /**
+   * The native step's own save, because it cannot read a return value.
+   *
+   * `model.send` is a synchronous dispatcher and drops promise results, so
+   * `validateKey`'s `{ saved, error, warning, valid }` reached nobody on iOS. A
+   * keychain refusal left `hasKey` false and the notice untouched — and since
+   * `OPOnboardingSteps.swift` clears its `saving` flag only when one of those
+   * two changes, the Save button stayed disabled with no message and no retry.
+   * On a first run, which is not dismissible, that is a dead end.
+   *
+   * The outcome rides the projection instead, which is how every other native
+   * result gets home. The web card keeps handling its own return value: it can,
+   * and its wording is per-status rather than a single notice.
+   */
+  const nativeSaveKey = useCallback(async (key) => {
+    setNotice(null);
+    let result;
+    try {
+      result = await validateKey(key);
+    } finally {
+      // The native step's "Saving…" is cleared by THIS, not by watching hasKey
+      // and notice change. Replacing a key that already worked with another
+      // that works moves neither — hasKey was true and stays true, the notice
+      // was nil and stays nil — so the step sat on "Saving…" with the button
+      // disabled and no way to retry or to correct a mistyped key. A counter
+      // always changes, so every completed attempt is reported, including the
+      // ones whose outcome happens to look like the state before them.
+      setKeySaves((n) => n + 1);
+    }
+    if (!result?.saved) {
+      setNotice({ kind: 'error', text: result?.error || 'Could not save your API key.' });
+      return;
+    }
+    // Saved but not stored, or saved but unverified: both are worth saying, and
+    // neither is a failure to save. Same words as the web card's, so the two
+    // screens do not describe one outcome differently.
+    if (result.warning) setNotice({ kind: 'error', text: result.warning });
+    else if (!result.valid) {
+      setNotice({
+        kind: 'error',
+        text: 'Could not validate your key. We saved it — you can re-check it later in Settings.',
+      });
+    }
+  }, [validateKey]);
+
   const chooseMode = useCallback((m) => {
     setMode(m);
     setStep(2);
@@ -280,11 +375,6 @@ export default function OnboardingWizard() {
   const addJob = useCallback((jd) => setJobDescriptions((prev) => [...prev, jd]), []);
   const removeJob = useCallback((i) => setJobDescriptions((prev) => prev.filter((_, idx) => idx !== i)), []);
 
-  // Jobs already persisted this session, tracked by object identity. Reaching
-  // Review runs commitJobsAndTailor, and Back→Tailor re-enters it — since
-  // addJobDescription mints a fresh id per call, re-committing the same
-  // in-memory jobs would save duplicates. Only newly-added jobs are committed.
-  const committedJobsRef = useRef(new Set());
 
   const commitJobsAndTailor = useCallback(async () => {
     const committed = committedJobsRef.current;
@@ -312,18 +402,81 @@ export default function OnboardingWizard() {
 
   const reviewBack = useCallback(() => setStep(mode === 'job' ? 2 : 3), [mode]);
 
-  const saveResume = useCallback(() => {
-    // saveOnboardingResume throws when the variant can't be persisted (full
-    // storage). Surface that and stay on the review step — advancing to
-    // the success screen would claim a resume that doesn't exist.
+  useEffect(() => {
+    const onGone = () => {
+      // The ref as well as the state. `saveResume` awaits a durability flush,
+      // and the closure it is running in captured `workspaceGone` before that
+      // await — so a tombstone landing DURING the flush sets the state, and the
+      // in-flight save reads false anyway and advances to "ready" for a résumé
+      // written into a namespace nothing will read.
+      workspaceGoneRef.current = true;
+      setWorkspaceGone(true);
+      setNotice({
+        kind: 'error',
+        text: 'This workspace was deleted on another device, so nothing here can be saved. '
+          + 'Copy anything you want to keep, then close this.',
+      });
+    };
+    window.addEventListener('rd:workspace-deleted', onGone);
+    return () => window.removeEventListener('rd:workspace-deleted', onGone);
+  }, []);
+
+  const saveResume = useCallback(async () => {
+    // SINGLE FLIGHT. Waiting for durability opened a window this step never had
+    // before: Create is a button on a screen that stays interactive, so a second
+    // tap while the flush is pending would run `saveOnboardingResume` again —
+    // minting a second résumé id, and in job mode committing the job
+    // descriptions a second time as well.
+    if (savingRef.current) return;
+    if (workspaceGone) return;
+    savingRef.current = true;
+    setBusy('save');
     try {
-      saveOnboardingResume({ parsedResume, mode, targetJob, jobDescriptions });
-    } catch (err) {
-      toast.error(err.message);
-      return;
+      // saveOnboardingResume throws when the variant can't be persisted (full
+      // storage). Surface that and stay on the review step — advancing to
+      // the success screen would claim a resume that doesn't exist.
+      setNotice(null);
+      // NOT REDONE ON A RETRY. The variant from the first attempt exists; only
+      // its durability was in doubt, so trying again re-flushes rather than
+      // creating a second résumé the person never asked for.
+      if (!savedRef.current) {
+        try {
+          saveOnboardingResume({ parsedResume, mode, targetJob, jobDescriptions });
+        } catch (err) {
+          toast.error(err.message);
+          setNotice({ kind: 'error', text: err.message });
+          return;
+        }
+        savedRef.current = true;
+      }
+    // …and the OTHER half of that same sentence, which the throw above does not
+    // cover. On a device the write goes into `appStorage`'s cache and the disk
+    // refusal arrives later, so the throw never happens and the wizard says
+    // "ready" for a résumé that is only in memory — the first one, on a fresh
+    // install, which is gone at the next launch with nothing to go back to.
+    //
+    // Waited for rather than warned about: this is a one-off at the end of a
+    // wizard, where a moment's pause is affordable and "ready" has to mean it.
+      // Re-read AFTER the await, from the ref. The check at the top of this
+      // function was true when it ran and says nothing about now.
+      if (workspaceGoneRef.current) return;
+      if (!(await appStorage.flush())) {
+        const text = 'Your resume could not be saved to disk. Free up space and try again.';
+        toast.error(text);
+        // The toast renders in the canvas, behind the native wizard. This is
+        // what the iOS side reads.
+        setNotice({ kind: 'error', text });
+        return;
+      }
+      // And again on the other side of it, which is the window the flush itself
+      // opens — the whole point of waiting for durability is that it takes time.
+      if (workspaceGoneRef.current) return;
+      setStep(5);
+    } finally {
+      savingRef.current = false;
+      setBusy('');
     }
-    setStep(5);
-  }, [parsedResume, mode, targetJob, jobDescriptions]);
+  }, [parsedResume, mode, targetJob, jobDescriptions, workspaceGone]);
 
   const finish = useCallback(() => {
     completeOnboarding();
@@ -336,6 +489,190 @@ export default function OnboardingWizard() {
     doClose();
     window.openUserProfilePanel?.();
   }, [doClose]);
+
+  // --- native shell -------------------------------------------------------
+  //
+  // On iOS this wizard is drawn by SwiftUI (OPOnboarding.swift), so the step
+  // machine below stays the only one: the component pushes its state and the
+  // native buttons call these handlers. Nothing here changes the web path.
+  //
+  // Reachable at all because App.jsx mounts this component from app start and
+  // it merely renders null while closed — the reason the other screens needed
+  // their composition extracted into framework-free modules first.
+
+
+  const nativeImprove = useCallback(async (value) => {
+    const q = INTERVIEW_QUESTIONS[question];
+    if (!q?.aiAssist) return;
+    setBusy('improve');
+    setNotice(null);
+    try {
+      // A NEW token every time, even for identical text: the native field
+      // applies the result on token change, and a re-improve that happened to
+      // return the same words would otherwise look like nothing happened.
+      const text = await improveText(q.question, value);
+      improveTokenRef.current += 1;
+      setImproved({ token: improveTokenRef.current, text });
+    } catch (err) {
+      setNotice({ kind: 'error', text: err?.message || 'Could not improve that answer.' });
+    } finally {
+      setBusy('');
+    }
+  }, [question, improveText]);
+
+  const nativeGenerate = useCallback(async (opts) => {
+    const controller = new AbortController();
+    genAbortRef.current = controller;
+    setNotice(null);
+    setNativeGen({ phase: 'generating', reasoning: '', done: false });
+    try {
+      await generateForJob({
+        ...opts,
+        signal: controller.signal,
+        hooks: {
+          onReasoning: (_delta, full) => setNativeGen(
+            (g) => ({ ...g, phase: 'generating', reasoning: full, done: false }),
+          ),
+        },
+      });
+      // Settle into the done screen rather than advancing, which is what the
+      // web does too — the user reads the reasoning and clicks through.
+      setNativeGen((g) => ({ phase: 'done', reasoning: g?.reasoning || '', done: true }));
+    } catch (err) {
+      setNativeGen(null);
+      // A user Cancel aborts the request; returning to the form silently is the
+      // whole feedback, the same as on the web.
+      if (!controller.signal.aborted) {
+        setNotice({ kind: 'error', text: `Failed to generate resume: ${err.message}` });
+      }
+    } finally {
+      genAbortRef.current = null;
+    }
+  }, [generateForJob]);
+
+  // Long AI calls that the web runs behind a step's own spinner. Named in
+  // `busy` so the native side can say which one is running.
+  const nativeParseImport = useCallback(async (text) => {
+    setBusy('parse');
+    setNotice(null);
+    try {
+      await parseImport(text);
+    } catch (err) {
+      setNotice({ kind: 'error', text: err?.message || 'Could not read that résumé.' });
+    } finally {
+      setBusy('');
+    }
+  }, [parseImport]);
+
+  // A file chosen in the native document picker. It arrives as base64 because
+  // the command channel is a JS string literal — there is no way to hand a
+  // Blob across it — and `parseResumeFile` branches on the FILENAME's
+  // extension, so the name has to survive the trip too.
+  const nativePickedFile = useCallback(async (name, base64) => {
+    setBusy('read');
+    setNotice(null);
+    try {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      await handleFile(new File([bytes], name));
+    } catch (err) {
+      setNotice({ kind: 'error', text: err?.message || 'Could not read that file.' });
+    } finally {
+      setBusy('');
+    }
+  }, [handleFile]);
+
+  const nativeNext = useCallback(async () => {
+    // The web's ApiKeyStep advances itself once its own validate resolves; the
+    // native one has no such closure, so Next is what leaves the key step.
+    if (step === 0) { goTo(1); return; }
+    // The job path skips the step-3 collector: it gathered its job description
+    // on the way in, and asking again is the bug that reads as a loop.
+    if (step === 2 && mode === 'job') { goTo(4); return; }
+    if (step !== 3) return;
+    setBusy('tailor');
+    try {
+      await commitJobsAndTailor();
+    } finally {
+      setBusy('');
+    }
+  }, [step, mode, goTo, commitJobsAndTailor]);
+
+  const nativeBack = useCallback((draft) => {
+    switch (step) {
+      case 1:
+        // Nothing behind it in new-résumé mode — the key step is not just
+        // skipped, it is not part of that flow.
+        if (!isNewResumeMode) goTo(0);
+        return;
+      case 2:
+        if (mode === 'import') {
+          if (filePreview != null) setFilePreview(null);
+          else goTo(1);
+        } else if (mode === 'job') {
+          // Carry the half-typed job back, or a Back-then-forward silently
+          // discards what was written.
+          if (draft) setTargetJob(draft);
+          goTo(1);
+        } else {
+          interviewBack();
+        }
+        return;
+      case 3: jdBack(); return;
+      case 4: reviewBack(); return;
+      default:
+    }
+  }, [step, mode, isNewResumeMode, filePreview, interviewBack, jdBack, reviewBack, goTo]);
+
+  useEffect(() => {
+    publishOnboarding(
+      open
+        ? {
+          open, step, mode, isNewResumeMode, canDismiss,
+          hasProviders: getConfiguredProviders().length > 0,
+          hasKey: !!getSettings().openrouterKey,
+          keySaves,
+          importText,
+          filePreview,
+          questions: INTERVIEW_QUESTIONS,
+          question,
+          answers,
+          improved,
+          jobDescriptions,
+          targetJob,
+          jobGaps,
+          models: getAvailableModelsForSelector(),
+          model: jobGenModelRef.current || getSettings().defaultModel || getDefaultModelId(),
+          reasoning: jobGenReasoningRef.current,
+          generating: nativeGen,
+          resume: parsedResume,
+          busy,
+          notice,
+        }
+        : null,
+      {
+        validateKey: nativeSaveKey,
+        chooseMode,
+        parseImport: nativeParseImport,
+        pickedFile: nativePickedFile,
+        clearFilePreview: () => setFilePreview(null),
+        interviewNext,
+        interviewBack,
+        improve: nativeImprove,
+        generateForJob: nativeGenerate,
+        cancelGenerate: () => genAbortRef.current?.abort(),
+        addJob,
+        removeJob,
+        next: nativeNext,
+        back: nativeBack,
+        saveResume,
+        finish,
+        openProfile,
+        dismiss,
+      },
+    );
+  });
 
   if (!open) return null;
 
@@ -428,6 +765,7 @@ export default function OnboardingWizard() {
             isTailored={jobDescriptions.length > 0}
             onBack={reviewBack}
             onCreate={saveResume}
+            saving={busy === 'save' || workspaceGone}
           />
         );
       case 5:

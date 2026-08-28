@@ -18,6 +18,18 @@
 export const PROFILES_KEY = 'resume-designer-profiles';
 export const ACTIVE_PROFILE_KEY = 'resume-designer-active-profile';
 export const OPENROUTER_KEY_KEY = 'resume-designer-openrouter-key';
+// This device's sync bookkeeping: per-unit modification times, and the device
+// id store.js stamps on the history entries it writes. Named here because two
+// modules that cannot import each other both need the exact string —
+// src/sync/syncModel.js writes the timestamps and src/store.js the id, and
+// syncModel.js already imports store.js, so the constant has to come from below
+// both. A second literal is how the two would drift apart into two keys.
+export const SYNC_STATE_KEY = 'resume-designer-sync-state';
+// Whether this install syncs to iCloud at all. Machine-level rather than
+// per-profile — the answer is about this device, not about one workspace — and
+// deliberately NOT in BACKUP_FIXED_KEYS: a backup carried to another device
+// must not be able to turn that device's sync on.
+export const SYNC_ENABLED_KEY = 'resume-designer-sync-enabled';
 export const PHYSICAL_PREFIX = 'resume-p--';
 const PHYSICAL_SEPARATOR = '--';
 
@@ -29,6 +41,7 @@ const SHARED_KEYS = new Set([
   'resume-designer-model-catalog',
   'resume-designer-electron-migration-attempted',
   'resume-designer-bridge-token', // one loopback server per install, not per profile
+  SYNC_ENABLED_KEY, // one answer per device, and it covers every profile on it
   PROFILES_KEY,
   ACTIVE_PROFILE_KEY,
   OPENROUTER_KEY_KEY,
@@ -46,6 +59,10 @@ export const BACKUP_FIXED_KEYS = [
   'resume-designer-chat-threads',
   'resume-designer-chat-history',          // legacy, harmless to round-trip
   'resume-designer-token-usage',
+  // Per-unit modification times for CloudKit sync. Device-local (see
+  // src/sync/syncKeys.js) but namespaced and round-tripped like every other
+  // key, because it is per-profile.
+  SYNC_STATE_KEY,
   'resume-designer-learned-answers',       // per-person Q&A the extension learns
   // UI / personalization
   'resume-designer-theme',
@@ -79,6 +96,11 @@ export function isSharedKey(key) {
 // to recognise it, and this module is the one both exporters can reach.
 const RESUME_DATA_KEY = 'resume-designer-data';
 
+// The one field the OpenRouter credential ever lived under inside `settings`.
+// Named once so the blob-level strip and the settings-object-level strip below
+// cannot drift into disagreeing about what a credential is.
+const SETTINGS_CREDENTIAL_FIELD = 'openrouterKey';
+
 /**
  * Strip a legacy credential out of a `resume-designer-data` blob crossing a
  * backup boundary — used by BOTH the full-backup paths in persistence.js and
@@ -110,12 +132,34 @@ export function withoutLegacyCredential(logicalKey, value) {
   try {
     const parsed = JSON.parse(value);
     if (!parsed || typeof parsed !== 'object' || !parsed.settings) return value;
-    if (!('openrouterKey' in parsed.settings)) return value;
-    delete parsed.settings.openrouterKey;
-    return JSON.stringify(parsed);
+    const settings = withoutSettingsCredential(parsed.settings);
+    if (settings === parsed.settings) return value;
+    return JSON.stringify({ ...parsed, settings });
   } catch {
     return value;
   }
+}
+
+/**
+ * The same strip, one level down: a `settings` OBJECT rather than the blob
+ * string that contains it.
+ *
+ * Split out because the blob is not the only boundary the credential can cross.
+ * Sync decomposes the blob into units (sync/syncUnits.js) and sends `settings`
+ * as its own record, so a blob whose plaintext cleanup has not yet flushed —
+ * keychain migration can succeed while the strip is still pending — would put
+ * the paid credential into CloudKit under `data:settings`, where the standalone
+ * key's device-local classification never sees it.
+ *
+ * Returns the SAME reference when there is nothing to strip, which is what lets
+ * both callers tell "unchanged" from "sanitized" without comparing contents.
+ */
+export function withoutSettingsCredential(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  if (!(SETTINGS_CREDENTIAL_FIELD in settings)) return settings;
+  const next = { ...settings };
+  delete next[SETTINGS_CREDENTIAL_FIELD];
+  return next;
 }
 
 // Pre-OpenRouter provider credentials. The app moved to OpenRouter on
@@ -180,6 +224,66 @@ export function withoutDeadProviderCredentials(logicalKey, value) {
 export function withoutStoredCredentials(logicalKey, value, { keepOpenRouterKey = false } = {}) {
   const withoutActive = keepOpenRouterKey ? value : withoutLegacyCredential(logicalKey, value);
   return withoutDeadProviderCredentials(logicalKey, withoutActive);
+}
+
+/**
+ * Drop the device identity out of a `resume-designer-sync-state` value crossing
+ * a backup boundary INWARDS — a full restore, a format-1 replace or merge, or a
+ * per-profile import.
+ *
+ * That key is in BACKUP_FIXED_KEYS on its merits: the per-unit modification
+ * stamps in it are genuinely per-profile data, and a backup that dropped them
+ * would restore a workspace whose every unit reads as never-stamped, which
+ * `resolveConflict` treats as -Infinity — it would lose every conflict it met.
+ * So the key rides along and only this ONE field is removed.
+ *
+ * It has to be removed because it is the opposite kind of thing: `deviceId` is
+ * store.js's name for THIS MACHINE, stamped as `origin` on every history entry
+ * it writes, and undo traverses only entries carrying this device's own origin.
+ * Seeding a second device from the first's backup — the natural migration path,
+ * and one the iOS Settings sheet actively offers — therefore gave both devices
+ * the same origin id, and "undo traverses only this device's own steps" silently
+ * stopped holding between exactly the two devices most likely to be syncing with
+ * each other.
+ *
+ * On the way IN rather than on the way OUT, for two reasons. The backups that
+ * can carry a foreign id ALREADY EXIST, so stripping at export would leave every
+ * one of them still able to clone an identity, and those are the files a person
+ * migrating today actually has. And the boundary that matters is the receiving
+ * device's: it is the only one that can know it must not adopt a name it did not
+ * choose.
+ *
+ * Nothing here MINTS a replacement, deliberately. store.js's one-time memo
+ * (deviceOrigin) is the single writer of this field, and it already generates
+ * one when the field is absent — so removing it hands the job back to its owner
+ * rather than adding a second generator that could race it or disagree with it
+ * about the format. Every restore path reloads the window, and a profile switch
+ * reloads too, so that memo is re-read from the restored key.
+ *
+ * The cost, stated plainly: restoring your OWN backup onto the SAME device also
+ * mints a new id, so the restored history entries — all stamped with the old one
+ * — read as foreign and undo will not step into them until new edits accumulate.
+ * Nothing is lost; the version-history dialog still lists and restores every one
+ * of them, since only the TRAVERSAL narrows (see store.js). It is accepted rather
+ * than worked around because an import cannot tell a rollback from a migration:
+ * both hand this device a file, and the only difference is which machine wrote
+ * it, which the file does not honestly say. Guessing wrong in the other direction
+ * clones an identity between two syncing devices, and that one is silent.
+ *
+ * Returns the value untouched when there is nothing to strip, including when it
+ * will not parse — that is still the user's data and has to round-trip, exactly
+ * as withoutLegacyCredential treats an unparseable blob.
+ */
+export function withoutDeviceIdentity(logicalKey, value) {
+  if (logicalKey !== SYNC_STATE_KEY || typeof value !== 'string') return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || !('deviceId' in parsed)) return value;
+    delete parsed.deviceId;
+    return JSON.stringify(parsed);
+  } catch {
+    return value;
+  }
 }
 
 export function isPhysicalKey(key) {

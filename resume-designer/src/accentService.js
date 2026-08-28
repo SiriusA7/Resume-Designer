@@ -117,7 +117,12 @@ export function applyAccentSettings(settings) {
  * Reset accent settings to defaults
  */
 export function resetAccentSettings() {
-  appStorage.removeItem('resume-accent-settings');
+  // WRITTEN, not removed — see `resetSpacingSettings` for the whole reason.
+  // Short version: this key is synced, `removeItem` announces nothing, so a
+  // clear left the old accents on the server for every other device to keep and
+  // to send back. `getAccentSettings` spreads DEFAULT_ACCENT first, so writing
+  // the default reads exactly as absence did.
+  saveAccentSettings(DEFAULT_ACCENT);
   applyAccentSettings(DEFAULT_ACCENT);
   return DEFAULT_ACCENT;
 }
@@ -133,3 +138,17 @@ export function initAccentService() {
 
 // Export defaults
 export { DEFAULT_ACCENT };
+
+/**
+ * The value this key holds when it has never been customised.
+ *
+ * Exported so a replacement restore can CLEAR the key by writing what "no
+ * customisation" means, rather than deleting it — a deleted key announces
+ * nothing (`collectKeyUnit`), so the old customisation would survive on
+ * CloudKit and come back on the next fetch. The default stays owned here; the
+ * sync layer asks for it rather than keeping a second copy that would be wrong
+ * the first time this one changed.
+ */
+export function defaultAccentSettings() {
+  return { ...DEFAULT_ACCENT };
+}

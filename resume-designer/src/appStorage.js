@@ -12,6 +12,19 @@ export function setProfileMapping(profileId) {
 }
 
 /**
+ * The profile whose logical keys are mapped by this live appStorage instance.
+ *
+ * This is deliberately not the persisted active-profile pointer. During a
+ * durable profile switch that pointer already names the next boot while this
+ * process remains mapped to the profile being left until reload. Code routing
+ * profile-addressed bytes must use this live fact: confusing the two can write
+ * one profile's bytes into another profile's physical namespace.
+ */
+export function getProfileMapping() {
+  return activeProfileId;
+}
+
+/**
  * appStorage — the single persistence facade for every owned key.
  *
  * Why: webview localStorage has a hard ~5MB per-origin quota (WKWebView /
@@ -57,7 +70,7 @@ let mode = 'passthrough'; // 'passthrough' | 'cached'
 let readOnly = false;
 let backendImpl = null;
 let cache = new Map();
-let dirty = new Map(); // key -> 'write' | 'delete'
+let dirty = new Map(); // physical key -> { op: 'write'|'delete', name }
 let drainScheduled = false;
 let drainTimer = null; // handle for the pending coalescing setTimeout; cleared whenever a drain runs
 let chain = Promise.resolve();
@@ -77,6 +90,30 @@ let failureToastShown = false;
 // callers (backup-restore reload, PDF print window) whether their data
 // actually reached disk — see flush().
 let writeFailures = 0;
+// Monotonic id per queued write, so a settled/failed notification can say WHICH
+// write it is about and not merely which key. Anything holding a value to retry
+// needs that: the drain reads `cache.get(key)` when the op's turn arrives and
+// then awaits the disk, so an in-flight write can land bytes OLDER than what is
+// in the cache now. Keyed only by name, "a write to your key landed" was read
+// as "your write landed", and a copy was dropped whose bytes had not been
+// attempted yet — see `currentWriteSequence`.
+let writeSeq = 0;
+// logical key -> the id of the most recent write queued FOR THAT KEY. Asked per
+// key rather than globally because `setItem` is re-entrant: it calls
+// `observeWrite` synchronously, the sync stamper writes the state key from
+// inside that, and so the last id minted by the time a caller's `setItem`
+// returns routinely belongs to a DIFFERENT key's write.
+let lastSeqByKey = new Map();
+// logical key -> the highest write id for that key whose bytes have actually
+// REACHED the backend. The high-water mark a queued unit is measured against:
+// `pendingDirty` in the sync layer is global while a drain is per batch, so a
+// unit queued while an earlier batch was still awaiting its write used to be
+// announced the moment that batch settled — its own bytes still only in cache,
+// and the transport uploads on being told. Cumulative rather than per batch,
+// because a unit HELD back (no notifier yet, a notifier that threw, an earlier
+// refusal) has to become announceable on some later drain, and that drain will
+// not be rewriting its key.
+let landedSeqByKey = new Map();
 
 // Restore guard: for a caller-bounded window during a destructive backup restore,
 // appStorage BLOCKS every other ("external") writer so a late async completion (a
@@ -96,6 +133,191 @@ const deferredDuringRestore = new Map(); // mapped key -> { op: 'write'|'delete'
 // restore rolls back. Null for the interactive modal re-arm (the import already
 // committed; reads should see the restored cache and no rollback follows).
 let preRestoreSnapshot = null;
+
+// ── the sync stamping seam ─────────────────────────────────────────────────
+//
+// A write to a key the sync layer syncs has to mark that unit locally modified,
+// or the unit is uploaded once by the full sweep that runs when sync is first
+// switched on and NEVER again. The hook lives here, at the one function every
+// owned write already funnels through, rather than at the ~14 call sites that
+// write a synced key: the list of synced keys is `classifyKey`'s
+// (src/sync/syncKeys.js), an interceptor that asks it cannot drift from it, and
+// a call site added later is simply forgotten — which is exactly how the gap
+// this closes opened in the first place.
+//
+// This file cannot import the sync layer (the sync layer imports THIS file), so
+// main.js installs the observer, the same graph edge it already owns for
+// registerPersistedSaveHandler.
+//
+// `onWrite(logicalKey, value, previous)` is handed the LOGICAL key, because
+// that is what `classifyKey` takes — a physical, profile-namespaced key comes
+// back 'unknown' there and would sync nothing. `previous` is the value the
+// write replaced, and it is what lets the observer tell a `resume-designer-data`
+// write that changed `settings` from one that only touched a résumé.
+//
+// `onFlush(failedLogicalKeys)` is called from the write-behind drain, AFTER
+// that batch's writes have actually run — not when they were queued. The
+// observer accumulates ids in onWrite and notifies ONCE per window there, and
+// the set names the keys whose bytes were refused so it can hold those back.
+// The barrier is the point: whatever the observer announces, something uploads,
+// so announcing before the disk has taken the bytes hands the server content
+// this device may never hold. That matters: the application-notes field writes on every
+// keystroke ON PURPOSE (see DetailPane.jsx), on the understanding that this
+// layer collapses the burst into one write — a sync notification per character
+// would be a CloudKit send per character.
+let writeObserver = null;
+
+/** Install (or, with null, remove) the sync stamping observer. */
+export function setStorageWriteObserver(observer) {
+  writeObserver = observer && typeof observer.onWrite === 'function' ? observer : null;
+}
+
+/** The stored value for a MAPPED key, read the same way getItem's tail does. */
+// What a `removeItem` evicted, held only until that key is written again.
+//
+// The observer compares a write against what was there before, and a remove
+// followed by a write is a real pattern — both backup-restore paths wipe a key
+// and rewrite it, and a FAILED restore rolls back by wiping and putting the
+// prior values straight back. Without this the second half sees `previous`
+// null, so EVERYTHING in that key reads as changed: a rollback that restored
+// the status quo byte for byte stamped every résumé with a fresh time and named
+// them all to the transport, and newer-wins then reverted another device's real
+// edits. A restore that visibly did nothing, undoing work on a machine that was
+// not even involved.
+const removedForComparison = new Map();
+
+function readStored(mappedKey) {
+  if (mode === 'passthrough') return localStorage.getItem(mappedKey);
+  return cache.has(mappedKey) ? cache.get(mappedKey) : null;
+}
+
+/**
+ * Both observer calls swallow and log a throw, deliberately: the bytes are
+ * already stored by the time either runs, and letting a bookkeeping failure
+ * propagate would surface at whichever call site happened to be writing and
+ * read there as a lost edit. persistence.js guards its own stamping the same
+ * way, for the same reason.
+ */
+function observeWrite(logicalKey, value, previous) {
+  if (!writeObserver) return;
+  try {
+    writeObserver.onWrite(logicalKey, value, previous);
+  } catch (err) {
+    console.error(`[appStorage] sync stamping failed for "${logicalKey}":`, err);
+  }
+}
+
+/**
+ * Announce the window that just closed, naming the keys whose writes FAILED.
+ *
+ * The observer decides what to do with them; this layer only reports. Failures
+ * are named rather than successes because the observer holds its own record of
+ * what it is waiting on, and an empty set is the ordinary case.
+ */
+function observeFlush(failedLogicalKeys) {
+  if (!writeObserver?.onFlush) return;
+  try {
+    writeObserver.onFlush(failedLogicalKeys ?? EMPTY_KEYS);
+  } catch (err) {
+    console.error('[appStorage] sync notification failed:', err);
+  }
+}
+
+const EMPTY_KEYS = new Set();
+
+/**
+ * Told when a disk write is permanently rejected, whoever is listening.
+ *
+ * Separate from `writeObserver`, which is ONE slot and belongs to the sync
+ * layer's stamping. A failure is of interest to more than one part of the app —
+ * the sync layer must not announce a unit whose bytes were refused, and the
+ * profile sheet must not tell somebody their edits are saved when they are
+ * memory-only — so this is a set rather than a slot. Fired for the LOGICAL key,
+ * because that is the name every consumer above this layer knows.
+ */
+const writeFailureListeners = new Set();
+
+/** Subscribe to permanently-failed writes. Returns its own unsubscribe. */
+export function onWriteFailure(listener) {
+  if (typeof listener !== 'function') return () => {};
+  writeFailureListeners.add(listener);
+  return () => writeFailureListeners.delete(listener);
+}
+
+/**
+ * Told when a write LANDED. The other half of `onWriteFailure`, and the same
+ * shape for the same reason.
+ *
+ * It exists because anything holding a copy of a value to retry needs to know
+ * when that copy stopped being the last word on its key, and a failure alone
+ * cannot say so. Whoever wrote it: the point is not "my write finished" but
+ * "the disk has moved on", and a retry copy is stale either way. Without this,
+ * a held copy outlives its own write and gets attributed to somebody else's
+ * later failure on the same key — see `profileBridge`, where that meant writing
+ * an old profile back over a newer one.
+ *
+ * Fired for the LOGICAL key, from this batch's own entry, exactly as failures
+ * are: the name its caller used.
+ */
+const writeSettledListeners = new Set();
+
+/**
+ * The id of the most recently QUEUED write.
+ *
+ * Read straight after a `setItem` to learn which write that call created, then
+ * compare it against the id a settled/failed notification carries. That
+ * comparison is the whole point: `>= mine` means the disk has reached or passed
+ * my write, `< mine` means the notification is about somebody else's earlier
+ * one and says nothing about mine. Without it a holder of a retry copy can only
+ * ask "was it my key?", which an in-flight write of older bytes answers yes to.
+ */
+export function currentWriteSequence(logicalKey) {
+  return lastSeqByKey.get(logicalKey) ?? 0;
+}
+
+/** Subscribe to writes that reached the backend. Returns its own unsubscribe. */
+export function onWriteSettled(listener) {
+  if (typeof listener !== 'function') return () => {};
+  writeSettledListeners.add(listener);
+  return () => writeSettledListeners.delete(listener);
+}
+
+function notifyWriteSettled(logicalKey, seq) {
+  for (const listener of writeSettledListeners) {
+    try {
+      listener(logicalKey, seq);
+    } catch (err) {
+      console.error(`[appStorage] a write-settled listener threw for "${logicalKey}":`, err);
+    }
+  }
+}
+
+/** The highest write id for `logicalKey` whose bytes reached the backend. */
+export function landedWriteSequence(logicalKey) {
+  return landedSeqByKey.get(logicalKey) ?? 0;
+}
+
+function recordLanded(logicalKey, seq) {
+  const highest = landedSeqByKey.get(logicalKey);
+  if (highest === undefined || seq > highest) landedSeqByKey.set(logicalKey, seq);
+}
+
+/** The next id, recorded against the key it belongs to. */
+function mintSeq(logicalKey) {
+  writeSeq += 1;
+  lastSeqByKey.set(logicalKey, writeSeq);
+  return writeSeq;
+}
+
+function notifyWriteFailure(logicalKey, seq) {
+  for (const listener of writeFailureListeners) {
+    try {
+      listener(logicalKey, seq);
+    } catch (err) {
+      console.error(`[appStorage] a write-failure listener threw for "${logicalKey}":`, err);
+    }
+  }
+}
 
 // Readiness signal for the React chrome. App.jsx gates every storage-reading
 // child on this so their mount-time facade reads can never execute before the
@@ -186,7 +408,9 @@ function drain() {
   }
   const batch = [...dirty.entries()];
   dirty.clear();
-  for (const [key, op] of batch) {
+  // Keys this batch could not write, named for the observer below.
+  const failedLogicalKeys = new Set();
+  for (const [key, { op, name, seq }] of batch) {
     // Value is read from the cache at write time, so a set that happened
     // after this key was marked dirty still writes the latest value. If a
     // removeItem landed after this write op was snapshotted, the key is gone
@@ -194,13 +418,27 @@ function drain() {
     // the write rather than materialize a spurious '' file (which a crash
     // before that delete would leave on disk).
     chain = chain.then(async () => {
+      // Recorded rather than announced inline, so that a settled listener can
+      // never throw its way into the write's own error handling and have the
+      // write attempted a second time.
+      let landed = false;
       try {
-        if (op === 'delete') await backendImpl.delete(key);
-        else if (cache.has(key)) await backendImpl.write(key, cache.get(key));
+        // `landed` is set INSIDE each branch, not after the if/else: the third
+        // case writes nothing at all (a delete overtook this write and is
+        // queued behind it), and calling that "landed" would tell a retry-copy
+        // holder that bytes reached the disk when none did.
+        if (op === 'delete') { await backendImpl.delete(key); landed = true; }
+        else if (cache.has(key)) {
+          await backendImpl.write(key, cache.get(key));
+          landed = true;
+        }
       } catch {
         try {
-          if (op === 'delete') await backendImpl.delete(key);
-          else if (cache.has(key)) await backendImpl.write(key, cache.get(key));
+          if (op === 'delete') { await backendImpl.delete(key); landed = true; }
+          else if (cache.has(key)) {
+            await backendImpl.write(key, cache.get(key));
+            landed = true;
+          }
         } catch (err2) {
           // The write failed twice. Keep the value in cache (the session keeps
           // working) AND re-mark the key dirty so the NEXT drain/flush retries
@@ -215,13 +453,44 @@ function drain() {
           // permanently full disk must not busy-loop; the retry rides the next
           // user-triggered drain or the next flush() (which drains first).
           if (!dirty.has(key) && (op === 'delete' || cache.has(key))) {
-            dirty.set(key, op);
+            dirty.set(key, { op, name, seq });
           }
           reportWriteFailure(key, err2);
+          // Reported under the name the CALLER used — captured in this batch's
+          // own entry, never looked up in shared state. An overlapping drain
+          // re-marking the same physical key would otherwise have its metadata
+          // deleted by this batch's cleanup, and the failure would surface
+          // under a name no gate matches: the unit would be announced while its
+          // bytes were only ever in memory.
+          failedLogicalKeys.add(name);
+          notifyWriteFailure(name, seq);
         }
+      }
+      // Under the same name and the same write id, for the same reasons.
+      if (landed) {
+        recordLanded(name, seq);
+        notifyWriteSettled(name, seq);
       }
     });
   }
+  // The coalescing window just closed — but the writes for it have only been
+  // APPENDED to `chain`, not run. Announcing here (which this did) tells the
+  // transport a unit is ready while its bytes are still queued, and the
+  // transport uploads on being told: CloudKit then keeps a change tag for
+  // content that may never reach this disk, the next launch reads the older
+  // file, and the edit after that overwrites the server with no conflict.
+  //
+  // The old note here argued the notification "says WHAT changed, and the
+  // transport decides when it goes up", so it should not wait behind an
+  // unrelated key's retry. The first half is true and the second does not
+  // follow: being told IS what sends it. Waiting costs a delay; not waiting
+  // costs the guarantee.
+  //
+  // `chain` is sequential, so the value captured after the loop resolves once
+  // every op queued above has settled. A later drain extending `chain` cannot
+  // affect this snapshot.
+  const batchSettled = chain;
+  batchSettled.then(() => observeFlush(failedLogicalKeys));
 }
 
 export const appStorage = {
@@ -245,35 +514,95 @@ export const appStorage = {
   },
 
   setItem(key, value) {
+    // Kept before the mapping: `classifyKey` — the sync layer's authority on
+    // which keys travel — is defined over LOGICAL keys (see setStorageWriteObserver).
+    const logicalKey = key;
     key = mapKey(activeProfileId, key);
     const v = String(value);
     // Blocked mid-restore: record the latest write and skip cache+disk (see the
     // restoreGuardActive note). The import's own writes ran before the guard armed.
-    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'write', value: v }); return; }
+    // No observer call either — nothing was stored, so nothing changed yet.
+    // AN ID EVEN THOUGH NOTHING IS QUEUED. The write is deferred, not
+    // cancelled, and it is still this caller's write — so it takes its own id
+    // here and keeps it through the replay. Without one, `currentWriteSequence`
+    // answers with some EARLIER write's id, a caller records that as its own,
+    // and the settle for that earlier write is read as "mine landed".
+    if (restoreGuardActive) {
+      deferredDuringRestore.set(key, {
+        op: 'write', value: v, name: logicalKey, seq: mintSeq(logicalKey),
+      });
+      return;
+    }
+    // Read BEFORE the write lands, and only when someone is listening. In cached
+    // mode — every shipped desktop and iOS build — this is a Map lookup.
+    // The evicted value stands in when the key was just removed — see
+    // `removedForComparison`. Consumed here, so it can only ever answer for the
+    // write that immediately follows its own remove.
+    let previous = null;
+    if (writeObserver) {
+      previous = readStored(key);
+      if (previous === null && removedForComparison.has(key)) {
+        previous = removedForComparison.get(key);
+      }
+    }
+    removedForComparison.delete(key);
     if (mode === 'passthrough') {
       // readOnly passthrough (print window whose disk load failed): there is
       // no separate cache here, and it must never touch localStorage — no-op.
       if (readOnly) return;
       localStorage.setItem(key, v); // may throw on quota — callers guard
+      // An id here too, and a landing in the same breath: this call IS the
+      // durable write, so the observer's queue can be gated identically in both
+      // modes instead of passthrough being an exception to the rule.
+      recordLanded(logicalKey, mintSeq(logicalKey));
+      // AFTER the store, so a quota throw above leaves no unit claiming a
+      // change that never landed.
+      observeWrite(logicalKey, v, previous);
+      // Passthrough has no drain to coalesce on — this call IS the durable
+      // write, so the notification window opens and closes with it, and nothing
+      // can have failed: a quota throw above returned before reaching here.
+      observeFlush(EMPTY_KEYS);
       return;
     }
     cache.set(key, v);
     if (readOnly) return; // print window: cache-only, never queued to disk
-    dirty.set(key, 'write');
+    dirty.set(key, { op: 'write', name: logicalKey, seq: mintSeq(logicalKey) });
     scheduleDrain();
+    observeWrite(logicalKey, v, previous);
   },
 
+  // Deliberately NOT observed. `collectKeyUnit` (syncModel.js) answers null for
+  // an absent key — "absent is not empty", since an empty payload would CLEAR
+  // that key on every receiving device — so a stamped removal names a unit the
+  // model would then decline to build. Deletion does not propagate in this
+  // design; nothing here is a tombstone.
+  //
+  // WHICH MEANS: clearing a SYNCED key is not a way to reset one. The server
+  // keeps what it had, every other device keeps showing it, and the next edit
+  // anywhere can send it back. A reset has to WRITE the value it means — see
+  // `resetSpacingSettings`. What belongs here is local disposal, where the key
+  // is going away with its workspace and no other device should learn anything:
+  // profile deletion, the wipe-before-validate restore path, the API key.
   removeItem(key) {
+    // Captured before mapping, the way setItem does it: a notification names
+    // the string its CALLER used, never the physical one it was mapped to.
+    const logicalKey = key;
     key = mapKey(activeProfileId, key);
-    if (restoreGuardActive) { deferredDuringRestore.set(key, { op: 'delete' }); return; }
+    if (restoreGuardActive) {
+      deferredDuringRestore.set(key, { op: 'delete', name: logicalKey, seq: mintSeq(logicalKey) });
+      return;
+    }
     if (mode === 'passthrough') {
       if (readOnly) return; // see setItem: readOnly passthrough never writes
       localStorage.removeItem(key);
       return;
     }
+    // Remembered for the comparison the next write of this key will make.
+    const evicted = readStored(key);
+    if (evicted !== null) removedForComparison.set(key, evicted);
     cache.delete(key);
     if (readOnly) return; // print window: cache-only, never queued to disk
-    dirty.set(key, 'delete');
+    dirty.set(key, { op: 'delete', name: logicalKey, seq: mintSeq(logicalKey) });
     scheduleDrain();
   },
 
@@ -286,6 +615,7 @@ export const appStorage = {
     }
     cache.clear();
     dirty.clear();
+    removedForComparison.clear();
     if (!readOnly) {
       // Failure mode: if backendImpl.clear() rejects, the cache is already
       // empty but the old files survive until the next boot. For the backup
@@ -317,6 +647,22 @@ export const appStorage = {
    * Passthrough (browser localStorage) is synchronous, so it is always durable.
    */
   async flush() {
+    // READ-ONLY IS NEVER DURABLE, and it has to say so before anything else
+    // here. `setItem` returns early in this mode, so nothing is ever queued —
+    // `dirty` stays empty and `writeFailures` never moves, and the test below
+    // would answer `true` for a session in which not one byte reached disk.
+    //
+    // That answer is what durability-gated callers act on: `importFullBackup
+    // Durably` announces a restore and reloads, profile creation and switching
+    // reload on it, and the PDF export builds from a disk that never received
+    // this session's changes. All three are worse than the failure they are
+    // checking for, because they are confident.
+    //
+    // The degraded recovery mode this covers is entered by `initAppStorage`
+    // when the disk store cannot be read and there is nothing to fall back to;
+    // the print window's own read-only mode reaches this too, and never calls
+    // flush, because it never writes.
+    if (readOnly) return false;
     if (mode === 'passthrough') return true;
     const before = writeFailures;
     if (dirty.size) drain();
@@ -398,12 +744,38 @@ export const appStorage = {
     // previously-absent keys would lose real work done during the window.
     let applied = false;
     for (const [key, entry] of deferredDuringRestore) {
+      // A FRESH id, even though the deferral minted one. This is being queued
+      // now, and things happened in between: a failed restore rolls back by
+      // rewriting every key it wiped, and that rollback's own `setItem` queues
+      // a unit at a HIGH id. Replaying under the deferral's LOW id replaces
+      // that dirty entry, so the only landing for the key comes in below the
+      // unit's gate and the unit is never announced — held in memory until
+      // something else happens to write the key, which for a unit named once
+      // may be never.
+      //
+      // The deferral's mint is still what matters to a caller holding an id to
+      // recognise its own outcome by, and it still works: those gates are `>=`,
+      // so a landing at this higher id satisfies the lower one it recorded.
+      const name = entry.name ?? key;
+      const seq = mintSeq(name);
       if (entry.op === 'delete') {
         cache.delete(key);
-        dirty.set(key, 'delete');
+        dirty.set(key, { op: 'delete', name, seq });
       } else {
+        // THROUGH THE OBSERVER, against the rolled-back value. This is the
+        // caller's own work — a chat reply, a token-usage record, a design edit
+        // made while the restore held the guard — and it is landing now, for the
+        // first time. Installed straight into the cache it reached disk with no
+        // stamp and no queued unit, so it could never go up and would later lose
+        // to an older remote snapshot.
+        //
+        // It went unnoticed because the rollback's own remove-and-rewrite used
+        // to stamp everything in the key: the value was wrong but the unit was
+        // named. Fixing that over-stamp is what exposed this.
+        const previous = writeObserver ? readStored(key) : null;
         cache.set(key, entry.value);
-        dirty.set(key, 'write');
+        dirty.set(key, { op: 'write', name, seq });
+        observeWrite(name, entry.value, previous);
       }
       applied = true;
     }
@@ -463,13 +835,43 @@ export async function initAppStorage({ backend = null, readOnly: ro = false } = 
       // emit `print-error` and abort the export instead of silently succeeding.
       throw err;
     }
-    // Main window (the sole writer): degrade to passthrough localStorage rather
-    // than booting with an empty store (which would look like total data loss),
-    // and warn the user that this session's changes may not persist.
+    // Main window. Falling back to passthrough localStorage is only a fallback
+    // while localStorage still HOLDS something — which is true on exactly one
+    // kind of install: one where the one-time adoption below has not run yet.
+    // Once it has, it EMPTIES localStorage (see the clear after the copy), so
+    // this branch on an established install does not avoid an empty store, it
+    // manufactures a writable one: a blank workspace that accepts edits into
+    // localStorage, and a next launch that finds the disk store non-empty,
+    // skips adoption, and never reads them again. The older disk data comes
+    // back and the session's work is gone — the loss this branch was written to
+    // prevent, caused by the branch.
+    const stillInLocalStorage = (() => {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(OWNED_PREFIX)) return true;
+      }
+      return false;
+    })();
+    if (stillInLocalStorage) {
+      showFailureToastOnce(
+        'Stored data could not be loaded from disk — running on a fallback '
+        + 'store, and changes made this session may not persist. Check the '
+        + 'app data folder, then restart.',
+      );
+      return;
+    }
+    // Nothing to fall back TO. Refuse to accept work rather than take it
+    // somewhere it will be silently dropped: cached mode over an empty cache,
+    // read-only, so reads answer empty, writes stay in memory, and the disk
+    // store is left exactly as it is for the next launch to load. A restart
+    // recovers everything; this session simply cannot save.
+    mode = 'cached';
+    readOnly = true;
     showFailureToastOnce(
-      'Stored data could not be loaded from disk — running on a fallback '
-      + 'store, and changes made this session may not persist. Check the '
-      + 'app data folder, then restart.',
+      'Stored data could not be loaded from disk. On Paper has not opened your '
+      + 'resumes and will not save anything this session, so nothing is lost — '
+      + 'please restart the app. If it keeps happening, check the app data '
+      + 'folder.',
     );
     return;
   }
@@ -561,6 +963,11 @@ export function __resetAppStorageForTests() {
   chain = Promise.resolve();
   failureToastShown = false;
   writeFailures = 0;
+  writeSeq = 0;
+  lastSeqByKey = new Map();
+  landedSeqByKey = new Map();
+  removedForComparison.clear();
+  writeObserver = null;
   restoreGuardActive = false;
   deferredDuringRestore.clear();
   preRestoreSnapshot = null;

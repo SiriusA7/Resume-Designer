@@ -8,7 +8,7 @@
  * Only the last 50 messages of a thread are persisted (see MAX_PERSISTED).
  */
 
-import { appStorage } from './appStorage.js';
+import { appStorage, onWriteFailure, onWriteSettled } from './appStorage.js';
 
 const STORAGE_KEY = 'resume-designer-chat-history'; // legacy single-thread history
 const THREADS_KEY = 'resume-designer-chat-threads';
@@ -134,15 +134,46 @@ export function withContextMarker(messages, activeVariantId, activeVariantName) 
 }
 
 /**
+ * The thread list inside a stored or fetched value, or `null` when it is not
+ * one. A list is the only shape this module reads back; anything else is a
+ * value it has nothing to say about, which the two callers below answer
+ * differently — see landsAsThreads.
+ */
+function threadsIn(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (e) {
+    console.error('Failed to read chat threads:', e);
+    return null;
+  }
+}
+
+/**
+ * Whether a fetched payload is one the holder could adopt — asked by the sync
+ * layer BEFORE it writes the key (src/sync/syncModel.js, KEY_OWNERS).
+ *
+ * The same reader `loadThreads` uses, so the write and the adoption cannot
+ * disagree about what "readable" means. That agreement matters more here than
+ * anywhere else on this key: `loadThreads` does not merely fall back to an
+ * empty list on garbage, it MANUFACTURES a single fresh 'New Chat' thread — so
+ * a payload allowed onto disk would be adopted as, and then persisted and
+ * pushed up as, an empty conversation history. Refusing before the write is
+ * what keeps absence from becoming deletion.
+ */
+export function landsAsThreads(payload) {
+  return threadsIn(payload) !== null;
+}
+
+/**
  * Load all threads and decide which is current. Migrates legacy single-thread
  * history on first run, guarantees at least one thread, and selects the
  * most-recently-updated thread as current. Mirrors the old loadChatHistory().
  */
 export function loadThreads() {
   try {
-    const saved = appStorage.getItem(THREADS_KEY);
-    let threads = saved ? JSON.parse(saved) : [];
-    if (!Array.isArray(threads)) threads = [];
+    const threads = threadsIn(appStorage.getItem(THREADS_KEY)) ?? [];
 
     if (threads.length === 0) {
       // Migrate any old single-thread history into a fresh thread — in memory
@@ -153,8 +184,7 @@ export function loadThreads() {
       const oldHistory = appStorage.getItem(STORAGE_KEY);
       const oldMessages = oldHistory ? JSON.parse(oldHistory) : [];
       const thread = makeThread('New Chat', Array.isArray(oldMessages) ? oldMessages : []);
-      threads = [thread];
-      return { threads, currentThreadId: thread.id };
+      return { threads: [thread], currentThreadId: thread.id };
     }
 
     const mostRecent = [...threads].sort(
@@ -192,6 +222,7 @@ export function countThreadsForVariant(threads, variantId) {
 }
 
 export function persistThreads(threads) {
+  listenForThreadWrites();
   // Writes during a destructive backup import are blocked centrally by
   // appStorage's restore guard (which also replays this write if the restore
   // fails), so there is no per-writer suspension check here.
@@ -199,13 +230,153 @@ export function persistThreads(threads) {
     appStorage.setItem(THREADS_KEY, JSON.stringify(threads));
   } catch (e) {
     console.error('Failed to save threads:', e);
+    // The SYNCHRONOUS half of a refusal. Nothing was queued, so no settle will
+    // arrive to clear this; the next write that does reach disk clears it.
+    reportThreadWrite(false);
   }
 }
 
+// ── "these messages are not on disk" ───────────────────────────────────────
+//
+// `setItem` returns when the CACHE takes the value. The disk write sits behind
+// a coalescing drain and can be refused long afterwards, so the throw caught
+// above is only half of it; the other half arrives through `onWriteFailure`,
+// naming the key and nothing else.
+//
+// It has to be said in the projection because on iOS the chat is a native sheet
+// over the web page, and the global toast the web relies on renders UNDER it.
+// Without this the composer clears, the reply appears, and the only sign the
+// transcript will not survive a relaunch is a toast nobody can see.
+
+/** Fired when the flag below changes; a disk failure is not a React change. */
+export const CHAT_THREADS_STATE_EVENT = 'rd:chat-threads-state-changed';
+
+let threadsUnsaved = false;
+let watchingThreadWrites = false;
+
+function reportThreadWrite(ok) {
+  if (threadsUnsaved === !ok) return;
+  threadsUnsaved = !ok;
+  window.dispatchEvent(new CustomEvent(CHAT_THREADS_STATE_EVENT));
+}
+
+function listenForThreadWrites() {
+  if (watchingThreadWrites) return;
+  watchingThreadWrites = true;
+  onWriteFailure((logicalKey) => {
+    if (logicalKey === THREADS_KEY) reportThreadWrite(false);
+  });
+  // NO write-id gate, unlike the profile sheet's listener. That one holds one
+  // specific unsaved copy and has to know whether a given refusal was that
+  // copy's. This says only "what you are looking at is not on disk", and the
+  // drain coalesces per key — so a settle for this key means the latest list
+  // landed, whatever was refused before it.
+  onWriteSettled((logicalKey) => {
+    if (logicalKey === THREADS_KEY) reportThreadWrite(true);
+  });
+}
+
+/** True while the thread list on screen is known not to have reached disk. */
+export function threadsSaveFailed() {
+  listenForThreadWrites();
+  return threadsUnsaved;
+}
+
+// ── the live thread list ───────────────────────────────────────────────────
+//
+// This module is stateless on purpose — every function above takes threads and
+// hands threads back — but the APP holds exactly one live copy of the list:
+// useChat's React state, which `persistThreads` writes straight back over the
+// key. So a thread list `applyUnits` landed in storage lasted only until the
+// next send, which wrote the stale in-memory list over it, stamped the unit,
+// and — the transport legitimately holding the record's change tag, because the
+// page had confirmed the apply — pushed the revert up as a clean, uncontested
+// update. No conflict was raised and the other device's threads were gone.
+//
+// Same trap store.adoptDocument answers for the résumé, and the same answer:
+// ask the holder to adopt rather than writing behind its back. The holder is
+// asked rather than told for the same reason too — only it knows whether it can
+// take a replacement right now.
+//
+// Every OTHER reader of this key (deleteVariantThreadsFlow, LibraryDialog,
+// DetailPane) calls loadThreads(), which reads storage each time and therefore
+// holds nothing that could go stale.
+let holder = null;
+
+/**
+ * Install (or, with null, remove) the live thread-list holder — `{ isBusy(),
+ * adopt() }`. useChat registers itself while mounted; ChatPanel drives both the
+ * desktop panel and the native iOS chat sheet from it, so this is one holder on
+ * both platforms.
+ *
+ * Returns a deregistration that clears the slot ONLY while this holder is still
+ * the one in it. There is a single call site today, so the unconditional clear
+ * it replaces was correct today — and silently stopped being correct the moment
+ * a second holder registered: React mounts the replacement before unmounting the
+ * old one, so the departing holder's cleanup would deregister the SURVIVOR and
+ * leave the live copy unreachable, which is the revert bug back with no symptom
+ * until another device's threads went missing.
+ */
+export function registerThreadHolder(next) {
+  const installed = next && typeof next.adopt === 'function' ? next : null;
+  holder = installed;
+  return () => {
+    if (holder === installed) holder = null;
+  };
+}
+
+/**
+ * Whether replacing the thread list right now would destroy work in flight.
+ *
+ * A streamed reply lives ONLY in the hook's state until it commits, and it
+ * commits by mapping over the thread list — so a list replaced mid-stream takes
+ * the reply with it, with no history and nothing else holding it. Exactly the
+ * exposure store.isBusyEditing covers for the résumé's inline edit, and it is
+ * answered from the same place the chat's own flows read it: the hook's
+ * existing `loading` / in-flight-stream refs, not a new flag invented for sync.
+ *
+ * The caller REFUSES on a true rather than deferring — see
+ * src/sync/syncModel.js, where refusing shortens the applied count, the
+ * transport forfeits the record's change tag, and the unit is re-offered.
+ *
+ * The NATIVE composer is asked too. Its draft lives only in Swift state, which
+ * the hook's refs cannot see, so an adopted thread list could select a
+ * different current thread underneath unsent text — and Send would then post
+ * words written for one conversation into another. Same shape as the profile
+ * and structure fields, and answered from the same bridge.
+ */
+let nativeComposerBusy = null;
+
+/** Install the native composer's own answer. `null` removes it. */
+export function registerNativeChatEditing(probe) {
+  nativeComposerBusy = typeof probe === 'function' ? probe : null;
+}
+
+export function threadHolderBusy() {
+  if (nativeComposerBusy?.() === true) return true;
+  return holder?.isBusy?.() === true;
+}
+
+/**
+ * Ask the holder to take the thread list now in storage. A no-op when nothing
+ * holds one, which is the honest answer: loadThreads() re-reads storage.
+ */
+export function adoptStoredThreads() {
+  holder?.adopt();
+}
+
 // Clear the legacy single-thread history key (used by /clear).
+//
+// EMPTIED, not removed. The key is synced and `removeItem` announces nothing,
+// so a clear left the old messages on the server. Nothing reads them again on
+// THIS device — the migration above runs only when there are no threads at all
+// — but a device joining the workspace later starts with none, reads the key
+// that was never cleared for it, and resurrects a conversation the person
+// explicitly deleted. An empty array is what the migration already treats as
+// "nothing to carry over", so this is the same state, said out loud.
 export function clearLegacyHistory() {
   try {
-    appStorage.removeItem(STORAGE_KEY);
+    appStorage.setItem(STORAGE_KEY, '[]');
   } catch {
     /* ignore */
   }

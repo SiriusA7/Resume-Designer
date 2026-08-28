@@ -22,6 +22,30 @@ describe('applyRecommendationToStore', () => {
     expect(store.getData().summary).toBe('new summary');
   });
 
+  it('refuses a direct write whose premise has gone', () => {
+    // The report is stored per résumé and applied whenever the person gets to
+    // it. Edit the summary after running an analysis — or while one is still in
+    // flight — and this used to replace that edit with a rewrite of the
+    // paragraph it superseded. The card shows the model's `current`, not what
+    // the résumé says now, so there was nothing on screen to notice it by.
+    store.setData({ summary: 'edited since the analysis', experience: [], sections: [], contact: {} }, true);
+    expect(applyRecommendationToStore('summary', 'old summary', 'new summary')).toBe(false);
+    expect(store.getData().summary).toBe('edited since the analysis');
+  });
+
+  it('still fills a field the analysis found empty', () => {
+    // An "add new" has no current text to match by design, and refusing those
+    // would break the recommendations most worth taking.
+    store.setData({ summary: '', experience: [], sections: [], contact: {} }, true);
+    expect(applyRecommendationToStore('summary', 'N/A', 'a written summary')).toBe(true);
+    expect(store.getData().summary).toBe('a written summary');
+  });
+
+  it('tolerates the whitespace a model puts around the text it quotes', () => {
+    expect(applyRecommendationToStore('summary', '  old summary\n', 'new summary')).toBe(true);
+    expect(store.getData().summary).toBe('new summary');
+  });
+
   it('returns false instead of throwing when the section is missing', () => {
     expect(applyRecommendationToStore(undefined, 'x', 'y')).toBe(false);
     expect(applyRecommendationToStore(null, 'x', 'y')).toBe(false);

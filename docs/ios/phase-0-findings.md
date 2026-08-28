@@ -1,0 +1,491 @@
+# iOS Phase 0 — findings
+
+> **Authority.** This document is **empirical**. Everything in it was produced by
+> building On Paper and running it on an iOS 27.0 simulator, and measuring the
+> result — not by reading source and inferring. Where it conflicts with the
+> design spec
+> ([`../superpowers/specs/2026-08-09-ios-ipados-port-design.md`](../superpowers/specs/2026-08-09-ios-ipados-port-design.md))
+> or with the portability audit
+> ([`2026-08-09-ios-portability-audit.md`](2026-08-09-ios-portability-audit.md)),
+> **this document wins**. Both of those were written before the app had ever
+> run on iOS; the corrections have been propagated back into them, but if a
+> third claim is found that disagrees with a measurement here, the measurement
+> is the one to trust.
+
+**Date:** 2026-08-09
+**Host:** macOS, Xcode 26.6 (17F113), rustc 1.92.0, CocoaPods 1.17.0
+**Tauri:** CLI 2.11.2 · tauri 2.11.2 · tauri-utils 2.9.2 · wry 0.55.1 · tao 0.35.3
+**Simulator:** iPhone 17, iOS 27.0 (`2BAF4B5E-…`), 402×874 pt
+**Signing team:** `847VH25R7U` (HyperBuild, Inc.) — same team as the macOS
+Developer ID builds, chosen to keep Universal Purchase available.
+
+## Task 3 — project generation
+
+| Question | Answer |
+|---|---|
+| Did `tauri ios init` succeed? | **Yes**, cleanly. |
+| Does tauri#11257 (productName vs Cargo name) reproduce? | **No.** `productName: "On Paper"` and Cargo `name = "resume-designer"` coexist fine in the generated `project.yml`/pbxproj. The plan's pessimism was unwarranted; no `PRODUCT_NAME` workaround is needed. |
+| `TARGETED_DEVICE_FAMILY` | **`"1,2"`** — universal iPhone + iPad by default. Already matches the full-parity decision; no change required. |
+| `IPHONEOS_DEPLOYMENT_TARGET` | **`17.4`** in both Debug and Release. The `tauri.ios.conf.json` overlay IS being read. |
+| Was `UIApplicationSceneManifest` merged? | **Yes — but not at `init`.** See below. |
+| Did anything under `gen/` become tracked? | **No.** `git status --short` empty. The regeneration-safety design holds. |
+| iOS icons | `icons/ios/` exists, 18 tracked files, `AppIcon-512@2x.png` is a real 1024×1024. **`hasAlpha: yes`** — an App Store upload gate, deferred to Phase 5. |
+
+### The `Info.ios.plist` merge fires at build, not at init
+
+The Task 3 implementer checked immediately after `tauri ios init`, found no scene
+manifest, and concluded *"there is no automatic filename pickup of
+`Info.ios.plist`."* **That conclusion was wrong.** The merge happens during
+`ios dev` / `ios build`, exactly as the Task 2 reviewer hypothesised.
+
+Verified twice, at both ends of the pipeline:
+
+`src-tauri/gen/apple/resume-designer_iOS/Info.plist` (generated) —
+
+```
+"CFBundleDisplayName" => "On Paper"
+"ITSAppUsesNonExemptEncryption" => false
+"UIApplicationSceneManifest" => {
+  "UIApplicationSupportsMultipleScenes" => false
+  "UISceneConfigurations" => {
+    "UIWindowSceneSessionRoleApplication" => [
+      0 => { "UISceneConfigurationName" => "Default Configuration"
+             "UISceneDelegateClassName" => "TaoSceneDelegate" } ] } }
+```
+
+`Build/Products/debug-iphonesimulator/On Paper.app/Info.plist` (processed,
+binary) — same manifest, plus `CFBundleIdentifier => com.resumedesigner.app`,
+`MinimumOSVersion => 17.4`, `UIDeviceFamily => [1, 2]`.
+
+**Action: none. Do NOT add `bundle.iOS.infoPlist`** — the auto-detection works.
+
+**Caveat on interpreting a successful launch:** tao wires the scene delegate
+*programmatically* at runtime (`tao-0.35.3/src/platform_impl/ios/view.rs:628-646`
+returns a `UISceneConfiguration` named `"TaoScene"` and calls
+`setDelegateClass`). The static Info.plist entry mainly satisfies the
+manifest-*presence* requirement, so a typo in `UISceneDelegateClassName` would
+not surface as a launch crash. The string is correct here — diffed against
+tao's own `#[name = "TaoSceneDelegate"]` at `scene.rs:52` — but do not treat a
+green boot as evidence for it.
+
+## Tooling sharp edges discovered (not in the plan)
+
+These cost real time and belong in `TAURI.md` when Phase 1 lands.
+
+### 1. `tauri ios dev` classifies every simulator as a physical device
+
+```
+Detected connected device: iPhone 17 (iPhone18,3) with target "aarch64-apple-ios"
+Detected connected device: iPad Pro 13-inch (M5) (iPad17,4) with target "aarch64-apple-ios"
+```
+
+Neither is a real device — the only physical iPhone paired to this Mac is an
+iPhone 16 Pro (`iPhone17,1`). Tauri 2.11.2 assigns the **device** Rust target
+(`aarch64-apple-ios`), builds with `-sdk iphoneos`, and rewrites `devUrl` to the
+LAN address, then tries to install that device binary onto a simulator:
+
+> The executable has code for these platforms and architectures: `[iOS, arm64]`.
+> This device can run code for these platforms: `iOS-simulator`.
+
+It is systematic, not a name-ambiguity artifact — it reproduced with an
+unambiguous iPad simulator name. Both slices are built and present on disk
+(`target/aarch64-apple-ios{,-sim}/debug/libon_paper_lib.a`); the wrong one is
+selected.
+
+### 2. `xcodebuild` cannot be driven standalone for a Tauri dev build
+
+The Xcode "Build Rust Code" phase shells out to `tauri ios xcode-script`, which
+opens a **WebSocket back to a running `tauri ios dev` supervisor** to read its
+options. Without that parent process it panics:
+
+```
+failed to read CLI options: Context("failed to build WebSocket client",
+  Io(Os { code: 61, kind: ConnectionRefused }))
+  at crates/tauri-cli/src/mobile/mod.rs:403
+```
+
+So "just run xcodebuild with `-sdk iphonesimulator`" is not available as a
+workaround for finding 1.
+
+### 3. The way through: `tauri ios build --debug --target aarch64-sim`
+
+`tauri ios build` accepts `--target [aarch64 | aarch64-sim | x86_64]` and acts
+as its own supervisor. It produces a self-contained bundle (assets from
+`frontendDist`, no dev server), which is also a *better* probe host than
+`ios dev` — it exercises the real `tauri://` custom-scheme asset pipeline, which
+is what the Task 5 PDF spike depends on.
+
+### 4. Signing is required even for a simulator run
+
+`tauri ios dev` performs an xcodebuild **archive**, which demands a development
+team regardless of simulator vs device:
+
+> `error: Signing for "resume-designer_iOS" requires a development team.`
+
+Supplied via `APPLE_DEVELOPMENT_TEAM=847VH25R7U` in the environment, keeping the
+team ID out of git as Task 2's config intended.
+
+### 5. CocoaPods must be installed and needs UTF-8
+
+`brew install cocoapods` (1.17.0). It warns that it requires a UTF-8 locale;
+prefix invocations with `LANG=en_US.UTF-8`.
+
+## MILESTONE: On Paper launches on iOS
+
+**On Paper builds, installs, and runs on an iOS 27.0 simulator.** The working
+route is *not* the one the plan assumed:
+
+```bash
+npx tauri ios build --debug --target aarch64-sim     # NOT `tauri ios dev`
+xcrun simctl install <udid> src-tauri/gen/apple/build/arm64-sim/On\ Paper.app
+xcrun simctl launch  <udid> com.resumedesigner.app
+```
+
+Binary verified `platform IOSSIMULATOR, minos 17.4, arm64`. It launches on the
+iOS 27 SDK with no scene-lifecycle crash, and every asset loads through the
+`tauri://` custom-scheme handler with **zero CSP violations and zero errors**.
+
+## RESOLVED: the blank screen — three-part failure, now fixed
+
+**On Paper renders correctly on iOS 27.** Onboarding, typography, palette, all
+of it. Getting there required fixing three separate things, and the first two
+diagnoses I published were wrong — recorded here because the wrong turns are
+themselves the finding.
+
+### What it was NOT
+
+- **Not `glass.css`.** Gating `data-tauri` on platform (commit `66fa6a9`) is a
+  correct, independently-required D1 fix and it is kept — but the screen stayed
+  black afterwards. The probe later proved `data-tauri` was `null` and
+  `body` background was an opaque `rgb(232,228,223)` the whole time.
+- **Not the blob `<a download>`** tearing down the document.
+- **Not CSP, not asset loading, not a JS error.** Storage proved the app was
+  fully alive: it created a profile, ran the migration probe, and fetched an
+  81 KB model catalog from OpenRouter over the network.
+
+### What it was
+
+Read out through the app's own storage layer (probe writes a key; the file is
+read from the simulator container — no Safari Web Inspector needed):
+
+```
+innerSize [0,0]   outerSize [0,0]   docScroll [0,0]   centerElement null
+screen [402,874]  rootHtmlLength 29343  bodyHtmlLength 29767
+bodyStyle.background rgb(232,228,223)   resumeRect 816x1056
+```
+
+**The app was rendering perfectly into a 0×0 viewport.** Nothing was hidden;
+there was nothing to paint into. That also explains why a probe overlay with
+`position:fixed; inset:0` never appeared — it resolves against the viewport, so
+a 0×0 viewport yields a 0×0 overlay.
+
+Rust-side instrumentation (written to `<container>/Documents/ios-dbg.txt`) found
+three stacked causes:
+
+| # | Cause | Evidence |
+|---|---|---|
+| 1 | **WKWebView frame is 0×0.** wry's iOS branch does `initWithFrame: ns_view.frame()` (`wkwebview/mod.rs:447-451`) — the parent's frame *at creation time* — and sets **no autoresizing mask**. Every `setAutoresizingMask` in wry (`:504/507/521/677`) is macOS-only; the iOS path is a bare `addSubview` at `:705`. | `frame_before=0x0` |
+| 2 | **The parent view is also 0×0**, while the grandparent is correct. Sizing only the webview leaves it inside a zero-sized ancestor. | `superview_bounds=0x0`, `superview2_bounds=402x874` |
+| 3 | **The `UIWindow` has no `windowScene`,** so it is orphaned on iOS 13+: it can be sized, unhidden and fully populated and will still never composite. `makeKeyAndVisible()` was a silent no-op. | `window hidden=false key=false`; after attaching a scene, `key=true` |
+
+**We trigger this ourselves.** Task 2's `UIApplicationSceneManifest` is
+*required* (without it the app will not launch on the iOS 27 SDK), and it is the
+same change that moves tao onto the scene lifecycle where the window is never
+attached. tao's own `set_focus()` reads `window.windowScene()` and branches on
+it, so tao knows the association matters — but under a *static* scene manifest
+nothing ever assigns it.
+
+### The workaround (spike-quality; needs a proper home in Phase 1)
+
+From Rust via `with_webview`, on a retry loop **after** the event loop starts
+(doing it inside `setup()` is too early — attempt 1 failed exactly that way):
+
+1. size the superview to the grandparent/screen bounds + `autoresizingMask`
+2. size the webview to match + `autoresizingMask`
+3. if `windowScene` is nil, find the connected `UIWindowScene` and attach it
+4. `setHidden:false` + `makeKeyAndVisible`
+
+This belongs upstream (tao/wry) rather than in app code. File it; carry the
+workaround until it lands.
+
+## ASIDE: an unexplained navigation-policy log — observed pre-fix, needs re-observation
+
+**This was captured during the blank-screen investigation above, before the
+0×0-viewport fix landed** (the app was still invisible, rendering into a
+0×0 `WKWebView` inside a scene-less `UIWindow`). It is recorded here because
+the design spec cites it as a still-open question, and this document is the
+declared authority — it should not cite a log line findings.md never wrote
+down.
+
+The console log at that point in the investigation included:
+
+```
+decidePolicyForNavigationAction … Client responded with policy 2
+Adding download 30 to UIProcess DownloadProxyMap
+```
+
+Policy `2` is wry's `WKNavigationActionPolicyDownload`. Per wry's
+`wkwebview/navigation.rs:70`, wry only returns `Download` when
+`has_download_handler == true` — which contradicts the premise, shared by the
+audit and by the corrected blob-download finding, that this app leaves
+`download_handler` at `None`. Unexplained.
+
+**Do not invest time explaining this, or treat it as evidence for the
+`<a download>`-on-iOS question, until it is reproduced on the now-visible
+app.** It was observed against a broken render (no content occupying the
+webview's frame at all), which is a plausible confound for almost anything
+navigation-related; a clean re-run on the fixed app is the prerequisite for
+trusting this log line at all.
+
+## Task 4 — platform behaviour — ANSWERED
+
+Measured on the running app (iPhone 17, iOS 27.0, 402×874 pt).
+
+| Question | Spec predicted | **Observed** |
+|---|---|---|
+| App launches on the iOS 27 SDK | yes | **YES** |
+| `platform()` | `"ios"` | **`"ios"`**, `version()` = `27.0.0` |
+| `navigator.platform` | unknown | **`"iPhone"`** |
+| User agent | unknown | `…(iPhone; CPU iPhone OS 18_7 like Mac OS X)… Mobile/15E148` — note the **frozen `18_7`** even on iOS 27 |
+| `Promise.withResolvers` | present ≥17.4 | **present** — the 17.4 floor is correct |
+| `ReadableStream[Symbol.asyncIterator]` | **absent** | **PRESENT — spec is WRONG** |
+| `env(safe-area-inset-*)` | 0 without `viewport-fit=cover` | **0 both before and after** adding it — needs re-measuring now the viewport is non-zero |
+| `visualViewport` | — | **present** |
+| Task 3.5 platform gate | — | **works** — `data-tauri` is `null` on iOS |
+| `document.documentElement.className` | — | **`"desktop electron"`** — spec D1's unconditional desktop classes, **confirmed** |
+| Google Fonts at runtime | CDN fetch | **confirmed** — `css2?family=Cormorant…` and `DM+Sans` in `document.styleSheets` |
+| `#resume` vs viewport | 816 px cropped | **confirmed** — `resumeRect` 816×1056 at `x=-207` in a 402 pt viewport |
+| Onboarding hard-gate | 2.1 rejection risk | **confirmed visually** — Step 1 of 6 demands an `sk-or-v1-…` key before anything else |
+
+### 🔴 `alert()` / `confirm()` — CRITICAL, and the spec had it exactly backwards
+
+**Isolated test run** (`resume-ios-confirm-test`, a probe that does nothing else):
+
+```json
+"confirm_ms": 1,          "confirm_typeof": "object",
+"confirm_String": "[object Promise]",   "confirm_ctor": "Promise",
+"confirm_isPromise": true,
+"confirm_strictTrue": false,  "confirm_strictFalse": false,
+"confirm_BOOLEAN_COERCION": true,
+"confirm_wouldProceed": "YES — DESTRUCTIVE PATH RUNS",
+"backupFlowPattern_destructiveRan": true,
+"alert_ms": 1, "alert_blocked": false
+```
+
+**`window.confirm()` returns a Promise on iOS. A Promise is always truthy.**
+
+So this, the literal shape at `backupFlow.js:248`:
+
+```js
+if (confirm('Your current resumes … will be REPLACED. Continue?')) {
+  /* destructive import */
+}
+```
+
+**always takes the destructive branch**, regardless of what the user taps — the
+value being tested is a pending Promise object, never a boolean. The test above
+ran that exact pattern and `backupFlowPattern_destructiveRan` came back `true`.
+
+`alert()` likewise returns in ~1 ms and does **not** block, though it *does*
+present a real native panel (screenshotted over the onboarding screen). It is
+fire-and-forget: any code sequencing on it is broken.
+
+**The spec was wrong in the dangerous direction.** It reasoned that `confirm()`
+returning `false` made the Import button merely "look dead", and rated it a
+low-severity, fail-safe defect. On iOS it is a **silent data-loss path**: a
+destructive whole-store replace runs with no confirmation at all.
+
+**Blast radius — 2 reachable `confirm()` gates.**
+
+> **Correction.** An earlier version of this section listed
+> `src/native.js:108` as "the shared confirm facade… every caller is affected."
+> **That was wrong.** `native.js:85` `showMessage()` opens with
+> `if (isTauri) {` at `:86` and returns at `:95`/`:103` through
+> `tauri-plugin-dialog`'s `dialog.message` / `dialog.ask`. Lines 106-111 are the
+> **web fallback**, and `isTauri` is `true` on iOS (proved — `platform()`
+> returned `"ios"` and the migration probe ran, both of which require IPC).
+> `native.js:108` and `:110` are therefore unreachable on iOS.
+
+| Site | Consequence on iOS |
+|---|---|
+| `src/backupFlow.js:248` | whole-store **REPLACE** proceeds unconfirmed |
+| `src/backupFlow.js:336` | legacy-Electron replace/merge, same pattern |
+
+(`components/PdfDialog.jsx:164`'s `confirm()` is a local callback prop, not
+`window.confirm` — unaffected. `native.js:108` is dead on iOS, per the
+correction above.)
+
+Eleven **reachable** `alert()` sites lose their blocking behaviour — direct
+calls, not routed through `showMessage()`: `backupFlow.js:167/201/306/330/467`,
+`pdf.js:71/111/376/393/404`, `variantManager.js:251`. `backupFlow.js:167` is the
+worst: it is the *only* signal that an import never reached disk.
+
+**Untested and important:** the iOS path through `showMessage()` —
+`dialog.ask` / `dialog.message` — was never exercised in Phase 0. The
+permissions are correctly in the cross-platform capability
+(`capabilities/default.json`: `dialog:allow-ask`, `allow-message`,
+`allow-confirm`), but whether the plugin actually **presents and resolves** on
+iOS is unknown. If it does, it is the right target for all thirteen sites (the
+eleven `alert()` calls above plus the two `confirm()` gates) and needs no React
+plumbing. Measure it before designing the fix.
+
+**This raises the priority of the spec's Phase 1 "swap `backupFlow.js`
+alert/confirm for `confirmDestructive`" item from cleanup to a
+data-loss blocker.** Nothing that calls `window.confirm` may ship on iOS.
+
+## Task 5 — createPDF rect spike — **PASSED. D5 option C is viable.**
+
+Run on iOS 27.0 simulator via `tauri ios build --debug --target aarch64-sim`,
+with the `ios_view` workaround active (without it the webview is 0×0 and any
+capture is a false negative).
+
+**The binding.** `objc2-web-kit` declares `WKWebView` with an AppKit superclass
+under `#[cfg(target_os = "macos")]` and ships no UIKit variant, so the typed
+`createPDFWithConfiguration_completionHandler` used by `pdf_macos.rs:125` is
+unavailable. Dynamic dispatch works and compiles clean:
+
+```rust
+let obj = webview.inner() as *mut AnyObject;
+let _: () = objc2::msg_send![obj, createPDFWithConfiguration: &*configuration,
+                                  completionHandler: &*handler];
+```
+
+`WKPDFConfiguration` is **not** cfg-gated and is used as-is, so the iOS Cargo
+block needs `objc2-web-kit` **without** the `objc2-app-kit` feature.
+
+**Results — every load-bearing assumption confirmed:**
+
+| Question | Result |
+|---|---|
+| Does `createPDF` run on iOS? | **Yes** — 63,168 bytes returned |
+| Is the `rect` honoured? | **Yes** — a one-sheet rect produced exactly **one** page (`/Type /Page` ×1, `/Count 1`) |
+| MediaBox vs requested CSS px | **`MediaBox [0 0 816 1056]`** — byte-exact match to the requested 816×1056. **pt == CSS px 1:1, so `PX_TO_PT = 72/96` in `pdf_merge.rs` stands unchanged.** |
+| Vector or raster? | **Vector.** Embedded subset fonts `AAAAAB+Geist-Medium`, `AAAAAC+Geist-SemiBold`, `AAAAAD+Geist-Regular`, 212 text-showing operators. **The ATS requirement is met on iOS.** |
+| Does an iframe get its own 816 px layout viewport on a 402 pt device? | **Yes** — `iframe_innerWidth: 816`, `scrollHeight: 2112`, `sameOrigin: true`, body 31,821 bytes. **Option C's core premise is confirmed.** |
+| Is `/print.html` served by the `tauri://` scheme handler? | **Yes** — HTTP 200, 31,384 bytes, content verified |
+
+**One caveat, and it is a test artefact rather than a result.** The captured page
+contains the *onboarding modal* ("Step 1 of 6 / Welcome to On Paper"), not the
+iframe's résumé content. Two reasons, both fixable: the iframe was mounted at
+`opacity: 0.01` (borrowed from the native-offscreen-webview technique, where it
+keeps a webview rendering — but inside a *captured* document it simply makes the
+content invisible), and a full-screen fixed modal was painted over it. So the
+PDF **machinery** is proven end-to-end; what is not yet proven is that iframe
+content composites into the rect. Re-test with an opaque iframe and no modal
+before committing to option C over option A.
+
+**Also guard:** WebKit caps a PDF page at 14400 pt and loops, so a rect taller
+than 14400 CSS px silently becomes multiple pages. Untested; reachable in
+`.is-overflowing` mode.
+
+## Task 4 addendum — measurements taken with a real viewport
+
+Everything geometric measured before the `ios_view` fix was taken against a 0×0
+viewport and is void. Re-measured:
+
+| Question | iPhone 17 (402×874) | iPad Pro 13" (1032×1376) |
+|---|---|---|
+| `innerSize` | `[402, 778]` | `[1032, 1324]` |
+| `env(safe-area-inset-*)` **without** `viewport-fit=cover` | `0px` all round | `0px` all round |
+| **with** `viewport-fit=cover` | **`62px` top, `34px` bottom** | **`32px` top, `20px` bottom` |
+| `/print.html` reachable | 200, 31,384 B | 200, 31,384 B |
+
+So `viewport-fit=cover` is required and sufficient; the earlier all-zero reading
+was an artefact of the 0×0 viewport, not a platform limitation.
+
+### 🔴 iPadOS reports a DESKTOP user agent — the shipped gate missed it
+
+`66fa6a9` gated the glass treatment on `/iPad|iPhone|iPod/.test(userAgent)`,
+measured on iPhone only. On iPad:
+
+```
+userAgent:         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15…"
+navigator.platform: "MacIntel"        maxTouchPoints: 5
+gateRegexMatches:   false             dataTauriAttr: "true"   <-- glass RE-ENGAGED
+```
+
+The regex misses, `data-tauri` is set, and the iPad went transparent again —
+**the same black screen, reintroduced on half the declared device scope by the
+fix for it.** Fixed in `fbacc48` by adding the standard iPadOS discriminator
+(`navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1`; a real Mac
+reports `0`), with the CSP hash recomputed. **Verified on device:**
+`dataTauriAttr: null` and the iPad now renders the app correctly.
+
+### `tauri-plugin-dialog` presents AND resolves on iOS — use it
+
+The natural replacement for the 13 broken `window.confirm`/`alert` sites was
+untested. Measured:
+
+- **`message()` — presents a native panel and RESOLVES**: `{resolved: true,
+  value: 'Ok'}` after tapping Ok.
+- **`ask()` — presents** a two-button panel (screenshotted, "No" / "Yes").
+  Its resolution was **not captured** — the probe's 20 s timeout elapsed before
+  the tap landed. Same plugin and same IPC path as `message()`, so it very
+  likely resolves, but that is **inferred, not measured**.
+
+This is the decisive difference from `window.confirm`, which returns an
+always-truthy Promise. `dialog:allow-ask` / `allow-message` / `allow-confirm`
+are already granted in the cross-platform `capabilities/default.json`, and
+`native.js:85` `showMessage()` already routes through this plugin on Tauri — so
+the fix for the data-loss sites is to make `backupFlow.js` call `showMessage()`
+(async) instead of `window.confirm`.
+
+### The updater error is real and user-visible
+
+Screenshotted on first launch: a toast reading **"Updater error: Command
+`check_update_on_channel` not found"**. Spec D1 predicted exactly this —
+`isTauri` is true on iOS, so `updateFlow.js`'s startup check calls a
+`#[cfg(desktop)]` command. Confirms the 2.1 App Store rejection risk.
+
+## Task 6 — contentEditable spike — **PASSED on physical hardware**
+
+**Device:** Ash's iPhone (iPhone 16 Pro, `iPhone17,1`), real hardware, not the
+Simulator. Build: `tauri ios build --debug --target aarch64`, installed via
+`xcrun devicectl device install app`. Development-provisioned under team
+`847VH25R7U` using the pre-existing wildcard profile `847VH25R7U.*` — so no App
+ID registration and no free-personal-team 7-day limit were needed, contrary to
+the plan's assumption.
+
+**Result, reported by the developer:** the app works, nothing is broken, and
+**tapping into résumé text places the caret correctly and selection handles drag
+correctly** — inside the `transform: scale()`d subtree at phone zoom. The
+remaining issues are UI/UX, "in the context of it being an iOS app."
+
+### This refutes D7's premise and shrinks Phase 3
+
+D7 ("disable `contentEditable` on mobile; tap → select → edit in a sheet")
+existed **solely** to sidestep the caret/selection risk, which the spec called
+"the largest genuinely unverified risk in the entire port." That risk did not
+materialise. On-page editing works on iOS.
+
+**Therefore D7 must be revised before Phase 3 is planned.** It changes from
+*"rewrite the mobile editing model"* to *"harden the existing editor for
+touch"* — a large scope reduction. The plan's own contingency said exactly this:
+"If they work, on-page editing reopens and D7 gets revisited."
+
+**What is NOT thereby answered** — these were not part of the caret/selection
+check and remain open:
+
+- **Autocorrect persistence.** There are still **zero** `autocorrect` /
+  `autocapitalize` attributes anywhere in `src/`, and `inlineEditor.js:975`
+  writes `element.textContent` straight to storage. iOS rewriting `Kubernetes`
+  or `SaaS` and *persisting* it is still a live risk. Required regardless.
+- **Keyboard avoidance.** Every ancestor is `overflow: hidden`, so a focused
+  field physically cannot scroll above the software keyboard. Still needs the
+  `visualViewport` work.
+- **The AI Apply/Reject dead-end.** `inlineEditor.js:58` still gates that menu on
+  `mouseover`, and `startEditing()` calls `hideAIButton()` at `:785`. Caret
+  working does not make a hover-only menu tappable. Still needs a touch surface —
+  but it can now be solved *in place* rather than by rehosting the whole editor
+  in a sheet.
+- **Pinch-zoom conflict (D8).** `index.html` has no `maximum-scale`, so WKWebView
+  page zoom fights `zoomControls.js`'s `transform: scale()`. With on-page editing
+  retained this becomes **more** load-bearing, not less — the plan predicted this
+  exact trade.
+
+### Phase 0 status after this
+
+Every spike in the plan has now returned a result. Outstanding items are no
+longer unknowns, only work: the desktop runtime gate (`tauri:dev` PDF export +
+update check), the option-C re-test with an opaque iframe, and three upstream
+issues to file.

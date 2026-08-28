@@ -1,4 +1,12 @@
 mod commands;
+// Workaround for upstream wry/tao bugs that leave the iOS webview 0×0 inside an
+// unattached UIWindow — see the module docs. Not app logic; delete on upstream fix.
+#[cfg(target_os = "ios")]
+mod ios_view;
+// The native SwiftUI chrome. Reparents wry's WKWebView into a UIHostingController;
+// see the module docs and docs/ios/swiftui-lifecycle-spike.md.
+#[cfg(target_os = "ios")]
+mod ios_shell;
 
 // `Manager` is used by the desktop `app.manage(...)` call in `setup` and by the
 // macOS-only Reopen handler below. Gating to `desktop` keeps it out of mobile
@@ -18,6 +26,14 @@ pub fn run() {
         .manage(commands::PreviewPdfPath::default())
         .manage(commands::bridge::BridgePending::default())
         .setup(|app| {
+            // BEFORE anything slow: show tao's window as early as this process
+            // can. `.run()` only starts pumping once the whole of Rust startup
+            // is finished, so leaving this to the event loop puts the app's
+            // first visible frame ~150ms in — after iOS has already given up on
+            // the launch screen and faded it to black. See ios_view::try_apply.
+            #[cfg(target_os = "ios")]
+            ios_view::try_apply(app.handle());
+
             #[cfg(desktop)]
             {
                 app.handle()
@@ -82,7 +98,10 @@ pub fn run() {
             commands::pick_pdf_save_path,
             commands::capture_pdf_from_window,
             commands::read_pdf_preview,
+            commands::pdf_preview_path,
             commands::save_pdf_preview,
+            commands::stage_pdf_for_share,
+            commands::stage_text_for_share,
             commands::discard_pdf_preview,
             commands::migration::probe_legacy_electron_data,
             commands::migration::import_legacy_electron_data,
@@ -103,6 +122,18 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // iOS only: size the webview and attach its window to a scene, both
+            // of which upstream leaves undone. Driven from here because the view
+            // hierarchy does not exist yet in `setup`. See ios_view.rs.
+            #[cfg(target_os = "ios")]
+            ios_view::on_run_event(app_handle, &event);
+
+            // Native chrome. HARD ORDERING DEPENDENCY: must run AFTER ios_view,
+            // which attaches the UIWindowScene this needs. Installing first puts
+            // SwiftUI into a window UIKit never lays out, and it sizes to zero.
+            #[cfg(target_os = "ios")]
+            ios_shell::on_run_event(app_handle, &event);
+
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
                 has_visible_windows,

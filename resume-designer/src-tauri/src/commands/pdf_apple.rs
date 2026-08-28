@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2_foundation::{NSData, NSError, NSPoint, NSRect, NSSize, NSString};
-use objc2_web_kit::{WKPDFConfiguration, WKWebView};
+use objc2_web_kit::WKPDFConfiguration;
+#[cfg(target_os = "macos")]
+use objc2_web_kit::WKWebView;
 use tauri::WebviewWindow;
 use tokio::sync::oneshot;
 
@@ -95,7 +97,6 @@ async fn capture_one(target_window: &WebviewWindow, rect: &CaptureRect) -> Resul
         };
 
         unsafe {
-            let wkwebview: &WKWebView = &*(wkwebview_ptr as *const WKWebView);
             let configuration = WKPDFConfiguration::new(mtm);
             configuration.setRect(NSRect {
                 origin: NSPoint { x: rect.x, y: rect.y },
@@ -122,7 +123,29 @@ async fn capture_one(target_window: &WebviewWindow, rect: &CaptureRect) -> Resul
                 send_result(&pdf_slot_handler, result);
             });
 
-            wkwebview.createPDFWithConfiguration_completionHandler(Some(&configuration), &handler);
+            // One selector, two spellings. objc2-web-kit 0.3.2 declares
+            // `WKWebView` `#[cfg(target_os = "macos")]` and ships no iOS class,
+            // even though the Objective-C class, this selector and
+            // `WKPDFConfiguration` (not gated at all) are all present on iOS.
+            // So macOS keeps the typed call and iOS sends the same message to
+            // the raw pointer, exactly as ios_view.rs and ios_shell.rs do.
+            // Collapse this into the typed call if objc2-web-kit ever adds the
+            // iOS class.
+            #[cfg(target_os = "macos")]
+            {
+                let wkwebview: &WKWebView = &*(wkwebview_ptr as *const WKWebView);
+                wkwebview
+                    .createPDFWithConfiguration_completionHandler(Some(&configuration), &handler);
+            }
+            #[cfg(target_os = "ios")]
+            {
+                let obj = wkwebview_ptr as *mut objc2::runtime::AnyObject;
+                let _: () = objc2::msg_send![
+                    obj,
+                    createPDFWithConfiguration: &*configuration,
+                    completionHandler: &*handler,
+                ];
+            }
         }
     });
 

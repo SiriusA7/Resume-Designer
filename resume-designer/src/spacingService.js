@@ -88,7 +88,13 @@ export function applySpacingSettings(settings) {
  * Reset spacing to defaults
  */
 export function resetSpacingSettings() {
-  appStorage.removeItem('resume-spacing-settings');
+  // WRITTEN, not removed. This key is synced, and `removeItem` deliberately
+  // neither stamps nor announces — deletion does not travel in this design (see
+  // appStorage.removeItem). Cleared, the CloudKit record kept the old spacing,
+  // so no other device ever saw the reset and any later edit there could send
+  // the obsolete settings back and undo it. The explicit default reads exactly
+  // as absence did: `getSpacingSettings` spreads DEFAULT_SPACING first.
+  saveSpacingSettings(DEFAULT_SPACING);
   applySpacingSettings(DEFAULT_SPACING);
   return DEFAULT_SPACING;
 }
@@ -104,3 +110,17 @@ export function initSpacingService() {
 
 // Export defaults for reference
 export { DEFAULT_SPACING };
+
+/**
+ * The value this key holds when it has never been customised.
+ *
+ * Exported so a replacement restore can CLEAR the key by writing what "no
+ * customisation" means, rather than deleting it — a deleted key announces
+ * nothing (`collectKeyUnit`), so the old customisation would survive on
+ * CloudKit and come back on the next fetch. The default stays owned here; the
+ * sync layer asks for it rather than keeping a second copy that would be wrong
+ * the first time this one changed.
+ */
+export function defaultSpacingSettings() {
+  return { ...DEFAULT_SPACING };
+}

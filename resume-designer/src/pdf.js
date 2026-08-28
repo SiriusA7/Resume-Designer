@@ -9,11 +9,13 @@
  * Browser fallback: html2pdf.js produces image-based PDFs (not ATS-friendly).
  */
 
-import { isElectron, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, savePdfPreview, discardPdfPreview } from './native.js';
+import { isElectron, isIOSPlatform, pickPdfSavePath, capturePdfFromWindow, readPdfPreview, pdfPreviewPath, savePdfPreview, stagePdfForShare, discardPdfPreview, notify } from './native.js';
+import { openNativePdfPreview, sharePdf, isNativeShellAvailable } from './iosShell.js';
 import { getCurrentId, getVariantList } from './variantManager.js';
 import { store } from './store.js';
 import { appStorage } from './appStorage.js';
 import { withPreviewSuppressed } from './inlineChanges.js';
+import { commitActiveInlineEdit } from './inlineEditor.js';
 
 let html2pdfModule = null;
 
@@ -33,6 +35,26 @@ async function loadHtml2Pdf() {
     html2pdfModule = module.default || module;
   }
   return html2pdfModule;
+}
+
+/**
+ * A main-window capture is running.
+ *
+ * It counts as EDITING for the sync guards, and that is not a metaphor: the
+ * capture takes each page's rect in turn, so a document replaced between two of
+ * them puts one résumé on the early pages and another on the late ones. The
+ * editing probe is the existing way to say "this document must not be replaced
+ * right now", and a capture has exactly that requirement.
+ *
+ * It became necessary the moment the capture started BLURRING the editor:
+ * before that, exporting mid-sentence left a focused contenteditable, and the
+ * probe answered true by accident. Blurring closed the typing hole and opened
+ * this one — the guard the blur removed has to be replaced deliberately.
+ */
+let capturing = false;
+
+export function isPdfCapturing() {
+  return capturing;
 }
 
 export function initPdfExport() {
@@ -68,7 +90,7 @@ async function handleDownloadPdf(customFilename) {
   // Validate resume element exists
   if (!resumeEl) {
     console.error('PDF generation failed: Resume element not found');
-    alert('Failed to generate PDF: Resume content not found.');
+    await notify({ title: 'PDF export failed', type: 'error', message: 'Failed to generate PDF: Resume content not found.' });
     return;
   }
   
@@ -108,7 +130,7 @@ async function handleDownloadPdf(customFilename) {
     
   } catch (error) {
     console.error('PDF generation failed:', error);
-    alert(`Failed to generate PDF: ${error.message || 'Unknown error'}. Check the console for details.`);
+    await notify({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message || 'Unknown error'}. Check the console for details.` });
   } finally {
     // Restore button state on EVERY exit path (success, user-cancel, error).
     // Mirror busy:false to the visible React header button too.
@@ -167,7 +189,138 @@ function releaseExportGuard() {
   nativeExportInFlight = false;
 }
 
+/**
+ * Generate the PDF from the MAIN window, for iOS.
+ *
+ * The desktop flow above spawns a second, off-screen `WebviewWindow` at
+ * `/print.html`. iOS Tauri is single-window — an iOS app has one `UIWindow` —
+ * and `x`/`y`/`decorations`/`skipTaskbar` are desktop-only options, so that
+ * constructor emits `tauri://error` immediately and the export dies with
+ * "Print window creation failed". Phase 0 proved `createPDF` itself works on
+ * iOS (63,168 bytes returned); it was the window on top of it that never could.
+ *
+ * So iOS captures the window it already has, using the SAME `html.pdf-export-mode`
+ * stylesheet the print window applies to itself: chrome hidden, the zoom
+ * transform and its scroll-margins removed, `.resume` planted at the document
+ * origin at 8.5in. No re-render is needed — a transform does not affect layout,
+ * so the on-screen pagination was already measured at the export width.
+ *
+ * The visible cost is a brief flash of the export layout, which the desktop
+ * flow deliberately avoids. There is no way around it with one window, and the
+ * preview dialog opens over it immediately afterwards.
+ *
+ * @param {string|null} variantId ignored — the main window always holds the
+ *   current variant. Bridge exports of OTHER variants are desktop-only for the
+ *   same single-window reason; the caller rejects them before reaching here.
+ */
+async function generatePdfInMainWindow() {
+  const root = document.documentElement;
+  const resumeEl = document.getElementById('resume');
+  if (!resumeEl) throw new Error('Resume content not found');
+
+  const scroller = document.getElementById('resume-scroller');
+  const scrollTop = scroller?.scrollTop ?? 0;
+  const scrollLeft = scroller?.scrollLeft ?? 0;
+
+  // THE EDITOR TOO, not only the native controls. The toolbar buttons were
+  // disabled for the capture, but the résumé itself is `contenteditable`: a
+  // field left focused when the export starts stays live through the two-frame
+  // wait and every page capture, and the keyboard is still up. Typing then puts
+  // one revision in the pages already taken and another in the rest.
+  //
+  // Blurred AND frozen: blurring alone dismisses the keyboard but leaves the
+  // element editable, so a tap during the capture puts the caret straight back.
+  const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+  // The guard first, so it is continuous: the commit below clears
+  // `activeElement`, which is what `isBusyEditing` was answering from.
+  capturing = true;
+  // COMMITTED BEFORE FREEZING, and this ordering is the whole of it. `handleBlur`
+  // finishes the edit on a 100ms timer, and `finishEditing` bails at
+  // `!element.isContentEditable` — so freezing first meant that callback found a
+  // frozen node, returned without saving, and left `activeElement` set. The
+  // typed text stayed in the DOM and nowhere else, to be discarded by the next
+  // store-driven render, and the editing probe went on reporting a session that
+  // could never end.
+  commitActiveInlineEdit();
+  document.activeElement?.blur?.();
+  for (const el of editables) el.setAttribute('contenteditable', 'false');
+
+  root.classList.add('pdf-export-mode');
+  try {
+    // pdf-export-mode makes <html> the scrolling box, so a mid-document scroll
+    // position would offset every rect measured below.
+    window.scrollTo(0, 0);
+
+    // Fonts are already loaded in this window, unlike a freshly spawned print
+    // window — this resolves immediately and only guards a cold first export.
+    if (document.fonts?.ready) await document.fonts.ready;
+
+    // Force the reflow that the class change requires before measuring. Two
+    // frames, not a timeout: this window IS on screen, so rAF actually fires
+    // here (the print window's setTimeout exists precisely because an
+    // off-screen macOS window never composites).
+    void resumeEl.offsetHeight;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    const bounds = resumeEl.getBoundingClientRect();
+    // Per-sheet rects, doc-relative to #resume — one PDF page per on-screen
+    // `.resume-page`. Identical projection to initPrintMode's.
+    const pages = Array.from(resumeEl.querySelectorAll('.resume-page')).map((p) => {
+      const r = p.getBoundingClientRect();
+      return {
+        x: r.left - bounds.left,
+        y: r.top - bounds.top,
+        width: r.width,
+        height: r.height,
+      };
+    });
+    const captureRect = { x: 0, y: 0, width: bounds.width, height: bounds.height };
+    const pageSize = { width: bounds.width / 96, height: bounds.height / 96 };
+
+    console.log(
+      `PDF Export (iOS, main window): ${bounds.width.toFixed(0)}×${bounds.height.toFixed(0)} CSS px, `
+      + `${pages.length || 1} sheet(s)`
+    );
+
+    const result = await capturePdfFromWindow(
+      'main', pageSize, captureRect, pages.length ? pages : [captureRect]
+    );
+    if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
+  } finally {
+    // Restore unconditionally: leaving the class on would strand the user in a
+    // chrome-less full-bleed page with no way back.
+    root.classList.remove('pdf-export-mode');
+    // Restored on every exit, including the throwing ones — a résumé that
+    // cannot be typed into is a worse outcome than a failed export.
+    for (const el of editables) el.setAttribute('contenteditable', 'true');
+    capturing = false;
+    // `pdf-export-mode` makes <html> the scrolling box over a document as tall
+    // as the whole resume. Once the class is gone `overflow: hidden` returns
+    // and hides any leftover offset visually, so a non-zero scroll here is
+    // invisible but still shifts where touches land.
+    window.scrollTo(0, 0);
+    if (scroller) {
+      scroller.scrollTop = scrollTop;
+      scroller.scrollLeft = scrollLeft;
+    }
+  }
+}
+
 async function generatePdfNative(_resumeEl, _filename, variantId = null) {
+  // iOS captures the main window instead of a print window it cannot create.
+  // Returning before the saveNow()/flush() below is deliberate, not an
+  // oversight: that durability gate exists because the print window is a
+  // separate webview that reads ONLY disk and would otherwise capture stale
+  // data. Here the capture target IS this DOM, so the newest keystroke is
+  // already in it, and blocking the export on a disk write would only add a
+  // way for it to fail.
+  if (isIOSPlatform()) {
+    if (variantId) {
+      // Only the companion bridge passes one, and it is desktop-only.
+      throw new Error('Exporting a specific resume is not supported on iOS');
+    }
+    return generatePdfInMainWindow();
+  }
   // 0. Flush any pending in-memory edits to storage BEFORE the print
   //    window opens. The store's auto-save is debounced (~SAVE_DEBOUNCE_MS),
   //    so a user who types and immediately clicks "Download PDF" can have
@@ -373,7 +526,7 @@ function setExportBusy(busy) {
 async function runNativeExportWithPreview(defaultFilename) {
   const resumeEl = document.getElementById('resume');
   if (!resumeEl) {
-    alert('Failed to generate PDF: Resume content not found.');
+    await notify({ title: 'PDF export failed', type: 'error', message: 'Failed to generate PDF: Resume content not found.' });
     return;
   }
   // Hold the export guard for the WHOLE preview lifecycle — from before
@@ -390,18 +543,25 @@ async function runNativeExportWithPreview(defaultFilename) {
   try {
     acquireExportGuard();
   } catch (error) {
-    alert(`Failed to generate PDF: ${error.message}.`);
+    await notify({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message}.` });
     return;
   }
   setExportBusy(true);
   let previewBase64 = null;
+  let previewPath = null;
   try {
     await generatePdfNative(resumeEl, defaultFilename); // captures to the temp slot
-    previewBase64 = await readPdfPreview();
-    if (!previewBase64) throw new Error('Could not read the generated PDF for preview.');
+    // iOS previews the FILE natively and never needs its bytes in the page.
+    if (isIOSPlatform()) {
+      previewPath = await pdfPreviewPath();
+      if (!previewPath) throw new Error('Could not find the generated PDF to preview.');
+    } else {
+      previewBase64 = await readPdfPreview();
+      if (!previewBase64) throw new Error('Could not read the generated PDF for preview.');
+    }
   } catch (error) {
     console.error('PDF generation failed:', error);
-    alert(`Failed to generate PDF: ${error.message || 'Unknown error'}.`);
+    await notify({ title: 'PDF export failed', type: 'error', message: `Failed to generate PDF: ${error.message || 'Unknown error'}.` });
     // Terminal: clean the slot first, then release (discardPdfPreview never
     // throws — see native.js — so the release below always runs).
     await discardPdfPreview();
@@ -411,13 +571,19 @@ async function runNativeExportWithPreview(defaultFilename) {
   }
   setExportBusy(false);
 
+  const onConfirm = (filename) => savePreviewedPdf(filename);
+  const onCancel = () => cancelPreviewedPdf();
+
+  // The native sheet gets the same two callbacks the web dialog would, so the
+  // export guard and the temp file have one lifecycle whichever presented it.
+  // Falls through when there is no native shell, which is every other platform.
+  if (previewPath
+    && openNativePdfPreview({ path: previewPath, defaultFilename, onConfirm, onCancel })) {
+    return;
+  }
+
   window.dispatchEvent(new CustomEvent('rd:open-pdf-dialog', {
-    detail: {
-      defaultFilename,
-      previewBase64,
-      onConfirm: (filename) => savePreviewedPdf(filename),
-      onCancel: () => cancelPreviewedPdf(),
-    },
+    detail: { defaultFilename, previewBase64, onConfirm, onCancel },
   }));
 }
 
@@ -437,6 +603,76 @@ async function savePreviewedPdf(customFilename) {
   const filename = customFilename
     ? (customFilename.endsWith('.pdf') ? customFilename : `${customFilename}.pdf`)
     : 'Resume.pdf';
+
+  // iOS has no save-to-path dialog, so it shares instead — see
+  // stage_pdf_for_share in commands/mod.rs for why the plugin's approximation
+  // of one does not work under the native shell. The share sheet's own
+  // "Save to Files" is the equivalent of what the desktop picker does.
+  if (isIOSPlatform()) {
+    setExportBusy(true);
+    try {
+      // CHECKED BEFORE STAGING, the same order `shareTextFile` uses, and the
+      // order is the whole of this. `isIOSPlatform` is a user-agent test and
+      // knows nothing about the shell, so this branch is still taken when there
+      // is none — `OP_NATIVE_SHELL=0`, a supported control, or an install where
+      // the shell never came up. Staged first, the failure left a second,
+      // user-named copy of the résumé behind: `discardPdfPreview` in the
+      // `finally` deletes only the SOURCE the preview slot holds, and the staged
+      // copy is deleted by the share sheet's completion handler, which in this
+      // case is never installed. Sensitive PDFs then accumulate in the temp
+      // directory, one per attempt. Not staging at all is the fix; there is no
+      // command to delete an arbitrary staged file, and adding one would be
+      // more surface than simply not creating it.
+      if (!isNativeShellAvailable()) {
+        await notify({
+          title: 'PDF export failed',
+          type: 'error',
+          message: 'On Paper could not open the share sheet, so the PDF was not '
+            + 'saved. Please restart the app and try again.',
+        });
+        // Terminal, like every other outcome here. There is nothing to retry
+        // against: a second attempt finds the shell still missing.
+        return;
+      }
+      const staged = await stagePdfForShare(filename);
+      // ANSWERED, not fired and forgotten — the check above cannot rule out the
+      // shell going away between it and this call, and an ignored answer is
+      // what made Save produce no sheet, no file and no error.
+      if (!sharePdf(staged)) {
+        await notify({
+          title: 'PDF export failed',
+          type: 'error',
+          message: 'On Paper could not open the share sheet, so the PDF was not '
+            + 'saved. Please restart the app and try again.',
+        });
+        return;
+      }
+      console.log('PDF Export: shared', staged);
+    } catch (error) {
+      // Staging CAN fail — a full temp dir, or an emptied preview slot — and a
+      // throw here used to escape before the two lines below, which are the
+      // only things that release the guard. Unlike the desktop branch there is
+      // no retry to keep it held for: the native sheet dismissed itself on the
+      // way in, so nothing is left on screen that could call back. Leaving it
+      // held meant every later export was refused as already in progress,
+      // until the app restarted.
+      console.error('PDF share staging failed:', error);
+      await notify({
+        title: 'PDF export failed',
+        type: 'error',
+        message: `Could not prepare the PDF to share: ${error.message || 'Unknown error'}.`,
+      });
+    } finally {
+      setExportBusy(false);
+      // Terminal either way: the share sheet is the system's now, and whether
+      // the user saves or dismisses it is not something the app is told — and
+      // a failure has nowhere to go back to.
+      await discardPdfPreview();
+      releaseExportGuard();
+    }
+    return;
+  }
+
   const path = await pickPdfSavePath(filename);
   if (!path) {
     await discardPdfPreview();

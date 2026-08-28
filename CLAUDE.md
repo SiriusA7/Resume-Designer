@@ -76,9 +76,25 @@ Transition phrasing, where existing users could be confused, is exactly
 
 These are **frozen and must never be renamed**, however tempting a sweep looks:
 
-- **Bundle identifier `com.resumedesigner.app`** — Tauri derives the app-data
-  directory from it, so it is the on-disk address of every user's resumes.
-  Changing it ships via the auto-updater and factory-resets the app.
+- **The DESKTOP bundle identifier `com.resumedesigner.app`** — Tauri derives the
+  app-data directory from it, so it is the on-disk address of every user's
+  resumes. Changing it ships via the auto-updater and factory-resets the app.
+  It is also the keychain `SERVICE` in `src-tauri/src/commands/secret.rs`, where
+  the same argument applies to every stored API key.
+
+  **iOS is `com.onpaper.app`, and that divergence is deliberate.** It is set by
+  `identifier` in `src-tauri/tauri.ios.conf.json`, which Tauri 2 merges over
+  `tauri.conf.json` for iOS builds. `project.yml`'s
+  `PRODUCT_BUNDLE_IDENTIFIER` is INERT — the CLI overwrites it from the merged
+  config on every build, so editing it alone silently does nothing.
+
+  iOS had never shipped when this was chosen, so nothing was addressed by it yet
+  and the brand name was still free — the same reasoning that named the CloudKit
+  container `iCloud.com.onpaper.app`. Both are frozen from the first iOS release
+  onward. Note that neither is reverse-DNS for a domain we own (`onpaper.com` is
+  someone else's); that was a deliberate, informed choice — Apple treats these as
+  opaque unique strings and verifies nothing. `secret.rs`'s `SERVICE` deliberately did
+  NOT move: it is shared with desktop, where real users' keys sit behind it.
 - **Every `resume-designer-*` / `resume-*` storage key** — desktop storage is
   one file per key, so these are filenames. Renaming them also turns the
   wipe-before-validate path in `persistence.js` into a silent data loss on the

@@ -1,8 +1,5 @@
 import { useEffect, useReducer, useState } from 'react';
-import {
-  FileText, Pencil, Sparkles, Upload, ArrowUpDown, Plus, Minus,
-  RotateCcw, Columns2, X,
-} from 'lucide-react';
+import { FileText, Pencil, RotateCcw, Columns2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -12,6 +9,9 @@ import { confirmDestructive } from '@/components/ui/confirm';
 import { cn } from '@/lib/utils';
 
 import { store } from '../store.js';
+// The badge label and icon per changeType, in their own module: see the header
+// there for why they are not in this file.
+import { TYPE_LABELS, TYPE_ICONS } from './historyEntryTypes.js';
 import { diffResumeData } from '../diffEngine.js';
 import { showDiffView } from '../diffView.js';
 
@@ -23,27 +23,6 @@ import { showDiffView } from '../diffView.js';
 // Built from genuine shadcn primitives (Dialog / Badge / Button) + Tailwind, no
 // bespoke CSS. Opens on `rd:open-history`; Restore/Compare go through the store +
 // diffView. Restore confirm() -> confirmDestructive; compare no-diff -> toast.
-
-const TYPE_LABELS = {
-  initial: 'Created',
-  edit: 'Edit',
-  ai: 'AI change',
-  import: 'Import',
-  reorder: 'Reordered',
-  add: 'Added',
-  remove: 'Removed',
-};
-
-// changeType -> lucide icon. 'edit' (Pencil) is the unknown-type fallback.
-const TYPE_ICONS = {
-  initial: FileText,
-  edit: Pencil,
-  ai: Sparkles,
-  import: Upload,
-  reorder: ArrowUpDown,
-  add: Plus,
-  remove: Minus,
-};
 
 function formatTime(timestamp) {
   const date = new Date(timestamp);
@@ -83,6 +62,12 @@ export default function HistoryDialog() {
   const currentIndex = open ? store.getHistoryIndex() : -1;
 
   const handleRestore = async (index) => {
+    // PAIRED with the version the row named. A history unit fetched from another
+    // device merges into this array and renumbers it, and the confirm is an
+    // unbounded wait — so the index on its own would restore a different whole
+    // document than the dialog described. The native route carries the
+    // timestamp for exactly this reason; see `restoreVersion` in main.js.
+    const stamp = entries[index]?.timestamp;
     const ok = await confirmDestructive({
       title: 'Restore to this version?',
       description: 'Your current changes will be saved in history.',
@@ -90,6 +75,10 @@ export default function HistoryDialog() {
       destructive: false,
     });
     if (!ok) return;
+    if (store.getHistoryEntries()[index]?.timestamp !== stamp) {
+      toast.error('That version moved while the dialog was open — nothing was restored.');
+      return;
+    }
     store.restoreToEntry(index); // fires historyChanged -> bump() re-renders
   };
 
