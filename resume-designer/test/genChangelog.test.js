@@ -66,3 +66,66 @@ describe('groupChangelog', () => {
     expect(md).toContain('- Maintenance and internal improvements.');
   });
 });
+
+// The changelog is read by DESKTOP users — changelogService.js shows it when an
+// update lands. iOS ships as a separate app and its CloudKit transport is
+// dormant on desktop, so these bullets describe features the reader does not
+// have. Each case below was taken from the real ios→next promotion, where 237
+// of 338 bullets were ios/sync.
+describe('groupChangelog: omitting work the reader cannot use', () => {
+  it('drops the ios and sync scopes entirely', () => {
+    const md = groupChangelog([
+      'feat(ios): make the jobs and profile screens native',
+      'feat(sync): give shared units a zone any device can find',
+      'feat(chat): add per-resume threads',
+    ], '2.2.0');
+
+    expect(md).not.toContain('native');
+    expect(md).not.toContain('zone');
+    expect(md).not.toContain('**Ios**');
+    expect(md).not.toContain('**Sync**');
+    // The desktop bullet still lands, so this is a filter and not a blackout.
+    expect(md).toContain('Add per-resume threads');
+  });
+
+  it('drops ios-* sub-scopes, which an exact-match set let through', () => {
+    // This is the case the first version of the filter missed: the promotion
+    // carried ios-shell and ios-docs beside ios, and both reached the output.
+    const md = groupChangelog([
+      'fix(ios-shell): hold the splash for the first pull',
+      'fix(ios-docs): record the bundle identifier rule',
+      'feat(sync-engine): a scope that does not exist yet',
+    ], '2.2.0');
+
+    expect(md).not.toContain('splash');
+    expect(md).not.toContain('bundle identifier');
+    expect(md).not.toContain('does not exist yet');
+    expect(md).toContain('Maintenance and internal improvements.');
+  });
+
+  it('does not match a scope that merely starts with those letters', () => {
+    const md = groupChangelog(['feat(iosomething): a real desktop feature'], '2.2.0');
+    expect(md).toContain('A real desktop feature');
+  });
+
+  it('catches a stray that names the platform under another scope', () => {
+    // feat(secret) in the real promotion: the scope is desktop-shaped, the
+    // subject is not.
+    const md = groupChangelog([
+      'feat(secret): carry the API key between devices via iCloud Keychain',
+      'fix(backup): say that a replace now deletes on other devices too',
+      'fix(profiles): recover from a registry every device has tombstoned',
+    ], '2.2.0');
+
+    expect(md).not.toContain('iCloud');
+    expect(md).not.toContain('other devices');
+    expect(md).not.toContain('every device');
+  });
+
+  it('keeps "this device", which is about local storage and reveals nothing', () => {
+    // The narrowness matters: over-filtering would silently drop real desktop
+    // fixes, and nothing downstream would say so.
+    const md = groupChangelog(['fix(backup): clear an omitted key this device never stored'], '2.2.0');
+    expect(md).toContain('Clear an omitted key this device never stored');
+  });
+});

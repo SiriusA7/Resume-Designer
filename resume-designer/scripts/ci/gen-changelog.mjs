@@ -31,6 +31,41 @@ const AREA_NAMES = {
 const areaLabel = (scope) =>
   (!scope ? 'General' : AREA_NAMES[scope] || scope.charAt(0).toUpperCase() + scope.slice(1));
 
+// Scopes whose work the reader of THIS changelog cannot use.
+//
+// The audience is the desktop app: `changelogService.js` shows these notes when
+// an update lands. iOS ships as a separate app, and its CloudKit transport is
+// the SwiftUI shell — `initIOSShell` stays dormant until that shell calls
+// `activate()`, so on desktop the whole sync layer is wired and silent. Listing
+// either is therefore INACCURATE, not merely early: it describes features the
+// reader does not have and cannot get from this release.
+//
+// This also keeps the material away from the AI rewrite in release.yml, which
+// is told to find the release's "honest through-line". Measured on the iOS
+// promotion: 237 of 338 bullets were ios/sync, so the through-line it would
+// have found was the iPhone app.
+//
+// WHEN iOS SHIPS: delete the scope from this set and its bullets return. Do not
+// reach for the subject net below to do the same job — that is a backstop for
+// strays, not a switch.
+const OMIT_SCOPES = new Set(['ios', 'sync']);
+
+// Matched on the scope's LEADING SEGMENT, not the whole string: the promotion
+// carried `ios-shell` and `ios-docs` alongside `ios`, and an exact-set test let
+// both through. Splitting on `-` and `/` also means a future `sync-engine`
+// needs no edit here, while `iosomething` still does not match.
+const omitted = (scope) =>
+  OMIT_SCOPES.has(String(scope || '').toLowerCase().split(/[-/]/)[0]);
+
+// Backstop for commits that carry a different scope but still name the platform
+// or the cross-device behaviour only sync provides — `feat(secret): carry the
+// API key between devices via iCloud Keychain` is the case that motivated it.
+//
+// Deliberately narrow. "this device" is NOT matched: it means local storage and
+// says nothing about a second one, so `fix(backup): clear an omitted key this
+// device never stored` is a real desktop fix and stays.
+const OMIT_SUBJECT = /\b(ios|iphone|ipad|ipados|icloud|cloudkit|swiftui|app store)\b|\b(?:other|every|another|across|between|all)\s+devices?\b/i;
+
 // User-facing commit types → section (array order = display order). Any other
 // type is treated as internal and omitted.
 const SECTIONS = [
@@ -50,6 +85,8 @@ export function groupChangelog(subjects, version = '') {
     if (!m) continue;
     const [, type, scope, bang, subject] = m;
     if (!buckets[type]) continue; // internal type → drop
+    if (omitted(scope)) continue; // not this reader's app
+    if (OMIT_SUBJECT.test(subject)) continue; // stray that names the platform anyway
     const area = areaLabel(scope);
     (buckets[type][area] ||= []).push(`${bang ? '**Breaking:** ' : ''}${cap(subject.trim())}`);
   }
